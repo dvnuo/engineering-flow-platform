@@ -4,6 +4,7 @@ A simple web interface to chat with the agent directly.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -35,6 +36,9 @@ from src.agents.core import run_chat_execution
 from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
+from src.hooks.file_context.models import Chunk, SessionFileMeta
+from src.hooks.file_context.retrieval import retrieval_engine
+from src.hooks.file_context.storage import storage as file_context_storage
 from src.config import config as global_config, DEFAULT_LLM_MODEL
 from src.github.url_utils import normalize_github_api_base_url
 from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
@@ -435,6 +439,194 @@ async def _collect_attached_images(
     return attached_images
 
 
+def _chunk_context_text(chunk: Chunk) -> str:
+    return (chunk.content or chunk.markdown or chunk.table_json or "").strip()
+
+
+async def _parse_file_into_file_context(*, session_id: str, file_id: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    metadata = get_metadata(file_id)
+    if metadata.session_id and metadata.session_id != session_id:
+        return {"success": False, "error": "File not found", "file_id": file_id}
+    if not file_context_storage.get_file_meta(session_id, file_id):
+        file_context_storage.add_file_to_session(session_id, SessionFileMeta(
+            file_id=file_id, session_id=session_id, filename=metadata.original_filename, content_type=metadata.content_type, parse_status="pending"
+        ))
+    file_context_storage.update_file_status(session_id, file_id, status="processing")
+    result = await parse_file(file_id, options or {})
+    if not result.success:
+        file_context_storage.update_file_status(session_id, file_id, status="failed", error=result.error)
+        return {"success": False, "error": result.error, "file_id": file_id, "result": result}
+
+    new_chunks: List[Chunk] = []
+    total_chars = 0
+    for block in (result.blocks or []):
+        block_data = block.model_dump(by_alias=True, exclude_none=True)
+        content = (block_data.get("content") or "").strip()
+        if not content:
+            content = (block_data.get("markdown") or "").strip()
+        if not content and block_data.get("json") is not None:
+            content = json.dumps(block_data.get("json"), ensure_ascii=False)
+        if not content and block_data.get("table_json") is not None:
+            content = json.dumps(block_data.get("table_json"), ensure_ascii=False)
+        if not content:
+            continue
+        chunk_index = len(new_chunks) + 1
+        chunk_id = block_data.get("chunk_id") or f"{file_id}_{block_data.get('type', 'chunk')}_{block_data.get('page', 1)}_{block_data.get('index', chunk_index)}"
+        table_data = block_data.get("json") if block_data.get("json") is not None else block_data.get("table_json")
+        chunk = Chunk(
+            chunk_id=chunk_id, file_id=file_id, session_id=session_id, type=block_data.get("type", "paragraph"),
+            content=content, markdown=block_data.get("markdown"), page=block_data.get("page"), index=block_data.get("index", chunk_index),
+            row_range=block_data.get("row_range"), source=block_data.get("method", "unknown"), confidence=block_data.get("confidence", 0.95),
+            content_hash=hashlib.sha256(content.encode()).hexdigest(), bbox=block_data.get("bbox"),
+            table_json=json.dumps(table_data, ensure_ascii=False) if table_data is not None else None,
+        )
+        new_chunks.append(chunk)
+        total_chars += len(content)
+    if not new_chunks and result.markdown:
+        fallback_content = str(result.markdown).strip()
+        if fallback_content:
+            new_chunks.append(Chunk(
+                chunk_id=f"{file_id}_markdown_1_1", file_id=file_id, session_id=session_id, type="paragraph", content=fallback_content,
+                markdown=fallback_content, source="fallback", confidence=0.95, content_hash=hashlib.sha256(fallback_content.encode()).hexdigest(),
+            ))
+            total_chars = len(fallback_content)
+    if not new_chunks:
+        error = "Parsed file did not produce any text chunks"
+        file_context_storage.update_file_status(session_id, file_id, status="failed", error=error)
+        return {"success": False, "error": error, "file_id": file_id, "saved_chunks": 0, "total_chars": 0}
+
+    file_context_storage.delete_file_chunks(file_id)
+    for chunk in new_chunks:
+        file_context_storage.save_chunk(chunk)
+    file_context_storage.update_file_status(session_id=session_id, file_id=file_id, status="completed", chunk_count=len(new_chunks), total_chars=total_chars)
+    retrieval_engine.rebuild_index(session_id)
+    return {"success": True, "result": result, "saved_chunks": len(new_chunks), "total_chars": total_chars}
+
+
+async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: List[str]) -> Dict[str, Any]:
+    context_file_ids: List[str] = []
+    image_file_ids: List[str] = []
+    failures: List[Dict[str, str]] = []
+    parsed_file_ids: List[str] = []
+    already_ready_file_ids: List[str] = []
+    for file_id in list(dict.fromkeys(attachment_ids)):
+        try:
+            metadata = get_metadata(file_id)
+        except Exception as e:
+            failures.append({"file_id": file_id, "error": str(e)})
+            continue
+        if metadata.session_id and metadata.session_id != session_id:
+            failures.append({"file_id": file_id, "error": "File not found"})
+            continue
+        if (metadata.content_type or "").startswith("image/"):
+            image_file_ids.append(file_id)
+            continue
+        file_meta = file_context_storage.get_file_meta(session_id, file_id)
+        if not file_meta:
+            file_context_storage.add_file_to_session(session_id, SessionFileMeta(
+                file_id=file_id, session_id=session_id, filename=metadata.original_filename, content_type=metadata.content_type, parse_status="pending"
+            ))
+            file_meta = file_context_storage.get_file_meta(session_id, file_id)
+        chunks = file_context_storage.get_file_chunks(file_id)
+        has_text_chunks = any(_chunk_context_text(c) for c in chunks)
+        if file_meta and file_meta.parse_status == "completed" and has_text_chunks:
+            context_file_ids.append(file_id)
+            already_ready_file_ids.append(file_id)
+            continue
+        parse_res = await _parse_file_into_file_context(session_id=session_id, file_id=file_id)
+        if parse_res.get("success"):
+            reparsed_chunks = file_context_storage.get_file_chunks(file_id)
+            if any(_chunk_context_text(c) for c in reparsed_chunks):
+                context_file_ids.append(file_id)
+                parsed_file_ids.append(file_id)
+            else:
+                failures.append({"file_id": file_id, "error": "Parsed file did not produce any text chunks"})
+        else:
+            failures.append({"file_id": file_id, "error": str(parse_res.get("error") or "Parse failed")})
+    return {"context_file_ids": context_file_ids, "image_file_ids": image_file_ids, "failures": failures, "parsed_file_ids": parsed_file_ids, "already_ready_file_ids": already_ready_file_ids}
+
+
+def _build_direct_attachment_context_prompt(*, session_id: str, file_ids: List[str], user_question: str, max_chars: int = 12000) -> Optional[str]:
+    parts: List[str] = []
+    used = 0
+    has_chunk_text = False
+    for file_id in file_ids:
+        meta = file_context_storage.get_file_meta(session_id, file_id)
+        header = f"--- File: {(meta.filename if meta else file_id)} ({(meta.content_type if meta else 'unknown')}) ---"
+        if used + len(header) > max_chars:
+            break
+        parts.append(header)
+        used += len(header) + 1
+        for idx, chunk in enumerate(file_context_storage.get_file_chunks(file_id), 1):
+            text = _chunk_context_text(chunk)
+            if not text:
+                continue
+            chunk_header = f"--- Chunk {idx}{(', rows ' + chunk.row_range) if chunk.row_range else ''} ---"
+            candidate = f"{chunk_header}\n{text}\n"
+            if used + len(candidate) > max_chars:
+                remain = max_chars - used
+                if remain > 64:
+                    parts.append(candidate[:remain])
+                    has_chunk_text = True
+                used = max_chars
+                break
+            parts.append(candidate)
+            used += len(candidate)
+            has_chunk_text = True
+        if used >= max_chars:
+            break
+    if not has_chunk_text:
+        return None
+    return f"Based on the attached file context, answer the user's request.\n\nUser request:\n{user_question}\n\nAttached file context:\n" + "\n".join(parts) + "\n\nAnswer:"
+
+
+def _prepare_attachment_transient_model_message(
+    *,
+    session_id: str,
+    context_file_ids: List[str],
+    model_context_query: str,
+    top_k: int = 5,
+    max_tokens: int = 4000,
+) -> Tuple[Optional[str], List[Dict[str, Any]], str]:
+    transient_model_message: Optional[str] = None
+    citations: List[Dict[str, Any]] = []
+    source = "none"
+    try:
+        enhanced_message, _budget_status, citations = inject_context(
+            session_id=session_id,
+            message=model_context_query,
+            top_k=top_k,
+            max_tokens=max_tokens,
+            file_ids=context_file_ids,
+        )
+        if enhanced_message and enhanced_message != model_context_query:
+            transient_model_message = enhanced_message
+            source = "inject_context"
+    except Exception:
+        logger.warning("[attachment_context] Failed to inject file context", exc_info=True)
+
+    if not transient_model_message:
+        transient_model_message = _build_direct_attachment_context_prompt(
+            session_id=session_id, file_ids=context_file_ids, user_question=model_context_query
+        )
+        if transient_model_message:
+            source = "direct_fallback"
+    return transient_model_message, citations, source
+
+
+def _build_attachment_parse_failure_notice(failures: List[Dict[str, Any]]) -> str:
+    if not failures:
+        return ""
+    lines = ["Some attached file(s) could not be parsed and are not available to the model:"]
+    for item in failures:
+        file_id = str(item.get("file_id") or "unknown")
+        error = safe_preview(str(item.get("error") or "unknown error"), 240)
+        lines.append(f"- {file_id}: {error}")
+    lines.append("")
+    lines.append("Do not claim to have read or summarized those failed attachment(s). Answer only from the available text context, image attachment(s), and the user's message.")
+    return "\n".join(lines)
+
+
 def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]]:
     headers = getattr(request, "headers", {}) or {}
     trace = {
@@ -500,7 +692,7 @@ async def _run_chat_via_execution_bus(
             portal_user_id=payload.get("portal_user_id"),
             portal_user_name=payload.get("portal_user_name"),
             attached_images=attached_images,
-            attachments=None,
+            attachments=attachments,
             transient_model_message=transient_model_message,
             track_usage=bool(payload.get("track_usage", True)),
             reasoning_replay=payload.get("reasoning_replay"),
@@ -522,7 +714,7 @@ async def _run_chat_via_execution_bus(
             "portal_user_id": portal_user_id,
             "portal_user_name": portal_user_name,
             "attached_image_count": len(attached_images or []),
-            "attachments": None,
+            "attachments": list(attachments or []),
             "track_usage": True,
             "reasoning_replay": reasoning_replay,
             "stream_callback": stream_callback,
@@ -803,7 +995,8 @@ async def api_chat(request: web.Request) -> web.Response:
     )
     try:
         data = await request.json()
-        message = (data.get('message') or '').strip()
+        original_user_text = (data.get('message') or '').strip()
+        message = original_user_text
         
         # Dynamic session_id with collision-safe default for multi-session support
         session_id = _resolve_webchat_session_id(data)
@@ -850,39 +1043,61 @@ async def api_chat(request: web.Request) -> web.Response:
             attachments=attachment_ids,
         )
         
-        if not message.strip():
-            if attached_images:
-                message = "[image]"
-            elif attachment_ids:
-                message = "[attachment]"
+        attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
+        context_file_ids = attachment_context.get("context_file_ids", [])
+        failures = attachment_context.get("failures", [])
+        failure_notice = _build_attachment_parse_failure_notice(failures)
+        if failures:
+            execution_metadata["attachment_parse_failures"] = failures
+        if failures and not context_file_ids and not attached_images:
+            return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
-        if not message.strip() and not attached_images and not attachment_ids:
+        if original_user_text:
+            history_message = original_user_text
+        elif context_file_ids:
+            history_message = "[attachment]"
+        elif attached_images:
+            history_message = "[image]"
+        else:
+            history_message = ""
+
+        model_context_query = original_user_text or ("Please summarize the attached file(s)." if context_file_ids else history_message)
+
+        if not history_message.strip() and not attached_images and not attachment_ids:
             return web.json_response({'error': 'Empty message'}, status=400)
 
         # Inject file context if user has uploaded files
-        original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
+        original_msg_for_history = history_message if history_message.strip() else ("[image]" if attached_images else "")
         logger.info("[api_chat] Message summary: session_id=%s attached_images=%d message_length=%d preview=%s", safe_log_field(session_id, 120), len(attached_images) if attached_images else 0, len(original_msg_for_history), safe_preview(original_msg_for_history, 120))
-        history_message = message
         transient_model_message: Optional[str] = None
-        try:
-            if attachment_ids:
-                enhanced_message, budget_status, citations = inject_context(
-                    session_id=session_id,
-                    message=history_message,
-                    top_k=5,
-                    max_tokens=4000,
-                    file_ids=attachment_ids,
+        citations: List[Dict[str, Any]] = []
+        if context_file_ids:
+            transient_model_message, citations, _source = _prepare_attachment_transient_model_message(
+                session_id=session_id,
+                context_file_ids=context_file_ids,
+                model_context_query=model_context_query,
+                top_k=5,
+                max_tokens=4000,
+            )
+            request['file_citations'] = citations
+            if not transient_model_message:
+                return web.json_response(
+                    {
+                        "error": "attachment_context_unavailable",
+                        "message": "Attached file context could not be prepared for the model.",
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "attachment_ids": context_file_ids,
+                    },
+                    status=400,
                 )
-                if enhanced_message and enhanced_message != history_message:
-                    logger.info(
-                        "[api_chat] File context prepared transiently: status=%s, chunks=%s",
-                        budget_status,
-                        len(citations),
-                    )
-                    transient_model_message = enhanced_message
-                    request['file_citations'] = citations
-        except Exception as e:
-            logger.warning(f"[api_chat] File context injection failed: {sanitize_exception_message(e)}")
+            if failure_notice:
+                transient_model_message = f"{transient_model_message}\n\n{failure_notice}"
+        elif attached_images and failure_notice:
+            transient_model_message = (
+                f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
+                f"{failure_notice}"
+            )
         # Revalidate message is not empty to prevent downstream LLM input from being empty
         if not history_message.strip() and not transient_model_message:
             logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
@@ -932,7 +1147,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 portal_user_name=portal_user_name,
                 reasoning_replay=reasoning_replay,
                 attached_images=attached_images if attached_images else None,
-                attachments=None,
+                attachments=attachment_ids if attachment_ids else None,
                 request_path="/api/chat",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
@@ -1136,7 +1351,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     )
     try:
         data = await request.json()
-        message = (data.get('message') or '').strip()
+        original_user_text = (data.get('message') or '').strip()
+        message = original_user_text
         session_id = _resolve_webchat_session_id(data)
         attachment_ids = _normalize_attachment_ids(data.get("attachments", []))
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
@@ -1154,30 +1370,56 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             message=message,
             attachments=attachment_ids,
         )
-        if not message.strip():
-            if attached_images:
-                message = "[image]"
-            elif attachment_ids:
-                message = "[attachment]"
+        attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
+        context_file_ids = attachment_context.get("context_file_ids", [])
+        failures = attachment_context.get("failures", [])
+        failure_notice = _build_attachment_parse_failure_notice(failures)
+        if failures:
+            execution_metadata["attachment_parse_failures"] = failures
+        if failures and not context_file_ids and not attached_images:
+            return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
-        if not message.strip() and not attached_images and not attachment_ids:
+        if original_user_text:
+            history_message = original_user_text
+        elif context_file_ids:
+            history_message = "[attachment]"
+        elif attached_images:
+            history_message = "[image]"
+        else:
+            history_message = ""
+
+        model_context_query = original_user_text or ("Please summarize the attached file(s)." if context_file_ids else history_message)
+
+        if not history_message.strip() and not attached_images and not attachment_ids:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
-        history_message = message
         transient_model_message: Optional[str] = None
-        try:
-            if attachment_ids:
-                enhanced_message, _budget_status, _citations = inject_context(
-                    session_id=session_id,
-                    message=history_message,
-                    top_k=5,
-                    max_tokens=4000,
-                    file_ids=attachment_ids,
+        if context_file_ids:
+            transient_model_message, _citations, _source = _prepare_attachment_transient_model_message(
+                session_id=session_id,
+                context_file_ids=context_file_ids,
+                model_context_query=model_context_query,
+                top_k=5,
+                max_tokens=4000,
+            )
+            if not transient_model_message:
+                return web.json_response(
+                    {
+                        "error": "attachment_context_unavailable",
+                        "message": "Attached file context could not be prepared for the model.",
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "attachment_ids": context_file_ids,
+                    },
+                    status=400,
                 )
-                if enhanced_message and enhanced_message != history_message:
-                    transient_model_message = enhanced_message
-        except Exception as e:
-            logger.warning(f"[api_chat_stream] File context injection failed: {sanitize_exception_message(e)}")
+            if failure_notice:
+                transient_model_message = f"{transient_model_message}\n\n{failure_notice}"
+        elif attached_images and failure_notice:
+            transient_model_message = (
+                f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
+                f"{failure_notice}"
+            )
 
         # Create streaming response
         response = web.StreamResponse(
@@ -1238,7 +1480,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 portal_user_name=portal_user_name,
                 stream_callback=event_queue,
                 attached_images=attached_images if attached_images else None,
-                attachments=None,
+                attachments=attachment_ids if attachment_ids else None,
                 request_path="/api/chat/stream",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
@@ -3030,11 +3272,6 @@ async def api_files_parse(request: web.Request) -> web.Response:
     session_id = None
     file_id = None
     try:
-        from src.hooks.file_context.models import Chunk, SessionFileMeta
-        from src.hooks.file_context.retrieval import retrieval_engine
-        from src.hooks.file_context.storage import storage as file_context_storage
-        import hashlib
-
         try:
             data = await request.json()
         except json.JSONDecodeError:
@@ -3048,64 +3285,14 @@ async def api_files_parse(request: web.Request) -> web.Response:
         metadata = get_metadata(file_id)
         if metadata.session_id and (not session_id or metadata.session_id != session_id):
             return web.json_response({'success': False, 'error': 'File not found'}, status=404)
-
-        if session_id:
-            if not file_context_storage.get_file_meta(session_id, file_id):
-                file_context_storage.add_file_to_session(
-                    session_id,
-                    SessionFileMeta(
-                        file_id=file_id,
-                        session_id=session_id,
-                        filename=metadata.original_filename,
-                        content_type=metadata.content_type,
-                        parse_status="pending",
-                    ),
-                )
-            file_context_storage.update_file_status(session_id, file_id, status="processing")
+        if not session_id:
+            session_id = metadata.session_id or "default"
 
         options = data.get('options', {})
-        result = await parse_file(file_id, options)
-
-        if not result.success:
-            if session_id:
-                file_context_storage.update_file_status(session_id, file_id, status="failed", error=result.error)
-            return web.json_response({'success': False, 'error': result.error}, status=400)
-
-        total_chars = 0
-        saved_chunks = 0
-        for block in (result.blocks or []):
-            block_data = block.model_dump(by_alias=True, exclude_none=True)
-            content = block_data.get('content', '')
-            chunk_id = block_data.get('chunk_id') or f"{file_id}_{block_data.get('type', 'chunk')}_{block_data.get('page', 1)}_{block_data.get('index', saved_chunks + 1)}"
-            chunk = Chunk(
-                chunk_id=chunk_id,
-                file_id=file_id,
-                session_id=session_id or '',
-                type=block_data.get('type', 'paragraph'),
-                content=content,
-                markdown=block_data.get('markdown'),
-                page=block_data.get('page'),
-                index=block_data.get('index', saved_chunks + 1),
-                row_range=block_data.get('row_range'),
-                source=block_data.get('method', 'unknown'),
-                confidence=block_data.get('confidence', 0.95),
-                content_hash=hashlib.sha256(content.encode()).hexdigest(),
-                bbox=block_data.get('bbox'),
-                table_json=json.dumps(block_data.get('json')) if block_data.get('json') is not None else None,
-            )
-            file_context_storage.save_chunk(chunk)
-            total_chars += len(content)
-            saved_chunks += 1
-
-        if session_id:
-            file_context_storage.update_file_status(
-                session_id=session_id,
-                file_id=file_id,
-                status="completed",
-                chunk_count=saved_chunks,
-                total_chars=total_chars,
-            )
-            retrieval_engine.rebuild_index(session_id)
+        parse_ctx = await _parse_file_into_file_context(session_id=session_id, file_id=file_id, options=options)
+        if not parse_ctx.get("success"):
+            return web.json_response({'success': False, 'error': parse_ctx.get("error")}, status=400)
+        result = parse_ctx["result"]
 
         return web.json_response({
             'success': True,

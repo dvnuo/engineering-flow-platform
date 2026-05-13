@@ -10,6 +10,10 @@ from .models import Chunk, RetrievalRequest, RetrievalResult
 from .storage import storage
 
 
+def _chunk_search_text(chunk: Chunk) -> str:
+    return (chunk.content or chunk.markdown or chunk.table_json or "").strip()
+
+
 class KeywordIndex:
     """Simple inverted keyword index."""
     
@@ -34,7 +38,7 @@ class KeywordIndex:
     
     def add_chunk(self, chunk: Chunk) -> None:
         """Add chunk to index."""
-        terms = self._tokenize(chunk.content)
+        terms = self._tokenize(_chunk_search_text(chunk))
         self.chunk_terms[chunk.chunk_id] = set(terms)
         
         for term in terms:
@@ -83,7 +87,7 @@ class RetrievalEngine:
     def _estimate_tokens(self, chunks: List[Chunk]) -> int:
         """Rough token estimation."""
         # Average token is ~4 characters
-        return sum(len(c.content) // 4 for c in chunks)
+        return sum(len(_chunk_search_text(c)) // 4 for c in chunks)
     
     def _filter_images(self, chunks: List[Chunk], include_images: bool) -> List[Chunk]:
         """Filter out image chunks if not requested."""
@@ -129,6 +133,7 @@ class RetrievalEngine:
         
         # Filter images if not requested
         all_chunks = self._filter_images(all_chunks, request.include_images)
+        all_chunks = [c for c in all_chunks if _chunk_search_text(c)]
         
         if not all_chunks:
             return RetrievalResult(
@@ -174,7 +179,7 @@ class RetrievalEngine:
                 "file_id": c.file_id,
                 "page": c.page,
                 "type": c.type,
-                "preview": c.content[:100] + "..." if len(c.content) > 100 else c.content
+                "preview": (_chunk_search_text(c)[:100] + "...") if len(_chunk_search_text(c)) > 100 else _chunk_search_text(c)
             }
             for c in chunks
         ]
