@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from src.gateway import webchat
 from src.utils.file_parser.models import ParseResult, Block
+from src.hooks.file_context.models import Chunk
 
 
 @pytest.mark.asyncio
@@ -27,6 +28,62 @@ async def test_parse_file_into_context_fallback_content(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_parse_file_into_context_contentless_fails_without_deleting(monkeypatch):
+    calls = {"status": [], "deleted": 0}
+    monkeypatch.setattr(webchat, "get_metadata", lambda fid: SimpleNamespace(session_id="s1", original_filename="a.csv", content_type="text/csv"))
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_meta", lambda s, f: None)
+    monkeypatch.setattr(webchat.file_context_storage, "add_file_to_session", lambda *a, **k: None)
+    monkeypatch.setattr(webchat.file_context_storage, "update_file_status", lambda *a, **k: calls["status"].append((a, k)))
+    monkeypatch.setattr(webchat.file_context_storage, "delete_file_chunks", lambda f: calls.__setitem__("deleted", calls["deleted"] + 1))
+    monkeypatch.setattr(webchat.file_context_storage, "save_chunk", lambda c: None)
+
+    async def fake_parse(_fid, _opt):
+        return ParseResult(success=True, content_type="text/csv", file_id="f1", filename="a.csv", markdown="", blocks=[], json={})
+    monkeypatch.setattr(webchat, "parse_file", fake_parse)
+
+    out = await webchat._parse_file_into_file_context(session_id="s1", file_id="f1")
+    assert out["success"] is False
+    assert "did not produce any text chunks" in out["error"]
+    assert calls["deleted"] == 0
+    assert any(kwargs.get("status") == "failed" for _args, kwargs in calls["status"])
+    assert out["saved_chunks"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ensure_attachment_context_rejects_contentless_parse(monkeypatch):
+    monkeypatch.setattr(webchat, "get_metadata", lambda fid: SimpleNamespace(session_id="s1", original_filename="a.csv", content_type="text/csv"))
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_meta", lambda s, f: SimpleNamespace(parse_status="pending"))
+    monkeypatch.setattr(webchat.file_context_storage, "add_file_to_session", lambda *a, **k: None)
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_chunks", lambda _f: [])
+
+    async def fake_parse_ctx(**kwargs):
+        return {"success": True}
+    monkeypatch.setattr(webchat, "_parse_file_into_file_context", fake_parse_ctx)
+
+    out = await webchat._ensure_chat_attachment_context(session_id="s1", attachment_ids=["f1"])
+    assert "f1" not in out["context_file_ids"]
+    assert any(item["file_id"] == "f1" for item in out["failures"])
+
+
+def test_direct_prompt_returns_none_for_header_only(monkeypatch):
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_meta", lambda s, f: SimpleNamespace(filename="a.csv", content_type="text/csv"))
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_chunks", lambda _f: [])
+    out = webchat._build_direct_attachment_context_prompt(session_id="s1", file_ids=["f1"], user_question="q")
+    assert out is None
+
+
+def test_prepare_transient_model_message_fallback_on_inject_exception(monkeypatch):
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_meta", lambda s, f: SimpleNamespace(filename="a.csv", content_type="text/csv"))
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_chunks", lambda _f: [Chunk(chunk_id="c1", file_id="f1", session_id="s1", type="table", content="", markdown="|name|age|\n|---|---|\n|alice|30|", source="x", content_hash="h")])
+    transient, citations, source = webchat._prepare_attachment_transient_model_message(session_id="s1", context_file_ids=["f1"], model_context_query="Please summarize the attached file(s).")
+    assert transient and "alice" in transient and "name" in transient
+    assert transient != "[attachment]"
+    assert isinstance(citations, list)
+    assert source == "direct_fallback"
+
+
+@pytest.mark.asyncio
 async def test_run_chat_via_execution_bus_retains_attachments(monkeypatch):
     captured = {}
     async def fake_run_chat_execution(*args, **kwargs):
@@ -43,3 +100,43 @@ async def test_run_chat_via_execution_bus_retains_attachments(monkeypatch):
     await webchat._run_chat_via_execution_bus(agent=object(), session_id="s1", message="m", user_name="u", portal_user_id=None, portal_user_name=None, attachments=["f1"])
     assert captured["payload"]["attachments"] == ["f1"]
     assert captured["attachments_run"] == ["f1"]
+
+class _FakeRequest:
+    def __init__(self, payload):
+        self._payload = payload
+        self.headers = {}
+        self.app = {}
+        self.query = {}
+        self.match_info = {}
+        self._state = {}
+    def __setitem__(self, key, value):
+        self._state[key] = value
+    def __getitem__(self, key):
+        return self._state[key]
+    async def json(self):
+        return self._payload
+
+
+@pytest.mark.asyncio
+async def test_api_chat_and_stream_use_unavailable_context_guard(monkeypatch):
+    webchat.global_config._config.setdefault("llm", {})
+    webchat.global_config._config["llm"].update({"api_key": "k", "model": "gpt-4o"})
+    async def _fake_ensure(**kwargs):
+        return {"context_file_ids": ["f1"], "failures": []}
+    async def _fake_images(**kwargs):
+        return []
+    monkeypatch.setattr(webchat, "_ensure_chat_attachment_context", _fake_ensure)
+    monkeypatch.setattr(webchat, "_collect_attached_images", _fake_images)
+    monkeypatch.setattr(webchat, "_prepare_attachment_transient_model_message", lambda **kwargs: (None, [], "none"))
+    called = {"run": 0}
+    async def fake_run(*args, **kwargs):
+        called["run"] += 1
+        return {}
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", fake_run)
+
+    chat_resp = await webchat.api_chat(_FakeRequest({"message": "", "session_id": "s1", "attachments": ["f1"]}))
+    assert chat_resp.status == 400
+
+    stream_resp = await webchat.api_chat_stream(_FakeRequest({"message": "", "session_id": "s1", "attachments": ["f1"]}))
+    assert stream_resp.status == 400
+    assert called["run"] == 0

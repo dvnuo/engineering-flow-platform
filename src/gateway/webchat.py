@@ -19,7 +19,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -457,8 +457,7 @@ async def _parse_file_into_file_context(*, session_id: str, file_id: str, option
         file_context_storage.update_file_status(session_id, file_id, status="failed", error=result.error)
         return {"success": False, "error": result.error, "file_id": file_id, "result": result}
 
-    file_context_storage.delete_file_chunks(file_id)
-    saved_chunks = 0
+    new_chunks: List[Chunk] = []
     total_chars = 0
     for block in (result.blocks or []):
         block_data = block.model_dump(by_alias=True, exclude_none=True)
@@ -471,30 +470,37 @@ async def _parse_file_into_file_context(*, session_id: str, file_id: str, option
             content = json.dumps(block_data.get("table_json"), ensure_ascii=False)
         if not content:
             continue
-        chunk_id = block_data.get("chunk_id") or f"{file_id}_{block_data.get('type', 'chunk')}_{block_data.get('page', 1)}_{block_data.get('index', saved_chunks + 1)}"
+        chunk_index = len(new_chunks) + 1
+        chunk_id = block_data.get("chunk_id") or f"{file_id}_{block_data.get('type', 'chunk')}_{block_data.get('page', 1)}_{block_data.get('index', chunk_index)}"
         table_data = block_data.get("json") if block_data.get("json") is not None else block_data.get("table_json")
         chunk = Chunk(
             chunk_id=chunk_id, file_id=file_id, session_id=session_id, type=block_data.get("type", "paragraph"),
-            content=content, markdown=block_data.get("markdown"), page=block_data.get("page"), index=block_data.get("index", saved_chunks + 1),
+            content=content, markdown=block_data.get("markdown"), page=block_data.get("page"), index=block_data.get("index", chunk_index),
             row_range=block_data.get("row_range"), source=block_data.get("method", "unknown"), confidence=block_data.get("confidence", 0.95),
             content_hash=hashlib.sha256(content.encode()).hexdigest(), bbox=block_data.get("bbox"),
             table_json=json.dumps(table_data, ensure_ascii=False) if table_data is not None else None,
         )
-        file_context_storage.save_chunk(chunk)
-        saved_chunks += 1
+        new_chunks.append(chunk)
         total_chars += len(content)
-    if saved_chunks == 0 and result.markdown:
+    if not new_chunks and result.markdown:
         fallback_content = str(result.markdown).strip()
         if fallback_content:
-            file_context_storage.save_chunk(Chunk(
+            new_chunks.append(Chunk(
                 chunk_id=f"{file_id}_markdown_1_1", file_id=file_id, session_id=session_id, type="paragraph", content=fallback_content,
                 markdown=fallback_content, source="fallback", confidence=0.95, content_hash=hashlib.sha256(fallback_content.encode()).hexdigest(),
             ))
-            saved_chunks = 1
             total_chars = len(fallback_content)
-    file_context_storage.update_file_status(session_id=session_id, file_id=file_id, status="completed", chunk_count=saved_chunks, total_chars=total_chars)
+    if not new_chunks:
+        error = "Parsed file did not produce any text chunks"
+        file_context_storage.update_file_status(session_id, file_id, status="failed", error=error)
+        return {"success": False, "error": error, "file_id": file_id, "saved_chunks": 0, "total_chars": 0}
+
+    file_context_storage.delete_file_chunks(file_id)
+    for chunk in new_chunks:
+        file_context_storage.save_chunk(chunk)
+    file_context_storage.update_file_status(session_id=session_id, file_id=file_id, status="completed", chunk_count=len(new_chunks), total_chars=total_chars)
     retrieval_engine.rebuild_index(session_id)
-    return {"success": True, "result": result, "saved_chunks": saved_chunks, "total_chars": total_chars}
+    return {"success": True, "result": result, "saved_chunks": len(new_chunks), "total_chars": total_chars}
 
 
 async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: List[str]) -> Dict[str, Any]:
@@ -529,8 +535,12 @@ async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: Li
             continue
         parse_res = await _parse_file_into_file_context(session_id=session_id, file_id=file_id)
         if parse_res.get("success"):
-            context_file_ids.append(file_id)
-            parsed_file_ids.append(file_id)
+            reparsed_chunks = file_context_storage.get_file_chunks(file_id)
+            if any(_chunk_context_text(c) for c in reparsed_chunks):
+                context_file_ids.append(file_id)
+                parsed_file_ids.append(file_id)
+            else:
+                failures.append({"file_id": file_id, "error": "Parsed file did not produce any text chunks"})
         else:
             failures.append({"file_id": file_id, "error": str(parse_res.get("error") or "Parse failed")})
     return {"context_file_ids": context_file_ids, "image_file_ids": image_file_ids, "failures": failures, "parsed_file_ids": parsed_file_ids, "already_ready_file_ids": already_ready_file_ids}
@@ -539,6 +549,7 @@ async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: Li
 def _build_direct_attachment_context_prompt(*, session_id: str, file_ids: List[str], user_question: str, max_chars: int = 12000) -> Optional[str]:
     parts: List[str] = []
     used = 0
+    has_chunk_text = False
     for file_id in file_ids:
         meta = file_context_storage.get_file_meta(session_id, file_id)
         header = f"--- File: {(meta.filename if meta else file_id)} ({(meta.content_type if meta else 'unknown')}) ---"
@@ -560,11 +571,46 @@ def _build_direct_attachment_context_prompt(*, session_id: str, file_ids: List[s
                 break
             parts.append(candidate)
             used += len(candidate)
+            has_chunk_text = True
         if used >= max_chars:
             break
-    if not parts:
+    if not has_chunk_text:
         return None
     return f"Based on the attached file context, answer the user's request.\n\nUser request:\n{user_question}\n\nAttached file context:\n" + "\n".join(parts) + "\n\nAnswer:"
+
+
+def _prepare_attachment_transient_model_message(
+    *,
+    session_id: str,
+    context_file_ids: List[str],
+    model_context_query: str,
+    top_k: int = 5,
+    max_tokens: int = 4000,
+) -> Tuple[Optional[str], List[Dict[str, Any]], str]:
+    transient_model_message: Optional[str] = None
+    citations: List[Dict[str, Any]] = []
+    source = "none"
+    try:
+        enhanced_message, _budget_status, citations = inject_context(
+            session_id=session_id,
+            message=model_context_query,
+            top_k=top_k,
+            max_tokens=max_tokens,
+            file_ids=context_file_ids,
+        )
+        if enhanced_message and enhanced_message != model_context_query:
+            transient_model_message = enhanced_message
+            source = "inject_context"
+    except Exception:
+        logger.warning("[attachment_context] Failed to inject file context", exc_info=True)
+
+    if not transient_model_message:
+        transient_model_message = _build_direct_attachment_context_prompt(
+            session_id=session_id, file_ids=context_file_ids, user_question=model_context_query
+        )
+        if transient_model_message:
+            source = "direct_fallback"
+    return transient_model_message, citations, source
 
 
 def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]]:
@@ -1009,18 +1055,27 @@ async def api_chat(request: web.Request) -> web.Response:
         original_msg_for_history = history_message if history_message.strip() else ("[image]" if attached_images else "")
         logger.info("[api_chat] Message summary: session_id=%s attached_images=%d message_length=%d preview=%s", safe_log_field(session_id, 120), len(attached_images) if attached_images else 0, len(original_msg_for_history), safe_preview(original_msg_for_history, 120))
         transient_model_message: Optional[str] = None
-        try:
-            if context_file_ids:
-                enhanced_message, budget_status, citations = inject_context(
-                    session_id=session_id, message=model_context_query, top_k=5, max_tokens=4000, file_ids=context_file_ids,
+        citations: List[Dict[str, Any]] = []
+        if context_file_ids:
+            transient_model_message, citations, _source = _prepare_attachment_transient_model_message(
+                session_id=session_id,
+                context_file_ids=context_file_ids,
+                model_context_query=model_context_query,
+                top_k=5,
+                max_tokens=4000,
+            )
+            request['file_citations'] = citations
+            if not transient_model_message:
+                return web.json_response(
+                    {
+                        "error": "attachment_context_unavailable",
+                        "message": "Attached file context could not be prepared for the model.",
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "attachment_ids": context_file_ids,
+                    },
+                    status=400,
                 )
-                request['file_citations'] = citations
-                if enhanced_message and enhanced_message != model_context_query:
-                    transient_model_message = enhanced_message
-                if (not transient_model_message or budget_status == 'no_context') and context_file_ids:
-                    transient_model_message = _build_direct_attachment_context_prompt(session_id=session_id, file_ids=context_file_ids, user_question=model_context_query) or transient_model_message
-        except Exception as e:
-            logger.warning(f"[api_chat] File context injection failed: {sanitize_exception_message(e)}")
         # Revalidate message is not empty to prevent downstream LLM input from being empty
         if not history_message.strip() and not transient_model_message:
             logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
@@ -1316,15 +1371,25 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
         transient_model_message: Optional[str] = None
-        try:
-            if context_file_ids:
-                enhanced_message, budget_status, _citations = inject_context(session_id=session_id, message=model_context_query, top_k=5, max_tokens=4000, file_ids=context_file_ids)
-                if enhanced_message and enhanced_message != model_context_query:
-                    transient_model_message = enhanced_message
-                if (not transient_model_message or budget_status == 'no_context') and context_file_ids:
-                    transient_model_message = _build_direct_attachment_context_prompt(session_id=session_id, file_ids=context_file_ids, user_question=model_context_query) or transient_model_message
-        except Exception as e:
-            logger.warning(f"[api_chat_stream] File context injection failed: {sanitize_exception_message(e)}")
+        if context_file_ids:
+            transient_model_message, _citations, _source = _prepare_attachment_transient_model_message(
+                session_id=session_id,
+                context_file_ids=context_file_ids,
+                model_context_query=model_context_query,
+                top_k=5,
+                max_tokens=4000,
+            )
+            if not transient_model_message:
+                return web.json_response(
+                    {
+                        "error": "attachment_context_unavailable",
+                        "message": "Attached file context could not be prepared for the model.",
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "attachment_ids": context_file_ids,
+                    },
+                    status=400,
+                )
 
         # Create streaming response
         response = web.StreamResponse(
