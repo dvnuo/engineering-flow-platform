@@ -216,3 +216,96 @@ async def test_api_chat_parse_failure_does_not_call_execution_bus(monkeypatch):
     assert payload["error"] == "attachment_parse_failed"
     assert payload["failures"][0]["file_id"] == "f1"
     assert called["run"] == 0
+
+
+def test_failure_notice_builder_includes_failed_attachment():
+    notice = webchat._build_attachment_parse_failure_notice([{"file_id": "bad.csv-id", "error": "bad csv"}])
+    assert "bad.csv-id" in notice
+    assert "bad csv" in notice
+    assert "Do not claim" in notice
+    assert webchat._build_attachment_parse_failure_notice([]) == ""
+
+
+@pytest.mark.asyncio
+async def test_api_chat_image_plus_failed_csv_allows_image_and_warns_model(monkeypatch):
+    webchat.global_config._config.setdefault("llm", {})
+    webchat.global_config._config["llm"].update({"api_key": "k", "model": "gpt-4o"})
+    captured = {}
+    async def _fake_images(**kwargs): return ["data:image/png;base64,abc"]
+    async def _fake_ensure(**kwargs): return {"context_file_ids": [], "failures": [{"file_id": "csv_bad", "error": "bad csv"}]}
+    async def _fake_bus(**kwargs): captured.update(kwargs); return {"response": "ok", "request_id": "r1"}
+    monkeypatch.setattr(webchat, "_collect_attached_images", _fake_images)
+    monkeypatch.setattr(webchat, "_ensure_chat_attachment_context", _fake_ensure)
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _r: (None, None))
+    monkeypatch.setattr(webchat, "AgentCore", lambda **kwargs: object())
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_bus)
+    monkeypatch.setattr(webchat, "build_webchat_response_payload", lambda _result, session_id: {"response": "ok", "session_id": session_id})
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    async def _fake_get_session(_sid): return None
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+
+    resp = await webchat.api_chat(_FakeRequest({"message": "", "session_id": "s1", "attachments": ["img1", "csv_bad"]}))
+    assert resp.status == 200
+    assert captured["message"] == "[image]"
+    assert captured["attached_images"]
+    assert captured["attachments"] == ["img1", "csv_bad"]
+    assert "csv_bad" in captured["transient_model_message"]
+    assert "bad csv" in captured["transient_model_message"]
+    assert "Do not claim" in captured["transient_model_message"]
+
+
+@pytest.mark.asyncio
+async def test_api_chat_good_csv_plus_failed_csv_warns_model(monkeypatch):
+    webchat.global_config._config.setdefault("llm", {})
+    webchat.global_config._config["llm"].update({"api_key": "k", "model": "gpt-4o"})
+    captured = {}
+    async def _fake_images(**kwargs): return []
+    async def _fake_ensure(**kwargs): return {"context_file_ids": ["csv_good"], "failures": [{"file_id": "csv_bad", "error": "bad csv"}]}
+    def _fake_prepare(**kwargs): return ("name,age\nalice,30", [], "direct_fallback")
+    async def _fake_bus(**kwargs): captured.update(kwargs); return {"response": "ok", "request_id": "r1"}
+    monkeypatch.setattr(webchat, "_collect_attached_images", _fake_images)
+    monkeypatch.setattr(webchat, "_ensure_chat_attachment_context", _fake_ensure)
+    monkeypatch.setattr(webchat, "_prepare_attachment_transient_model_message", _fake_prepare)
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _r: (None, None))
+    monkeypatch.setattr(webchat, "AgentCore", lambda **kwargs: object())
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_bus)
+    monkeypatch.setattr(webchat, "build_webchat_response_payload", lambda _result, session_id: {"response": "ok", "session_id": session_id})
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    async def _fake_get_session(_sid): return None
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+
+    resp = await webchat.api_chat(_FakeRequest({"message": "", "session_id": "s1", "attachments": ["csv_good", "csv_bad"]}))
+    assert resp.status == 200
+    assert "alice" in captured["transient_model_message"]
+    assert "csv_bad" in captured["transient_model_message"]
+    assert "bad csv" in captured["transient_model_message"]
+    assert captured["transient_model_message"] != "[attachment]"
+    assert captured["message"] == "[attachment]"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_image_plus_failed_csv_warns_model(monkeypatch):
+    webchat.global_config._config.setdefault("llm", {})
+    webchat.global_config._config["llm"].update({"api_key": "k", "model": "gpt-4o"})
+    captured = {}
+    async def _fake_images(**kwargs): return ["data:image/png;base64,abc"]
+    async def _fake_ensure(**kwargs): return {"context_file_ids": [], "failures": [{"file_id": "csv_bad", "error": "bad csv"}]}
+    async def _fake_bus(**kwargs): captured.update(kwargs); return {"response": "ok", "request_id": "r1", "usage": {}}
+    monkeypatch.setattr(webchat, "_collect_attached_images", _fake_images)
+    monkeypatch.setattr(webchat, "_ensure_chat_attachment_context", _fake_ensure)
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _r: (None, None))
+    monkeypatch.setattr(webchat, "AgentCore", lambda **kwargs: object())
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_bus)
+    monkeypatch.setattr(webchat, "build_webchat_response_payload", lambda _result, session_id: {"response": "ok", "session_id": session_id})
+
+    class _FakeStreamResponse:
+        def __init__(self, *args, **kwargs): self.status=kwargs.get("status",200)
+        async def prepare(self, _req): return None
+        async def write(self, _b): return None
+        async def write_eof(self): return None
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    resp = await webchat.api_chat_stream(_FakeRequest({"message": "", "session_id": "s1", "attachments": ["img1", "csv_bad"]}))
+    assert getattr(resp, "status", 0) == 200
+    assert "csv_bad" in captured["transient_model_message"]
+    assert "Do not claim" in captured["transient_model_message"]

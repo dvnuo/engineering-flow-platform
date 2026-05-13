@@ -614,6 +614,19 @@ def _prepare_attachment_transient_model_message(
     return transient_model_message, citations, source
 
 
+def _build_attachment_parse_failure_notice(failures: List[Dict[str, Any]]) -> str:
+    if not failures:
+        return ""
+    lines = ["Some attached file(s) could not be parsed and are not available to the model:"]
+    for item in failures:
+        file_id = str(item.get("file_id") or "unknown")
+        error = safe_preview(str(item.get("error") or "unknown error"), 240)
+        lines.append(f"- {file_id}: {error}")
+    lines.append("")
+    lines.append("Do not claim to have read or summarized those failed attachment(s). Answer only from the available text context, image attachment(s), and the user's message.")
+    return "\n".join(lines)
+
+
 def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]]:
     headers = getattr(request, "headers", {}) or {}
     trace = {
@@ -1033,10 +1046,11 @@ async def api_chat(request: web.Request) -> web.Response:
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
         context_file_ids = attachment_context.get("context_file_ids", [])
         failures = attachment_context.get("failures", [])
-        if failures and not context_file_ids:
-            return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
+        failure_notice = _build_attachment_parse_failure_notice(failures)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
+        if failures and not context_file_ids and not attached_images:
+            return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
         if original_user_text:
             history_message = original_user_text
@@ -1077,6 +1091,13 @@ async def api_chat(request: web.Request) -> web.Response:
                     },
                     status=400,
                 )
+            if failure_notice:
+                transient_model_message = f"{transient_model_message}\n\n{failure_notice}"
+        elif attached_images and failure_notice:
+            transient_model_message = (
+                f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
+                f"{failure_notice}"
+            )
         # Revalidate message is not empty to prevent downstream LLM input from being empty
         if not history_message.strip() and not transient_model_message:
             logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
@@ -1352,10 +1373,11 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
         context_file_ids = attachment_context.get("context_file_ids", [])
         failures = attachment_context.get("failures", [])
-        if failures and not context_file_ids:
-            return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
+        failure_notice = _build_attachment_parse_failure_notice(failures)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
+        if failures and not context_file_ids and not attached_images:
+            return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
         if original_user_text:
             history_message = original_user_text
@@ -1391,6 +1413,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                     },
                     status=400,
                 )
+            if failure_notice:
+                transient_model_message = f"{transient_model_message}\n\n{failure_notice}"
+        elif attached_images and failure_notice:
+            transient_model_message = (
+                f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
+                f"{failure_notice}"
+            )
 
         # Create streaming response
         response = web.StreamResponse(
