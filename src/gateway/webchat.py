@@ -567,6 +567,7 @@ def _build_direct_attachment_context_prompt(*, session_id: str, file_ids: List[s
                 remain = max_chars - used
                 if remain > 64:
                     parts.append(candidate[:remain])
+                    has_chunk_text = True
                 used = max_chars
                 break
             parts.append(candidate)
