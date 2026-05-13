@@ -8,6 +8,10 @@ from .parser import CommandParser
 from .storage import storage
 
 
+def _chunk_context_text(chunk: Chunk) -> str:
+    return (chunk.content or chunk.markdown or chunk.table_json or "").strip()
+
+
 def build_rag_prompt(
     user_message: str,
     retrieval_result: RetrievalResult
@@ -35,8 +39,14 @@ def build_rag_prompt(
             source_info += f", page {chunk.page}"
         source_info += "]"
         
-        context_parts.append(f"--- Context {i} {source_info} ---\n{chunk.content}")
+        chunk_text = _chunk_context_text(chunk)
+        if not chunk_text:
+            continue
+        context_parts.append(f"--- Context {i} {source_info} ---\n{chunk_text}")
     
+    if not context_parts:
+        return user_message, "no_context"
+
     context_text = "\n\n".join(context_parts)
     
     # Build prompt based on budget status
@@ -162,7 +172,7 @@ def inject_context(
                     chunks.append(chunk)
                     break
         # Build result manually
-        estimated_tokens = sum(len(c.content) // 4 for c in chunks)
+        estimated_tokens = sum(len(_chunk_context_text(c)) // 4 for c in chunks)
         retrieval_result = RetrievalResult(
             chunks=chunks,
             total_chunks=len(chunks),

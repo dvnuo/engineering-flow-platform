@@ -141,7 +141,7 @@ async def parse_csv(file_path: str, options: Dict = None) -> ParseResult:
         
         # Add header info
         blocks.append(Block(
-            chunk_id="csv_1",
+            chunk_id=f"{file_id}_csv_columns_1",
             type="paragraph",
             content=f"Columns: {', '.join(df.columns)}",
             row_range=f"1-{len(df)}",
@@ -254,7 +254,7 @@ def _rows_to_table_block(rows: List[List[str]], sheet_idx: int, sheet_name: str,
     return Block(
         chunk_id=f"{file_id}_{source_type}_{sheet_idx}_1",
         type="table",
-        content="",
+        content=markdown,
         markdown=markdown,
         table_json=json_table,
         sheet=sheet_name,
