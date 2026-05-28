@@ -39,6 +39,60 @@ def test_discovers_uppercase_and_lowercase_skill_files(tmp_path):
     assert skills[1].metadata["license"] == "Apache-2.0"
 
 
+def test_skill_discovery_requires_valid_manifest_name(tmp_path):
+    frontmatter = tmp_path / "frontmatter"
+    frontmatter.mkdir()
+    (frontmatter / "SKILL.md").write_text(
+        "---\nname: manifest-skill\n---\n# Manifest\n",
+        encoding="utf-8",
+    )
+
+    compact = tmp_path / "compact"
+    compact.mkdir()
+    (compact / "skill.md").write_text(
+        "name: compact-skill\n\n# Compact\n",
+        encoding="utf-8",
+    )
+
+    missing_name = tmp_path / "missing-name"
+    missing_name.mkdir()
+    (missing_name / "SKILL.md").write_text(
+        "# Missing Name\n",
+        encoding="utf-8",
+    )
+
+    empty_name = tmp_path / "empty-name"
+    empty_name.mkdir()
+    (empty_name / "SKILL.md").write_text(
+        "---\nname: \ndescription: Hidden\n---\n# Empty Name\n",
+        encoding="utf-8",
+    )
+
+    alternate_manifest = tmp_path / "alternate-manifest"
+    alternate_manifest.mkdir()
+    (alternate_manifest / "SKILL.md").write_text(
+        "# Invalid Manifest\n",
+        encoding="utf-8",
+    )
+    (alternate_manifest / "skill.md").write_text(
+        "name: alternate-valid\n\n# Alternate Valid\n",
+        encoding="utf-8",
+    )
+
+    skills = discover_skills([tmp_path])
+    by_name = {skill.name: skill for skill in skills}
+
+    assert [skill.name for skill in skills] == [
+        "alternate-valid",
+        "compact-skill",
+        "manifest-skill",
+    ]
+    assert by_name["manifest-skill"].description == ""
+    assert by_name["manifest-skill"].content == "# Manifest"
+    assert by_name["compact-skill"].content == "# Compact"
+    assert by_name["alternate-valid"].content == "# Alternate Valid"
+
+
 def test_default_skill_directories_include_opencode_skill_before_plural(
     tmp_path,
     monkeypatch,
@@ -216,7 +270,10 @@ def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp
     )
     no_description = tmp_path / "no-description"
     no_description.mkdir()
-    (no_description / "SKILL.md").write_text("# No Description\n", encoding="utf-8")
+    (no_description / "SKILL.md").write_text(
+        "---\nname: no-description\n---\n# No Description\n",
+        encoding="utf-8",
+    )
 
     tool = build_skill_tool(SkillDiscovery([tmp_path]))
 
@@ -230,6 +287,7 @@ def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp
         in tool.description
     )
     assert "<name>no-description</name>" in tool.description
+    assert "<description></description>" in tool.description
 
     empty_tool = build_skill_tool(SkillDiscovery([]))
 

@@ -741,9 +741,10 @@ runtime/session stack.
 
 ## Skills
 
-Skills are discovered from `SKILL.md` or `skill.md` files. Loading a skill reads
-markdown plus optional sidecar context. Python sidecar files are treated as text
-or binary files; runtime v2 never imports or executes them.
+Skills are discovered from `SKILL.md` or `skill.md` files with a manifest that
+provides a valid `name`. Loading a skill reads markdown plus optional sidecar
+context. Python sidecar files are treated as text or binary files; runtime v2
+never imports or executes them.
 
 Discovery walks configured skill roots in order. If two packages declare the
 same case-insensitive skill name, the later root wins; within one root,
@@ -756,11 +757,14 @@ defaults. Configured skill roots are appended after defaults and can override
 default roots while provider prompts remain stable.
 
 Skill markdown supports either `---` frontmatter or the existing compact leading
-`name: ...` / `description: ...` header style. Runtime v2 parses only simple
-scalar metadata fields from that header, including fields such as `license`,
-`compatibility`, `category`, `version`, and `author`; unknown simple scalar
-fields are preserved in `SkillPackage.metadata`. It does not parse nested YAML,
-lists, block scalars, or sidecar manifests into executable behavior.
+`name: ...` / `description: ...` header style. The manifest must provide `name`;
+`description` is optional and defaults to an empty string. A `SKILL.md` or
+`skill.md` file with no valid `name` is ignored during discovery so ordinary
+markdown files are not accidentally exposed as skills. Runtime v2 parses only
+simple scalar metadata fields from that header, including fields such as
+`license`, `compatibility`, `category`, `version`, and `author`; unknown simple
+scalar fields are preserved in `SkillPackage.metadata`. It does not parse nested
+YAML, lists, block scalars, or sidecar manifests into executable behavior.
 
 `AgentRuntime` can keep an instance-level active skill list from
 `RuntimeConfig.active_skills` and `/skill` command lines. Active skill context is

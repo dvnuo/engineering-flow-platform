@@ -62,8 +62,10 @@ def discover_skills(directories: Iterable[str | Path]) -> list[SkillPackage]:
             root = skill_file.parent.resolve()
             if root in seen_roots:
                 continue
-            seen_roots.add(root)
             skill = _load_skill_package(skill_file)
+            if skill is None:
+                continue
+            seen_roots.add(root)
             packages_by_name[_normalize_skill_name(skill.name)] = skill
     return sorted(packages_by_name.values(), key=_skill_sort_key)
 
@@ -110,12 +112,16 @@ def _iter_skill_files(directory: Path) -> list[Path]:
     )
 
 
-def _load_skill_package(skill_file: Path) -> SkillPackage:
+def _load_skill_package(skill_file: Path) -> SkillPackage | None:
     content = skill_file.read_text(encoding="utf-8")
     metadata, body = _parse_frontmatter(content)
     root = skill_file.parent
-    name = str(metadata.get("name") or root.name).strip()
-    description = str(metadata.get("description") or "").strip()
+    if "name" not in metadata:
+        return None
+    name = str(metadata["name"]).strip()
+    if not name:
+        return None
+    description = str(metadata["description"]) if "description" in metadata else ""
     sidecars = _collect_sidecars(root, skill_file)
     return SkillPackage(
         name=name,
