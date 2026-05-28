@@ -93,7 +93,11 @@ async def test_webfetch_uses_fetch_execution_and_metadata(
         "truncated": False,
         "original_chars": len(LocalFetchHandler.body),
     }
-    assert webfetch_result.metadata == fetch_result.metadata
+    fetch_metadata = dict(fetch_result.metadata)
+    webfetch_metadata = dict(webfetch_result.metadata)
+    assert isinstance(fetch_metadata.pop("duration_ms"), int)
+    assert isinstance(webfetch_metadata.pop("duration_ms"), int)
+    assert webfetch_metadata == fetch_metadata
     assert {
         "url",
         "status_code",
