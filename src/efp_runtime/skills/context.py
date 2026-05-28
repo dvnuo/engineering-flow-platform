@@ -12,6 +12,14 @@ from ..types import SkillPackage
 from .discovery import SkillDiscovery
 
 
+DEFAULT_SKILL_FILE_SAMPLE_LIMIT = 10
+RELATIVE_PATH_GUIDANCE = (
+    "Relative paths in this skill (e.g., scripts/, reference/) are relative to "
+    "this base directory."
+)
+SAMPLED_FILE_NOTE = "Note: file list is sampled."
+
+
 class SkillContextBuilder:
     """Build system messages that load discovered skills as model context."""
 
@@ -93,21 +101,14 @@ def _render_skill_context_text(
             skill.content,
             "",
             f"Base directory for this skill: {_file_uri(skill.root)}",
+            RELATIVE_PATH_GUIDANCE,
+            SAMPLED_FILE_NOTE,
             "<skill_files>",
         ]
     )
-    lines.extend(
-        _render_skill_file_lines(
-            skill.root,
-            skill.skill_file,
-            include_content=False,
-            max_chars=max_sidecar_chars,
-        )
-    )
-    for path in skill.sidecar_files:
+    for path in _sample_sidecar_files(skill.sidecar_files):
         lines.extend(
             _render_skill_file_lines(
-                skill.root,
                 path,
                 include_content=include_sidecar_content,
                 max_chars=max_sidecar_chars,
@@ -130,51 +131,45 @@ def _file_uri(path: Path) -> str:
 
 
 def _render_skill_file_lines(
-    root: Path,
     path: Path,
     *,
     include_content: bool,
     max_chars: int,
 ) -> list[str]:
-    relative_path = _relative_sidecar_path(root, path)
-    size = path.stat().st_size
+    absolute_path = str(path.resolve())
+    file_line = f"<file>{escape(absolute_path)}</file>"
     if not include_content:
-        return [f"- {relative_path} ({size} bytes)"]
+        return [file_line]
 
     sidecar = _read_sidecar_text(path, max_chars=max_chars)
     content_type = sidecar["content_type"]
-    header = f"- {relative_path} ({size} bytes, {content_type})"
+    content_attrs = [
+        f'path="{escape(absolute_path, quote=True)}"',
+        f'content_type="{content_type}"',
+    ]
     if content_type != "text":
-        return [header]
+        return [file_line, f"<file_content {' '.join(content_attrs)} />"]
 
+    content_attrs.append(f'truncated="{str(sidecar["truncated"]).lower()}"')
+    content = str(sidecar["content"])
+    content_lines = [file_line, f"<file_content {' '.join(content_attrs)}>"]
     if sidecar["truncated"]:
-        header = (
-            f"{header} truncated to {len(sidecar['content'])} of "
-            f"{sidecar['original_chars']} chars"
+        content_lines.append(
+            f"truncated to {len(content)} of {sidecar['original_chars']} chars"
         )
-    return [header, "  Content:", _indent_text(str(sidecar["content"]), prefix="  ")]
+    content_lines.append(content)
+    content_lines.append("</file_content>")
+    return content_lines
 
 
-def _render_sidecar_lines(
-    root: Path,
-    path: Path,
+def _sample_sidecar_files(
+    sidecar_files: Iterable[Path],
     *,
-    include_content: bool,
-    max_chars: int,
-) -> list[str]:
-    return _render_skill_file_lines(
-        root,
-        path,
-        include_content=include_content,
-        max_chars=max_chars,
-    )
-
-
-def _relative_sidecar_path(root: Path, path: Path) -> str:
-    try:
-        return str(path.relative_to(root))
-    except ValueError:
-        return str(path)
+    limit: int = DEFAULT_SKILL_FILE_SAMPLE_LIMIT,
+) -> list[Path]:
+    if limit < 0:
+        return list(sidecar_files)
+    return list(sidecar_files)[:limit]
 
 
 def _read_sidecar_text(path: Path, *, max_chars: int) -> dict[str, Any]:
@@ -198,9 +193,3 @@ def _read_sidecar_text(path: Path, *, max_chars: int) -> dict[str, Any]:
         "truncated": False,
         "original_chars": len(content),
     }
-
-
-def _indent_text(text: str, *, prefix: str) -> str:
-    if not text:
-        return prefix
-    return "\n".join(f"{prefix}{line}" for line in text.splitlines())

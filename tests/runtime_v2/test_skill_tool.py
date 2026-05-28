@@ -4,6 +4,7 @@ from efp_runtime.context import render_tool_schemas
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import ToolCall
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
+from efp_runtime.skills.context import SkillContextBuilder
 from efp_runtime.skills.discovery import (
     SkillDiscovery,
     default_skill_directories,
@@ -69,7 +70,11 @@ def test_skill_discovery_loads_from_default_opencode_skill_directory(tmp_path):
 
 
 def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp_path):
-    _write_skill(tmp_path, "safe-skill", description="Loads context safely")
+    _write_skill(
+        tmp_path,
+        "safe-skill",
+        description="Loads <context> & references safely",
+    )
     no_description = tmp_path / "no-description"
     no_description.mkdir()
     (no_description / "SKILL.md").write_text("# No Description\n", encoding="utf-8")
@@ -77,13 +82,23 @@ def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp
     tool = build_skill_tool(SkillDiscovery([tmp_path]))
 
     assert tool.description.startswith("Load a specialized skill")
-    assert "Available skills:" in tool.description
-    assert "- safe-skill: Loads context safely" in tool.description
-    assert "- no-description" in tool.description
+    assert "skill({name})" in tool.description
+    assert "<available_skills>" in tool.description
+    assert "<skill>" in tool.description
+    assert "<name>safe-skill</name>" in tool.description
+    assert (
+        "<description>Loads &lt;context&gt; &amp; references safely</description>"
+        in tool.description
+    )
+    assert "<name>no-description</name>" in tool.description
 
     empty_tool = build_skill_tool(SkillDiscovery([]))
 
-    assert "No skills available." in empty_tool.description
+    assert empty_tool.description.endswith(
+        "<available_skills>\n"
+        "  <no_skills>No skills available.</no_skills>\n"
+        "</available_skills>"
+    )
 
 
 def test_skill_tool_permission_subject_metadata(tmp_path):
@@ -129,10 +144,18 @@ async def test_skill_tool_returns_skill_content_and_sidecar_context_without_pyth
 
     assert result.status == "success"
     assert result.content.startswith('<skill_content name="safe-skill">')
-    assert "Base directory" in result.content
+    assert "# Skill: safe-skill" in result.content
+    assert f"Base directory for this skill: {skill_dir.resolve().as_uri()}/" in result.content
+    assert (
+        "Relative paths in this skill (e.g., scripts/, reference/) are relative "
+        "to this base directory."
+    ) in result.content
+    assert "Note: file list is sampled." in result.content
     assert "<skill_files>" in result.content
-    assert "- references/guide.md" in result.content
-    assert "- side_effect.py" in result.content
+    assert f"<file>{refs_dir / 'guide.md'}</file>" in result.content
+    assert f"<file>{skill_dir / 'side_effect.py'}</file>" in result.content
+    assert f"<file>{skill_dir / 'SKILL.md'}</file>" not in result.content
+    assert "Reference details" in result.content
     assert result.output["name"] == "safe-skill"
     assert result.output["description"] == "Loads context safely"
     assert result.output["skill_file"] == str(skill_dir / "SKILL.md")
@@ -147,6 +170,46 @@ async def test_skill_tool_returns_skill_content_and_sidecar_context_without_pyth
     assert result.metadata["skill_file"] == str(skill_dir / "SKILL.md")
     assert result.metadata["sidecar_count"] == 2
     assert sentinel.exists() is False
+
+
+@pytest.mark.asyncio
+async def test_skill_tool_file_list_is_sampled_and_stable_without_skill_file(tmp_path):
+    skill_dir = _write_skill(tmp_path, "sampled-skill")
+    for index in range(12):
+        (skill_dir / f"{index:02}.md").write_text(
+            f"sidecar {index}",
+            encoding="utf-8",
+        )
+
+    runtime = ToolRuntime(ToolRegistry([build_skill_tool(SkillDiscovery([tmp_path]))]))
+
+    result = await runtime.execute(
+        ToolCall(id="call-1", tool_id="skill", args={"name": "sampled-skill"})
+    )
+
+    file_lines = [
+        line for line in result.content.splitlines() if line.startswith("<file>")
+    ]
+    assert file_lines == [
+        f"<file>{skill_dir / f'{index:02}.md'}</file>" for index in range(10)
+    ]
+    assert f"<file>{skill_dir / '10.md'}</file>" not in result.content
+    assert f"<file>{skill_dir / 'SKILL.md'}</file>" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_active_skill_context_and_skill_tool_share_rendered_shape(tmp_path):
+    skill_dir = _write_skill(tmp_path, "shared-skill")
+    (skill_dir / "guide.md").write_text("Guide", encoding="utf-8")
+    discovery = SkillDiscovery([tmp_path])
+    active_context = SkillContextBuilder(discovery).build_messages(["shared-skill"])[0]
+    runtime = ToolRuntime(ToolRegistry([build_skill_tool(discovery)]))
+
+    result = await runtime.execute(
+        ToolCall(id="call-1", tool_id="skill", args={"name": "shared-skill"})
+    )
+
+    assert result.content == active_context.parts[0].text
 
 
 @pytest.mark.asyncio
@@ -176,10 +239,12 @@ def test_core_registry_can_include_skill_tool_with_provider_schema_description(t
 
     assert "skill" in registry.ids()
     skill_tool = registry.require("skill")
-    assert "- safe-skill: Loads context safely" in skill_tool.description
+    assert "<name>safe-skill</name>" in skill_tool.description
+    assert "<description>Loads context safely</description>" in skill_tool.description
     schemas = render_tool_schemas(registry.list())
     skill_schema = next(schema for schema in schemas if schema.id == "skill")
-    assert "- safe-skill: Loads context safely" in skill_schema.description
+    assert "<name>safe-skill</name>" in skill_schema.description
+    assert "<description>Loads context safely</description>" in skill_schema.description
 
 
 @pytest.mark.asyncio
@@ -203,7 +268,8 @@ async def test_agent_runtime_default_provider_request_tools_include_skill(tmp_pa
     request = provider.requests[0]
     assert "skill" in [schema.id for schema in request.provider_request.tools]
     skill_schema = next(schema for schema in request.provider_request.tools if schema.id == "skill")
-    assert "- safe-skill: Loads context safely" in skill_schema.description
+    assert "<name>safe-skill</name>" in skill_schema.description
+    assert "<description>Loads context safely</description>" in skill_schema.description
 
 
 @pytest.mark.asyncio

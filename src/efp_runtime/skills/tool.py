@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import codecs
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -300,21 +301,26 @@ def skill_package_to_list_entry(
 
 def _skill_tool_description(discovery: SkillDiscovery) -> str:
     lines = [
-        "Load a specialized skill by name and return its full model-readable "
-        "<skill_content> context. Use this when the task would benefit from "
-        "instructions or references from a discovered skill package.",
+        "Load a specialized skill by name: skill({name}) returns its full "
+        "model-readable <skill_content> context.",
         "",
-        "Available skills:",
+        "<available_skills>",
     ]
     skills = discovery.discover()
     if not skills:
-        lines.append("No skills available.")
+        lines.append("  <no_skills>No skills available.</no_skills>")
+        lines.append("</available_skills>")
         return "\n".join(lines)
     for skill in skills:
-        if skill.description:
-            lines.append(f"- {skill.name}: {skill.description}")
-        else:
-            lines.append(f"- {skill.name}")
+        lines.extend(
+            [
+                "  <skill>",
+                f"    <name>{escape(skill.name)}</name>",
+                f"    <description>{escape(skill.description or '')}</description>",
+                "  </skill>",
+            ]
+        )
+    lines.append("</available_skills>")
     return "\n".join(lines)
 
 

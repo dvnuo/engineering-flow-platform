@@ -39,6 +39,26 @@ async def test_skill_list_returns_multiple_skills_in_stable_order(tmp_path: Path
         "Beta skill",
     ]
     assert [skill["sidecar_count"] for skill in result.output["skills"]] == [1, 0]
+    [alpha_entry, beta_entry] = result.output["skills"]
+    assert set(alpha_entry) == {
+        "name",
+        "description",
+        "skill_file",
+        "root",
+        "sidecar_count",
+        "sidecars",
+        "metadata",
+    }
+    assert alpha_entry["skill_file"] == str(alpha / "SKILL.md")
+    assert alpha_entry["root"] == str(alpha)
+    assert alpha_entry["sidecars"] == [
+        {
+            "path": "guide.md",
+            "size": 5,
+            "content_type": "text",
+        }
+    ]
+    assert beta_entry["sidecars"] == []
     assert result.content.startswith("<available_skills>")
     assert "- alpha: Alpha skill (1 sidecar file)" in result.content
     assert "- beta: Beta skill (0 sidecar files)" in result.content

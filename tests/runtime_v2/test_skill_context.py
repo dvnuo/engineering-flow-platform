@@ -39,7 +39,14 @@ def test_skill_context_builder_generates_system_message_with_metadata(tmp_path):
     assert "Skill: review-pr" in part.text
     assert "Description: Review pull requests" in part.text
     assert "# Review\nCheck diffs and tests." in part.text
-    assert "- references/guide.md" in part.text
+    assert f"Base directory for this skill: {skill_dir.resolve().as_uri()}/" in part.text
+    assert (
+        "Relative paths in this skill (e.g., scripts/, reference/) are relative "
+        "to this base directory."
+    ) in part.text
+    assert "Note: file list is sampled." in part.text
+    assert f"<file>{skill_dir / 'references' / 'guide.md'}</file>" in part.text
+    assert f"<file>{skill_dir / 'SKILL.md'}</file>" not in part.text
 
 
 def test_skill_context_sidecars_default_to_metadata_without_reading_content(tmp_path):
@@ -50,8 +57,7 @@ def test_skill_context_sidecars_default_to_metadata_without_reading_content(tmp_
     message = skill_package_to_system_message(SkillDiscovery([tmp_path]).get("safe-skill"))
 
     text = message.parts[0].text
-    assert "- side_effect.py" in text
-    assert "bytes" in text
+    assert f"<file>{sidecar}</file>" in text
     assert "raise RuntimeError" not in text
 
 
@@ -66,9 +72,12 @@ def test_skill_context_can_include_truncated_sidecar_text(tmp_path):
     )
 
     text = message.parts[0].text
-    assert "- guide.md" in text
+    assert f"<file>{skill_dir / 'guide.md'}</file>" in text
+    assert '<file_content path="' in text
+    assert 'content_type="text"' in text
+    assert 'truncated="true"' in text
     assert "truncated to 3 of 6 chars" in text
-    assert "  abc" in text
+    assert "\nabc\n" in text
     assert "abcdef" not in text
 
 

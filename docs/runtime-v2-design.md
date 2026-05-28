@@ -638,10 +638,13 @@ configured for the default core tool registry. `skill_list` is the lightweight
 registry view: it lists available skill names, descriptions, active skills, and
 sidecar path/size/content-type inventory without loading full skill context.
 Structured `skill_list` entries include the parsed skill metadata dictionary.
-The `skill` tool is the full context loader. It returns a model-visible
-`<skill_content name="...">` block, and the structured output keeps the skill
-name, description, skill file, raw skill markdown, sidecar inventory, and
-metadata for programmatic consumers.
+The `skill` tool is the full context loader. Its provider description exposes
+available skills in an XML-like `<available_skills>` block with each skill name
+and description. Calling `skill({name})` returns a model-visible
+`<skill_content name="...">` block with the skill markdown, base-directory
+guidance, and sampled sidecar inventory as `<file>` entries. The structured
+output keeps the skill name, description, skill file, raw skill markdown,
+sidecar inventory, and metadata for programmatic consumers.
 
 These tools complement, rather than replace, `/skill`: `/skill` explicitly
 activates provider-only system context before the provider call, while
@@ -652,7 +655,7 @@ remains transient provider-only system context and is not persisted.
 
 Skill tools are read-only context loading. They never import or execute sidecar
 files, including Python files. `skill_list` reports whether sidecars are text or
-binary but never returns sidecar bodies; `skill` lists sidecar files in
+binary but never returns sidecar bodies; `skill` lists sampled sidecar files in
 `<skill_files>` by default, and callers may request bounded text content for
 sidecars, subject to the configured maximum character limit.
 
