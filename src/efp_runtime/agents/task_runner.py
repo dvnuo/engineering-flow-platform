@@ -217,6 +217,11 @@ def _child_config(
         context_reserve_chars=(
             base_config.context_reserve_chars if base_config is not None else 0
         ),
+        enable_compaction_summarizer=(
+            False
+            if base_config is None
+            else base_config.enable_compaction_summarizer
+        ),
         enabled_tools=(
             None
             if base_config is None or base_config.enabled_tools is None
@@ -227,6 +232,9 @@ def _child_config(
         ),
         enable_question_tool=(
             False if base_config is None else base_config.enable_question_tool
+        ),
+        enable_lsp_tool=(
+            False if base_config is None else base_config.enable_lsp_tool
         ),
         metadata=base_metadata,
         include_default_system_prompt=(
@@ -245,6 +253,21 @@ def _child_config(
         ),
         include_runtime_reminders=(
             True if base_config is None else base_config.include_runtime_reminders
+        ),
+        instruction_paths=(
+            [] if base_config is None else list(base_config.instruction_paths)
+        ),
+        instruction_texts=(
+            [] if base_config is None else list(base_config.instruction_texts)
+        ),
+        include_default_instructions=(
+            True if base_config is None else base_config.include_default_instructions
+        ),
+        attach_read_instructions=(
+            True if base_config is None else base_config.attach_read_instructions
+        ),
+        max_instruction_chars=(
+            20000 if base_config is None else base_config.max_instruction_chars
         ),
         skill_directories=(
             [] if base_config is None else list(base_config.skill_directories)
@@ -266,6 +289,25 @@ def _child_config(
         ),
         max_prompt_directory_entries=(
             200 if base_config is None else base_config.max_prompt_directory_entries
+        ),
+        tool_output_max_lines=(
+            2000 if base_config is None else base_config.tool_output_max_lines
+        ),
+        tool_output_max_bytes=(
+            50 * 1024 if base_config is None else base_config.tool_output_max_bytes
+        ),
+        tool_output_truncation_direction=(
+            "head"
+            if base_config is None
+            else base_config.tool_output_truncation_direction
+        ),
+        archive_truncated_tool_outputs=(
+            True
+            if base_config is None
+            else base_config.archive_truncated_tool_outputs
+        ),
+        tool_output_dir=(
+            None if base_config is None else base_config.tool_output_dir
         ),
     )
 
