@@ -18,6 +18,7 @@ from .fetch import create_fetch_tool
 from .filesystem import create_filesystem_tools, normalize_workspace_root
 from .invalid import create_invalid_tool
 from .lsp import create_lsp_tool
+from .plan import create_plan_exit_tool
 from .question import create_question_tool
 from .search import create_glob_tool, create_grep_tool
 from .shell import create_shell_exec_tool
@@ -45,6 +46,7 @@ def create_core_tool_registry(
     lsp_client: LSPClient | None = None,
     include_lsp_tool: bool = False,
     lsp_permission: PermissionMetadata | None = None,
+    include_plan_tool: bool = False,
 ) -> ToolRegistry:
     """Create a registry containing Runtime v2 core built-in tools."""
 
@@ -81,6 +83,8 @@ def create_core_tool_registry(
     if include_question_tool:
         registry.register(create_question_tool(question_broker))
     registry.register(create_todo_write_tool())
+    if include_plan_tool:
+        registry.register(create_plan_exit_tool())
     if resolved_skill_discovery is not None:
         registry.register(
             build_skill_tool(

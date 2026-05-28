@@ -20,6 +20,9 @@ class RuntimeConfig:
     enable_compaction_summarizer: bool = False
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
+    runtime_mode: str = "build"
+    enable_plan_tool: bool | None = None
+    plan_mode_read_only: bool = True
     enable_question_tool: bool = False
     enable_lsp_tool: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -71,10 +74,16 @@ class RuntimeConfig:
             raise ValueError("tool_output_max_bytes must be greater than or equal to 0 or None")
         if self.tool_output_truncation_direction not in ("head", "tail"):
             raise ValueError("tool_output_truncation_direction must be 'head' or 'tail'")
+        if self.runtime_mode not in ("build", "plan"):
+            raise ValueError("runtime_mode must be 'build' or 'plan'")
         self.enabled_tools = (
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
+        self.enable_plan_tool = (
+            None if self.enable_plan_tool is None else bool(self.enable_plan_tool)
+        )
+        self.plan_mode_read_only = bool(self.plan_mode_read_only)
         self.enable_question_tool = bool(self.enable_question_tool)
         self.enable_lsp_tool = bool(self.enable_lsp_tool)
         self.disabled_tools = list(self.disabled_tools)

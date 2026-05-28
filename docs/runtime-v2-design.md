@@ -141,6 +141,25 @@ a tool result for that pending call. If the caller approves and then calls
 to the next provider iteration. Set
 `RuntimeConfig(doom_loop_threshold=None)` to disable this guard.
 
+Runtime v2 supports a minimal `plan` runtime mode alongside the default `build`
+mode. In plan mode, `AgentRuntime` registers the `plan_exit` built-in tool by
+default and, while `RuntimeConfig.plan_mode_read_only=True`, hides mutating
+tools from the provider request schema: `apply_patch`, `edit`, `write_file`,
+and `shell_exec`. These tools remain registered in the underlying registry so
+the policy is enforced through tool selection rather than by changing registry
+shape. Caller-supplied `disabled_tools` still apply, and caller-supplied
+`enabled_tools` cannot expose those mutating tools unless
+`plan_mode_read_only=False`.
+
+`plan_exit` lets the model submit a final structured plan. Its `ToolResult`
+contains the plan, status, summary, next steps, and risks in `output`, and marks
+`ToolResult.metadata["terminal"] = True` with
+`terminal_reason="plan_exit"`. The loop appends that tool result to session
+history like any other successful tool result, emits a `tool_terminal` runtime
+event, finishes the run as `completed`, and does not make another provider
+request. The final assistant message remains the assistant message that made the
+tool call; the runtime does not synthesize assistant text after a terminal tool.
+
 The core built-in registry is workspace-contained and intentionally independent
 from the legacy runtime. It includes read/list/write, grep/glob, shell execution,
 single-file edit, unified-diff apply_patch, session-local todo_write planning,
@@ -243,12 +262,14 @@ Runtime v2 has a small configurable system prompt stack. By default,
 `AgentRuntime` adds a stable base code-agent prompt, then optional explicit
 `RuntimeConfig.system_prompt_texts` and UTF-8 workspace-local
 `RuntimeConfig.system_prompt_paths`. It can also add runtime reminders for the
-current iteration limit, the optional `question` tool, and saved truncated tool
-output referenced by `output_path`.
+current iteration limit, the optional `question` tool, plan mode, and saved
+truncated tool output referenced by `output_path`.
 
 System prompt and reminder messages are transient provider-only system context.
 They are not appended to the session store, are not copied into user messages,
 and are rebuilt for each `run()` or `resume()` request.
+Plan mode does not persist extra system prompt text either; only ordinary
+user, assistant, and tool history is stored.
 
 The full provider request context order is:
 

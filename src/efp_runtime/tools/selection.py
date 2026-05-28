@@ -12,12 +12,14 @@ class ToolSelection:
 
     enabled: set[str] | None = None
     disabled: set[str] = field(default_factory=set)
+    forced_disabled: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.enabled = (
             None if self.enabled is None else {str(tool_id) for tool_id in self.enabled}
         )
         self.disabled = {str(tool_id) for tool_id in self.disabled}
+        self.forced_disabled = {str(tool_id) for tool_id in self.forced_disabled}
 
 
 def resolve_tool_selection(
@@ -25,6 +27,7 @@ def resolve_tool_selection(
     *,
     enabled: Iterable[str] | None = None,
     disabled: Iterable[str] | None = None,
+    forced_disabled: Iterable[str] | None = None,
     overrides: Mapping[str, bool] | None = None,
 ) -> list[str]:
     """Resolve enabled tool ids after configured selection and run overrides."""
@@ -32,6 +35,7 @@ def resolve_tool_selection(
     all_ids = {str(tool_id) for tool_id in all_tool_ids}
     enabled_ids = None if enabled is None else _normalize_ids(enabled)
     disabled_ids = _normalize_ids(disabled or ())
+    forced_disabled_ids = _normalize_ids(forced_disabled or ())
     override_map = dict(overrides or {})
     override_ids = {str(tool_id) for tool_id in override_map}
 
@@ -53,6 +57,7 @@ def resolve_tool_selection(
         else:
             raise TypeError("tool overrides must map tool ids to bool values")
 
+    selected.difference_update(forced_disabled_ids)
     return sorted(selected)
 
 

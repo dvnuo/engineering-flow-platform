@@ -25,7 +25,11 @@ from ..skills.context import SkillContextBuilder
 from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_tool
 from ..system_prompt import SystemPromptBuilder
-from ..tools.builtin import create_core_tool_registry, create_question_tool
+from ..tools.builtin import (
+    create_core_tool_registry,
+    create_plan_exit_tool,
+    create_question_tool,
+)
 from ..tools.definition import OutputPolicy
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
@@ -33,6 +37,9 @@ from ..tools.selection import ToolSelection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
 from .config import RuntimeConfig
 from .run_state import RuntimeRunState
+
+
+PLAN_MODE_MUTATING_TOOLS = {"apply_patch", "edit", "write_file", "shell_exec"}
 
 
 class AgentRuntime:
@@ -315,6 +322,8 @@ class AgentRuntime:
         run_metadata = dict(self.config.metadata)
         run_metadata.update(metadata or {})
         run_metadata["max_iterations"] = self.config.max_iterations
+        run_metadata["runtime_mode"] = self.config.runtime_mode
+        run_metadata["plan_mode_read_only"] = self.config.plan_mode_read_only
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
         run_metadata["tool_output_truncation_enabled"] = (
             self.config.workspace_root is not None
@@ -367,6 +376,9 @@ def _resolve_config(
             None if config.enabled_tools is None else list(config.enabled_tools)
         ),
         disabled_tools=list(config.disabled_tools),
+        runtime_mode=config.runtime_mode,
+        enable_plan_tool=config.enable_plan_tool,
+        plan_mode_read_only=config.plan_mode_read_only,
         enable_question_tool=config.enable_question_tool,
         enable_lsp_tool=config.enable_lsp_tool,
         metadata=resolved_metadata,
@@ -433,11 +445,14 @@ def _resolve_tool_runtime(
                 instruction_resolver=instruction_resolver,
                 lsp_client=lsp_client,
                 include_lsp_tool=config.enable_lsp_tool,
+                include_plan_tool=_plan_tool_enabled(config),
             )
         else:
             if config.enable_lsp_tool or lsp_client is not None:
                 raise ValueError("workspace_root is required to enable the lsp tool")
             registry = ToolRegistry()
+            if _plan_tool_enabled(config):
+                registry.register(create_plan_exit_tool())
             if config.enable_question_tool:
                 registry.register(create_question_tool(question_broker))
             if skill_discovery is not None:
@@ -585,10 +600,22 @@ def _unique_skill_names(names: Iterable[str]) -> list[str]:
 
 
 def _config_tool_selection(config: RuntimeConfig) -> ToolSelection:
+    forced_disabled = (
+        set(PLAN_MODE_MUTATING_TOOLS)
+        if config.runtime_mode == "plan" and config.plan_mode_read_only
+        else set()
+    )
     return ToolSelection(
         enabled=None if config.enabled_tools is None else set(config.enabled_tools),
         disabled=set(config.disabled_tools),
+        forced_disabled=forced_disabled,
     )
+
+
+def _plan_tool_enabled(config: RuntimeConfig) -> bool:
+    if config.enable_plan_tool is None:
+        return config.runtime_mode == "plan"
+    return bool(config.enable_plan_tool)
 
 
 def _permission_request_to_dict(request: Any) -> dict[str, Any]:

@@ -57,6 +57,8 @@ class _ToolExecutionOutcome:
     cancelled: bool = False
     pending_permission_request: Optional[dict[str, Any]] = None
     pending_question_request: Optional[dict[str, Any]] = None
+    terminal: bool = False
+    terminal_reason: Optional[str] = None
 
 
 class _RuntimeEventLog(list):
@@ -140,6 +142,7 @@ class RuntimeLoopRunner:
             all_tool_ids,
             enabled=self.tool_selection.enabled,
             disabled=self.tool_selection.disabled,
+            forced_disabled=self.tool_selection.forced_disabled,
             overrides=tools,
         )
         disabled_tool_ids = _disabled_tool_ids(
@@ -177,6 +180,7 @@ class RuntimeLoopRunner:
         iterations = 0
         pending_permission_request: Optional[dict[str, Any]] = None
         pending_question_request: Optional[dict[str, Any]] = None
+        terminal_reason: Optional[str] = None
         run_metadata = dict(metadata or {})
         run_id = str(run_metadata.get("run_id") or new_id("run"))
         run_metadata["run_id"] = run_id
@@ -251,6 +255,10 @@ class RuntimeLoopRunner:
                 if pending_outcome.pending_question_request is not None:
                     status = LoopStatus.WAITING_FOR_QUESTION
                     pending_question_request = pending_outcome.pending_question_request
+                    break
+                if pending_outcome.terminal:
+                    status = LoopStatus.COMPLETED
+                    terminal_reason = pending_outcome.terminal_reason
                     break
 
             iteration = iterations + 1
@@ -407,6 +415,10 @@ class RuntimeLoopRunner:
                 status = LoopStatus.WAITING_FOR_QUESTION
                 pending_question_request = tool_execution_outcome.pending_question_request
                 break
+            if tool_execution_outcome.terminal:
+                status = LoopStatus.COMPLETED
+                terminal_reason = tool_execution_outcome.terminal_reason
+                break
 
             if iterations >= iteration_limit:
                 status = LoopStatus.MAX_ITERATIONS
@@ -427,6 +439,13 @@ class RuntimeLoopRunner:
 
         if status == LoopStatus.CANCELLED:
             publish_cancelled("finish")
+        finish_payload = {
+            "run_id": run_id,
+            "status": status,
+            "iterations": iterations,
+        }
+        if terminal_reason is not None:
+            finish_payload["terminal_reason"] = terminal_reason
         runtime_events.append(
             RuntimeEvent(
                 type="run_finish",
@@ -436,11 +455,7 @@ class RuntimeLoopRunner:
                     if final_assistant_message is not None
                     else None
                 ),
-                payload={
-                    "run_id": run_id,
-                    "status": status,
-                    "iterations": iterations,
-                },
+                payload=finish_payload,
             )
         )
         return RuntimeLoopResult(
@@ -732,6 +747,29 @@ class RuntimeLoopRunner:
                 runtime_events=runtime_events,
                 run_id=run_id,
             )
+            if _is_terminal_tool_result(result):
+                terminal_reason = _terminal_reason(result) or "tool_terminal"
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="tool_terminal",
+                        message="Terminal tool result received.",
+                        session_id=session_id,
+                        payload={
+                            **_tool_event_context_payload(
+                                run_id=run_id,
+                                tool_call=tool_call,
+                                iteration=iteration,
+                            ),
+                            "terminal_reason": terminal_reason,
+                            "tool_result_status": result.status,
+                            "plan_status": result.metadata.get("plan_status"),
+                        },
+                    )
+                )
+                return _ToolExecutionOutcome(
+                    terminal=True,
+                    terminal_reason=terminal_reason,
+                )
         return _ToolExecutionOutcome()
 
     async def _evaluate_doom_loop_guard(
@@ -865,16 +903,20 @@ class RuntimeLoopRunner:
             status="complete",
             completed_at=result.created_at,
         )
+        payload = {
+            "run_id": run_id,
+            "tool_call_id": result.call_id,
+            "tool_name": result.tool_name,
+            "status": result.status,
+        }
+        if _is_terminal_tool_result(result):
+            payload["terminal"] = True
+            payload["terminal_reason"] = _terminal_reason(result)
         runtime_events.append(
             RuntimeEvent(
                 type="tool_result_appended",
                 session_id=session_id,
-                payload={
-                    "run_id": run_id,
-                    "tool_call_id": result.call_id,
-                    "tool_name": result.tool_name,
-                    "status": result.status,
-                },
+                payload=payload,
             )
         )
 
@@ -1002,6 +1044,7 @@ def _copy_tool_selection(selection: Optional[ToolSelection]) -> ToolSelection:
     return ToolSelection(
         enabled=None if selection.enabled is None else set(selection.enabled),
         disabled=set(selection.disabled),
+        forced_disabled=set(selection.forced_disabled),
     )
 
 
@@ -1047,6 +1090,17 @@ def _disabled_tool_result(tool_call: ToolCall) -> ToolResult:
         content=message,
         metadata={"disabled": True},
     )
+
+
+def _is_terminal_tool_result(result: ToolResult) -> bool:
+    return result.metadata.get("terminal") is True
+
+
+def _terminal_reason(result: ToolResult) -> Optional[str]:
+    value = result.metadata.get("terminal_reason")
+    if value is None or value == "":
+        return None
+    return str(value)
 
 
 def _tool_context(

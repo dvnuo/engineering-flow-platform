@@ -148,6 +148,11 @@ class SystemPromptBuilder:
             lines.append(
                 "- When clarification is required, call the question tool instead of guessing."
             )
+        if _metadata_value(metadata, "runtime_mode") == "plan":
+            lines.append(
+                "- Plan mode is active: analyze first, outline viable options, "
+                "do not modify files, and call plan_exit when the final plan is ready."
+            )
         if _metadata_bool(
             metadata,
             "tool_output_truncation_enabled",

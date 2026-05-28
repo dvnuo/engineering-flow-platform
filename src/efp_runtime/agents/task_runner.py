@@ -230,6 +230,15 @@ def _child_config(
         disabled_tools=(
             [] if base_config is None else list(base_config.disabled_tools)
         ),
+        runtime_mode=(
+            "build" if base_config is None else base_config.runtime_mode
+        ),
+        enable_plan_tool=(
+            None if base_config is None else base_config.enable_plan_tool
+        ),
+        plan_mode_read_only=(
+            True if base_config is None else base_config.plan_mode_read_only
+        ),
         enable_question_tool=(
             False if base_config is None else base_config.enable_question_tool
         ),
