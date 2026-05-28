@@ -1,0 +1,442 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from efp_runtime.agents import (
+    AgentProfile,
+    AgentRegistry,
+    create_subagent_task_runner,
+)
+from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest, ScriptedLLMProvider
+from efp_runtime.runtime import RuntimeConfig
+from efp_runtime.session.models import MessagePartType, MessageRole
+from efp_runtime.tools.builtin.task import TaskToolRequest, create_task_tool
+from efp_runtime.tools.definition import ToolDef
+from efp_runtime.tools.registry import ToolRegistry
+from efp_runtime.tools.runtime import ToolRuntime
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_agent_profile_and_registry_resolution():
+    source_tools = {"alpha": True}
+    source_skills = [" review-pr ", "review-pr"]
+    source_metadata = {"kind": "debug"}
+    profile = AgentProfile(
+        name=" debugger ",
+        prompt="Inspect failures.",
+        tools=source_tools,
+        active_skills=source_skills,
+        max_iterations=2,
+        metadata=source_metadata,
+    )
+    source_tools["alpha"] = False
+    source_skills.append("other")
+    source_metadata["kind"] = "changed"
+
+    assert profile.name == "debugger"
+    assert profile.tools == {"alpha": True}
+    assert profile.active_skills == ["review-pr"]
+    assert profile.metadata == {"kind": "debug"}
+
+    registry = AgentRegistry(
+        [
+            AgentProfile(name="general", description="General purpose"),
+            profile,
+        ],
+        default_agent="general",
+    )
+    assert registry.get("debugger") is profile
+    assert registry.resolve("debugger") is profile
+    assert registry.resolve("missing").name == "general"
+
+    mapped = AgentRegistry.from_mappings(
+        {
+            "general": {"prompt": "Default instructions."},
+            "reviewer": {"description": "Reviews code."},
+        }
+    )
+    assert mapped.resolve("reviewer").description == "Reviews code."
+    assert mapped.resolve("unknown").name == "general"
+
+    strict = AgentRegistry([AgentProfile(name="debugger")], default_agent="general")
+    with pytest.raises(KeyError) as error:
+        strict.resolve("missing")
+    message = str(error.value)
+    assert "missing" in message
+    assert "debugger" in message
+
+    with pytest.raises(ValueError, match="name"):
+        AgentProfile(name="")
+    with pytest.raises(ValueError, match="max_iterations"):
+        AgentProfile(name="bad", max_iterations=0)
+
+
+@pytest.mark.asyncio
+async def test_subagent_runner_selects_profile_and_builds_child_prompt():
+    provider = ScriptedLLMProvider([{"content": "child complete"}])
+    runner = create_subagent_task_runner(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="general"),
+            AgentProfile(
+                name="debugger",
+                prompt="Focus on failing tests and stack traces.",
+                metadata={"tier": "specialist"},
+            ),
+        ],
+        base_config=RuntimeConfig(max_iterations=1),
+    )
+
+    result = await runner(
+        TaskToolRequest(
+            description="Analyze logs",
+            prompt="Find the failing step.",
+            subagent_type="debugger",
+            task_id="task 1",
+            command="inspect-ci",
+            session_id="parent session",
+        )
+    )
+
+    assert result.state == "completed"
+    assert result.text == "child complete"
+    assert result.metadata["parent_session_id"] == "parent session"
+    assert result.metadata["task_id"] == "task 1"
+    assert result.metadata["subagent_type"] == "debugger"
+    assert result.metadata["agent_profile"] == "debugger"
+    assert result.metadata["profile_name"] == "debugger"
+    assert result.metadata["child_status"] == LoopStatus.COMPLETED
+    assert " " not in result.metadata["child_session_id"]
+    assert "parent_session" in result.metadata["child_session_id"]
+    assert "task_1" in result.metadata["child_session_id"]
+
+    assert len(provider.requests) == 1
+    request = provider.requests[0]
+    child_prompt = request.messages[0].parts[0].text
+    assert child_prompt is not None
+    assert '<agent_instructions name="debugger">' in child_prompt
+    assert "Focus on failing tests and stack traces." in child_prompt
+    assert '<task_prompt description="Analyze logs" command="inspect-ci">' in child_prompt
+    assert "Find the failing step." in child_prompt
+    assert request.metadata["agent_profile"] == "debugger"
+    assert request.metadata["subagent_type"] == "debugger"
+    assert request.session_id == result.metadata["child_session_id"]
+
+
+@pytest.mark.asyncio
+async def test_profile_tools_are_applied_as_per_run_overrides():
+    provider = ScriptedLLMProvider([{"content": "done"}])
+
+    def tool_runtime_factory(profile: AgentProfile) -> ToolRuntime:
+        assert profile.name == "restricted"
+        return ToolRuntime(ToolRegistry([_tool("alpha"), _tool("beta")]))
+
+    runner = create_subagent_task_runner(
+        provider=provider,
+        profiles=[
+            AgentProfile(
+                name="restricted",
+                tools={"beta": False},
+            )
+        ],
+        base_config=RuntimeConfig(
+            max_iterations=1,
+            enabled_tools=["alpha", "beta"],
+        ),
+        tool_runtime_factory=tool_runtime_factory,
+    )
+
+    result = await runner(
+        TaskToolRequest(
+            description="Use restricted tools",
+            prompt="Answer with available tools.",
+            subagent_type="restricted",
+            task_id="task-tools",
+            session_id="parent-tools",
+        )
+    )
+
+    assert result.state == "completed"
+    request = provider.requests[0]
+    assert [tool.id for tool in request.tools] == ["alpha"]
+    assert [schema.id for schema in request.provider_request.tools] == ["alpha"]
+    assert request.metadata["enabled_tool_ids"] == ["alpha"]
+    assert request.metadata["disabled_tool_ids"] == ["beta"]
+    assert request.provider_request.metadata["tools"] == {
+        "enabled": ["alpha"],
+        "disabled": ["beta"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_profile_active_skills_enter_child_context_without_base_pollution(
+    tmp_path: Path,
+):
+    _write_skill(tmp_path, "review-pr", content="# Review\nInspect diffs.")
+    provider = ScriptedLLMProvider([{"content": "review done"}])
+    base_config = RuntimeConfig(
+        skill_directories=[tmp_path],
+        active_skills=["base-skill"],
+        max_iterations=1,
+    )
+    runner = create_subagent_task_runner(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="reviewer", active_skills=["review-pr"]),
+        ],
+        base_config=base_config,
+    )
+
+    result = await runner(
+        TaskToolRequest(
+            description="Review",
+            prompt="Review the change.",
+            subagent_type="reviewer",
+            task_id="task-skill",
+            session_id="parent-skill",
+        )
+    )
+
+    assert result.state == "completed"
+    request = provider.requests[0]
+    assert request.provider_request.messages[0].role == "system"
+    assert '<skill_content name="review-pr">' in request.provider_request.messages[0].text
+    assert "# Skill: review-pr" in request.provider_request.messages[0].text
+    assert request.provider_request.messages[1].role == "user"
+    assert request.metadata["active_skills"] == ["review-pr"]
+    assert request.provider_request.metadata["active_skills"] == ["review-pr"]
+    assert base_config.active_skills == ["base-skill"]
+    assert [message.role for message in request.messages] == [MessageRole.USER]
+
+
+@pytest.mark.asyncio
+async def test_subagent_non_completed_and_runtime_errors_return_task_error_state():
+    max_provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-again",
+                        "type": "function",
+                        "function": {"name": "again", "arguments": "{}"},
+                    }
+                ]
+            }
+        ]
+    )
+    max_runner = create_subagent_task_runner(
+        provider=max_provider,
+        profiles=[AgentProfile(name="looper", max_iterations=1)],
+    )
+
+    max_result = await max_runner(
+        TaskToolRequest(
+            description="Loop",
+            prompt="Call a tool.",
+            subagent_type="looper",
+            task_id="task-max",
+            session_id="parent-max",
+        )
+    )
+
+    assert max_result.state == "error"
+    assert max_result.metadata["child_status"] == LoopStatus.MAX_ITERATIONS
+    assert "max_iterations" in max_result.text
+
+    error_provider = ScriptedLLMProvider([{"content": "unused"}])
+    error_runner = create_subagent_task_runner(
+        provider=error_provider,
+        profiles=[AgentProfile(name="bad-tools", tools={"missing": False})],
+    )
+
+    error_result = await error_runner(
+        TaskToolRequest(
+            description="Bad tools",
+            prompt="This should not reach the provider.",
+            subagent_type="bad-tools",
+            task_id="task-error",
+            session_id="parent-error",
+        )
+    )
+
+    assert error_result.state == "error"
+    assert error_result.metadata["child_status"] == LoopStatus.ERROR
+    assert "Unknown tool: missing" in error_result.text
+    assert error_provider.requests == []
+
+    class RaisingProvider:
+        def __init__(self) -> None:
+            self.requests: list[RuntimeRequest] = []
+
+        async def invoke(self, request: RuntimeRequest) -> dict[str, Any]:
+            self.requests.append(request)
+            raise RuntimeError("provider exploded")
+
+    raising_provider = RaisingProvider()
+    raising_runner = create_subagent_task_runner(
+        provider=raising_provider,
+        profiles=[AgentProfile(name="raiser")],
+    )
+
+    raising_result = await raising_runner(
+        TaskToolRequest(
+            description="Provider error",
+            prompt="Trigger provider failure.",
+            subagent_type="raiser",
+            task_id="task-provider-error",
+            session_id="parent-provider-error",
+        )
+    )
+
+    assert raising_result.state == "error"
+    assert raising_result.metadata["child_status"] == LoopStatus.ERROR
+    assert raising_result.text == "provider exploded"
+    assert len(raising_provider.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_task_tool_with_subagent_runner_returns_output_to_parent_loop():
+    class ParentChildProvider:
+        def __init__(self) -> None:
+            self.requests: list[RuntimeRequest] = []
+
+        async def invoke(self, request: RuntimeRequest) -> dict[str, Any]:
+            self.requests.append(request)
+            if request.metadata.get("agent_profile") == "debugger":
+                assert request.metadata["parent_session_id"] == "parent-session"
+                assert request.metadata["task_id"] == "task-loop"
+                assert request.session_id == "subagent-parent-session-task-loop"
+                return {"content": "child analysis"}
+
+            if request.iteration == 1:
+                return {
+                    "tool_calls": [
+                        {
+                            "id": "call-task-loop",
+                            "type": "function",
+                            "function": {
+                                "name": "task",
+                                "arguments": json.dumps(
+                                    {
+                                        "description": "Analyze logs",
+                                        "prompt": "Find the failing step.",
+                                        "subagent_type": "debugger",
+                                        "task_id": "task-loop",
+                                    },
+                                    sort_keys=True,
+                                ),
+                            },
+                        }
+                    ]
+                }
+
+            assert request.iteration == 2
+            assert request.messages[-1].role is MessageRole.TOOL
+            result_part = request.messages[-1].parts[0]
+            assert result_part.type is MessagePartType.TOOL_RESULT
+            assert result_part.tool_result is not None
+            assert result_part.tool_result.call_id == "call-task-loop"
+            assert "<task_result>\nchild analysis\n</task_result>" in (
+                result_part.tool_result.content
+            )
+            assert result_part.tool_result.metadata["task_result_metadata"][
+                "child_session_id"
+            ] == "subagent-parent-session-task-loop"
+            return {"content": "parent final"}
+
+    provider = ParentChildProvider()
+    task_runner = create_subagent_task_runner(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="general"),
+            AgentProfile(name="debugger", prompt="Debug the task."),
+        ],
+        base_config=RuntimeConfig(max_iterations=1),
+    )
+    runner = RuntimeLoopRunner(
+        store=_store(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry([create_task_tool(task_runner)])),
+        max_iterations=3,
+    )
+
+    result = await runner.run(session_id="parent-session", user_text="Delegate.")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.final_assistant_message is not None
+    assert result.final_assistant_message.parts[0].text == "parent final"
+    assert len(provider.requests) == 3
+
+
+def test_agent_profiles_import_boundary():
+    code = """
+import importlib
+import json
+import sys
+
+importlib.import_module("efp_runtime.agents")
+legacy_modules = [
+    "src.sessions",
+    "src.agents.core",
+    "src.runtime",
+    "src.skills",
+]
+print(json.dumps({
+    "legacy_loaded": [name for name in legacy_modules if name in sys.modules],
+}))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = "src"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload == {"legacy_loaded": []}
+
+
+def _tool(tool_id: str) -> ToolDef:
+    async def execute(args, context):
+        return {"tool": tool_id, "session_id": context.session_id}
+
+    return ToolDef(
+        id=tool_id,
+        description=f"{tool_id} tool",
+        input_schema={"type": "object", "properties": {}},
+        execute=execute,
+    )
+
+
+def _write_skill(
+    tmp_path: Path,
+    name: str,
+    *,
+    description: str = "Loads skill context",
+    content: str = "# Skill\nUse this context.",
+) -> Path:
+    skill_dir = tmp_path / name
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n{content}\n",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def _store():
+    from efp_runtime.session.store import InMemorySessionStore
+
+    return InMemorySessionStore()

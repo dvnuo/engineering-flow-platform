@@ -131,6 +131,38 @@ tool result for the next provider iteration. Runtime v2 does not implement
 background task synthetic-message injection yet; `background=true` is rejected
 with an explicit unsupported error by default.
 
+## Agent Profiles And Subagents
+
+Runtime v2 has a small standalone agent profile layer under
+`efp_runtime.agents`. `AgentProfile` names a profile and can provide additional
+agent instructions, per-run tool overrides, active skills, a child iteration
+limit, and metadata. `AgentRegistry` resolves `task.subagent_type` to a profile
+and can fall back to a configured default profile, usually `general`.
+
+`create_subagent_task_runner(...)` builds the foreground task runner used by the
+injectable `task` tool. The runner does not start a legacy agent, background
+worker, or separate process. It creates a child `AgentRuntime`, constructs a
+traceable child session id from the parent session id and task id, prepends the
+selected profile prompt to the task prompt, and runs the child loop. Completed
+child runs return the final assistant text as the task result. Non-completed
+child runs and provider/runtime failures are normalized into `TaskToolResult`
+with `state="error"` so the parent loop receives an ordinary tool result rather
+than an exception.
+
+Child config is derived from the supplied `base_config` without mutating it.
+`workspace_root` passed to the runner wins over `base_config.workspace_root`;
+profile `max_iterations` wins over the base limit; profile `active_skills`
+replace base active skills to avoid implicit skill leakage; and base
+enabled/disabled tool settings remain in the child config. Profile `tools` are
+passed to `AgentRuntime.run(..., tools=...)` as the per-run override. The core
+registry still does not register `task` by default; callers must explicitly wire
+the runner, for example by passing
+`task_runner=create_subagent_task_runner(...)` to `create_core_tool_registry`.
+
+Only foreground subagent tasks are supported in this phase. Background tasks,
+real multiprocess workers, and legacy runtime/session integration remain
+unsupported.
+
 ## Skills
 
 Skills are discovered from `SKILL.md` or `skill.md` files. Loading a skill reads
