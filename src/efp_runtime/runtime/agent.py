@@ -16,13 +16,14 @@ from ..loop.provider import LLMProvider
 from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
 from ..permissions import PermissionEvaluator
 from ..prompt import resolve_prompt_references
+from ..questions import QuestionBroker
 from ..session.protocol import SessionStore
 from ..session.store import InMemorySessionStore
 from ..skills.commands import SkillCommandResult, parse_skill_commands
 from ..skills.context import SkillContextBuilder
 from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_tool
-from ..tools.builtin import create_core_tool_registry
+from ..tools.builtin import create_core_tool_registry, create_question_tool
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection
@@ -55,6 +56,7 @@ class AgentRuntime:
         event_bus: RuntimeEventBus | None = None,
         run_state: RuntimeRunState | None = None,
         compaction_summarizer: CompactionSummarizer | None = None,
+        question_broker: QuestionBroker | None = None,
     ) -> None:
         self.config = _resolve_config(
             config,
@@ -68,6 +70,7 @@ class AgentRuntime:
         self.provider = provider
         self.adapter = adapter
         self.compaction_summarizer = compaction_summarizer
+        self.question_broker = question_broker or QuestionBroker()
         self.store = store or InMemorySessionStore()
         self.skill_discovery = _resolve_skill_discovery(
             config=self.config,
@@ -80,6 +83,7 @@ class AgentRuntime:
             tool_runtime=tool_runtime,
             permission_evaluator=permission_evaluator,
             skill_discovery=self.skill_discovery,
+            question_broker=self.question_broker,
         )
         self.skill_context_builder = _resolve_skill_context_builder(
             config=self.config,
@@ -241,6 +245,15 @@ class AgentRuntime:
     def pending_permission_requests(self) -> list[dict[str, Any]]:
         return self.pending_permissions()
 
+    def answer_question(self, request_id: str, answers):
+        return self.question_broker.answer(request_id, answers)
+
+    def pending_questions(self) -> list[dict[str, Any]]:
+        return [
+            _question_request_to_dict(request)
+            for request in self.question_broker.pending()
+        ]
+
     def cancel(self, session_id: str) -> bool:
         return self.run_state.cancel(session_id)
 
@@ -318,6 +331,7 @@ def _resolve_config(
             None if config.enabled_tools is None else list(config.enabled_tools)
         ),
         disabled_tools=list(config.disabled_tools),
+        enable_question_tool=config.enable_question_tool,
         metadata=resolved_metadata,
         instruction_paths=list(config.instruction_paths),
         instruction_texts=list(config.instruction_texts),
@@ -341,6 +355,7 @@ def _resolve_tool_runtime(
     tool_runtime: ToolRuntime | None,
     permission_evaluator: PermissionEvaluator | None,
     skill_discovery: SkillDiscovery | None,
+    question_broker: QuestionBroker,
 ) -> ToolRuntime:
     if tool_runtime is not None:
         if tool_registry is not None and tool_registry is not tool_runtime.registry:
@@ -356,9 +371,13 @@ def _resolve_tool_runtime(
                 workspace_root,
                 skill_discovery=skill_discovery,
                 max_skill_sidecar_chars=config.max_skill_sidecar_chars,
+                question_broker=question_broker,
+                include_question_tool=config.enable_question_tool,
             )
         else:
             registry = ToolRegistry()
+            if config.enable_question_tool:
+                registry.register(create_question_tool(question_broker))
             if skill_discovery is not None:
                 registry.register(
                     build_skill_tool(
@@ -459,6 +478,20 @@ def _permission_request_to_dict(request: Any) -> dict[str, Any]:
     decoded = json.loads(encoded)
     if not isinstance(decoded, dict):
         raise TypeError("pending permission request must encode to a JSON object")
+    return decoded
+
+
+def _question_request_to_dict(request: Any) -> dict[str, Any]:
+    if hasattr(request, "to_dict"):
+        payload = request.to_dict()
+    elif isinstance(request, Mapping):
+        payload = dict(request)
+    else:
+        raise TypeError("pending question request must be mapping-like")
+    encoded = json.dumps(payload, sort_keys=True, default=str)
+    decoded = json.loads(encoded)
+    if not isinstance(decoded, dict):
+        raise TypeError("pending question request must encode to a JSON object")
     return decoded
 
 

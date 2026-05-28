@@ -140,6 +140,20 @@ tool result for the next provider iteration. Runtime v2 does not implement
 background task synthetic-message injection yet; `background=true` is rejected
 with an explicit unsupported error by default.
 
+The `question` tool is an optional first-class interactive pause. It is disabled
+by default and can be enabled with
+`RuntimeConfig(enable_question_tool=True)` or by passing
+`include_question_tool=True` to `create_core_tool_registry`. When the model calls
+`question`, the tool creates a `QuestionRequest` in the `QuestionBroker` and
+returns `question_requested`. The loop publishes `tool.question_requested`,
+finishes the run as `waiting_for_question`, and leaves the assistant tool call
+unpaired. The caller answers with `AgentRuntime.answer_question(request_id,
+answers)` and then calls `resume(session_id)`. On resume, the same pending
+question tool call consumes the answer, appends a successful tool result, and the
+loop continues to the next provider iteration without adding an empty user
+message. Question requests are independent from permission requests and do not
+create pending permissions.
+
 ## Agent Profiles And Subagents
 
 Runtime v2 has a small standalone agent profile layer under

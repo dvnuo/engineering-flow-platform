@@ -34,6 +34,7 @@ class LoopStatus:
     MAX_ITERATIONS = "max_iterations"
     CANCELLED = "cancelled"
     WAITING_FOR_PERMISSION = "waiting_for_permission"
+    WAITING_FOR_QUESTION = "waiting_for_question"
 
 
 @dataclass
@@ -44,6 +45,7 @@ class RuntimeLoopResult:
     status: str
     runtime_events: List[RuntimeEvent] = field(default_factory=list)
     pending_permission_request: Optional[dict[str, Any]] = None
+    pending_question_request: Optional[dict[str, Any]] = None
 
 
 ProviderCallable = Callable[[RuntimeRequest], ProviderResult]
@@ -54,6 +56,7 @@ CancelCallback = Callable[..., Any]
 class _ToolExecutionOutcome:
     cancelled: bool = False
     pending_permission_request: Optional[dict[str, Any]] = None
+    pending_question_request: Optional[dict[str, Any]] = None
 
 
 class _RuntimeEventLog(list):
@@ -173,6 +176,7 @@ class RuntimeLoopRunner:
         status = LoopStatus.COMPLETED
         iterations = 0
         pending_permission_request: Optional[dict[str, Any]] = None
+        pending_question_request: Optional[dict[str, Any]] = None
         run_metadata = dict(metadata or {})
         run_id = str(run_metadata.get("run_id") or new_id("run"))
         run_metadata["run_id"] = run_id
@@ -243,6 +247,10 @@ class RuntimeLoopRunner:
                 if pending_outcome.pending_permission_request is not None:
                     status = LoopStatus.WAITING_FOR_PERMISSION
                     pending_permission_request = pending_outcome.pending_permission_request
+                    break
+                if pending_outcome.pending_question_request is not None:
+                    status = LoopStatus.WAITING_FOR_QUESTION
+                    pending_question_request = pending_outcome.pending_question_request
                     break
 
             iteration = iterations + 1
@@ -395,6 +403,10 @@ class RuntimeLoopRunner:
                 status = LoopStatus.WAITING_FOR_PERMISSION
                 pending_permission_request = tool_execution_outcome.pending_permission_request
                 break
+            if tool_execution_outcome.pending_question_request is not None:
+                status = LoopStatus.WAITING_FOR_QUESTION
+                pending_question_request = tool_execution_outcome.pending_question_request
+                break
 
             if iterations >= iteration_limit:
                 status = LoopStatus.MAX_ITERATIONS
@@ -438,6 +450,7 @@ class RuntimeLoopRunner:
             status=status,
             runtime_events=runtime_events,
             pending_permission_request=pending_permission_request,
+            pending_question_request=pending_question_request,
         )
 
     def _context_budget_enabled(self) -> bool:
@@ -617,7 +630,11 @@ class RuntimeLoopRunner:
                 resume_pending=resume_pending,
             )
             if doom_loop_outcome is not None:
-                if doom_loop_outcome.pending_permission_request is not None:
+                if (
+                    doom_loop_outcome.pending_permission_request is not None
+                    or doom_loop_outcome.pending_question_request is not None
+                    or doom_loop_outcome.cancelled
+                ):
                     return doom_loop_outcome
                 continue
 
@@ -632,7 +649,9 @@ class RuntimeLoopRunner:
                 ),
             )
             permission_request = _permission_request_payload(result.metadata)
+            question_request = _question_request_payload(result.metadata)
             permission_event_published = False
+            question_event_published = False
             for event in result.events:
                 if isinstance(event, RuntimeEvent):
                     if event.session_id is None:
@@ -650,6 +669,15 @@ class RuntimeLoopRunner:
                                 run_id=run_id,
                                 tool_call=tool_call,
                                 permission_request=permission_request,
+                            )
+                        )
+                    if event.type == "tool.question_requested":
+                        question_event_published = True
+                        event.payload.update(
+                            _question_requested_payload(
+                                run_id=run_id,
+                                tool_call=tool_call,
+                                question_request=question_request,
                             )
                         )
                     runtime_events.append(event)
@@ -678,6 +706,24 @@ class RuntimeLoopRunner:
                     )
                 return _ToolExecutionOutcome(
                     pending_permission_request=permission_request,
+                )
+
+            if result.status == "question_requested":
+                if not question_event_published:
+                    runtime_events.append(
+                        RuntimeEvent(
+                            type="tool.question_requested",
+                            session_id=session_id,
+                            message=result.content,
+                            payload=_question_requested_payload(
+                                run_id=run_id,
+                                tool_call=tool_call,
+                                question_request=question_request,
+                            ),
+                        )
+                    )
+                return _ToolExecutionOutcome(
+                    pending_question_request=question_request,
                 )
 
             self._append_tool_result(
@@ -1073,6 +1119,13 @@ def _permission_request_payload(metadata: Mapping[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _question_request_payload(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    raw_request = metadata.get("question_request")
+    if isinstance(raw_request, Mapping):
+        return dict(raw_request)
+    return {}
+
+
 def _permission_decision_request_payload(request: Any) -> dict[str, Any]:
     if request is None:
         return {}
@@ -1097,6 +1150,20 @@ def _permission_requested_payload(
         "tool_call_id": tool_call.call_id,
         "tool_name": tool_call.tool_name,
         "permission_request": dict(permission_request),
+    }
+
+
+def _question_requested_payload(
+    *,
+    run_id: str,
+    tool_call: ToolCall,
+    question_request: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "tool_call_id": tool_call.call_id,
+        "tool_name": tool_call.tool_name,
+        "question_request": dict(question_request),
     }
 
 

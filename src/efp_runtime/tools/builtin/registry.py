@@ -6,12 +6,14 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ...permissions import ALLOW, PermissionMetadata
+from ...questions import QuestionBroker
 from ...skills.discovery import SkillDiscovery
 from ...skills.tool import build_skill_tool
 from ..registry import ToolRegistry
 from .apply_patch import create_apply_patch_tool
 from .edit import create_edit_tool
 from .filesystem import create_filesystem_tools, normalize_workspace_root
+from .question import create_question_tool
 from .search import create_glob_tool, create_grep_tool
 from .shell import create_shell_exec_tool
 from .task import TaskToolRunner, create_task_tool
@@ -26,6 +28,8 @@ def create_core_tool_registry(
     task_runner: TaskToolRunner | None = None,
     include_task_tool: bool = False,
     allow_background_task: bool = False,
+    question_broker: QuestionBroker | None = None,
+    include_question_tool: bool = False,
     skill_discovery: SkillDiscovery | None = None,
     skill_directories: Iterable[str | Path] | None = None,
     include_skill_tool: bool = False,
@@ -54,6 +58,8 @@ def create_core_tool_registry(
         registry.register(
             create_task_tool(task_runner, allow_background=allow_background_task)
         )
+    if include_question_tool:
+        registry.register(create_question_tool(question_broker))
     registry.register(create_todo_write_tool())
     if resolved_skill_discovery is not None:
         registry.register(
