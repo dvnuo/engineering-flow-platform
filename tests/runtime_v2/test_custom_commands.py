@@ -17,6 +17,7 @@ from efp_runtime.commands import (
     command_definitions_from_config,
     expand_command,
 )
+from efp_runtime.llm.provider import OpenAICompatibleProvider, RecordingTransport
 from efp_runtime.loop import ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import _resolve_config
@@ -413,6 +414,60 @@ async def test_command_model_records_requested_model_without_provider_model_swit
     await runtime.run("/build", session_id="session-command-model")
 
     request = provider.requests[0]
+    assert request.metadata["command_model"] == "provider/model"
+    assert request.metadata["requested_model"] == "provider/model"
+    assert request.provider_request.metadata["requested_model"] == "provider/model"
+    assert not hasattr(request.provider_request, "model")
+
+
+@pytest.mark.asyncio
+async def test_command_model_sets_openai_payload_model_without_provider_model_switch():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="build",
+                content="Build.",
+                source="config",
+                model="provider/model",
+            )
+        ]
+    )
+    transport = RecordingTransport(
+        [
+            {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "Done."},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        ]
+    )
+    provider = OpenAICompatibleProvider(model="base/model", transport=transport)
+    requests: list[Any] = []
+    original_invoke = provider.invoke
+
+    async def recording_invoke(request):
+        requests.append(request)
+        return await original_invoke(request)
+
+    provider.invoke = recording_invoke
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+    )
+
+    await runtime.run("/build", session_id="session-command-openai-model")
+
+    request = requests[0]
+    assert provider.model == "base/model"
+    assert transport.payloads[0]["model"] == "provider/model"
     assert request.metadata["command_model"] == "provider/model"
     assert request.metadata["requested_model"] == "provider/model"
     assert request.provider_request.metadata["requested_model"] == "provider/model"

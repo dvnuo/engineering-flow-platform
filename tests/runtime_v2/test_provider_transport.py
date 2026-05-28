@@ -129,6 +129,78 @@ async def test_responses_endpoint_projects_input_tools_and_metadata():
 
 
 @pytest.mark.asyncio
+async def test_chat_provider_uses_requested_model_payload_hint_without_switching_provider():
+    transport = RecordingTransport([_chat_response("Requested chat model.")])
+    provider = OpenAICompatibleProvider(model="gpt-test", transport=transport)
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(
+        session_id="session-chat-model-hint",
+        user_text="Answer with requested model.",
+        metadata={"requested_model": "gpt-override"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert provider.model == "gpt-test"
+    assert transport.payloads[0]["model"] == "gpt-override"
+    assert transport.payloads[0]["metadata"]["requested_model"] == "gpt-override"
+
+
+@pytest.mark.asyncio
+async def test_responses_provider_uses_requested_model_payload_hint_without_switching_provider():
+    transport = RecordingTransport([_responses_response("Requested responses model.")])
+    provider = OpenAICompatibleProvider(
+        model="gpt-test",
+        transport=transport,
+        endpoint="responses",
+    )
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(
+        session_id="session-responses-model-hint",
+        user_text="Answer with requested model.",
+        metadata={"requested_model": "gpt-override"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert provider.model == "gpt-test"
+    assert transport.payloads[0]["model"] == "gpt-override"
+    assert transport.payloads[0]["metadata"]["requested_model"] == "gpt-override"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", ["", "   ", 123, None, ["gpt-override"]])
+async def test_provider_requested_model_payload_hint_falls_back_for_blank_or_non_string(
+    requested_model,
+):
+    transport = RecordingTransport([_chat_response("Base model.")])
+    provider = OpenAICompatibleProvider(model="gpt-test", transport=transport)
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(
+        session_id="session-model-hint-fallback-{0}".format(type(requested_model).__name__),
+        user_text="Answer with base model.",
+        metadata={"requested_model": requested_model},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert provider.model == "gpt-test"
+    assert transport.payloads[0]["model"] == "gpt-test"
+
+
+@pytest.mark.asyncio
 async def test_stream_provider_chunks_are_normalized_into_text_and_tool_call_events():
     async def execute(args, context):
         return "lookup:{0}:{1}".format(args["query"], context.session_id)
@@ -308,3 +380,29 @@ def _lookup_tool() -> ToolDef:
         },
         execute=execute,
     )
+
+
+def _chat_response(text):
+    return {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": text,
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+
+
+def _responses_response(text):
+    return {
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    }

@@ -314,6 +314,13 @@ of normalized `LLMEvent` values through `DefaultLLMEventAdapter`. Transport
 failures are mapped to provider error responses so the loop can finish with an
 error status without depending on SDK exception types.
 
+When `RuntimeRequest.metadata["requested_model"]` is a non-empty string,
+`OpenAICompatibleProvider` uses it as the outgoing payload `model` for Chat
+Completions or Responses projection. This does not mutate the provider's
+constructor `model` and does not switch provider instances, endpoint, transport,
+tools, schemas, mode, or sampling settings. Generic providers can continue to
+treat `requested_model` as run metadata.
+
 Provider exceptions are provider-neutral. Runtime v2 exposes
 `ProviderError`, `ProviderTransientError`, `ProviderContextOverflowError`, and
 `ProviderFatalError` with `retryable`, `code`, and `metadata` fields, but does
@@ -839,10 +846,11 @@ arguments and remaining body text.
 Command metadata flows into run metadata as `command_source`, optional
 `command_agent`, optional `command_model`, optional `command_subtask`, and a
 copied `command_metadata` object. When command `model` is present, Runtime v2
-also records `requested_model`. That field is metadata only in this phase: it
-does not switch provider instances, provider transports, request schemas, model
-ids, mode, or sampling settings. `subtask` is recorded only; it does not start a
-subagent in this phase.
+also records `requested_model`. For generic providers that field remains
+metadata only. `OpenAICompatibleProvider` honors it when building the outgoing
+payload `model`, but it does not switch provider instances, endpoint, transport,
+tools, schemas, mode, or sampling settings. `subtask` is recorded only; it does
+not start a subagent in this phase.
 
 Command `tools` metadata is treated as a per-run tool override base. A list such
 as `tools: [read_file, edit]` enables those tools, equivalent to

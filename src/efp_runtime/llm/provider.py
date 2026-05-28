@@ -67,17 +67,18 @@ class OpenAICompatibleProvider:
     def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
         """Project a RuntimeRequest into the configured provider payload."""
 
+        payload_model = _requested_model(request) or self.model
         if self.endpoint == "responses":
             return provider_request_to_openai_responses(
                 request.provider_request,
-                model=self.model,
+                model=payload_model,
                 instructions=self.instructions,
                 stream=self.stream,
                 metadata=self.metadata,
             )
         return provider_request_to_openai_chat(
             request.provider_request,
-            model=self.model,
+            model=payload_model,
             instructions=self.instructions,
             stream=self.stream,
             metadata=self.metadata,
@@ -142,6 +143,16 @@ class RecordingTransport:
     @property
     def remaining(self) -> int:
         return len(self._responses)
+
+
+def _requested_model(request: RuntimeRequest) -> Optional[str]:
+    requested_model = request.metadata.get("requested_model")
+    if not isinstance(requested_model, str):
+        return None
+    requested_model = requested_model.strip()
+    if not requested_model:
+        return None
+    return requested_model
 
 
 __all__ = [
