@@ -528,6 +528,15 @@ unless raw HTML is requested, while non-HTML text is returned as decoded text.
 Responses are rejected when the declared or actual body exceeds 5 MiB, and
 `max_chars` still controls model-visible truncation.
 
+The `todo_write` and `todowrite` ids share one session-local in-memory todo
+store. Todo items normalize to `content`, `status`, and `priority`; `status`
+accepts `pending`, `in_progress`, `completed`, and `cancelled`, while
+`priority` accepts `high`, `medium`, and `low` and defaults to `medium` when
+callers omit it. Successful writes return the normalized todos in output and
+metadata, include active/completed/cancelled count metadata, and attach a
+`todo.updated` runtime event with the current session id, tool id, tool call id,
+normalized todos, and the same count fields.
+
 The legacy `read_file` id keeps its original raw text output. The `read` alias
 keeps raw selected text in `ToolResult.output["content"]` for callers, while its
 model-visible content wraps files in `<path>`, `<type>`, and `<content>` tags

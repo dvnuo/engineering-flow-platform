@@ -144,10 +144,18 @@ async def test_todowrite_uses_todo_write_schema_and_normalizes_todos(tmp_path: P
     assert result.tool_name == "todowrite"
     assert result.output == {
         "todos": [
-            {"content": "Inspect aliases", "status": "completed"},
-            {"content": "Run tests", "status": "in_progress"},
+            {
+                "content": "Inspect aliases",
+                "status": "completed",
+                "priority": "medium",
+            },
+            {"content": "Run tests", "status": "in_progress", "priority": "medium"},
         ]
     }
+    assert result.metadata["todo_count"] == 2
+    assert result.metadata["active_todo_count"] == 1
+    assert result.metadata["completed_todo_count"] == 1
+    assert result.metadata["cancelled_todo_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -168,19 +176,27 @@ async def test_todo_write_and_todowrite_share_registry_store(tmp_path: Path):
         context=ToolContext(session_id="session-shared"),
     )
     assert todo_store["session-shared"] == [
-        {"content": "From EFP id", "status": "pending"}
+        {"content": "From EFP id", "status": "pending", "priority": "medium"}
     ]
 
     await runtime.execute(
         ToolCall(
             id="call-todowrite",
             tool_id="todowrite",
-            args={"todos": [{"content": "From alias", "status": "completed"}]},
+            args={
+                "todos": [
+                    {
+                        "content": "From alias",
+                        "status": "completed",
+                        "priority": "high",
+                    }
+                ]
+            },
         ),
         context=ToolContext(session_id="session-shared"),
     )
     assert todo_store["session-shared"] == [
-        {"content": "From alias", "status": "completed"}
+        {"content": "From alias", "status": "completed", "priority": "high"}
     ]
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import textwrap
 from pathlib import Path
@@ -261,7 +262,9 @@ async def test_apply_patch_rejects_outside_paths(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_todo_write_normalizes_and_validates_status(tmp_path: Path):
+async def test_todo_write_normalizes_metadata_events_and_validates_input(
+    tmp_path: Path,
+):
     runtime = ToolRuntime(create_core_tool_registry(tmp_path))
 
     result = await runtime.execute(
@@ -272,18 +275,41 @@ async def test_todo_write_normalizes_and_validates_status(tmp_path: Path):
                 "todos": [
                     {"content": "Inspect tools", "status": "completed"},
                     {"content": "Run tests", "status": "in_progress"},
+                    {
+                        "content": "Drop stale task",
+                        "status": "cancelled",
+                        "priority": "low",
+                    },
                 ]
             },
         ),
         context=ToolContext(session_id="session-1"),
     )
 
+    todos = [
+        {"content": "Inspect tools", "status": "completed", "priority": "medium"},
+        {"content": "Run tests", "status": "in_progress", "priority": "medium"},
+        {"content": "Drop stale task", "status": "cancelled", "priority": "low"},
+    ]
     assert result.status == "success"
-    assert result.output == {
-        "todos": [
-            {"content": "Inspect tools", "status": "completed"},
-            {"content": "Run tests", "status": "in_progress"},
-        ]
+    assert result.output == {"todos": todos}
+    assert json.loads(result.content) == {"todos": todos}
+    assert result.metadata["todos"] == todos
+    assert result.metadata["todo_count"] == 3
+    assert result.metadata["active_todo_count"] == 1
+    assert result.metadata["completed_todo_count"] == 1
+    assert result.metadata["cancelled_todo_count"] == 1
+
+    todo_event = next(event for event in result.events if event.type == "todo.updated")
+    assert todo_event.session_id == "session-1"
+    assert todo_event.payload == {
+        "tool_id": "todo_write",
+        "tool_call_id": "call-todo",
+        "todos": todos,
+        "todo_count": 3,
+        "active_todo_count": 1,
+        "completed_todo_count": 1,
+        "cancelled_todo_count": 1,
     }
 
     invalid = await runtime.execute(
@@ -296,6 +322,25 @@ async def test_todo_write_normalizes_and_validates_status(tmp_path: Path):
 
     assert invalid.status == "validation_error"
     assert "todos[0].status" in invalid.error
+
+    invalid_priority = await runtime.execute(
+        ToolCall(
+            id="call-todo-invalid-priority",
+            tool_id="todo_write",
+            args={
+                "todos": [
+                    {
+                        "content": "Bad priority",
+                        "status": "pending",
+                        "priority": "urgent",
+                    }
+                ]
+            },
+        )
+    )
+
+    assert invalid_priority.status == "validation_error"
+    assert "todos[0].priority" in invalid_priority.error
 
 
 @pytest.mark.asyncio
@@ -331,7 +376,13 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
     assert registry.require("invalid").permission.action == ALLOW
     assert registry.require("invalid").permission.category == "validation"
     assert registry.require("todo_write").permission.action == ALLOW
+    assert registry.require("todo_write").permission.category == "planning"
+    assert registry.require("todo_write").permission.resource == "session"
+    assert registry.require("todo_write").permission.risk == "low"
     assert registry.require("todowrite").permission.action == ALLOW
+    assert registry.require("todowrite").permission.category == "planning"
+    assert registry.require("todowrite").permission.resource == "session"
+    assert registry.require("todowrite").permission.risk == "low"
     assert registry.require("shell_status").permission.action == ALLOW
     assert registry.require("shell_status").permission.risk == "low"
     assert registry.require("edit").permission.action == ASK
