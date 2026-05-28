@@ -6,6 +6,7 @@ from collections.abc import AsyncIterable, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 import inspect
+import json
 from typing import Any, Callable, List, Optional, Union
 
 from ..compaction.controller import CompactionController, CompactionSummarizer
@@ -15,6 +16,7 @@ from ..event_bus import RuntimeEventBus
 from ..events import RuntimeEvent
 from ..llm.adapter import DefaultLLMEventAdapter, LLMEventAdapter
 from ..llm.events import LLMEvent
+from ..permissions import ASK, DENY, PermissionMetadata
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.processor import RuntimeSession, SessionProcessor
 from ..session.protocol import SessionStore
@@ -80,6 +82,7 @@ class RuntimeLoopRunner:
         adapter: Optional[LLMEventAdapter] = None,
         tool_runtime: ToolRuntime,
         max_iterations: int = 4,
+        doom_loop_threshold: Optional[int] = 3,
         max_context_parts: Optional[int] = None,
         max_context_chars: Optional[int] = None,
         context_reserve_chars: int = 0,
@@ -90,6 +93,8 @@ class RuntimeLoopRunner:
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
+        if doom_loop_threshold is not None and doom_loop_threshold < 2:
+            raise ValueError("doom_loop_threshold must be at least 2 or None")
         if max_context_parts is not None and max_context_parts < 1:
             raise ValueError("max_context_parts must be at least 1")
         if max_context_chars is not None and max_context_chars < 1:
@@ -101,6 +106,7 @@ class RuntimeLoopRunner:
         self.adapter = adapter or DefaultLLMEventAdapter()
         self.tool_runtime = tool_runtime
         self.max_iterations = max_iterations
+        self.doom_loop_threshold = doom_loop_threshold
         self.max_context_parts = max_context_parts
         self.max_context_chars = max_context_chars
         self.context_reserve_chars = context_reserve_chars
@@ -602,6 +608,19 @@ class RuntimeLoopRunner:
                 )
                 continue
 
+            doom_loop_outcome = await self._evaluate_doom_loop_guard(
+                session_id=session_id,
+                tool_call=tool_call,
+                runtime_events=runtime_events,
+                run_id=run_id,
+                iteration=iteration,
+                resume_pending=resume_pending,
+            )
+            if doom_loop_outcome is not None:
+                if doom_loop_outcome.pending_permission_request is not None:
+                    return doom_loop_outcome
+                continue
+
             result = await self.tool_runtime.execute(
                 tool_call,
                 context=_tool_context(
@@ -669,6 +688,121 @@ class RuntimeLoopRunner:
             )
         return _ToolExecutionOutcome()
 
+    async def _evaluate_doom_loop_guard(
+        self,
+        *,
+        session_id: str,
+        tool_call: ToolCall,
+        runtime_events: List[RuntimeEvent],
+        run_id: str,
+        iteration: Optional[int],
+        resume_pending: bool,
+    ) -> Optional[_ToolExecutionOutcome]:
+        threshold = self.doom_loop_threshold
+        if threshold is None:
+            return None
+
+        repeat_count = _recent_tool_call_repeat_count(
+            self.store.read_history(session_id),
+            current=tool_call,
+        )
+        if repeat_count < threshold:
+            return None
+
+        arguments_json = _stable_tool_arguments_json(tool_call.arguments)
+        reason = (
+            "Repeated tool call detected: "
+            f"{tool_call.tool_name} was requested {repeat_count} times "
+            "with the same arguments."
+        )
+        metadata = PermissionMetadata(
+            action=ASK,
+            category="doom_loop",
+            resource=tool_call.tool_name,
+            risk="medium",
+            reason=reason,
+            data={
+                "tool_name": tool_call.tool_name,
+                "repeat_count": repeat_count,
+                "arguments_json": arguments_json,
+                "patterns": [arguments_json],
+            },
+        )
+        context = _tool_context(
+            session_id=session_id,
+            tool_call=tool_call,
+            run_id=run_id,
+            iteration=iteration,
+            resume_pending=resume_pending,
+        )
+        decision = await self.tool_runtime.permission_evaluator.evaluate(
+            tool_id=tool_call.tool_name,
+            args=dict(tool_call.arguments or {}),
+            metadata=metadata,
+            context=context,
+        )
+        if decision.action == ASK:
+            permission_request = _permission_decision_request_payload(decision.request)
+            runtime_events.append(
+                RuntimeEvent(
+                    type="tool.permission_requested",
+                    session_id=session_id,
+                    message=decision.reason or reason,
+                    payload={
+                        **_permission_requested_payload(
+                            run_id=run_id,
+                            tool_call=tool_call,
+                            permission_request=permission_request,
+                        ),
+                        "category": "doom_loop",
+                        "repeat_count": repeat_count,
+                    },
+                )
+            )
+            return _ToolExecutionOutcome(
+                pending_permission_request=permission_request,
+            )
+
+        if decision.action == DENY:
+            message = decision.reason or "Tool execution denied."
+            runtime_events.append(
+                RuntimeEvent(
+                    type="tool.permission_denied",
+                    session_id=session_id,
+                    message=message,
+                    payload={
+                        **_tool_event_context_payload(
+                            run_id=run_id,
+                            tool_call=tool_call,
+                            iteration=iteration,
+                        ),
+                        "category": "doom_loop",
+                        "repeat_count": repeat_count,
+                    },
+                )
+            )
+            self._append_tool_result(
+                session_id=session_id,
+                result=ToolResult(
+                    call_id=tool_call.call_id,
+                    tool_name=tool_call.tool_name,
+                    status="permission_denied",
+                    success=False,
+                    error=message,
+                    content=message,
+                    metadata={
+                        "permission_category": "doom_loop",
+                        "repeat_count": repeat_count,
+                        "arguments_json": arguments_json,
+                    },
+                ),
+                runtime_events=runtime_events,
+                run_id=run_id,
+            )
+            return _ToolExecutionOutcome()
+
+        return None
+
     def _append_tool_result(
         self,
         *,
@@ -709,6 +843,7 @@ async def run_runtime_loop(
     adapter: Optional[LLMEventAdapter] = None,
     tool_runtime: ToolRuntime,
     max_iterations: int = 4,
+    doom_loop_threshold: Optional[int] = 3,
     max_context_parts: Optional[int] = None,
     max_context_chars: Optional[int] = None,
     context_reserve_chars: int = 0,
@@ -728,6 +863,7 @@ async def run_runtime_loop(
         adapter=adapter,
         tool_runtime=tool_runtime,
         max_iterations=max_iterations,
+        doom_loop_threshold=doom_loop_threshold,
         max_context_parts=max_context_parts,
         max_context_chars=max_context_chars,
         context_reserve_chars=context_reserve_chars,
@@ -763,6 +899,55 @@ def _assistant_tool_calls(message: Message) -> List[ToolCall]:
         if part.type is MessagePartType.TOOL_CALL and part.tool_call is not None:
             calls.append(part.tool_call)
     return calls
+
+
+def _recent_tool_call_repeat_count(
+    messages: Iterable[Message],
+    *,
+    current: ToolCall,
+) -> int:
+    sequence = _assistant_tool_call_sequence_until(messages, current=current)
+    if not sequence:
+        sequence = [current]
+
+    current_key = _tool_call_repeat_key(current)
+    repeat_count = 0
+    for tool_call in reversed(sequence):
+        if _tool_call_repeat_key(tool_call) != current_key:
+            break
+        repeat_count += 1
+    return repeat_count
+
+
+def _assistant_tool_call_sequence_until(
+    messages: Iterable[Message],
+    *,
+    current: ToolCall,
+) -> List[ToolCall]:
+    sequence: List[ToolCall] = []
+    for message in messages:
+        if message.role is not MessageRole.ASSISTANT:
+            continue
+        for part in message.parts:
+            if part.type is not MessagePartType.TOOL_CALL or part.tool_call is None:
+                continue
+            sequence.append(part.tool_call)
+            if part.tool_call.call_id == current.call_id:
+                return sequence
+    return [*sequence, current]
+
+
+def _tool_call_repeat_key(tool_call: ToolCall) -> tuple[str, str]:
+    return (tool_call.tool_name, _stable_tool_arguments_json(tool_call.arguments))
+
+
+def _stable_tool_arguments_json(arguments: Optional[Mapping[str, Any]]) -> str:
+    return json.dumps(
+        dict(arguments or {}),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _copy_tool_selection(selection: Optional[ToolSelection]) -> ToolSelection:
@@ -885,6 +1070,19 @@ def _permission_request_payload(metadata: Mapping[str, Any]) -> dict[str, Any]:
     raw_request = metadata.get("permission_request")
     if isinstance(raw_request, Mapping):
         return dict(raw_request)
+    return {}
+
+
+def _permission_decision_request_payload(request: Any) -> dict[str, Any]:
+    if request is None:
+        return {}
+    if hasattr(request, "to_dict"):
+        payload = request.to_dict()
+        if isinstance(payload, Mapping):
+            return dict(payload)
+        return {}
+    if isinstance(request, Mapping):
+        return dict(request)
     return {}
 
 

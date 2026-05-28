@@ -205,6 +205,9 @@ def _child_config(
     return RuntimeConfig(
         workspace_root=resolved_workspace_root,
         max_iterations=max_iterations,
+        doom_loop_threshold=(
+            3 if base_config is None else base_config.doom_loop_threshold
+        ),
         max_context_parts=(
             base_config.max_context_parts if base_config is not None else None
         ),

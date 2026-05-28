@@ -128,6 +128,7 @@ class AgentRuntime:
                 adapter=self.adapter,
                 tool_runtime=self.tool_runtime,
                 max_iterations=self.config.max_iterations,
+                doom_loop_threshold=self.config.doom_loop_threshold,
                 max_context_parts=self.config.max_context_parts,
                 max_context_chars=self.config.max_context_chars,
                 context_reserve_chars=self.config.context_reserve_chars,
@@ -182,6 +183,7 @@ class AgentRuntime:
                 adapter=self.adapter,
                 tool_runtime=self.tool_runtime,
                 max_iterations=self.config.max_iterations,
+                doom_loop_threshold=self.config.doom_loop_threshold,
                 max_context_parts=self.config.max_context_parts,
                 max_context_chars=self.config.max_context_chars,
                 context_reserve_chars=self.config.context_reserve_chars,
@@ -285,6 +287,7 @@ def _resolve_config(
         return RuntimeConfig(
             workspace_root=workspace_root,
             max_iterations=max_iterations if max_iterations is not None else 4,
+            doom_loop_threshold=3,
             max_context_parts=max_context_parts,
             max_context_chars=max_context_chars,
             context_reserve_chars=(
@@ -298,6 +301,7 @@ def _resolve_config(
     return RuntimeConfig(
         workspace_root=workspace_root if workspace_root is not None else config.workspace_root,
         max_iterations=max_iterations if max_iterations is not None else config.max_iterations,
+        doom_loop_threshold=config.doom_loop_threshold,
         max_context_parts=(
             max_context_parts if max_context_parts is not None else config.max_context_parts
         ),

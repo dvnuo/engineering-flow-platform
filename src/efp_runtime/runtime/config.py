@@ -13,6 +13,7 @@ class RuntimeConfig:
 
     workspace_root: str | Path | None = None
     max_iterations: int = 4
+    doom_loop_threshold: int | None = 3
     max_context_parts: int | None = None
     max_context_chars: int | None = None
     context_reserve_chars: int = 0
@@ -35,6 +36,8 @@ class RuntimeConfig:
     def __post_init__(self) -> None:
         if self.max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
+        if self.doom_loop_threshold is not None and self.doom_loop_threshold < 2:
+            raise ValueError("doom_loop_threshold must be at least 2 or None")
         if self.max_context_parts is not None and self.max_context_parts < 1:
             raise ValueError("max_context_parts must be at least 1")
         if self.max_context_chars is not None and self.max_context_chars < 1:

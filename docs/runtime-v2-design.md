@@ -118,6 +118,15 @@ allow rule for the matching retry, while `always=True` creates a persistent
 allow rule for the same tool/category. Deny follows the same rule scope model
 and is appended as a final tool result on resume.
 
+Runtime v2 also pauses likely tool-call doom loops before executing the next
+tool. By default, if the same assistant tool call is requested three times in a
+row with the same stable JSON arguments, the loop asks for permission with
+category `doom_loop` and finishes as `waiting_for_permission` without appending
+a tool result for that pending call. If the caller approves and then calls
+`resume(session_id)`, the pending tool call is executed and the loop continues
+to the next provider iteration. Set
+`RuntimeConfig(doom_loop_threshold=None)` to disable this guard.
+
 The core built-in registry is workspace-contained and intentionally independent
 from the legacy runtime. It includes read/list/write, grep/glob, shell execution,
 single-file edit, unified-diff apply_patch, and a session-local todo_write
