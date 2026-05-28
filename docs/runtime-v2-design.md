@@ -939,6 +939,21 @@ expansion only: it is not a tool call, does not create persisted system prompt
 state, does not mutate active skills, and does not call the legacy
 runtime/session stack. Unknown slash commands remain ordinary user text.
 
+`AgentRuntime.run_command(...)` is the direct invocation API for callers that
+already know they want to run a registered command. It accepts a command name,
+raw argument string, optional input body, and the same per-run controls as
+`run(...)` where applicable. The method removes a leading slash from the command
+name, rejects empty names, rejects `skill`, requires a configured command
+registry, and raises `ValueError` for unknown commands with available names when
+they can be listed. Direct invocation builds the same slash-command text that a
+caller would otherwise pass to `run(...)`: `"/" + command`, optional `" " +
+arguments`, and optional `"\n" + input_text`. It then delegates to `run(...)`, so
+template rendering, command metadata, command agent and model selection, shell
+interpolation, skill-backed command expansion, and `command.executed` events
+stay centralized. Direct command runs add `command_invocation="direct"` to run
+metadata; ordinary `run(...)` slash parsing remains supported and unknown slash
+commands continue to be treated as user text.
+
 Command expansion happens before final primary-run profile resolution. The
 expanded prompt text is the user text sent through the normal
 `AgentRuntime.run(...)` path. If the expanded command has `agent` metadata and

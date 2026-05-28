@@ -524,6 +524,194 @@ async def test_skill_backed_slash_command_expands_into_provider_user_message(
 
 
 @pytest.mark.asyncio
+async def test_run_command_matches_slash_invocation_prompt_and_metadata(
+    tmp_path: Path,
+):
+    command_dir = _write_command(tmp_path, "fix.md", "# Fix\nUse $ARGUMENTS.")
+    arguments = 'ticket-1 --flag "two words"'
+    config = RuntimeConfig(
+        command_directories=[command_dir],
+        max_iterations=1,
+        include_default_system_prompt=False,
+        include_runtime_reminders=False,
+    )
+    slash_provider = ScriptedLLMProvider([{"content": "Done."}])
+    slash_runtime = AgentRuntime(provider=slash_provider, config=config)
+    direct_provider = ScriptedLLMProvider([{"content": "Done."}])
+    direct_runtime = AgentRuntime(provider=direct_provider, config=config)
+
+    await slash_runtime.run(
+        f"/fix {arguments}\nextra",
+        session_id="session-slash-command",
+    )
+    await direct_runtime.run_command(
+        "fix",
+        arguments=arguments,
+        input_text="extra",
+        session_id="session-direct-command",
+    )
+
+    slash_request = slash_provider.requests[0]
+    direct_request = direct_provider.requests[0]
+    slash_text = _last_user_text(slash_request)
+    direct_text = _last_user_text(direct_request)
+    assert direct_text == slash_text
+    assert f"<command_arguments>\n{arguments}\n</command_arguments>" in direct_text
+    assert "<command_input>\nextra\n</command_input>" in direct_text
+    for key in [
+        "command_name",
+        "command_file",
+        "command_arguments",
+        "command_source",
+        "command_metadata",
+        "command_truncated",
+        "command_original_chars",
+        "command_max_chars",
+    ]:
+        assert direct_request.metadata[key] == slash_request.metadata[key]
+    assert direct_request.metadata["command_invocation"] == "direct"
+    assert direct_request.provider_request.metadata["command_invocation"] == "direct"
+    assert "command_invocation" not in slash_request.metadata
+
+
+@pytest.mark.asyncio
+async def test_run_command_accepts_leading_slash_in_command_name(tmp_path: Path):
+    command_dir = _write_command(tmp_path, "fix.md", "# Fix\nApply this fix.")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            command_directories=[command_dir],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    await runtime.run_command("/fix", arguments="ticket-123")
+
+    request = provider.requests[0]
+    assert request.metadata["command_name"] == "fix"
+    assert request.metadata["command_arguments"] == "ticket-123"
+    assert request.metadata["command_invocation"] == "direct"
+
+
+@pytest.mark.asyncio
+async def test_run_command_unknown_command_lists_available_names():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(name="fix", content="# Fix"),
+            CommandDefinition(name="review", content="# Review"),
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    runtime = AgentRuntime(provider=provider, command_registry=registry)
+
+    with pytest.raises(ValueError) as excinfo:
+        await runtime.run_command("missing")
+
+    message = str(excinfo.value)
+    assert "unknown command 'missing'" in message
+    assert "fix" in message
+    assert "review" in message
+    assert provider.requests == []
+
+
+@pytest.mark.asyncio
+async def test_run_command_rejects_skill_command():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    runtime = AgentRuntime(provider=provider)
+
+    with pytest.raises(ValueError, match="skill"):
+        await runtime.run_command("skill")
+
+    assert provider.requests == []
+
+
+@pytest.mark.asyncio
+async def test_run_command_invokes_skill_backed_command(tmp_path: Path):
+    skill_dir = _write_skill(
+        tmp_path,
+        "review-pr",
+        description="Review pull requests",
+        content="# Review\nInspect $ARGUMENTS.",
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            skill_directories=[tmp_path],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    assert runtime.command_registry.get("review-pr").source == "skill"
+
+    await runtime.run_command(
+        "review-pr",
+        arguments="check the diff",
+        session_id="session-direct-skill-command",
+    )
+
+    request = provider.requests[0]
+    text = _last_user_text(request)
+    assert '<command name="review-pr"' in text
+    assert f'source="{skill_dir / "SKILL.md"}"' in text
+    assert 'command_source="skill"' in text
+    assert "# Review\nInspect check the diff." in text
+    assert "<command_arguments>\ncheck the diff\n</command_arguments>" in text
+    assert request.metadata["command_name"] == "review-pr"
+    assert request.metadata["command_source"] == "skill"
+    assert request.metadata["command_arguments"] == "check the diff"
+    assert request.metadata["command_invocation"] == "direct"
+    assert request.metadata["command_metadata"]["skill_name"] == "review-pr"
+    assert request.metadata["command_metadata"]["skill_file"] == str(
+        skill_dir / "SKILL.md"
+    )
+    assert request.metadata["active_skills"] == []
+    assert "skill_slash_command" not in request.metadata
+
+
+@pytest.mark.asyncio
+async def test_run_command_emits_command_executed_event_once(tmp_path: Path):
+    command_dir = _write_command(tmp_path, "fix.md", "# Fix\nApply this fix.")
+    bus = RuntimeEventBus()
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            command_directories=[command_dir],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        event_bus=bus,
+    )
+
+    result = await runtime.run_command(
+        "fix",
+        arguments="ticket-123",
+        session_id="session-direct-command-event",
+    )
+
+    command_events = [
+        event
+        for event in bus.history("session-direct-command-event")
+        if event.type == "command.executed"
+    ]
+    result_command_events = [
+        event for event in result.runtime_events if event.type == "command.executed"
+    ]
+    assert len(command_events) == 1
+    assert result_command_events == command_events
+    assert command_events[0].payload["name"] == "fix"
+    assert command_events[0].payload["arguments"] == "ticket-123"
+    assert provider.requests[0].metadata["command_invocation"] == "direct"
+
+
+@pytest.mark.asyncio
 async def test_slash_command_emits_command_executed_event(tmp_path: Path):
     command_body = "# Fix\nApply this fix."
     command_dir = _write_command(

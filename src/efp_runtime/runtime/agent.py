@@ -419,6 +419,51 @@ class AgentRuntime:
         self.run_state.finish(resolved_session_id, result.status)
         return result
 
+    async def run_command(
+        self,
+        command: str,
+        arguments: str = "",
+        input_text: str = "",
+        session_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        tools: Mapping[str, bool] | None = None,
+        *,
+        agent: "str | AgentProfile | None" = None,
+        output_schema: Mapping[str, Any] | None = None,
+    ) -> RuntimeLoopResult:
+        command_name = _normalize_direct_command_name(command)
+        if not command_name:
+            raise ValueError("command name cannot be empty")
+        if command_name == "skill":
+            raise ValueError(
+                "'skill' cannot be invoked with run_command; use /skill instead"
+            )
+        if self.command_registry is None:
+            raise ValueError("run_command requires a command registry")
+        if not self.config.enable_command_expansion:
+            raise ValueError("run_command requires command expansion to be enabled")
+
+        definition = self.command_registry.get(command_name, refresh=True)
+        if definition is None:
+            raise ValueError(
+                _unknown_direct_command_message(command_name, self.command_registry)
+            )
+
+        run_metadata = dict(metadata or {})
+        run_metadata["command_invocation"] = "direct"
+        return await self.run(
+            _compose_slash_command_text(
+                definition.name,
+                arguments=arguments,
+                input_text=input_text,
+            ),
+            session_id=session_id,
+            metadata=run_metadata,
+            tools=tools,
+            agent=agent,
+            output_schema=output_schema,
+        )
+
     async def resume(
         self,
         session_id: str,
@@ -1720,6 +1765,36 @@ def _command_executed_event(
             "max_chars": run_metadata.get("command_max_chars", 0),
         },
     )
+
+
+def _normalize_direct_command_name(command: str) -> str:
+    return str(command or "").strip().lstrip("/")
+
+
+def _compose_slash_command_text(
+    command: str,
+    *,
+    arguments: str = "",
+    input_text: str = "",
+) -> str:
+    text = "/" + command + (" " + arguments if arguments else "")
+    if input_text:
+        text += "\n" + input_text
+    return text
+
+
+def _unknown_direct_command_message(
+    command: str,
+    registry: CommandRegistry,
+) -> str:
+    message = f"unknown command '{command}'"
+    try:
+        names = [info.name for info in registry.list(refresh=False)]
+    except Exception:
+        names = []
+    if names:
+        message += "; available commands: " + ", ".join(names)
+    return message
 
 
 def _merge_run_tools(
