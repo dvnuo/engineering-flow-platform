@@ -34,6 +34,7 @@ from .commands import (
 )
 from .runtime.config import RuntimeConfig
 from .skills.discovery import SkillDiscovery, default_skill_directories
+from .tools.local import default_local_tool_directories
 
 
 DEFAULT_CONFIG_FILE_NAMES = (
@@ -47,6 +48,8 @@ DEFAULT_CONFIG_FILE_NAMES = (
 _RUNTIME_PROJECT_MARKER_DIRECTORIES = (
     ".opencode/command",
     ".opencode/commands",
+    ".opencode/tool",
+    ".opencode/tools",
     ".opencode/skill",
     ".opencode/skills",
     ".opencode/agent",
@@ -81,6 +84,8 @@ _RUNTIME_CONFIG_KEYS = {
     "commands",
     "commandDirectories",
     "command_directories",
+    "toolDirectories",
+    "tool_directories",
     "runtime",
     "runtime_mode",
     "agent",
@@ -519,6 +524,14 @@ def _runtime_config_from_raw(
     if command_directories is not None:
         kwargs["command_directories"] = command_directories
 
+    local_tool_directories = _local_tool_directories(
+        raw,
+        workspace_root=workspace_root,
+        include_defaults=include_defaults,
+    )
+    if local_tool_directories is not None:
+        kwargs["local_tool_directories"] = local_tool_directories
+
     runtime_mode = _runtime_mode(raw)
     if runtime_mode is not None:
         kwargs["runtime_mode"] = str(runtime_mode)
@@ -733,6 +746,30 @@ def default_command_directories(
         if path.is_dir():
             directories.append(path)
     return directories
+
+
+def _local_tool_directories(
+    raw: Mapping[str, Any],
+    *,
+    workspace_root: Path,
+    include_defaults: bool,
+) -> list[Path] | None:
+    paths = default_local_tool_directories(
+        workspace_root,
+        include_defaults=include_defaults,
+    )
+
+    configured = _merged_alias_paths(
+        raw,
+        ("toolDirectories", "tool_directories"),
+        workspace_root=workspace_root,
+    )
+    if configured is not None:
+        paths.extend(configured)
+
+    if not paths and configured is None:
+        return None
+    return _dedupe_paths(paths)
 
 
 def _loader_metadata(

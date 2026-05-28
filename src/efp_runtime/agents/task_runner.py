@@ -508,6 +508,9 @@ def _child_config(
         max_command_chars=(
             20000 if base_config is None else base_config.max_command_chars
         ),
+        local_tool_directories=(
+            [] if base_config is None else list(base_config.local_tool_directories)
+        ),
         resolve_prompt_references=(
             True if base_config is None else base_config.resolve_prompt_references
         ),

@@ -8,6 +8,11 @@ from .external import (
     external_tool_defs,
     register_external_tools,
 )
+from .local import (
+    default_local_tool_directories,
+    local_tool_defs,
+    register_local_tools,
+)
 from .registry import ToolRegistry
 from .runtime import ToolRuntime
 from .selection import (
@@ -30,7 +35,10 @@ __all__ = [
     "ValidationError",
     "ModelAwareToolSelection",
     "external_tool_defs",
+    "default_local_tool_directories",
+    "local_tool_defs",
     "register_external_tools",
+    "register_local_tools",
     "resolve_model_aware_tool_selection",
     "resolve_tool_selection",
 ]

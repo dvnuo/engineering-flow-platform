@@ -157,9 +157,9 @@ With `include_defaults=True`, the loader treats the input path as a startup
 location and walks upward from that directory, or from the parent when the input
 is a file, to find the nearest Runtime v2 project marker. Markers are default
 config files, project `.opencode/command`, `.opencode/commands`,
-`.opencode/skill`, `.opencode/skills`, `.opencode/agent`, `.opencode/agents`,
-`.opencode/mode`, `.opencode/modes`, `.claude/skills`, and `.agents/skills`
-directories. The matched directory becomes
+`.opencode/tool`, `.opencode/tools`, `.opencode/skill`, `.opencode/skills`,
+`.opencode/agent`, `.opencode/agents`, `.opencode/mode`, `.opencode/modes`,
+`.claude/skills`, and `.agents/skills` directories. The matched directory becomes
 `RuntimeConfig.workspace_root`, and default command, skill, and agent
 directories are loaded relative to that root. If no marker is found, the input
 path remains the workspace root. Passing `include_defaults=False` disables this
@@ -205,6 +205,7 @@ The loader maps the following opencode-style and snake_case keys into
 - `skillDirectories` / `skill_directories`, plus local `skills.paths`.
 - `activeSkills` / `active_skills`.
 - `commandDirectories` / `command_directories`.
+- `toolDirectories` / `tool_directories`.
 - `runtime.mode` or `runtime_mode`.
 
 Configured path fields are resolved as workspace-local `Path` objects without
@@ -215,6 +216,15 @@ then workspace-local `.opencode/commands`. Missing default command directories
 are ignored. Passing `include_defaults=False` disables these default command
 directories. Configured `commandDirectories` / `command_directories` entries
 are appended after defaults.
+
+With `include_defaults=True`, the loader adds existing workspace-local Python
+tool directories in discovery order: `.opencode/tool`, then `.opencode/tools`.
+Missing default local tool directories are ignored. Configured
+`toolDirectories` / `tool_directories` entries are resolved under the workspace
+root and appended after defaults with stable de-duplication. Config loading only
+records these paths; Python tool files are imported later when an
+`AgentRuntime` builds and registers its tool registry.
+
 With `include_defaults=True`, existing user-level skill directories are added
 in discovery load order: external compatibility roots `~/.claude/skills`, then
 `~/.agents/skills`; opencode config roots `~/.config/opencode/skill`, then
@@ -310,8 +320,9 @@ Keys that Runtime v2 does not consume in this phase, including root-level
 `RuntimeConfigLoadResult.metadata["unconsumed_config"]`; the full merged object
 is preserved in `metadata["raw_config"]` and `RuntimeConfigLoadResult.raw`.
 Loading config is side-effect free: it only reads local files, does not start
-subprocess tool providers, does not load Portal, and does not instantiate LLM or
-tool providers. Agent metadata such as `mode`, `model`, and `hidden` is
+subprocess tool providers, does not import workspace-local Python tool modules,
+does not load Portal, and does not instantiate LLM or tool providers. Agent
+metadata such as `mode`, `model`, and `hidden` is
 informational here; it does not switch providers, change `RuntimeConfig`, or
 start subagents. Agent `permission` metadata is preserved and is applied only
 when that profile is selected for a primary or child run.
@@ -408,13 +419,39 @@ rendered in the same provider request schema and use the same argument
 validation, permission broker, enabled/disabled selection, output policy, and
 `ToolResult` normalization path as built-ins.
 
-This bridge is the Runtime v2 entry point for project custom tools and
-enterprise internal tools. It intentionally does not load JavaScript or
-TypeScript plugins or start subprocess tool hosts in this phase.
 `ExternalToolContext` carries the session id, message/tool call ids, workspace
 root, copied runtime metadata, provider name, and provider-local tool name so
 providers can receive session and worktree context without mutating the original
 `ToolContext`.
+
+Workspace-local custom tools use the Python-native loader under
+`efp_runtime.tools.local`. With default config loading, existing
+`.opencode/tool` and `.opencode/tools` directories are searched for direct child
+`*.py` files only; nested files are not scanned. Additional workspace-relative
+directories can be configured with `toolDirectories` / `tool_directories` and
+are appended after defaults. Local Python modules may export `TOOL` or `tool`
+as a single spec, or `TOOLS` / `tools` as a mapping of export name to spec.
+Unrelated module exports are ignored.
+
+For `TOOL` / `tool`, the default runtime tool id is the Python file stem, such
+as `hello.py` becoming `hello`. For `TOOLS` / `tools`, the default id is
+`{file_stem}_{export_name}`, such as `math.py` with `TOOLS["add"]` becoming
+`math_add`. A spec can override that id with `id` or `name`; local tool ids are
+registered directly without a `local_` prefix. Each spec must provide a
+non-empty `description` and callable `execute`. Optional `input_schema`,
+`schema`, or `args_schema` fields define the object argument schema; when absent
+the loader uses a no-args object schema with `additionalProperties=False`.
+Optional `metadata`, `permission`, and `output_policy` fields are copied into
+the resulting `ToolDef`.
+
+Local execute callables are wrapped as async `ToolDef.execute` functions. The
+preferred signature is `execute(args, context)`, and the loader also accepts
+`execute(args)` and `execute()`. Awaitable return values are awaited. Returned
+strings, dictionaries, lists, bytes, and `ToolResult` objects then flow through
+the same `ToolRuntime` validation, permission evaluation, enabled/disabled
+selection, output normalization, truncation, and lifecycle events used by
+built-ins and injected external providers. JavaScript and TypeScript tool
+loading and subprocess tool hosts are not part of this phase.
 
 Runtime v2 applies a unified model-visible output policy during normalization.
 Large tool outputs are truncated by line and UTF-8 byte limits before they are

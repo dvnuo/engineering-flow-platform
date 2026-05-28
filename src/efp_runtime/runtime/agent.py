@@ -68,6 +68,7 @@ from ..tools.builtin import (
 from ..tools.builtin.task import format_background_task_notification
 from ..tools.definition import OutputPolicy, ToolContext
 from ..tools.external import ExternalToolProvider, register_external_tools
+from ..tools.local import register_local_tools
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection, resolve_tool_selection
@@ -2029,6 +2030,7 @@ def _resolve_config(
         command_directories=list(config.command_directories),
         enable_command_expansion=config.enable_command_expansion,
         max_command_chars=config.max_command_chars,
+        local_tool_directories=list(config.local_tool_directories),
         resolve_prompt_references=config.resolve_prompt_references,
         max_prompt_reference_chars=config.max_prompt_reference_chars,
         max_prompt_directory_entries=config.max_prompt_directory_entries,
@@ -2111,6 +2113,8 @@ def _resolve_tool_runtime(
                         tool_permissions=config.tool_permissions,
                     )
                 )
+    if config.local_tool_directories:
+        register_local_tools(registry, config.local_tool_directories)
     if external_tool_providers is not None:
         register_external_tools(
             registry,

@@ -121,6 +121,30 @@ def test_parent_default_commands_marker_resolves_workspace_root(
     assert result.command_registry.get("audit").content == "Audit nested work."
 
 
+@pytest.mark.parametrize("default_name", ["tool", "tools"])
+def test_parent_default_tool_marker_resolves_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    default_name: str,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    tools = project / ".opencode" / default_name
+    tools.mkdir(parents=True)
+    (tools / "hello.py").write_text(
+        "TOOL = {'description': 'Hello', 'execute': lambda args, context: 'hi'}\n",
+        encoding="utf-8",
+    )
+
+    result = load_runtime_config(nested)
+
+    assert result.loaded_paths == []
+    assert result.config.workspace_root == project.resolve()
+    assert result.config.local_tool_directories == [tools.resolve()]
+
+
 @pytest.mark.parametrize("default_name", ["skill", "skills"])
 def test_parent_default_skill_marker_resolves_workspace_root(
     tmp_path: Path,
@@ -242,6 +266,7 @@ def test_include_defaults_false_does_not_resolve_parent_marker(tmp_path: Path):
     assert result.config.runtime_mode == "build"
     assert result.config.command_directories == []
     assert result.config.skill_directories == []
+    assert result.config.local_tool_directories == []
 
 
 def test_jsonc_comments_trailing_commas_and_comment_like_strings(tmp_path: Path):
@@ -399,6 +424,7 @@ def test_runtime_config_field_mapping(tmp_path: Path):
             "skillDirectories": ["skills", "more-skills"],
             "activeSkills": ["review", "review"],
             "commandDirectories": ["commands", "commands"],
+            "toolDirectories": ["tools", "more-tools"],
             "runtime": {"mode": "plan"},
         },
     )
@@ -424,7 +450,36 @@ def test_runtime_config_field_mapping(tmp_path: Path):
     assert config.command_directories == [
         (tmp_path / "commands").resolve(),
     ]
+    assert config.local_tool_directories == [
+        (tmp_path / "tools").resolve(),
+        (tmp_path / "more-tools").resolve(),
+    ]
     assert config.runtime_mode == "plan"
+
+
+def test_configured_local_tool_directories_append_after_defaults(tmp_path: Path):
+    default_tool = tmp_path / ".opencode" / "tool"
+    default_tools = tmp_path / ".opencode" / "tools"
+    default_tool.mkdir(parents=True)
+    default_tools.mkdir(parents=True)
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "toolDirectories": ["project-tools", ".opencode/tool"],
+            "tool_directories": ["more-tools"],
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.config.local_tool_directories == [
+        default_tool.resolve(),
+        default_tools.resolve(),
+        (tmp_path / "project-tools").resolve(),
+        (tmp_path / "more-tools").resolve(),
+    ]
+    assert "toolDirectories" not in result.metadata["unconsumed_config"]
+    assert "tool_directories" not in result.metadata["unconsumed_config"]
 
 
 def test_model_aware_tool_selection_config_aliases(tmp_path: Path):
