@@ -21,6 +21,7 @@ from ..session.store import InMemorySessionStore
 from ..skills.commands import SkillCommandResult, parse_skill_commands
 from ..skills.context import SkillContextBuilder
 from ..skills.discovery import SkillDiscovery
+from ..skills.tool import build_skill_tool
 from ..tools.builtin import create_core_tool_registry
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
@@ -68,15 +69,21 @@ class AgentRuntime:
         self.adapter = adapter
         self.compaction_summarizer = compaction_summarizer
         self.store = store or InMemorySessionStore()
+        self.skill_discovery = _resolve_skill_discovery(
+            config=self.config,
+            skill_discovery=skill_discovery,
+        )
         self.tool_runtime = _resolve_tool_runtime(
             workspace_root=self.config.workspace_root,
+            config=self.config,
             tool_registry=tool_registry,
             tool_runtime=tool_runtime,
             permission_evaluator=permission_evaluator,
+            skill_discovery=self.skill_discovery,
         )
         self.skill_context_builder = _resolve_skill_context_builder(
             config=self.config,
-            skill_discovery=skill_discovery,
+            skill_discovery=self.skill_discovery,
             skill_context_builder=skill_context_builder,
         )
         self.instruction_context_builder = _resolve_instruction_context_builder(
@@ -325,9 +332,11 @@ def _resolve_config(
 def _resolve_tool_runtime(
     *,
     workspace_root: str | Path | None,
+    config: RuntimeConfig,
     tool_registry: ToolRegistry | None,
     tool_runtime: ToolRuntime | None,
     permission_evaluator: PermissionEvaluator | None,
+    skill_discovery: SkillDiscovery | None,
 ) -> ToolRuntime:
     if tool_runtime is not None:
         if tool_registry is not None and tool_registry is not tool_runtime.registry:
@@ -338,12 +347,34 @@ def _resolve_tool_runtime(
 
     registry = tool_registry
     if registry is None:
-        registry = (
-            create_core_tool_registry(workspace_root)
-            if workspace_root is not None
-            else ToolRegistry()
-        )
+        if workspace_root is not None:
+            registry = create_core_tool_registry(
+                workspace_root,
+                skill_discovery=skill_discovery,
+                max_skill_sidecar_chars=config.max_skill_sidecar_chars,
+            )
+        else:
+            registry = ToolRegistry()
+            if skill_discovery is not None:
+                registry.register(
+                    build_skill_tool(
+                        skill_discovery,
+                        max_sidecar_chars=config.max_skill_sidecar_chars,
+                    )
+                )
     return ToolRuntime(registry, permission_evaluator=permission_evaluator)
+
+
+def _resolve_skill_discovery(
+    *,
+    config: RuntimeConfig,
+    skill_discovery: SkillDiscovery | None,
+) -> SkillDiscovery | None:
+    if skill_discovery is not None:
+        return skill_discovery
+    if config.skill_directories:
+        return SkillDiscovery(config.skill_directories)
+    return None
 
 
 def _resolve_skill_context_builder(

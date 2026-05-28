@@ -175,6 +175,19 @@ rendered as transient system context in the provider request before session
 history. It is not appended to the persisted session store, so repeated runs do
 not duplicate skill messages in history.
 
+Runtime v2 also exposes a `skill` tool when skill discovery is configured for
+the default core tool registry. This complements, rather than replaces,
+`/skill`: `/skill` explicitly activates context before the provider call, while
+the `skill` tool lets the model load a discovered skill by name during the loop.
+The tool result content is a model-visible `<skill_content name="...">` block,
+and the structured output keeps the skill name, description, skill file, raw
+skill markdown, sidecar inventory, and metadata for programmatic consumers.
+
+The `skill` tool is read-only context loading. It never imports or executes
+sidecar files, including Python files. By default it lists sidecar files in
+`<skill_files>`; callers may request bounded text content for sidecars, subject
+to the configured maximum character limit.
+
 ## Instructions
 
 Runtime v2 loads workspace instruction files from `AGENTS.md`, `CLAUDE.md`, and
@@ -189,9 +202,10 @@ sources, so persisted history remains limited to user, assistant, tool, task,
 and compaction records created by the runtime loop.
 
 This phase only performs request-time context injection. It does not implement
-opencode's read-time nearby instruction attachment, does not scan outside
+opencode read-time nearby instruction attachment, does not scan outside
 `workspace_root` for default files, and does not read global home instruction
 files unless a caller explicitly configures such a path.
+
 
 ## Compaction
 
