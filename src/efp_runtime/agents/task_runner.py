@@ -409,6 +409,11 @@ def _child_config(
         disabled_tools=(
             [] if base_config is None else list(base_config.disabled_tools)
         ),
+        model_aware_tool_selection=(
+            True
+            if base_config is None
+            else base_config.model_aware_tool_selection
+        ),
         tool_permissions=merge_tool_permission_configs(
             base_tool_permissions,
             profile_permission_overlay,

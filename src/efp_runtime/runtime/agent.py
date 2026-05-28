@@ -757,6 +757,9 @@ class AgentRuntime:
         run_metadata["runtime_mode"] = self.config.runtime_mode
         run_metadata["plan_mode_read_only"] = self.config.plan_mode_read_only
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
+        run_metadata["model_aware_tool_selection_enabled"] = (
+            self.config.model_aware_tool_selection
+        )
         run_metadata["emit_llm_stream_events"] = self.config.emit_llm_stream_events
         if self.config.workspace_root is not None:
             run_metadata["workspace_root"] = str(self.config.workspace_root)
@@ -1255,6 +1258,7 @@ def _resolve_config(
             None if config.enabled_tools is None else list(config.enabled_tools)
         ),
         disabled_tools=list(config.disabled_tools),
+        model_aware_tool_selection=config.model_aware_tool_selection,
         tool_permissions=dict(config.tool_permissions),
         runtime_mode=config.runtime_mode,
         enable_plan_tool=config.enable_plan_tool,

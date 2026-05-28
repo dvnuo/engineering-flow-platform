@@ -440,6 +440,17 @@ requests, so `pending_permissions()`,
 `approve_permission(...)`, `deny_permission(...)`, and `resume(...)` keep the
 same flow as static ASK permissions.
 
+Runtime v2 applies model-aware selection for mutating file tools when callers
+provide a model hint in run metadata. The lookup checks `model`, `model_id`,
+`requested_model`, and `provider_model`; command expansion may set
+`requested_model` when a command declares a model. With
+`RuntimeConfig.model_aware_tool_selection=True` (the default), GPT-style ids
+containing `gpt-` but not `gpt-4` or `oss` expose `apply_patch` and hide
+`edit`, `write`, and `write_file`. Any other non-empty hint exposes the direct
+file tools and hides `apply_patch`. Without a hint, selection is unchanged.
+The provider request metadata records the model hint, selected mode
+(`patch`, `direct`, or `none`), and tool ids forced disabled by this policy.
+
 Runtime v2 also pauses likely tool-call doom loops before executing the next
 tool. By default, if the same assistant tool call is requested three times in a
 row with the same stable JSON arguments, the loop asks for permission with

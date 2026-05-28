@@ -22,6 +22,67 @@ class ToolSelection:
         self.forced_disabled = {str(tool_id) for tool_id in self.forced_disabled}
 
 
+@dataclass(frozen=True)
+class ModelAwareToolSelection:
+    """Outcome of model-hinted mutating file tool selection."""
+
+    enabled: bool
+    ran: bool
+    model_hint: str | None
+    mode: str
+    forced_disabled: tuple[str, ...] = ()
+
+
+MODEL_HINT_KEYS = ("model", "model_id", "requested_model", "provider_model")
+PATCH_FILE_TOOL_ID = "apply_patch"
+DIRECT_FILE_TOOL_IDS = frozenset({"edit", "write", "write_file"})
+
+
+def resolve_model_aware_tool_selection(
+    all_tool_ids: Iterable[str],
+    metadata: Mapping[str, object] | None = None,
+    *,
+    enabled: bool = True,
+) -> ModelAwareToolSelection:
+    """Return model-hinted forced-disabled mutating file tool ids."""
+
+    all_ids = {str(tool_id) for tool_id in all_tool_ids}
+    model_hint = _model_hint(metadata or {})
+    if not enabled:
+        return ModelAwareToolSelection(
+            enabled=False,
+            ran=False,
+            model_hint=model_hint,
+            mode="none",
+        )
+    if model_hint is None:
+        return ModelAwareToolSelection(
+            enabled=True,
+            ran=True,
+            model_hint=None,
+            mode="none",
+        )
+
+    if _prefers_patch_file_tool(model_hint):
+        forced_disabled = sorted(DIRECT_FILE_TOOL_IDS.intersection(all_ids))
+        return ModelAwareToolSelection(
+            enabled=True,
+            ran=True,
+            model_hint=model_hint,
+            mode="patch",
+            forced_disabled=tuple(forced_disabled),
+        )
+
+    forced_disabled = (PATCH_FILE_TOOL_ID,) if PATCH_FILE_TOOL_ID in all_ids else ()
+    return ModelAwareToolSelection(
+        enabled=True,
+        ran=True,
+        model_hint=model_hint,
+        mode="direct",
+        forced_disabled=forced_disabled,
+    )
+
+
 def resolve_tool_selection(
     all_tool_ids: Iterable[str],
     *,
@@ -65,4 +126,32 @@ def _normalize_ids(tool_ids: Iterable[str]) -> set[str]:
     return {str(tool_id) for tool_id in tool_ids}
 
 
-__all__ = ["ToolSelection", "resolve_tool_selection"]
+def _model_hint(metadata: Mapping[str, object]) -> str | None:
+    for key in MODEL_HINT_KEYS:
+        value = metadata.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _prefers_patch_file_tool(model_hint: str) -> bool:
+    normalized = model_hint.lower()
+    return (
+        "gpt-" in normalized
+        and "gpt-4" not in normalized
+        and "oss" not in normalized
+    )
+
+
+__all__ = [
+    "DIRECT_FILE_TOOL_IDS",
+    "MODEL_HINT_KEYS",
+    "ModelAwareToolSelection",
+    "PATCH_FILE_TOOL_ID",
+    "ToolSelection",
+    "resolve_model_aware_tool_selection",
+    "resolve_tool_selection",
+]

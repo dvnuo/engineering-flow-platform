@@ -36,6 +36,200 @@ def test_resolve_tool_selection_applies_sorted_overrides_and_rejects_unknown():
 
 
 @pytest.mark.asyncio
+async def test_model_hint_gpt_5_prefers_apply_patch_tool():
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=1),
+        tool_registry=_file_tool_registry(),
+    )
+
+    result = await runtime.run(
+        "run",
+        session_id="session-model-gpt-5",
+        metadata={"model": "gpt-5"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    assert _request_tool_ids(request) == ["apply_patch"]
+    assert [schema.id for schema in request.provider_request.tools] == ["apply_patch"]
+    assert request.metadata["model_aware_tool_selection"] == {
+        "enabled": True,
+        "ran": True,
+        "model_hint": "gpt-5",
+        "mode": "patch",
+        "forced_disabled": ["edit", "write", "write_file"],
+    }
+    assert request.metadata["tools"]["enabled"] == ["apply_patch"]
+    assert request.metadata["tools"]["disabled"] == ["edit", "write", "write_file"]
+
+
+@pytest.mark.asyncio
+async def test_model_hint_gpt_4_prefers_direct_file_tools():
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=1),
+        tool_registry=_file_tool_registry(),
+    )
+
+    result = await runtime.run(
+        "run",
+        session_id="session-model-gpt-4",
+        metadata={"model": "gpt-4.1"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert _request_tool_ids(provider.requests[0]) == ["edit", "write", "write_file"]
+    assert [schema.id for schema in provider.requests[0].provider_request.tools] == [
+        "edit",
+        "write",
+        "write_file",
+    ]
+    assert provider.requests[0].metadata["model_aware_tool_selection"]["mode"] == (
+        "direct"
+    )
+    assert provider.requests[0].metadata[
+        "model_aware_tool_selection_forced_disabled"
+    ] == ["apply_patch"]
+
+
+@pytest.mark.asyncio
+async def test_model_hint_gpt_oss_prefers_direct_file_tools():
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=1),
+        tool_registry=_file_tool_registry(),
+    )
+
+    result = await runtime.run(
+        "run",
+        session_id="session-model-gpt-oss",
+        metadata={"model": "gpt-oss-120b"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert _request_tool_ids(provider.requests[0]) == ["edit", "write", "write_file"]
+    assert "apply_patch" not in [
+        schema.id for schema in provider.requests[0].provider_request.tools
+    ]
+
+
+@pytest.mark.asyncio
+async def test_without_model_hint_keeps_default_file_tool_selection():
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=1),
+        tool_registry=_file_tool_registry(),
+    )
+
+    result = await runtime.run("run", session_id="session-no-model-hint")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert _request_tool_ids(provider.requests[0]) == [
+        "apply_patch",
+        "edit",
+        "write",
+        "write_file",
+    ]
+    assert provider.requests[0].metadata["model_aware_tool_selection"] == {
+        "enabled": True,
+        "ran": True,
+        "model_hint": None,
+        "mode": "none",
+        "forced_disabled": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_model_aware_tool_selection_can_be_disabled_by_config():
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            model_aware_tool_selection=False,
+        ),
+        tool_registry=_file_tool_registry(),
+    )
+
+    result = await runtime.run(
+        "run",
+        session_id="session-model-selection-disabled",
+        metadata={"model": "gpt-5"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert _request_tool_ids(provider.requests[0]) == [
+        "apply_patch",
+        "edit",
+        "write",
+        "write_file",
+    ]
+    assert provider.requests[0].metadata["model_aware_tool_selection"] == {
+        "enabled": False,
+        "ran": False,
+        "model_hint": "gpt-5",
+        "mode": "none",
+        "forced_disabled": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_per_run_override_cannot_reenable_model_disabled_tool():
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=1),
+        tool_registry=_file_tool_registry(),
+    )
+
+    result = await runtime.run(
+        "run",
+        session_id="session-model-forced-disabled",
+        metadata={"model": "gpt-5"},
+        tools={"edit": True},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert _request_tool_ids(provider.requests[0]) == ["apply_patch"]
+    assert "edit" in provider.requests[0].metadata["disabled_tool_ids"]
+
+
+@pytest.mark.asyncio
+async def test_structured_output_tool_remains_available_with_model_selection():
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=1),
+        tool_registry=_file_tool_registry(),
+    )
+
+    result = await runtime.run(
+        "run",
+        session_id="session-model-structured-output",
+        metadata={"model": "gpt-5"},
+        output_schema={
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"],
+        },
+    )
+
+    assert result.status == LoopStatus.ERROR
+    assert _request_tool_ids(provider.requests[0]) == [
+        "StructuredOutput",
+        "apply_patch",
+    ]
+    assert "StructuredOutput" in [
+        schema.id for schema in provider.requests[0].provider_request.tools
+    ]
+
+
+@pytest.mark.asyncio
 async def test_provider_request_only_contains_enabled_tools():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runner = RuntimeLoopRunner(
@@ -267,6 +461,14 @@ def _tool(
     )
 
 
+def _file_tool_registry() -> ToolRegistry:
+    return ToolRegistry(_tool(tool_id) for tool_id in _FILE_TOOL_IDS)
+
+
+def _request_tool_ids(request) -> list[str]:
+    return [tool.id for tool in request.tools]
+
+
 def _tool_call(call_id: str, tool_name: str) -> dict[str, Any]:
     return {
         "id": call_id,
@@ -276,3 +478,6 @@ def _tool_call(call_id: str, tool_name: str) -> dict[str, Any]:
             "arguments": "{}",
         },
     }
+
+
+_FILE_TOOL_IDS = ("apply_patch", "edit", "write", "write_file")

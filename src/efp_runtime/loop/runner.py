@@ -29,7 +29,12 @@ from ..session.protocol import SessionStore
 from ..session.status import RuntimeStatus
 from ..tools.definition import ToolContext
 from ..tools.runtime import ToolRuntime
-from ..tools.selection import ToolSelection, resolve_tool_selection
+from ..tools.selection import (
+    ModelAwareToolSelection,
+    ToolSelection,
+    resolve_model_aware_tool_selection,
+    resolve_tool_selection,
+)
 from ..types import ToolCall, ToolResult, new_id
 from ..usage import (
     UsageSummary,
@@ -180,12 +185,29 @@ class RuntimeLoopRunner:
         if iteration_limit < 1:
             raise ValueError("max_iterations must be at least 1")
 
+        run_metadata = dict(metadata or {})
+        run_id = str(run_metadata.get("run_id") or new_id("run"))
+        run_metadata["run_id"] = run_id
+        run_metadata["emit_llm_stream_events"] = self.emit_llm_stream_events
+        _record_usage_metadata(
+            run_metadata,
+            track_usage=self.track_usage,
+            pricing_enabled=bool(self.usage_pricing),
+        )
+
         all_tool_ids = self.tool_runtime.registry.ids()
+        model_aware_selection = resolve_model_aware_tool_selection(
+            all_tool_ids,
+            run_metadata,
+            enabled=_model_aware_tool_selection_enabled(run_metadata),
+        )
+        forced_disabled_tool_ids = set(self.tool_selection.forced_disabled)
+        forced_disabled_tool_ids.update(model_aware_selection.forced_disabled)
         enabled_tool_ids = resolve_tool_selection(
             all_tool_ids,
             enabled=self.tool_selection.enabled,
             disabled=self.tool_selection.disabled,
-            forced_disabled=self.tool_selection.forced_disabled,
+            forced_disabled=forced_disabled_tool_ids,
             overrides=tools,
         )
         disabled_tool_ids = _disabled_tool_ids(
@@ -225,14 +247,9 @@ class RuntimeLoopRunner:
         pending_question_request: Optional[dict[str, Any]] = None
         terminal_reason: Optional[str] = None
         structured_output: Optional[dict[str, Any]] = None
-        run_metadata = dict(metadata or {})
-        run_id = str(run_metadata.get("run_id") or new_id("run"))
-        run_metadata["run_id"] = run_id
-        run_metadata["emit_llm_stream_events"] = self.emit_llm_stream_events
-        _record_usage_metadata(
+        _record_model_aware_tool_selection_metadata(
             run_metadata,
-            track_usage=self.track_usage,
-            pricing_enabled=bool(self.usage_pricing),
+            model_aware_selection=model_aware_selection,
         )
         _record_tool_selection_metadata(
             run_metadata,
@@ -272,6 +289,9 @@ class RuntimeLoopRunner:
                     "max_iterations": iteration_limit,
                     "enabled_tool_ids": list(enabled_tool_ids),
                     "disabled_tool_ids": list(disabled_tool_ids),
+                    "model_aware_tool_selection": deepcopy(
+                        run_metadata["model_aware_tool_selection"]
+                    ),
                     "emit_llm_stream_events": self.emit_llm_stream_events,
                     "track_usage": self.track_usage,
                     "usage_pricing_enabled": bool(
@@ -1455,6 +1475,52 @@ def _record_tool_selection_metadata(
             merged_tools_metadata["caller_value"] = tools_metadata
     merged_tools_metadata.update({"enabled": enabled, "disabled": disabled})
     metadata["tools"] = merged_tools_metadata
+
+
+def _record_model_aware_tool_selection_metadata(
+    metadata: dict[str, Any],
+    *,
+    model_aware_selection: ModelAwareToolSelection,
+) -> None:
+    forced_disabled = list(model_aware_selection.forced_disabled)
+    metadata["model_aware_tool_selection_enabled"] = model_aware_selection.enabled
+    metadata["model_aware_tool_selection_ran"] = model_aware_selection.ran
+    metadata["model_aware_tool_selection_model_hint"] = (
+        model_aware_selection.model_hint
+    )
+    metadata["model_aware_tool_selection_mode"] = model_aware_selection.mode
+    metadata["model_aware_tool_selection_forced_disabled"] = forced_disabled
+
+    selection_metadata = metadata.get("model_aware_tool_selection")
+    if isinstance(selection_metadata, Mapping):
+        merged_selection_metadata = dict(selection_metadata)
+    else:
+        merged_selection_metadata = {}
+        if selection_metadata is not None:
+            merged_selection_metadata["caller_value"] = selection_metadata
+    merged_selection_metadata.update(
+        {
+            "enabled": model_aware_selection.enabled,
+            "ran": model_aware_selection.ran,
+            "model_hint": model_aware_selection.model_hint,
+            "mode": model_aware_selection.mode,
+            "forced_disabled": forced_disabled,
+        }
+    )
+    metadata["model_aware_tool_selection"] = merged_selection_metadata
+
+
+def _model_aware_tool_selection_enabled(metadata: Mapping[str, Any]) -> bool:
+    if "model_aware_tool_selection_enabled" not in metadata:
+        return True
+    value = metadata["model_aware_tool_selection_enabled"]
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+    return bool(value)
 
 
 def _record_usage_metadata(

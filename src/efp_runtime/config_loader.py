@@ -47,6 +47,8 @@ _RUNTIME_CONFIG_KEYS = {
     "disabled_tools",
     "enabledTools",
     "enabled_tools",
+    "modelAwareToolSelection",
+    "model_aware_tool_selection",
     "instructions",
     "systemPrompt",
     "system_prompt",
@@ -316,6 +318,10 @@ def _runtime_config_from_raw(
     if disabled_tools is not None:
         kwargs["disabled_tools"] = disabled_tools
 
+    model_aware_tool_selection = _model_aware_tool_selection(raw)
+    if model_aware_tool_selection is not None:
+        kwargs["model_aware_tool_selection"] = model_aware_tool_selection
+
     instruction_paths, instruction_texts = _instruction_sources(
         raw.get("instructions"),
         workspace_root=workspace_root,
@@ -491,6 +497,21 @@ def _runtime_mode(raw: Mapping[str, Any]) -> Any:
     return mode
 
 
+def _model_aware_tool_selection(raw: Mapping[str, Any]) -> Any:
+    selection = None
+    for key, value in raw.items():
+        if key == "runtime" and isinstance(value, Mapping):
+            for nested_key in (
+                "modelAwareToolSelection",
+                "model_aware_tool_selection",
+            ):
+                if nested_key in value:
+                    selection = value[nested_key]
+        elif key in {"modelAwareToolSelection", "model_aware_tool_selection"}:
+            selection = value
+    return selection
+
+
 def _command_directories(
     raw: Mapping[str, Any],
     *,
@@ -536,7 +557,12 @@ def _unconsumed_config(raw: Mapping[str, Any]) -> dict[str, Any]:
                 runtime_extra = {
                     str(runtime_key): deepcopy(runtime_value)
                     for runtime_key, runtime_value in value.items()
-                    if str(runtime_key) != "mode"
+                    if str(runtime_key)
+                    not in {
+                        "mode",
+                        "modelAwareToolSelection",
+                        "model_aware_tool_selection",
+                    }
                 }
                 if runtime_extra:
                     unconsumed[key_text] = runtime_extra

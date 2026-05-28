@@ -129,6 +129,37 @@ def test_runtime_config_field_mapping(tmp_path: Path):
     assert config.runtime_mode == "plan"
 
 
+def test_model_aware_tool_selection_config_aliases(tmp_path: Path):
+    _write_json(
+        tmp_path / "camel.json",
+        {
+            "modelAwareToolSelection": False,
+        },
+    )
+    _write_json(
+        tmp_path / "snake.json",
+        {
+            "runtime": {"model_aware_tool_selection": False},
+        },
+    )
+
+    camel = load_runtime_config(
+        tmp_path,
+        paths=["camel.json"],
+        include_defaults=False,
+    )
+    snake = load_runtime_config(
+        tmp_path,
+        paths=["snake.json"],
+        include_defaults=False,
+    )
+
+    assert camel.config.model_aware_tool_selection is False
+    assert snake.config.model_aware_tool_selection is False
+    assert camel.metadata["unconsumed_config"] == {}
+    assert snake.metadata["unconsumed_config"] == {}
+
+
 def test_default_skill_directories_precede_configured_directories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
