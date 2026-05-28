@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from html import escape
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
@@ -71,7 +72,7 @@ from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
-from ..types import SkillPackage, ToolCall
+from ..types import SkillPackage, ToolCall, ToolResult, new_id
 from ..workspace_snapshots import (
     WorkspaceSnapshot,
     WorkspaceSnapshotDiff,
@@ -115,6 +116,12 @@ class _AgentMention:
     name: str
     profile: Any
     stripped_text: str
+
+
+@dataclass(frozen=True)
+class _CommandSubtaskExecution:
+    user_text: str | None = None
+    event: RuntimeEvent | None = None
 
 
 class AgentRuntime:
@@ -280,6 +287,7 @@ class AgentRuntime:
             self._inject_pending_background_task_results(resolved_session_id)
             run_metadata["max_iterations"] = iteration_limit
             run_metadata["run_id"] = run_id
+            command_subtask_events: list[RuntimeEvent] = []
             if selected_agent_source is not None:
                 run_metadata["selected_agent_source"] = selected_agent_source
             if command_expansion is not None:
@@ -291,6 +299,18 @@ class AgentRuntime:
                     run_metadata=run_metadata,
                 )
                 user_text_for_request = command_expansion.text
+                subtask_execution = await self._execute_command_subtask_if_requested(
+                    command_expansion,
+                    profile=profile,
+                    tool_runtime=run_tool_runtime,
+                    session_id=resolved_session_id,
+                    run_id=run_id,
+                    run_metadata=run_metadata,
+                )
+                if subtask_execution.event is not None:
+                    command_subtask_events.append(subtask_execution.event)
+                if subtask_execution.user_text is not None:
+                    user_text_for_request = subtask_execution.user_text
             self._annotate_skill_metadata(run_metadata, active_skills)
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             agent_profile_messages = self._build_agent_profile_messages(profile)
@@ -387,6 +407,7 @@ class AgentRuntime:
             self.run_state.finish(resolved_session_id, LoopStatus.ERROR)
             raise
 
+        result.runtime_events.extend(command_subtask_events)
         if command_expansion is not None:
             result.runtime_events.append(
                 _command_executed_event(
@@ -938,6 +959,97 @@ class AgentRuntime:
         ]
         return expansion
 
+    async def _execute_command_subtask_if_requested(
+        self,
+        expansion: CommandExpansionResult,
+        *,
+        profile: Any | None,
+        tool_runtime: ToolRuntime,
+        session_id: str,
+        run_id: str,
+        run_metadata: dict[str, Any],
+    ) -> _CommandSubtaskExecution:
+        requested = _command_subtask_requested(expansion, profile)
+        run_metadata["command_subtask_requested"] = requested
+        if not requested:
+            run_metadata["command_subtask_executed"] = False
+            return _CommandSubtaskExecution()
+
+        run_metadata["command_subtask_available"] = (
+            tool_runtime.registry.get("task") is not None
+        )
+        if not run_metadata["command_subtask_available"]:
+            run_metadata["command_subtask_executed"] = False
+            return _CommandSubtaskExecution()
+
+        task_id = new_id("command-task")
+        subagent_type = _command_subtask_subagent_type(
+            expansion,
+            profile=profile,
+            default_agent=self.default_agent,
+        )
+        description = expansion.definition.description or expansion.definition.name
+        context_metadata = _command_subtask_context_metadata(
+            expansion,
+            session_id=session_id,
+            run_id=run_id,
+            task_id=task_id,
+            subagent_type=subagent_type,
+        )
+        tool_call = ToolCall(
+            tool_id="task",
+            id=task_id,
+            args={
+                "description": description,
+                "prompt": expansion.command_content,
+                "subagent_type": subagent_type,
+                "task_id": task_id,
+                "command": expansion.definition.name,
+            },
+            metadata=context_metadata,
+        )
+        result = await tool_runtime.execute(
+            tool_call,
+            context=ToolContext(
+                session_id=session_id,
+                run_id=run_id,
+                tool_call_id=tool_call.call_id,
+                tool_name="task",
+                metadata=context_metadata,
+                cancel_requested=lambda: self.run_state.is_cancelled(session_id),
+            ),
+        )
+
+        _record_command_subtask_result_metadata(
+            run_metadata,
+            result=result,
+            task_id=task_id,
+            subagent_type=subagent_type,
+        )
+        if result.status != "success":
+            run_metadata["command_subtask_executed"] = False
+            return _CommandSubtaskExecution()
+
+        run_metadata["command_subtask_executed"] = True
+        task_content = _command_subtask_content(result)
+        event = _command_subtask_completed_event(
+            session_id=session_id,
+            run_id=run_id,
+            command_name=expansion.definition.name,
+            task_id=task_id,
+            subagent_type=subagent_type,
+            status=result.status,
+        )
+        return _CommandSubtaskExecution(
+            user_text=_render_command_subtask_prompt(
+                expansion,
+                task_content=task_content,
+                task_id=task_id,
+                subagent_type=subagent_type,
+            ),
+            event=event,
+        )
+
     def _publish_command_shell_tool_events(
         self,
         events: Iterable[Any],
@@ -1247,6 +1359,175 @@ def _command_shell_context_metadata(
     if command_file:
         metadata["command_file"] = command_file
     return metadata
+
+
+def _command_subtask_requested(
+    expansion: CommandExpansionResult,
+    profile: Any | None,
+) -> bool:
+    if _command_subtask_explicit_false(expansion):
+        return False
+    if _command_subtask_explicit_true(expansion):
+        return True
+    if expansion.definition.source == "skill":
+        return False
+    return _profile_metadata(profile).get("mode") == "subagent" if profile else False
+
+
+def _command_subtask_explicit_true(expansion: CommandExpansionResult) -> bool:
+    return any(
+        _subtask_value_is_true(value)
+        for value in _command_subtask_values(expansion)
+    )
+
+
+def _command_subtask_explicit_false(expansion: CommandExpansionResult) -> bool:
+    return any(
+        _subtask_value_is_false(value)
+        for value in _command_subtask_values(expansion)
+    )
+
+
+def _command_subtask_values(expansion: CommandExpansionResult) -> list[Any]:
+    values: list[Any] = [expansion.definition.subtask]
+    if "subtask" in expansion.definition.metadata:
+        values.append(expansion.definition.metadata["subtask"])
+    return values
+
+
+def _subtask_value_is_true(value: Any) -> bool:
+    if value is True:
+        return True
+    return isinstance(value, str) and value.strip().lower() == "true"
+
+
+def _subtask_value_is_false(value: Any) -> bool:
+    if value is False:
+        return True
+    return isinstance(value, str) and value.strip().lower() == "false"
+
+
+def _command_subtask_subagent_type(
+    expansion: CommandExpansionResult,
+    *,
+    profile: Any | None,
+    default_agent: str | None,
+) -> str:
+    if profile is not None:
+        profile_name = _normalize_optional_name(_profile_name(profile))
+        if profile_name is not None:
+            return profile_name
+    command_agent = _command_agent_name(expansion)
+    if command_agent is not None:
+        return command_agent
+    if default_agent is not None:
+        return default_agent
+    return "general"
+
+
+def _command_subtask_context_metadata(
+    expansion: CommandExpansionResult,
+    *,
+    session_id: str,
+    run_id: str,
+    task_id: str,
+    subagent_type: str,
+) -> dict[str, Any]:
+    metadata = {
+        "command_subtask": True,
+        "command_name": expansion.definition.name,
+        "command_source": expansion.definition.source,
+        "command_arguments": expansion.arguments,
+        "command_metadata": deepcopy(expansion.definition.metadata),
+        "session_id": session_id,
+        "run_id": run_id,
+        "task_id": task_id,
+        "subagent_type": subagent_type,
+    }
+    command_file = _command_file_metadata(expansion.definition)
+    if command_file:
+        metadata["command_file"] = command_file
+    return metadata
+
+
+def _record_command_subtask_result_metadata(
+    run_metadata: dict[str, Any],
+    *,
+    result: ToolResult,
+    task_id: str,
+    subagent_type: str,
+) -> None:
+    run_metadata["command_subtask_available"] = True
+    run_metadata["command_subtask_task_id"] = task_id
+    run_metadata["command_subtask_subagent_type"] = subagent_type
+    run_metadata["command_subtask_result_status"] = result.status
+    run_metadata["command_subtask_result_success"] = result.success
+    if result.error is not None:
+        run_metadata["command_subtask_result_error"] = result.error
+    if result.metadata:
+        run_metadata["command_subtask_result_metadata"] = deepcopy(result.metadata)
+    output = result.output
+    if isinstance(output, Mapping):
+        output_metadata = output.get("metadata")
+        if isinstance(output_metadata, Mapping):
+            run_metadata["command_subtask_output_metadata"] = deepcopy(
+                dict(output_metadata)
+            )
+
+
+def _command_subtask_content(result: ToolResult) -> str:
+    output = result.output
+    if isinstance(output, Mapping) and output.get("text") is not None:
+        return str(output["text"])
+    return result.content
+
+
+def _render_command_subtask_prompt(
+    expansion: CommandExpansionResult,
+    *,
+    task_content: str,
+    task_id: str,
+    subagent_type: str,
+) -> str:
+    attrs = [
+        f'name="{escape(expansion.definition.name, quote=True)}"',
+        f'agent="{escape(subagent_type, quote=True)}"',
+        f'task_id="{escape(task_id, quote=True)}"',
+    ]
+    block = "\n".join(
+        [
+            f"<command_subtask_result {' '.join(attrs)}>",
+            task_content,
+            "</command_subtask_result>",
+        ]
+    )
+    if expansion.remaining_text:
+        return f"{block}\n\n{expansion.remaining_text}"
+    return block
+
+
+def _command_subtask_completed_event(
+    *,
+    session_id: str,
+    run_id: str,
+    command_name: str,
+    task_id: str,
+    subagent_type: str,
+    status: str,
+) -> RuntimeEvent:
+    return RuntimeEvent(
+        type="command.subtask.completed",
+        message="Command subtask completed.",
+        session_id=session_id,
+        payload={
+            "run_id": run_id,
+            "command": command_name,
+            "task_id": task_id,
+            "subagent_type": subagent_type,
+            "status": status,
+            "success": status == "success",
+        },
+    )
 
 
 def _command_file_metadata(definition: CommandDefinition) -> str:

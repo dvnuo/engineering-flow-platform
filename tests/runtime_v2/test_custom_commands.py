@@ -28,6 +28,11 @@ from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import _resolve_config
 from efp_runtime.skills.discovery import SkillDiscovery
 from efp_runtime.tools.definition import ToolDef
+from efp_runtime.tools.builtin.task import (
+    TaskToolRequest,
+    TaskToolResult,
+    create_task_tool,
+)
 from efp_runtime.tools.registry import ToolRegistry
 
 
@@ -717,6 +722,9 @@ async def test_builtin_review_available_without_config_or_command_directory(
     assert request.metadata["command_name"] == "review"
     assert request.metadata["command_source"] == "builtin"
     assert request.metadata["command_subtask"] is True
+    assert request.metadata["command_subtask_requested"] is True
+    assert request.metadata["command_subtask_available"] is False
+    assert request.metadata["command_subtask_executed"] is False
     assert "Review the requested code changes." in text
     assert "git diff" in text
     assert "git diff --cached" in text
@@ -825,6 +833,248 @@ async def test_injected_command_registry_expands_without_config_directories():
     assert request.metadata["command_model"] == "provider/model"
     assert request.metadata["command_subtask"] is False
     assert request.metadata["command_metadata"]["tools"] == ["shell_exec"]
+
+
+@pytest.mark.asyncio
+async def test_command_subtask_true_executes_task_tool_before_parent_provider():
+    captured: list[TaskToolRequest] = []
+
+    async def task_runner(request: TaskToolRequest) -> TaskToolResult:
+        captured.append(request)
+        return TaskToolResult(
+            task_id=request.task_id,
+            text="child review result",
+            metadata={"child": "metadata"},
+        )
+
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="review",
+                description="Review changes",
+                content="Review expanded $ARGUMENTS.",
+                source="config",
+                subtask=True,
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Parent final."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+        tool_registry=ToolRegistry([create_task_tool(task_runner)]),
+    )
+
+    result = await runtime.run(
+        "/review src/runtime\nKeep this parent context.",
+        session_id="session-command-subtask",
+    )
+
+    assert len(captured) == 1
+    task_request = captured[0]
+    assert task_request.description == "Review changes"
+    assert task_request.prompt == "Review expanded src/runtime."
+    assert task_request.subagent_type == "general"
+    assert task_request.task_id.startswith("command-task_")
+    assert task_request.command == "review"
+    assert task_request.session_id == "session-command-subtask"
+    assert task_request.metadata["session_id"] == "session-command-subtask"
+    assert task_request.metadata["run_id"] == provider.requests[0].metadata["run_id"]
+    assert task_request.metadata["command_name"] == "review"
+
+    parent_text = _last_user_text(provider.requests[0])
+    assert '<command_subtask_result name="review" agent="general"' in parent_text
+    assert f'task_id="{task_request.task_id}"' in parent_text
+    assert "child review result" in parent_text
+    assert "Keep this parent context." in parent_text
+    assert '<command name="review"' not in parent_text
+    assert "Review expanded src/runtime." not in parent_text
+
+    metadata = provider.requests[0].metadata
+    assert metadata["command_subtask_executed"] is True
+    assert metadata["command_subtask_requested"] is True
+    assert metadata["command_subtask_available"] is True
+    assert metadata["command_subtask_subagent_type"] == "general"
+    assert metadata["command_subtask_task_id"] == task_request.task_id
+    assert metadata["command_subtask_result_status"] == "success"
+    assert metadata["command_subtask_output_metadata"] == {"child": "metadata"}
+    assert metadata["command_name"] == "review"
+    assert metadata["command_arguments"] == "src/runtime"
+    assert metadata["command_metadata"]["subtask"] is True
+
+    subtask_events = [
+        event for event in result.runtime_events if event.type == "command.subtask.completed"
+    ]
+    command_events = [
+        event for event in result.runtime_events if event.type == "command.executed"
+    ]
+    assert len(subtask_events) == 1
+    assert len(command_events) == 1
+    assert subtask_events[0].payload == {
+        "run_id": metadata["run_id"],
+        "command": "review",
+        "task_id": task_request.task_id,
+        "subagent_type": "general",
+        "status": "success",
+        "success": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_command_agent_subagent_profile_executes_task_when_subtask_omitted():
+    captured: list[TaskToolRequest] = []
+
+    async def task_runner(request: TaskToolRequest) -> str:
+        captured.append(request)
+        return "reviewer child result"
+
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="audit",
+                content="Audit $ARGUMENTS.",
+                source="config",
+                agent="reviewer",
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Parent final."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+        agent_registry=AgentRegistry(
+            [AgentProfile(name="reviewer", metadata={"mode": "subagent"})],
+            default_agent=None,
+        ),
+        tool_registry=ToolRegistry([create_task_tool(task_runner)]),
+    )
+
+    await runtime.run("/audit target", session_id="session-command-profile-subtask")
+
+    assert len(captured) == 1
+    assert captured[0].prompt == "Audit target."
+    assert captured[0].subagent_type == "reviewer"
+    request = provider.requests[0]
+    assert request.metadata["selected_agent_source"] == "command"
+    assert request.metadata["command_subtask_requested"] is True
+    assert request.metadata["command_subtask_executed"] is True
+    assert request.metadata["command_subtask_subagent_type"] == "reviewer"
+    assert "reviewer child result" in _last_user_text(request)
+    assert '<command name="audit"' not in _last_user_text(request)
+
+
+@pytest.mark.asyncio
+async def test_command_subtask_false_overrides_subagent_profile_mode():
+    called = False
+
+    async def task_runner(request: TaskToolRequest) -> str:
+        nonlocal called
+        called = True
+        return "should not run"
+
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="audit",
+                content="Audit $ARGUMENTS.",
+                source="config",
+                agent="reviewer",
+                subtask=False,
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Parent final."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+        agent_registry=AgentRegistry(
+            [AgentProfile(name="reviewer", metadata={"mode": "subagent"})],
+            default_agent=None,
+        ),
+        tool_registry=ToolRegistry([create_task_tool(task_runner)]),
+    )
+
+    await runtime.run("/audit target", session_id="session-command-subtask-false")
+
+    request = provider.requests[0]
+    assert called is False
+    assert request.metadata["command_subtask"] is False
+    assert request.metadata["command_subtask_requested"] is False
+    assert request.metadata["command_subtask_executed"] is False
+    assert '<command name="audit"' in _last_user_text(request)
+    assert "<command_subtask_result" not in _last_user_text(request)
+
+
+@pytest.mark.asyncio
+async def test_command_subtask_error_falls_back_to_ordinary_command_prompt():
+    captured: list[TaskToolRequest] = []
+
+    async def task_runner(request: TaskToolRequest) -> TaskToolResult:
+        captured.append(request)
+        return TaskToolResult(
+            task_id=request.task_id,
+            text="child failed",
+            state="error",
+            metadata={"phase": "child"},
+        )
+
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="review",
+                content="Review $ARGUMENTS.",
+                source="config",
+                subtask=True,
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Parent fallback."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+        tool_registry=ToolRegistry([create_task_tool(task_runner)]),
+    )
+
+    result = await runtime.run(
+        "/review branch",
+        session_id="session-command-subtask-error",
+    )
+
+    assert len(captured) == 1
+    request = provider.requests[0]
+    text = _last_user_text(request)
+    assert '<command name="review"' in text
+    assert "<command_subtask_result" not in text
+    assert "Review branch." in text
+    assert request.metadata["command_subtask_requested"] is True
+    assert request.metadata["command_subtask_available"] is True
+    assert request.metadata["command_subtask_executed"] is False
+    assert request.metadata["command_subtask_result_status"] == "error"
+    assert request.metadata["command_subtask_result_error"] == "child failed"
+    assert request.metadata["command_subtask_output_metadata"] == {"phase": "child"}
+    assert not [
+        event for event in result.runtime_events if event.type == "command.subtask.completed"
+    ]
 
 
 @pytest.mark.asyncio

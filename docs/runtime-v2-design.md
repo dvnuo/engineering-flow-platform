@@ -861,8 +861,10 @@ command. `/init` asks the model to create or update the workspace-root
 the runtime has no workspace root, and includes `$ARGUMENTS` for caller focus.
 `/review` asks for a findings-first code review and includes `$ARGUMENTS` as the
 review target. Its metadata sets `subtask=true`, which is reported as
-`command_subtask=True`; this metadata is observational and does not start a
-subagent.
+`command_subtask=True`. Runtime v2 can execute such commands through an
+injected local `task` tool when that tool is registered for the active run.
+Minimal runtimes without the `task` tool keep the ordinary prompt expansion
+path, so `/review` remains available without delegated execution.
 
 Command files are markdown or text prompt templates discovered from configured
 directories, including hidden configured roots such as `.opencode/command`;
@@ -953,7 +955,29 @@ optional `command_subtask`, and a copied `command_metadata` object. When command
 providers that field remains metadata only. `OpenAICompatibleProvider` honors it
 when building the outgoing payload `model`, but it does not switch provider
 instances, endpoint, transport, tools, schemas, mode, or sampling settings.
-`subtask` is recorded only; it does not start a subagent in this phase.
+Command subtask selection follows the expanded command metadata and the selected
+profile. Explicit `subtask=false` disables delegated execution. Explicit
+`subtask=true` enables it. Otherwise, a selected profile with
+`metadata["mode"] == "subagent"` enables it for ordinary commands; skill-backed
+commands stay on the prompt-expansion path unless the command definition
+explicitly opts in.
+
+When a command subtask is requested and the active tool runtime has a registered
+`task` tool, Runtime v2 runs that tool after command shell interpolation and
+before the parent provider call. The task receives the interpolated
+`command_content` as its prompt, the command description or name as the task
+description, the resolved subagent type, the command name, and session/run
+context metadata. On success, the parent provider receives a concise
+`<command_subtask_result ...>` user block plus any remaining user text after the
+slash command, rather than the ordinary `<command ...>` wrapper. Run metadata
+records the requested, available, executed, subagent type, task id, result
+status, and copied task result metadata. Runtime v2 also emits one
+`command.subtask.completed` event for the successful task execution.
+
+If the `task` tool is unavailable, asks for permission, is denied, fails
+validation, errors, or is cancelled, Runtime v2 does not send a partial subtask
+result to the parent provider. It falls back to the ordinary command prompt
+expansion and records the failed or unavailable subtask status in run metadata.
 
 After a command-backed `AgentRuntime.run(...)` returns or pauses, Runtime v2
 emits one `command.executed` runtime event. The event uses the resolved
