@@ -32,7 +32,7 @@ def _default_input_schema() -> dict[str, Any]:
 class ExternalToolSpec:
     """Provider-declared external tool shape.
 
-    Providers expose these specs without binding Runtime v2 to a specific MCP,
+    Providers expose these specs without binding Runtime v2 to a specific
     plugin, network, or subprocess transport.
     """
 

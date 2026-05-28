@@ -405,7 +405,7 @@ def test_agent_loader_keys_are_not_unconsumed_config(tmp_path: Path):
 def test_unconsumed_config_is_preserved_in_metadata(tmp_path: Path):
     raw = {
         "model": "example-model",
-        "mcp": {"server": {"command": "noop"}},
+        "experimental": {"future": {"enabled": True}},
         "commands": {"fmt": "python -m compileall"},
         "plugins": ["local-plugin"],
         "runtime": {"mode": "build", "future": True},
@@ -418,7 +418,7 @@ def test_unconsumed_config_is_preserved_in_metadata(tmp_path: Path):
     assert result.metadata["raw_config"] == raw
     assert result.metadata["unconsumed_config"] == {
         "model": "example-model",
-        "mcp": {"server": {"command": "noop"}},
+        "experimental": {"future": {"enabled": True}},
         "plugins": ["local-plugin"],
         "runtime": {"future": True},
     }
