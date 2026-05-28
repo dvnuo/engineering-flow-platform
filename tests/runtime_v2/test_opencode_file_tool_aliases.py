@@ -93,7 +93,10 @@ async def test_read_alias_reads_whole_file_using_file_path(tmp_path: Path):
         "<path>src/app.txt</path>\n"
         "<type>file</type>\n"
         "<content>\n"
-        "alpha\nbeta\n"
+        "1: alpha\n"
+        "2: beta\n"
+        "\n"
+        "(End of file - total 2 lines)\n"
         "</content>"
     )
 
@@ -122,7 +125,14 @@ async def test_read_alias_reads_line_range_with_next_offset(tmp_path: Path):
     assert result.output["range_truncated"] is True
     assert result.output["default_limit_applied"] is False
     assert result.output["truncated_by"] == ["lines"]
-    assert "<content>\ntwo\nthree\n</content>" in result.content
+    assert (
+        "<content>\n"
+        "2: two\n"
+        "3: three\n"
+        "\n"
+        "(Showing lines 2-3 of 4. Use offset=4 to continue.)\n"
+        "</content>"
+    ) in result.content
 
 
 @pytest.mark.asyncio
@@ -146,6 +156,9 @@ async def test_read_alias_defaults_to_2000_visible_lines(tmp_path: Path):
     assert result.output["range_truncated"] is True
     assert result.output["default_limit_applied"] is True
     assert result.output["truncated_by"] == ["lines"]
+    assert "1: line 1" in result.content
+    assert "2000: line 2000" in result.content
+    assert "(Showing lines 1-2000 of 2005. Use offset=2001 to continue.)" in result.content
 
 
 @pytest.mark.asyncio
@@ -169,6 +182,51 @@ async def test_read_alias_limit_zero_returns_empty_range_metadata(tmp_path: Path
     assert result.output["range_truncated"] is True
     assert result.output["default_limit_applied"] is False
     assert result.output["truncated_by"] == ["lines"]
+    assert "(Showing lines 1-0 of 2. Use offset=1 to continue.)" in result.content
+
+
+@pytest.mark.asyncio
+async def test_read_alias_rejects_offset_beyond_eof(tmp_path: Path):
+    (tmp_path / "log.txt").write_text("one\ntwo\n", encoding="utf-8")
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-read-past-eof",
+            tool_id="read",
+            args={"filePath": "log.txt", "offset": 3},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error == "Offset 3 is out of range for this file (2 lines)."
+
+
+@pytest.mark.asyncio
+async def test_read_alias_allows_empty_file_at_first_offset(tmp_path: Path):
+    (tmp_path / "empty.txt").write_text("", encoding="utf-8")
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-read-empty",
+            tool_id="read",
+            args={"filePath": "empty.txt", "offset": 1},
+        )
+    )
+
+    assert result.status == "success"
+    assert result.output["content"] == ""
+    assert result.output["total_lines"] == 0
+    assert result.output["line_count"] == 0
+    assert result.content == (
+        "<path>empty.txt</path>\n"
+        "<type>file</type>\n"
+        "<content>\n"
+        "\n"
+        "(End of file - total 0 lines)\n"
+        "</content>"
+    )
 
 
 @pytest.mark.asyncio
@@ -191,6 +249,7 @@ async def test_read_alias_caps_bytes_and_long_lines(tmp_path: Path):
     assert "bytes" in result.output["truncated_by"]
     assert suffix in result.output["content"]
     assert "x" * 2100 not in result.output["content"]
+    assert "(Output capped at 50 KB." in result.content
 
 
 @pytest.mark.asyncio
@@ -264,13 +323,50 @@ async def test_read_alias_reads_directory_entries_with_range_metadata(tmp_path: 
     assert result.output["has_more"] is True
     assert result.output["next_offset"] == 3
     assert result.output["truncated"] is True
+    assert result.output["default_limit_applied"] is False
     assert result.content == (
         "<path>pkg</path>\n"
         "<type>directory</type>\n"
         "<entries>\n"
         "Alpha/\n"
         "alpha.txt\n"
+        "\n"
+        "(Showing 2 of 3 entries. Use offset=3 to read beyond entry 2)\n"
         "</entries>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_alias_directory_defaults_to_2000_entries(tmp_path: Path):
+    root = tmp_path / "many"
+    root.mkdir()
+    for index in range(2005):
+        (root / f"entry-{index:04}.txt").write_text("", encoding="utf-8")
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-read-dir-default-limit",
+            tool_id="read",
+            args={"filePath": "many"},
+        )
+    )
+
+    assert result.status == "success"
+    assert len(result.output["entries"]) == 2000
+    assert result.output["total_entries"] == 2005
+    assert result.output["offset"] == 1
+    assert result.output["limit"] == 2000
+    assert result.output["has_more"] is True
+    assert result.output["next_offset"] == 2001
+    assert result.output["truncated"] is True
+    assert result.output["default_limit_applied"] is True
+    assert "entry-0000.txt" in result.content
+    assert "entry-1999.txt" in result.content
+    assert "entry-2000.txt" not in result.content
+    assert (
+        "(Showing 2000 of 2005 entries. Use offset=2001 to read beyond entry 2000)"
+        in result.content
     )
 
 

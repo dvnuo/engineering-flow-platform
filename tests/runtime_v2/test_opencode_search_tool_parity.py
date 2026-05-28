@@ -104,6 +104,74 @@ async def test_grep_no_matches_returns_no_files_found(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_search_includes_hidden_files_and_excludes_git(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "ignored.txt").write_text("needle git\n", encoding="utf-8")
+    (tmp_path / ".hidden.txt").write_text("needle hidden\n", encoding="utf-8")
+    (tmp_path / "visible.txt").write_text("needle visible\n", encoding="utf-8")
+    os.utime(tmp_path / ".hidden.txt", (200, 200))
+    os.utime(tmp_path / "visible.txt", (100, 100))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    grep_result = await runtime.execute(
+        ToolCall(id="call-grep-hidden", tool_id="grep", args={"pattern": "needle"})
+    )
+
+    assert grep_result.status == "success"
+    assert [match["path"] for match in grep_result.output["matches"]] == [
+        ".hidden.txt",
+        "visible.txt",
+    ]
+    assert grep_result.output["total_matches"] == 2
+    assert grep_result.output["files_searched"] == 2
+    assert ".git" not in grep_result.content
+
+    glob_result = await runtime.execute(
+        ToolCall(id="call-glob-hidden", tool_id="glob", args={"pattern": "*.txt"})
+    )
+
+    assert glob_result.status == "success"
+    assert glob_result.output["paths"] == [".hidden.txt", "visible.txt"]
+    assert all(".git" not in path for path in glob_result.output["paths"])
+
+
+@pytest.mark.asyncio
+async def test_search_fallback_is_safe_for_invalid_utf8_and_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("PATH", "")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "ignored.txt").write_text("needle git\n", encoding="utf-8")
+    (tmp_path / ".hidden.txt").write_text("needle hidden\n", encoding="utf-8")
+    (tmp_path / "bad.txt").write_bytes(b"bad \xff needle\n")
+    os.utime(tmp_path / ".hidden.txt", (100, 100))
+    os.utime(tmp_path / "bad.txt", (200, 200))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    grep_result = await runtime.execute(
+        ToolCall(id="call-grep-fallback", tool_id="grep", args={"pattern": "needle"})
+    )
+
+    assert grep_result.status == "success"
+    assert [match["path"] for match in grep_result.output["matches"]] == [
+        "bad.txt",
+        ".hidden.txt",
+    ]
+    assert grep_result.output["matches"][0]["line"] == "bad \ufffd needle"
+    assert grep_result.output["files_searched"] == 2
+    assert ".git" not in grep_result.content
+
+    glob_result = await runtime.execute(
+        ToolCall(id="call-glob-fallback", tool_id="glob", args={"pattern": "*.txt"})
+    )
+
+    assert glob_result.status == "success"
+    assert glob_result.output["paths"] == ["bad.txt", ".hidden.txt"]
+    assert all(".git" not in path for path in glob_result.output["paths"])
+
+
+@pytest.mark.asyncio
 async def test_glob_defaults_to_100_matches_and_sorts_by_mtime(tmp_path: Path):
     for index in range(105):
         path = tmp_path / f"file-{index:03}.txt"

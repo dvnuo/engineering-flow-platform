@@ -271,7 +271,11 @@ def _read_alias_file(
     return ToolResult(
         call_id=context.tool_call_id or "read",
         tool_name="read",
-        content=_format_read_file_content(path=relative_path, content=content),
+        content=_format_read_file_content(
+            path=relative_path,
+            content=content,
+            range_metadata=range_metadata,
+        ),
         output=output,
         metadata={
             "truncated": content_truncated,
@@ -298,6 +302,10 @@ def _read_alias_text_range(
     byte_truncated = False
 
     if start_index >= total_lines:
+        if total_lines > 0 or offset != 1:
+            raise ValueError(
+                f"Offset {offset} is out of range for this file ({total_lines} lines)."
+            )
         end_index = start_index
         content = ""
         line_count = 0
@@ -448,7 +456,8 @@ def _read_alias_directory(
 ) -> ToolResult:
     relative_path = workspace_relative_path(workspace_root, path)
     offset = args.get("offset", 1)
-    limit = args.get("limit")
+    default_limit_applied = "limit" not in args
+    limit = args.get("limit", READ_ALIAS_DEFAULT_LIMIT)
     all_entries = [
         _directory_entry(workspace_root, entry)
         for entry in sorted(path.iterdir(), key=_sort_key)
@@ -457,6 +466,7 @@ def _read_alias_directory(
         all_entries,
         offset=offset,
         limit=limit,
+        default_limit_applied=default_limit_applied,
     )
     display_entries = [_directory_display_name(entry) for entry in entries]
     output = {
@@ -473,8 +483,15 @@ def _read_alias_directory(
         content=_format_read_directory_content(
             path=relative_path,
             entries=display_entries,
+            total_entries=len(all_entries),
+            range_metadata=metadata,
         ),
         output=output,
+        metadata={
+            "truncated": metadata["truncated"],
+            "default_limit_applied": default_limit_applied,
+        },
+        truncated=metadata["truncated"],
     )
 
 
@@ -483,6 +500,7 @@ def _slice_directory_entries(
     *,
     offset: int,
     limit: int | None,
+    default_limit_applied: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     _validate_read_range(offset=offset, limit=limit)
     total_entries = len(entries)
@@ -506,6 +524,7 @@ def _slice_directory_entries(
         "has_more": has_more,
         "next_offset": next_offset,
         "truncated": truncated,
+        "default_limit_applied": default_limit_applied,
     }
 
 
@@ -765,24 +784,95 @@ def _directory_display_name(entry: dict[str, Any]) -> str:
     return name
 
 
-def _format_read_file_content(*, path: str, content: str) -> str:
+def _format_read_file_content(
+    *,
+    path: str,
+    content: str,
+    range_metadata: dict[str, Any],
+) -> str:
+    numbered_content = _numbered_read_content(
+        content=content,
+        range_metadata=range_metadata,
+    )
     return "\n".join(
         [
             _inline_tag("path", path),
             _inline_tag("type", "file"),
-            _tagged_block("content", content),
+            _tagged_block("content", numbered_content),
         ]
     )
 
 
-def _format_read_directory_content(*, path: str, entries: list[str]) -> str:
+def _numbered_read_content(*, content: str, range_metadata: dict[str, Any]) -> str:
+    start_line = int(range_metadata["start_line"])
+    end_line = int(range_metadata["end_line"])
+    total_lines = int(range_metadata["total_lines"])
+    lines = [
+        f"{line_number}: {line}"
+        for line_number, line in enumerate(content.splitlines(), start=start_line)
+    ]
+
+    if "bytes" in range_metadata.get("truncated_by", []):
+        next_offset = range_metadata["next_offset"] or end_line + 1
+        marker = (
+            f"(Output capped at {READ_ALIAS_MAX_VISIBLE_BYTES // 1024} KB. "
+            f"Showing lines {start_line}-{end_line}. Use offset={next_offset} "
+            "to continue.)"
+        )
+    elif range_metadata["has_more"]:
+        next_offset = range_metadata["next_offset"] or end_line + 1
+        marker = (
+            f"(Showing lines {start_line}-{end_line} of {total_lines}. "
+            f"Use offset={next_offset} to continue.)"
+        )
+    else:
+        marker = f"(End of file - total {total_lines} lines)"
+
+    return "\n".join([*lines, "", marker])
+
+
+def _format_read_directory_content(
+    *,
+    path: str,
+    entries: list[str],
+    total_entries: int,
+    range_metadata: dict[str, Any],
+) -> str:
+    entries_content = list(entries)
+    entries_content.extend(
+        [
+            "",
+            _directory_range_marker(
+                shown_entries=len(entries),
+                total_entries=total_entries,
+                range_metadata=range_metadata,
+            ),
+        ]
+    )
     return "\n".join(
         [
             _inline_tag("path", path),
             _inline_tag("type", "directory"),
-            _tagged_block("entries", "\n".join(entries)),
+            _tagged_block("entries", "\n".join(entries_content)),
         ]
     )
+
+
+def _directory_range_marker(
+    *,
+    shown_entries: int,
+    total_entries: int,
+    range_metadata: dict[str, Any],
+) -> str:
+    if range_metadata["has_more"]:
+        offset = int(range_metadata["offset"])
+        next_offset = range_metadata["next_offset"] or offset + shown_entries
+        last_entry = offset + shown_entries - 1
+        return (
+            f"(Showing {shown_entries} of {total_entries} entries. "
+            f"Use offset={next_offset} to read beyond entry {last_entry})"
+        )
+    return f"({total_entries} entries)"
 
 
 def _format_write_content(

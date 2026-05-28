@@ -490,6 +490,21 @@ unless raw HTML is requested, while non-HTML text is returned as decoded text.
 Responses are rejected when the declared or actual body exceeds 5 MiB, and
 `max_chars` still controls model-visible truncation.
 
+The legacy `read_file` id keeps its original raw text output. The `read` alias
+keeps raw selected text in `ToolResult.output["content"]` for callers, while its
+model-visible content wraps files in `<path>`, `<type>`, and `<content>` tags
+with numbered lines plus explicit end, continuation, or byte-cap markers.
+Directory reads keep structured `entries` output and default to 2000 visible
+entries when no limit is supplied, with the visible `<entries>` block showing
+either the total entry count or the offset needed to continue.
+
+Search tools prefer the local `rg` executable when available, with user
+configuration disabled, hidden files included, and `.git` paths excluded.
+When `rg` is unavailable they use the standard-library fallback with the same
+workspace-relative output shape. `glob` defaults to 100 recent-first paths, and
+`grep` preserves the structured `matches`, counts, include filter, truncation
+metadata, and grouped readable content expected by Runtime v2 callers.
+
 Foreground `shell_exec` keeps the existing timeout behavior: the runtime waits
 for `communicate()`, kills the process on timeout, and returns the collected
 stdout, stderr, exit code, timeout flag, and saved full output path. Runtime v2
