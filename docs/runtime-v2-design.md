@@ -955,6 +955,17 @@ when building the outgoing payload `model`, but it does not switch provider
 instances, endpoint, transport, tools, schemas, mode, or sampling settings.
 `subtask` is recorded only; it does not start a subagent in this phase.
 
+After a command-backed `AgentRuntime.run(...)` returns or pauses, Runtime v2
+emits one `command.executed` runtime event. The event uses the resolved
+`session_id`, the final assistant `message_id` when present, and the stable
+message `Command executed.` Its payload includes `name`, `arguments`, `source`,
+`status`, `run_id`, `command_metadata`, `truncated`, `original_chars`, and
+`max_chars`. The event is appended to the returned
+`RuntimeLoopResult.runtime_events` and therefore is also visible from
+`RuntimeEventBus.history(session_id)`. Unknown slash commands, `/skill`
+activation without command expansion, and `resume(...)` do not emit
+`command.executed`.
+
 Command `tools` metadata is treated as a per-run tool override base. A list such
 as `tools: [read_file, edit]` enables those tools, equivalent to
 `{"read_file": true, "edit": true}`. A mapping such as

@@ -21,8 +21,9 @@ from efp_runtime.commands import (
     expand_command,
 )
 from efp_runtime.config_loader import load_runtime_config
+from efp_runtime.event_bus import RuntimeEventBus
 from efp_runtime.llm.provider import OpenAICompatibleProvider, RecordingTransport
-from efp_runtime.loop import ScriptedLLMProvider
+from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import _resolve_config
 from efp_runtime.skills.discovery import SkillDiscovery
@@ -516,6 +517,121 @@ async def test_skill_backed_slash_command_expands_into_provider_user_message(
         for message in request.provider_request.messages
     )
 
+
+@pytest.mark.asyncio
+async def test_slash_command_emits_command_executed_event(tmp_path: Path):
+    command_body = "# Fix\nApply this fix."
+    command_dir = _write_command(
+        tmp_path,
+        "fix.md",
+        "---\ndescription: Fix defects\n---\n" + command_body,
+    )
+    bus = RuntimeEventBus()
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            command_directories=[command_dir],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        event_bus=bus,
+    )
+
+    result = await runtime.run("/fix ticket-123", session_id="session-command-event")
+
+    command_events = [
+        event
+        for event in bus.history("session-command-event")
+        if event.type == "command.executed"
+    ]
+    assert len(command_events) == 1
+    assert [
+        event for event in result.runtime_events if event.type == "command.executed"
+    ] == command_events
+
+    event = command_events[0]
+    assert event.message == "Command executed."
+    assert event.session_id == "session-command-event"
+    assert event.message_id == result.final_assistant_message.message_id
+    assert event.payload == {
+        "name": "fix",
+        "arguments": "ticket-123",
+        "source": "file",
+        "status": LoopStatus.COMPLETED,
+        "run_id": provider.requests[0].metadata["run_id"],
+        "command_metadata": {
+            "description": "Fix defects",
+            "source": "file",
+            "name": "fix",
+        },
+        "truncated": False,
+        "original_chars": len(command_body),
+        "max_chars": 20000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_command_executed_event_emits_on_pause_and_not_resume(tmp_path: Path):
+    command_dir = _write_command(tmp_path, "fix.md", "# Fix\nWrite the file.")
+    bus = RuntimeEventBus()
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call_write",
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": json.dumps(
+                                {
+                                    "path": "created.txt",
+                                    "content": "approved\n",
+                                }
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "File written."},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            command_directories=[command_dir],
+            max_iterations=3,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        event_bus=bus,
+    )
+
+    first = await runtime.run("/fix ticket-123", session_id="session-command-pause")
+
+    assert first.status == LoopStatus.WAITING_FOR_PERMISSION
+    command_events = [
+        event
+        for event in bus.history("session-command-pause")
+        if event.type == "command.executed"
+    ]
+    assert len(command_events) == 1
+    assert command_events[0].payload["status"] == LoopStatus.WAITING_FOR_PERMISSION
+    assert command_events[0].message_id == first.final_assistant_message.message_id
+
+    runtime.approve_permission(first.pending_permission_request["request_id"])
+    resumed = await runtime.resume("session-command-pause")
+
+    assert resumed.status == LoopStatus.COMPLETED
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "approved\n"
+    assert [
+        event
+        for event in bus.history("session-command-pause")
+        if event.type == "command.executed"
+    ] == command_events
 
 @pytest.mark.asyncio
 async def test_default_command_file_available_when_loaded_from_nested_dir(
@@ -1047,6 +1163,7 @@ async def test_slash_command_preserves_remaining_body(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_unknown_slash_command_is_left_as_user_text(tmp_path: Path):
     command_dir = _write_command(tmp_path, "fix.md", "# Fix\nKnown.")
+    bus = RuntimeEventBus()
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
@@ -1057,6 +1174,7 @@ async def test_unknown_slash_command_is_left_as_user_text(tmp_path: Path):
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),
+        event_bus=bus,
     )
 
     original = "/missing foo\nkeep this body"
@@ -1066,6 +1184,11 @@ async def test_unknown_slash_command_is_left_as_user_text(tmp_path: Path):
     assert request.provider_request.messages[0].text == original
     assert "command_name" not in request.metadata
     assert "skill_slash_command" not in request.metadata
+    assert not [
+        event
+        for event in bus.history("session-unknown-command")
+        if event.type == "command.executed"
+    ]
 
 
 @pytest.mark.asyncio
@@ -1168,6 +1291,7 @@ async def test_custom_command_wins_over_same_named_skill(tmp_path: Path):
 async def test_skill_command_does_not_trigger_custom_command(tmp_path: Path):
     command_dir = _write_command(tmp_path, "skill.md", "# Custom Skill\nDo not use.")
     _write_skill(tmp_path, "review-pr")
+    bus = RuntimeEventBus()
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
@@ -1178,6 +1302,7 @@ async def test_skill_command_does_not_trigger_custom_command(tmp_path: Path):
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),
+        event_bus=bus,
     )
 
     assert runtime.command_registry.get("review-pr").source == "skill"
@@ -1195,6 +1320,11 @@ async def test_skill_command_does_not_trigger_custom_command(tmp_path: Path):
     assert request.provider_request.messages[2].role == "user"
     assert request.provider_request.messages[2].text == "Please inspect the diff."
     assert "command_name" not in request.metadata
+    assert not [
+        event
+        for event in bus.history("session-skill-command")
+        if event.type == "command.executed"
+    ]
 
 
 @pytest.mark.asyncio

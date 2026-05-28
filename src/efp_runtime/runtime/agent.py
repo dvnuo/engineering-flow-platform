@@ -387,6 +387,14 @@ class AgentRuntime:
             self.run_state.finish(resolved_session_id, LoopStatus.ERROR)
             raise
 
+        if command_expansion is not None:
+            result.runtime_events.append(
+                _command_executed_event(
+                    session_id=resolved_session_id,
+                    result=result,
+                    run_metadata=run_metadata,
+                )
+            )
         self.run_state.finish(resolved_session_id, result.status)
         return result
 
@@ -1405,6 +1413,32 @@ def _command_tool_overrides(
         return {str(tool_id): True for tool_id in raw_tools}
 
     raise ValueError("command tools metadata must be a list or mapping")
+
+
+def _command_executed_event(
+    *,
+    session_id: str,
+    result: RuntimeLoopResult,
+    run_metadata: Mapping[str, Any],
+) -> RuntimeEvent:
+    final_message = result.final_assistant_message
+    return RuntimeEvent(
+        type="command.executed",
+        message="Command executed.",
+        session_id=session_id,
+        message_id=final_message.message_id if final_message is not None else None,
+        payload={
+            "name": run_metadata.get("command_name"),
+            "arguments": run_metadata.get("command_arguments", ""),
+            "source": run_metadata.get("command_source"),
+            "status": result.status,
+            "run_id": run_metadata.get("run_id"),
+            "command_metadata": deepcopy(run_metadata.get("command_metadata") or {}),
+            "truncated": bool(run_metadata.get("command_truncated", False)),
+            "original_chars": run_metadata.get("command_original_chars", 0),
+            "max_chars": run_metadata.get("command_max_chars", 0),
+        },
+    )
 
 
 def _merge_run_tools(
