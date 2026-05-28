@@ -606,6 +606,7 @@ async def test_unknown_slash_command_is_left_as_user_text(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             command_directories=[command_dir],
+            skill_directories=[tmp_path],
             max_iterations=1,
             include_default_system_prompt=False,
             include_runtime_reminders=False,
@@ -618,6 +619,92 @@ async def test_unknown_slash_command_is_left_as_user_text(tmp_path: Path):
     request = provider.requests[0]
     assert request.provider_request.messages[0].text == original
     assert "command_name" not in request.metadata
+    assert "skill_slash_command" not in request.metadata
+
+
+@pytest.mark.asyncio
+async def test_skill_slash_fallback_activates_discovered_skill(tmp_path: Path):
+    _write_skill(tmp_path, "review-pr")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            skill_directories=[tmp_path],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    await runtime.run("/review-pr check the diff", session_id="session-skill-slash")
+
+    request = provider.requests[0]
+    assert request.provider_request.messages[0].role == "system"
+    assert '<skill_content name="review-pr">' in request.provider_request.messages[0].text
+    assert request.provider_request.messages[1].role == "user"
+    assert request.provider_request.messages[1].text == "check the diff"
+    assert request.metadata["active_skills"] == ["review-pr"]
+    assert request.metadata["skill_command"] == {
+        "add": ["review-pr"],
+        "clear": False,
+        "cleaned_text": "check the diff",
+    }
+    assert request.metadata["skill_slash_command"] == "review-pr"
+    assert request.metadata["skill_slash_arguments"] == "check the diff"
+    assert "command_name" not in request.metadata
+
+
+@pytest.mark.asyncio
+async def test_skill_slash_fallback_handles_multiline_form(tmp_path: Path):
+    _write_skill(tmp_path, "review-pr")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            skill_directories=[tmp_path],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    await runtime.run(
+        "/review-pr\nPlease inspect this diff",
+        session_id="session-skill-slash-multiline",
+    )
+
+    request = provider.requests[0]
+    assert request.provider_request.messages[1].text == "Please inspect this diff"
+    assert request.metadata["skill_command"]["cleaned_text"] == "Please inspect this diff"
+    assert request.metadata["skill_slash_command"] == "review-pr"
+    assert request.metadata["skill_slash_arguments"] == ""
+
+
+@pytest.mark.asyncio
+async def test_custom_command_wins_over_same_named_skill(tmp_path: Path):
+    command_dir = _write_command(tmp_path, "review-pr.md", "# Review\nUse command.")
+    _write_skill(tmp_path, "review-pr")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            command_directories=[command_dir],
+            skill_directories=[tmp_path],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    await runtime.run("/review-pr target", session_id="session-custom-before-skill")
+
+    request = provider.requests[0]
+    assert request.metadata["command_name"] == "review-pr"
+    assert request.metadata["command_source"] == "file"
+    assert request.metadata["command_arguments"] == "target"
+    assert "skill_slash_command" not in request.metadata
+    assert request.metadata["active_skills"] == []
+    assert '<command name="review-pr"' in request.provider_request.messages[0].text
 
 
 @pytest.mark.asyncio

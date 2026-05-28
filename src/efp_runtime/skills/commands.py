@@ -14,6 +14,15 @@ class SkillCommandResult:
     clear: bool = False
 
 
+@dataclass(frozen=True)
+class SkillSlashCommandLine:
+    """A parsed fallback slash command line for skill activation."""
+
+    name: str
+    arguments: str
+    cleaned_text: str
+
+
 def parse_skill_commands(text: str) -> SkillCommandResult:
     """Parse `/skill ...` command lines without mutating runtime state."""
 
@@ -34,6 +43,37 @@ def parse_skill_commands(text: str) -> SkillCommandResult:
     return SkillCommandResult(cleaned_text="".join(kept_lines), add=add, clear=clear)
 
 
+def parse_skill_slash_command_line(text: str) -> SkillSlashCommandLine | None:
+    """Parse the first effective slash command line for skill fallback."""
+
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("/"):
+            return None
+
+        command_text = stripped[1:]
+        if not command_text or command_text[0].isspace():
+            return None
+
+        parts = command_text.split(None, 1)
+        name = parts[0]
+        arguments = parts[1].strip() if len(parts) > 1 else ""
+        if not name:
+            return None
+
+        remaining_text = "".join(lines[index + 1 :])
+        cleaned_text = _combine_slash_arguments_and_body(arguments, remaining_text)
+        return SkillSlashCommandLine(
+            name=name,
+            arguments=arguments,
+            cleaned_text=cleaned_text,
+        )
+    return None
+
+
 def _parse_skill_command(line: str) -> str | None:
     stripped = line.strip()
     if stripped == "/skill":
@@ -47,3 +87,11 @@ def _parse_skill_command(line: str) -> str | None:
     if not argument:
         return None
     return argument
+
+
+def _combine_slash_arguments_and_body(arguments: str, remaining_text: str) -> str:
+    if not arguments:
+        return remaining_text
+    if not remaining_text:
+        return arguments
+    return f"{arguments}\n{remaining_text}"

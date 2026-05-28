@@ -47,7 +47,11 @@ from ..session.protocol import SessionStore
 from ..session.checkpoint import SessionCheckpoint
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.store import InMemorySessionStore
-from ..skills.commands import SkillCommandResult, parse_skill_commands
+from ..skills.commands import (
+    SkillCommandResult,
+    parse_skill_commands,
+    parse_skill_slash_command_line,
+)
 from ..skills.context import SkillContextBuilder
 from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_list_tool, build_skill_tool
@@ -225,15 +229,13 @@ class AgentRuntime:
         if structured_output_active:
             run_metadata["structured_output"] = True
             run_metadata["structured_output_tool_id"] = structured_output_tool_id
-        run_metadata["skill_command"] = {
-            "add": list(skill_command.add),
-            "clear": skill_command.clear,
-            "cleaned_text": skill_command.cleaned_text,
-        }
+        run_metadata["skill_command"] = _skill_command_metadata(skill_command)
         command_expansion = self._expand_command_prompt(
             skill_command.cleaned_text,
             run_metadata,
         )
+        if command_expansion is None:
+            self._apply_skill_slash_command_fallback(skill_command, run_metadata)
         user_text_for_request = (
             command_expansion.text
             if command_expansion is not None
@@ -809,6 +811,28 @@ class AgentRuntime:
         run_metadata["command_original_chars"] = expansion.original_chars
         run_metadata["command_max_chars"] = expansion.max_chars
         return expansion
+
+    def _apply_skill_slash_command_fallback(
+        self,
+        skill_command: SkillCommandResult,
+        run_metadata: dict[str, Any],
+    ) -> None:
+        if self.skill_discovery is None:
+            return
+
+        slash_command = parse_skill_slash_command_line(skill_command.cleaned_text)
+        if slash_command is None or slash_command.name == "skill":
+            return
+
+        skill = self.skill_discovery.get(slash_command.name)
+        if skill is None:
+            return
+
+        skill_command.add.append(skill.name)
+        skill_command.cleaned_text = slash_command.cleaned_text
+        run_metadata["skill_command"] = _skill_command_metadata(skill_command)
+        run_metadata["skill_slash_command"] = skill.name
+        run_metadata["skill_slash_arguments"] = slash_command.arguments
 
     async def _interpolate_command_shell(
         self,
@@ -1741,6 +1765,14 @@ def _apply_skill_command(
         if normalized and normalized not in updated:
             updated.append(normalized)
     return updated
+
+
+def _skill_command_metadata(command: SkillCommandResult) -> dict[str, Any]:
+    return {
+        "add": list(command.add),
+        "clear": command.clear,
+        "cleaned_text": command.cleaned_text,
+    }
 
 
 def _unique_skill_names(names: Iterable[str]) -> list[str]:
