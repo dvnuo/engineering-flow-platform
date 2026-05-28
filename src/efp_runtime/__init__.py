@@ -26,6 +26,11 @@ from .session.processor import RuntimeSession, SessionProcessor
 from .session.file_store import FileSessionStore
 from .session.store import InMemorySessionStore
 from .types import Attachment, SkillPackage, ToolCall, ToolResult
+from .workspace import (
+    RuntimeWorkspace,
+    create_agent_runtime_from_workspace,
+    load_runtime_workspace,
+)
 
 __all__ = [
     "Attachment",
@@ -46,6 +51,7 @@ __all__ = [
     "RuntimeEventBus",
     "RuntimeEvent",
     "RuntimeSession",
+    "RuntimeWorkspace",
     "Session",
     "SessionCheckpoint",
     "SessionProcessor",
@@ -53,4 +59,6 @@ __all__ = [
     "TaskPart",
     "ToolCall",
     "ToolResult",
+    "create_agent_runtime_from_workspace",
+    "load_runtime_workspace",
 ]

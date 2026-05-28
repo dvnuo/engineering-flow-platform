@@ -124,17 +124,34 @@ Runtime v2 exposes an explicit local config-loading entry point:
 
 ```python
 from efp_runtime.config_loader import load_runtime_config
+from efp_runtime.workspace import (
+    create_agent_runtime_from_workspace,
+    load_runtime_workspace,
+)
 
 loaded = load_runtime_config(workspace_root)
 runtime_config = loaded.config
 agent_registry = loaded.agent_registry
+
+workspace = load_runtime_workspace(workspace_root)
+runtime = create_agent_runtime_from_workspace(
+    provider=provider,
+    workspace_root=workspace_root,
+)
 ```
 
 `load_runtime_config(...)` returns a `RuntimeConfigLoadResult` containing the
-constructed `RuntimeConfig`, an optional `AgentRegistry`, the successfully loaded
-file paths, the merged raw config object, and loader metadata. The facade does
-not call this loader automatically in this phase. Portal, CLI, tests, and other
-callers must opt in and pass the returned objects where they want them.
+constructed `RuntimeConfig`, an optional `AgentRegistry`, an optional
+`CommandRegistry`, config command definitions, the successfully loaded file
+paths, the merged raw config object, and loader metadata.
+
+`load_runtime_workspace(...)` wraps that result in a small `RuntimeWorkspace`
+object with convenience accessors for `config`, `agent_registry`, and
+`command_registry`. `create_agent_runtime_from_workspace(...)` loads the
+workspace once and constructs `AgentRuntime` with the loaded config, command
+registry, agent registry, and registry default agent. Runtime v2 still never
+constructs a provider in this path: provider and model selection remain
+caller-owned and must be injected with `provider=...`.
 
 The default lookup order is:
 
