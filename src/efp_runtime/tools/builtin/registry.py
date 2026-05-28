@@ -13,6 +13,12 @@ from ...skills.discovery import SkillDiscovery
 from ...skills.tool import build_skill_list_tool, build_skill_tool
 from ..registry import ToolRegistry
 from .apply_patch import create_apply_patch_tool
+from .background_shell import (
+    DEFAULT_MAX_BUFFER_BYTES,
+    ShellJobManager,
+    create_shell_kill_tool,
+    create_shell_status_tool,
+)
 from .edit import create_edit_tool
 from .fetch import create_fetch_tool
 from .filesystem import create_filesystem_tools, normalize_workspace_root
@@ -32,6 +38,9 @@ def create_core_tool_registry(
     write_permission: PermissionMetadata | None = None,
     shell_permission: PermissionMetadata | None = None,
     fetch_permission: PermissionMetadata | None = None,
+    shell_job_manager: ShellJobManager | None = None,
+    enable_background_shell: bool = True,
+    background_shell_max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
     task_runner: TaskToolRunner | None = None,
     include_task_tool: bool = False,
     allow_background_task: bool = False,
@@ -53,6 +62,15 @@ def create_core_tool_registry(
     """Create a registry containing Runtime v2 core built-in tools."""
 
     root = normalize_workspace_root(workspace_root)
+    background_manager = (
+        shell_job_manager
+        if enable_background_shell
+        else None
+    )
+    if enable_background_shell and background_manager is None:
+        background_manager = ShellJobManager(
+            max_buffer_bytes=background_shell_max_buffer_bytes
+        )
     resolved_skill_discovery = _resolve_skill_discovery(
         skill_discovery=skill_discovery,
         skill_directories=skill_directories,
@@ -81,7 +99,17 @@ def create_core_tool_registry(
         registry.register(
             create_lsp_tool(root, client=lsp_client, permission=lsp_permission)
         )
-    registry.register(create_shell_exec_tool(root, permission=shell_permission))
+    registry.register(
+        create_shell_exec_tool(
+            root,
+            permission=shell_permission,
+            shell_job_manager=background_manager,
+            enable_background=enable_background_shell,
+        )
+    )
+    if background_manager is not None:
+        registry.register(create_shell_status_tool(background_manager, root))
+        registry.register(create_shell_kill_tool(background_manager, root))
     if task_runner is not None or include_task_tool:
         if task_runner is None:
             raise ValueError("task_runner is required when include_task_tool is true.")

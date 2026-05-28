@@ -1,6 +1,12 @@
 """Core built-in tools for EFP Runtime v2."""
 
 from .apply_patch import create_apply_patch_tool
+from .background_shell import (
+    ShellJob,
+    ShellJobManager,
+    create_shell_kill_tool,
+    create_shell_status_tool,
+)
 from .edit import create_edit_tool
 from .fetch import create_fetch_tool
 from .filesystem import (
@@ -23,6 +29,8 @@ __all__ = [
     "TaskToolRequest",
     "TaskToolResult",
     "TaskToolRunner",
+    "ShellJob",
+    "ShellJobManager",
     "create_apply_patch_tool",
     "create_core_tool_registry",
     "create_edit_tool",
@@ -37,6 +45,8 @@ __all__ = [
     "create_question_tool",
     "create_read_file_tool",
     "create_shell_exec_tool",
+    "create_shell_kill_tool",
+    "create_shell_status_tool",
     "create_task_tool",
     "create_todo_write_tool",
     "create_write_file_tool",

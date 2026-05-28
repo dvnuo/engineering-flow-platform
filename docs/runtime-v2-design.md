@@ -204,10 +204,10 @@ Runtime v2 supports a minimal `plan` runtime mode alongside the default `build`
 mode. In plan mode, `AgentRuntime` registers the `plan_exit` built-in tool by
 default and, while `RuntimeConfig.plan_mode_read_only=True`, hides mutating
 tools from the provider request schema: `apply_patch`, `edit`, `write_file`,
-and `shell_exec`. These tools remain registered in the underlying registry so
-the policy is enforced through tool selection rather than by changing registry
-shape. Caller-supplied `disabled_tools` still apply, and caller-supplied
-`enabled_tools` cannot expose those mutating tools unless
+`shell_exec`, and `shell_kill`. These tools remain registered in the underlying
+registry so the policy is enforced through tool selection rather than by
+changing registry shape. Caller-supplied `disabled_tools` still apply, and
+caller-supplied `enabled_tools` cannot expose those mutating tools unless
 `plan_mode_read_only=False`.
 
 `plan_exit` lets the model submit a final structured plan. Its `ToolResult`
@@ -226,6 +226,17 @@ invalid-argument feedback, and HTTP(S) fetch tools. Mutating filesystem tools
 default to ask permission; read/search, todo planning, invalid feedback, and
 fetch tools default to allow. The fetch tool is categorized as medium-risk
 network access so callers can override it to ask permission when needed.
+
+Foreground `shell_exec` keeps the existing timeout behavior: the runtime waits
+for `communicate()`, kills the process on timeout, and returns the collected
+stdout, stderr, exit code, timeout flag, and saved full output path. Long-running
+shell commands can instead be started with `shell_exec(background=true)`. That
+call still uses the normal shell permission boundary, starts the process, and
+immediately returns a `job_id`. Callers read retained stdout/stderr and exit
+state with `shell_status(job_id, offset?, limit?)`, and stop a running job with
+`shell_kill(job_id)`. Background shell jobs are intentionally process-local to
+one `AgentRuntime` / `ToolRuntime` lifecycle; Runtime v2 does not run a
+cross-process daemon and does not restore jobs after VM or process restart.
 
 The `lsp` tool is an optional code-navigation boundary modeled after
 opencode-style LSP operations: definitions, references, hover, document and

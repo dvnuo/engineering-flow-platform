@@ -390,6 +390,8 @@ print(json.dumps({
             "list_dir",
             "read_file",
             "shell_exec",
+            "shell_kill",
+            "shell_status",
             "todo_write",
             "write_file",
         ],

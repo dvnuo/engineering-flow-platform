@@ -12,6 +12,7 @@ from typing import Any
 from ...permissions import ASK, PermissionMetadata
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
+from .background_shell import ShellJobManager
 from .filesystem import normalize_workspace_root, resolve_workspace_path, workspace_relative_path
 from .output import (
     DEFAULT_MAX_OUTPUT_CHARS,
@@ -28,6 +29,8 @@ def create_shell_exec_tool(
     workspace_root: str | Path,
     *,
     permission: PermissionMetadata | None = None,
+    shell_job_manager: ShellJobManager | None = None,
+    enable_background: bool = False,
 ) -> ToolDef:
     root = normalize_workspace_root(workspace_root)
 
@@ -39,6 +42,44 @@ def create_shell_exec_tool(
             raise FileNotFoundError(f"Working directory does not exist: {workspace_relative_path(root, cwd)}")
         if not cwd.is_dir():
             raise NotADirectoryError(f"Working path is not a directory: {workspace_relative_path(root, cwd)}")
+
+        cwd_relative = workspace_relative_path(root, cwd)
+        background = args.get("background", False)
+        if background:
+            if not enable_background or shell_job_manager is None:
+                raise ValueError("Background shell jobs are disabled.")
+            job = await shell_job_manager.start(
+                command,
+                cwd,
+                description=description,
+            )
+            tool_call_id = _result_call_id(context)
+            output = {
+                "job_id": job.job_id,
+                "status": job.status,
+                "cwd": cwd_relative,
+                "command": command,
+                "description": description,
+                "started_at": job.started_at,
+            }
+            metadata: dict[str, Any] = {
+                "background": True,
+                "job_id": job.job_id,
+                "status": job.status,
+                "cwd": cwd_relative,
+                "description": description,
+                "tool_call_id": tool_call_id,
+            }
+            run_id = _context_value(context, "run_id")
+            if run_id:
+                metadata["run_id"] = run_id
+            return ToolResult(
+                call_id=tool_call_id,
+                tool_name="shell_exec",
+                content=_format_background_content(output),
+                output=output,
+                metadata=metadata,
+            )
 
         timeout, timeout_ms = _resolve_timeout(args)
         max_output_chars = _positive_int_arg(
@@ -72,7 +113,6 @@ def create_shell_exec_tool(
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
-        cwd_relative = workspace_relative_path(root, cwd)
         output = {
             "stdout": stdout,
             "stderr": stderr,
@@ -143,6 +183,7 @@ def create_shell_exec_tool(
                 "timeout_ms": {"type": "number"},
                 "max_output_chars": {"type": "integer"},
                 "max_output_lines": {"type": "integer"},
+                "background": {"type": "boolean"},
             },
             "additionalProperties": False,
         },
@@ -230,6 +271,19 @@ def _format_shell_content(
             )
         )
     return "\n".join(parts)
+
+
+def _format_background_content(output: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "<shell_job>",
+            f"job_id: {output['job_id']}",
+            f"status: {output['status']}",
+            f"cwd: {output['cwd']}",
+            f"command: {output['command']}",
+            "</shell_job>",
+        ]
+    )
 
 
 def _tagged_output(tag: str, content: str) -> str:

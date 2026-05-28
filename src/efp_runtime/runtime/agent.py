@@ -41,7 +41,13 @@ from .config import RuntimeConfig
 from .run_state import RuntimeRunState
 
 
-PLAN_MODE_MUTATING_TOOLS = {"apply_patch", "edit", "write_file", "shell_exec"}
+PLAN_MODE_MUTATING_TOOLS = {
+    "apply_patch",
+    "edit",
+    "write_file",
+    "shell_exec",
+    "shell_kill",
+}
 
 
 class AgentRuntime:
@@ -456,6 +462,8 @@ def _resolve_config(
         plan_mode_read_only=config.plan_mode_read_only,
         enable_question_tool=config.enable_question_tool,
         enable_lsp_tool=config.enable_lsp_tool,
+        enable_background_shell=config.enable_background_shell,
+        background_shell_max_buffer_bytes=config.background_shell_max_buffer_bytes,
         metadata=resolved_metadata,
         include_default_system_prompt=config.include_default_system_prompt,
         system_prompt_texts=list(config.system_prompt_texts),
@@ -523,6 +531,10 @@ def _resolve_tool_runtime(
                 lsp_client=lsp_client,
                 include_lsp_tool=config.enable_lsp_tool,
                 include_plan_tool=_plan_tool_enabled(config),
+                enable_background_shell=config.enable_background_shell,
+                background_shell_max_buffer_bytes=(
+                    config.background_shell_max_buffer_bytes
+                ),
             )
         else:
             if config.enable_lsp_tool or lsp_client is not None:

@@ -290,6 +290,8 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
         "list_dir",
         "read_file",
         "shell_exec",
+        "shell_kill",
+        "shell_status",
         "todo_write",
         "write_file",
     ]
@@ -300,8 +302,13 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
     assert registry.require("invalid").permission.action == ALLOW
     assert registry.require("invalid").permission.category == "validation"
     assert registry.require("todo_write").permission.action == ALLOW
+    assert registry.require("shell_status").permission.action == ALLOW
+    assert registry.require("shell_status").permission.risk == "low"
     assert registry.require("edit").permission.action == ASK
     assert registry.require("apply_patch").permission.action == ASK
+    assert registry.require("shell_exec").permission.action == ASK
+    assert registry.require("shell_kill").permission.action == ASK
+    assert registry.require("shell_kill").permission.risk == "medium"
 
     target = tmp_path / "notes.txt"
     target.write_text("alpha\n", encoding="utf-8")

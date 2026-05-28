@@ -28,10 +28,12 @@ DEFAULT_TOOL_IDS = [
     "list_dir",
     "read_file",
     "shell_exec",
+    "shell_kill",
+    "shell_status",
     "todo_write",
     "write_file",
 ]
-MUTATING_TOOL_IDS = {"apply_patch", "edit", "write_file", "shell_exec"}
+MUTATING_TOOL_IDS = {"apply_patch", "edit", "write_file", "shell_exec", "shell_kill"}
 
 
 @pytest.mark.asyncio
@@ -212,6 +214,8 @@ async def test_plan_mode_enabled_tools_cannot_bypass_read_only_policy(
         "list_dir",
         "read_file",
         "shell_exec",
+        "shell_kill",
+        "shell_status",
         "todo_write",
         "write_file",
     ]
@@ -253,6 +257,8 @@ def test_child_config_preserves_plan_mode_settings(tmp_path: Path):
         runtime_mode="plan",
         enable_plan_tool=True,
         plan_mode_read_only=False,
+        enable_background_shell=False,
+        background_shell_max_buffer_bytes=4096,
         max_iterations=2,
     )
 
@@ -266,6 +272,8 @@ def test_child_config_preserves_plan_mode_settings(tmp_path: Path):
     assert child.runtime_mode == "plan"
     assert child.enable_plan_tool is True
     assert child.plan_mode_read_only is False
+    assert child.enable_background_shell is False
+    assert child.background_shell_max_buffer_bytes == 4096
 
 
 def test_plan_mode_import_boundary():
