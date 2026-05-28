@@ -24,6 +24,10 @@ from .question import create_question_tool
 from .registry import create_core_tool_registry
 from .search import create_glob_tool, create_grep_tool
 from .shell import create_bash_tool, create_shell_exec_tool
+from .structured_output import (
+    DEFAULT_STRUCTURED_OUTPUT_TOOL_ID,
+    create_structured_output_tool,
+)
 from .task import (
     TaskToolRequest,
     TaskToolResult,
@@ -40,6 +44,7 @@ __all__ = [
     "TaskToolRunner",
     "ShellJob",
     "ShellJobManager",
+    "DEFAULT_STRUCTURED_OUTPUT_TOOL_ID",
     "create_apply_patch_tool",
     "create_bash_tool",
     "create_core_tool_registry",
@@ -59,6 +64,7 @@ __all__ = [
     "create_shell_exec_tool",
     "create_shell_kill_tool",
     "create_shell_status_tool",
+    "create_structured_output_tool",
     "create_task_cancel_tool",
     "create_task_status_tool",
     "create_task_tool",

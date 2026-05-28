@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from html import escape
 import json
@@ -439,6 +440,11 @@ def _child_config(
             True
             if base_config is None
             else base_config.inject_background_task_results
+        ),
+        structured_output_schema=(
+            None
+            if base_config is None or base_config.structured_output_schema is None
+            else deepcopy(base_config.structured_output_schema)
         ),
         metadata=base_metadata,
         include_default_system_prompt=(

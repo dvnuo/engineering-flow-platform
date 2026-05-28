@@ -457,6 +457,23 @@ event, finishes the run as `completed`, and does not make another provider
 request. The final assistant message remains the assistant message that made the
 tool call; the runtime does not synthesize assistant text after a terminal tool.
 
+Structured output uses the same terminal-tool loop path. A caller can pass an
+object schema to `AgentRuntime.run(..., output_schema={...})`, or set
+`RuntimeConfig.structured_output_schema`, to expose a temporary
+`StructuredOutput` tool for that run. The tool is copied into a per-run
+`ToolRuntime`, so it is not part of the default core registry and does not
+persist as a global built-in. When the model calls `StructuredOutput`, Runtime
+v2 validates the arguments with the normal `ToolDef.validate_args(...)` schema
+validator, appends a successful terminal tool result with
+`terminal_reason="structured_output"`, copies the validated object into
+`RuntimeLoopResult.structured_output`, and stops without another provider
+request. While structured output is active, the provider request also receives a
+transient system reminder instructing the model to call `StructuredOutput`
+instead of replying with plain text; that reminder is never written to session
+history. If the run completes with assistant text and no structured-output tool
+call, the loop preserves the normal assistant history but returns
+`status="error"` and emits `structured_output.missing`.
+
 The core built-in registry is workspace-contained and intentionally independent
 from the legacy runtime. It preserves EFP ids while exposing opencode-style
 aliases: `read_file` / `read`, `write_file` / `write`, `fetch` / `webfetch`,

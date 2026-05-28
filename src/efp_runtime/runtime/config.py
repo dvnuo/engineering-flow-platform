@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,6 +41,7 @@ class RuntimeConfig:
     enable_background_shell: bool = True
     background_shell_max_buffer_bytes: int = 1024 * 1024
     inject_background_task_results: bool = True
+    structured_output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     include_default_system_prompt: bool = True
     system_prompt_texts: list[str] = field(default_factory=list)
@@ -133,6 +136,14 @@ class RuntimeConfig:
         self.inject_background_task_results = bool(
             self.inject_background_task_results
         )
+        if self.structured_output_schema is not None:
+            if not isinstance(self.structured_output_schema, Mapping):
+                raise ValueError(
+                    "structured_output_schema must be an object schema or None"
+                )
+            self.structured_output_schema = deepcopy(
+                dict(self.structured_output_schema)
+            )
         self.disabled_tools = list(self.disabled_tools)
         self.tool_permissions = normalize_tool_permissions(self.tool_permissions)
         self.metadata = dict(self.metadata)

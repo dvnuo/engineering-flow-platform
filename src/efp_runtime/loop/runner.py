@@ -61,6 +61,7 @@ class RuntimeLoopResult:
     pending_permission_request: Optional[dict[str, Any]] = None
     pending_question_request: Optional[dict[str, Any]] = None
     usage: dict[str, Any] = field(default_factory=dict)
+    structured_output: Optional[dict[str, Any]] = None
 
 
 ProviderCallable = Callable[[RuntimeRequest], ProviderResult]
@@ -74,6 +75,7 @@ class _ToolExecutionOutcome:
     pending_question_request: Optional[dict[str, Any]] = None
     terminal: bool = False
     terminal_reason: Optional[str] = None
+    structured_output: Optional[dict[str, Any]] = None
 
 
 class _RuntimeEventLog(list):
@@ -171,6 +173,8 @@ class RuntimeLoopRunner:
         append_user_message: bool = True,
         user_parts: Optional[List[MessagePart]] = None,
         tools: Optional[Mapping[str, bool]] = None,
+        structured_output_required: bool = False,
+        structured_output_tool_id: str = "StructuredOutput",
     ) -> RuntimeLoopResult:
         iteration_limit = max_iterations if max_iterations is not None else self.max_iterations
         if iteration_limit < 1:
@@ -220,6 +224,7 @@ class RuntimeLoopRunner:
         pending_permission_request: Optional[dict[str, Any]] = None
         pending_question_request: Optional[dict[str, Any]] = None
         terminal_reason: Optional[str] = None
+        structured_output: Optional[dict[str, Any]] = None
         run_metadata = dict(metadata or {})
         run_id = str(run_metadata.get("run_id") or new_id("run"))
         run_metadata["run_id"] = run_id
@@ -314,6 +319,7 @@ class RuntimeLoopRunner:
                 if pending_outcome.terminal:
                     status = LoopStatus.COMPLETED
                     terminal_reason = pending_outcome.terminal_reason
+                    structured_output = pending_outcome.structured_output
                     break
 
             iteration = iterations + 1
@@ -515,6 +521,7 @@ class RuntimeLoopRunner:
             if tool_execution_outcome.terminal:
                 status = LoopStatus.COMPLETED
                 terminal_reason = tool_execution_outcome.terminal_reason
+                structured_output = tool_execution_outcome.structured_output
                 break
 
             if iterations >= iteration_limit:
@@ -536,6 +543,29 @@ class RuntimeLoopRunner:
 
         if status == LoopStatus.CANCELLED:
             publish_cancelled("finish")
+        if (
+            structured_output_required
+            and status == LoopStatus.COMPLETED
+            and structured_output is None
+        ):
+            status = LoopStatus.ERROR
+            runtime_events.append(
+                RuntimeEvent(
+                    type="structured_output.missing",
+                    message="Structured output was requested but not provided.",
+                    session_id=resolved_session_id,
+                    message_id=(
+                        final_assistant_message.message_id
+                        if final_assistant_message is not None
+                        else None
+                    ),
+                    payload={
+                        "run_id": run_id,
+                        "tool_id": structured_output_tool_id,
+                        "iterations": iterations,
+                    },
+                )
+            )
         finish_payload = {
             "run_id": run_id,
             "status": status,
@@ -543,6 +573,8 @@ class RuntimeLoopRunner:
         }
         if terminal_reason is not None:
             finish_payload["terminal_reason"] = terminal_reason
+        if structured_output is not None:
+            finish_payload["structured_output"] = True
         if self.track_usage:
             finish_payload["usage"] = _usage_payload(run_usage)
         runtime_events.append(
@@ -566,6 +598,7 @@ class RuntimeLoopRunner:
             pending_permission_request=pending_permission_request,
             pending_question_request=pending_question_request,
             usage=_usage_payload(run_usage) if self.track_usage else {},
+            structured_output=structured_output,
         )
 
     def _context_budget(self) -> ContextBudget:
@@ -1064,6 +1097,9 @@ class RuntimeLoopRunner:
             )
             if _is_terminal_tool_result(result):
                 terminal_reason = _terminal_reason(result) or "tool_terminal"
+                terminal_structured_output = _structured_output_from_terminal_result(
+                    result
+                )
                 runtime_events.append(
                     RuntimeEvent(
                         type="tool_terminal",
@@ -1084,6 +1120,7 @@ class RuntimeLoopRunner:
                 return _ToolExecutionOutcome(
                     terminal=True,
                     terminal_reason=terminal_reason,
+                    structured_output=terminal_structured_output,
                 )
         return _ToolExecutionOutcome()
 
@@ -1260,6 +1297,8 @@ async def run_runtime_loop(
     is_cancelled: Optional[CancelCallback] = None,
     tool_selection: Optional[ToolSelection] = None,
     tools: Optional[Mapping[str, bool]] = None,
+    structured_output_required: bool = False,
+    structured_output_tool_id: str = "StructuredOutput",
     compaction_summarizer: Optional[CompactionSummarizer] = None,
     provider_max_retries: int = 2,
     provider_retry_backoff_seconds: float = 0.0,
@@ -1300,6 +1339,8 @@ async def run_runtime_loop(
         append_user_message=append_user_message,
         user_parts=user_parts,
         tools=tools,
+        structured_output_required=structured_output_required,
+        structured_output_tool_id=structured_output_tool_id,
     )
 
 
@@ -1503,6 +1544,17 @@ def _terminal_reason(result: ToolResult) -> Optional[str]:
     if value is None or value == "":
         return None
     return str(value)
+
+
+def _structured_output_from_terminal_result(
+    result: ToolResult,
+) -> Optional[dict[str, Any]]:
+    if _terminal_reason(result) != "structured_output":
+        return None
+    value = result.metadata.get("structured_output")
+    if not isinstance(value, Mapping):
+        return None
+    return deepcopy(dict(value))
 
 
 def _tool_context(

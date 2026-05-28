@@ -40,9 +40,11 @@ from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_list_tool, build_skill_tool
 from ..system_prompt import SystemPromptBuilder
 from ..tools.builtin import (
+    DEFAULT_STRUCTURED_OUTPUT_TOOL_ID,
     create_core_tool_registry,
     create_plan_exit_tool,
     create_question_tool,
+    create_structured_output_tool,
 )
 from ..tools.builtin.task import format_background_task_notification
 from ..tools.definition import OutputPolicy
@@ -70,6 +72,12 @@ PLAN_MODE_MUTATING_TOOLS = {
     "write",
     "write_file",
 }
+
+STRUCTURED_OUTPUT_SYSTEM_PROMPT = (
+    "IMPORTANT: The user has requested structured output. You MUST use the "
+    "StructuredOutput tool to provide your final response. Do NOT respond with "
+    "plain text."
+)
 
 
 @dataclass(frozen=True)
@@ -180,9 +188,19 @@ class AgentRuntime:
         tools: Mapping[str, bool] | None = None,
         *,
         agent: "str | AgentProfile | None" = None,
+        output_schema: Mapping[str, Any] | None = None,
     ) -> RuntimeLoopResult:
         skill_command = parse_skill_commands(user_text)
         run_metadata = self._base_run_metadata(metadata)
+        structured_output_schema = _active_structured_output_schema(
+            self.config,
+            output_schema,
+        )
+        structured_output_active = structured_output_schema is not None
+        structured_output_tool_id = DEFAULT_STRUCTURED_OUTPUT_TOOL_ID
+        if structured_output_active:
+            run_metadata["structured_output"] = True
+            run_metadata["structured_output_tool_id"] = structured_output_tool_id
         run_metadata["skill_command"] = {
             "add": list(skill_command.add),
             "clear": skill_command.clear,
@@ -219,6 +237,15 @@ class AgentRuntime:
         )
         command_tools = _command_tool_overrides(command_expansion)
         run_tools = _merge_run_tools(profile, command_tools, tools)
+        run_tool_runtime = (
+            _tool_runtime_with_structured_output(
+                self.tool_runtime,
+                structured_output_schema,
+                tool_id=structured_output_tool_id,
+            )
+            if structured_output_active
+            else self.tool_runtime
+        )
         resolved_session_id = session_id or self.store.create_session().session_id
         run_id = self.run_state.begin(resolved_session_id)
         try:
@@ -235,10 +262,16 @@ class AgentRuntime:
                 profile,
                 prompt_context_count=len(agent_profile_messages),
             )
+            structured_output_messages = (
+                _structured_output_context_messages(structured_output_tool_id)
+                if structured_output_active
+                else []
+            )
             instruction_context_messages = self._build_instruction_context_messages()
             skill_context_messages = self._build_skill_context_messages(active_skills)
             context_messages = [
                 *system_prompt_messages,
+                *structured_output_messages,
                 *agent_profile_messages,
                 *instruction_context_messages,
                 *skill_context_messages,
@@ -248,6 +281,9 @@ class AgentRuntime:
 
             run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
             run_metadata["agent_prompt_context_count"] = len(agent_profile_messages)
+            run_metadata["structured_output_context_count"] = len(
+                structured_output_messages
+            )
             run_metadata["instruction_context_count"] = len(instruction_context_messages)
             run_metadata["skill_context_count"] = len(skill_context_messages)
             user_parts = self._resolve_user_parts(user_text_for_request)
@@ -255,7 +291,7 @@ class AgentRuntime:
                 store=self.store,
                 provider=self.provider,
                 adapter=self.adapter,
-                tool_runtime=self.tool_runtime,
+                tool_runtime=run_tool_runtime,
                 max_iterations=iteration_limit,
                 doom_loop_threshold=self.config.doom_loop_threshold,
                 max_context_parts=self.config.max_context_parts,
@@ -276,7 +312,14 @@ class AgentRuntime:
                 usage_pricing=self.config.usage_pricing,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(resolved_session_id),
-                tool_selection=_config_tool_selection(self.config),
+                tool_selection=_config_tool_selection(
+                    self.config,
+                    structured_output_tool_id=(
+                        structured_output_tool_id
+                        if structured_output_active
+                        else None
+                    ),
+                ),
                 compaction_summarizer=(
                     self.compaction_summarizer
                     if self.config.enable_compaction_summarizer
@@ -290,6 +333,8 @@ class AgentRuntime:
                 metadata=run_metadata,
                 context_messages=context_messages,
                 tools=run_tools,
+                structured_output_required=structured_output_active,
+                structured_output_tool_id=structured_output_tool_id,
             )
         except asyncio.CancelledError:
             self.run_state.finish(resolved_session_id, LoopStatus.CANCELLED)
@@ -308,11 +353,26 @@ class AgentRuntime:
         tools: Mapping[str, bool] | None = None,
     ) -> RuntimeLoopResult:
         self.store.get_session(session_id)
+        structured_output_schema = self.config.structured_output_schema
+        structured_output_active = structured_output_schema is not None
+        structured_output_tool_id = DEFAULT_STRUCTURED_OUTPUT_TOOL_ID
+        run_tool_runtime = (
+            _tool_runtime_with_structured_output(
+                self.tool_runtime,
+                structured_output_schema,
+                tool_id=structured_output_tool_id,
+            )
+            if structured_output_active
+            else self.tool_runtime
+        )
         run_id = self.run_state.begin(session_id)
         try:
             self._inject_pending_background_task_results(session_id)
             run_metadata = self._base_run_metadata(metadata)
             run_metadata["run_id"] = run_id
+            if structured_output_active:
+                run_metadata["structured_output"] = True
+                run_metadata["structured_output_tool_id"] = structured_output_tool_id
             active_skills = _visible_skill_names_for_permissions(
                 self.active_skills,
                 tool_permissions=self.config.tool_permissions,
@@ -320,21 +380,30 @@ class AgentRuntime:
             self._annotate_skill_metadata(run_metadata, active_skills)
             run_metadata["resume"] = True
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
+            structured_output_messages = (
+                _structured_output_context_messages(structured_output_tool_id)
+                if structured_output_active
+                else []
+            )
             instruction_context_messages = self._build_instruction_context_messages()
             skill_context_messages = self._build_skill_context_messages(active_skills)
             context_messages = [
                 *system_prompt_messages,
+                *structured_output_messages,
                 *instruction_context_messages,
                 *skill_context_messages,
             ]
             run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
+            run_metadata["structured_output_context_count"] = len(
+                structured_output_messages
+            )
             run_metadata["instruction_context_count"] = len(instruction_context_messages)
             run_metadata["skill_context_count"] = len(skill_context_messages)
             runner = RuntimeLoopRunner(
                 store=self.store,
                 provider=self.provider,
                 adapter=self.adapter,
-                tool_runtime=self.tool_runtime,
+                tool_runtime=run_tool_runtime,
                 max_iterations=self.config.max_iterations,
                 doom_loop_threshold=self.config.doom_loop_threshold,
                 max_context_parts=self.config.max_context_parts,
@@ -355,7 +424,14 @@ class AgentRuntime:
                 usage_pricing=self.config.usage_pricing,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(session_id),
-                tool_selection=_config_tool_selection(self.config),
+                tool_selection=_config_tool_selection(
+                    self.config,
+                    structured_output_tool_id=(
+                        structured_output_tool_id
+                        if structured_output_active
+                        else None
+                    ),
+                ),
                 compaction_summarizer=(
                     self.compaction_summarizer
                     if self.config.enable_compaction_summarizer
@@ -369,6 +445,8 @@ class AgentRuntime:
                 context_messages=context_messages,
                 append_user_message=False,
                 tools=tools,
+                structured_output_required=structured_output_active,
+                structured_output_tool_id=structured_output_tool_id,
             )
         except asyncio.CancelledError:
             self.run_state.finish(session_id, LoopStatus.CANCELLED)
@@ -1000,6 +1078,11 @@ def _resolve_config(
         enable_background_shell=config.enable_background_shell,
         background_shell_max_buffer_bytes=config.background_shell_max_buffer_bytes,
         inject_background_task_results=config.inject_background_task_results,
+        structured_output_schema=(
+            None
+            if config.structured_output_schema is None
+            else deepcopy(config.structured_output_schema)
+        ),
         metadata=resolved_metadata,
         include_default_system_prompt=config.include_default_system_prompt,
         system_prompt_texts=list(config.system_prompt_texts),
@@ -1280,14 +1363,70 @@ def _visible_skill_names_for_permissions(
     ]
 
 
-def _config_tool_selection(config: RuntimeConfig) -> ToolSelection:
+def _active_structured_output_schema(
+    config: RuntimeConfig,
+    output_schema: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if output_schema is not None:
+        return output_schema
+    return config.structured_output_schema
+
+
+def _tool_runtime_with_structured_output(
+    tool_runtime: ToolRuntime,
+    output_schema: Mapping[str, Any],
+    *,
+    tool_id: str,
+) -> ToolRuntime:
+    registry = ToolRegistry(tool_runtime.registry.list())
+    registry.register(
+        create_structured_output_tool(output_schema, tool_id=tool_id),
+        replace=True,
+    )
+    return ToolRuntime(
+        registry,
+        permission_evaluator=tool_runtime.permission_evaluator,
+        default_output_policy=tool_runtime.default_output_policy,
+        output_truncator=tool_runtime.output_truncator,
+    )
+
+
+def _structured_output_context_messages(tool_id: str) -> list[Message]:
+    metadata = {
+        "context_type": "system_prompt",
+        "source": "structured_output_reminder",
+        "structured_output_tool_id": tool_id,
+    }
+    return [
+        Message(
+            role=MessageRole.SYSTEM,
+            parts=[
+                MessagePart.text_part(
+                    STRUCTURED_OUTPUT_SYSTEM_PROMPT,
+                    metadata=metadata,
+                )
+            ],
+            metadata=metadata,
+            status="complete",
+        )
+    ]
+
+
+def _config_tool_selection(
+    config: RuntimeConfig,
+    *,
+    structured_output_tool_id: str | None = None,
+) -> ToolSelection:
     forced_disabled = (
         set(PLAN_MODE_MUTATING_TOOLS)
         if config.runtime_mode == "plan" and config.plan_mode_read_only
         else set()
     )
+    enabled = None if config.enabled_tools is None else set(config.enabled_tools)
+    if enabled is not None and structured_output_tool_id is not None:
+        enabled.add(structured_output_tool_id)
     return ToolSelection(
-        enabled=None if config.enabled_tools is None else set(config.enabled_tools),
+        enabled=enabled,
         disabled=set(config.disabled_tools),
         forced_disabled=forced_disabled,
     )
