@@ -624,13 +624,17 @@ async def test_command_content_is_truncated_by_configured_limit(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_command_shell_syntax_is_plain_text_and_not_executed(tmp_path: Path):
-    marker = tmp_path / "marker"
+async def test_command_shell_interpolation_renders_tool_results(tmp_path: Path):
     registry = CommandRegistry.from_sources(
         definitions=[
             CommandDefinition(
-                name="danger",
-                content=f"Do not run !touch {marker}\nNor !`touch {marker}`",
+                name="inspect",
+                content=(
+                    "Before\n"
+                    "!printf line-command\n"
+                    "Between !`printf inline-command`\n"
+                    "After"
+                ),
                 source="config",
             )
         ]
@@ -639,19 +643,112 @@ async def test_command_shell_syntax_is_plain_text_and_not_executed(tmp_path: Pat
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
+            workspace_root=tmp_path,
             max_iterations=1,
+            tool_permissions={"shell_exec": "allow"},
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),
         command_registry=registry,
     )
 
-    await runtime.run("/danger", session_id="session-shell-command")
+    await runtime.run("/inspect", session_id="session-shell-command")
+
+    request = provider.requests[0]
+    text = request.provider_request.messages[0].text
+    assert text.count("<command_shell_result ") == 2
+    assert 'status="success"' in text
+    assert "line-command" in text
+    assert "inline-command" in text
+    assert "!printf line-command" not in text
+    assert "!`printf inline-command`" not in text
+    assert request.metadata["command_shell_interpolation_count"] == 2
+    assert [
+        interpolation["status"]
+        for interpolation in request.metadata["command_shell_interpolations"]
+    ] == ["success", "success"]
+    assert [
+        interpolation["tool_id"]
+        for interpolation in request.metadata["command_shell_interpolations"]
+    ] == ["shell_exec", "shell_exec"]
+
+
+@pytest.mark.asyncio
+async def test_command_shell_interpolation_permission_denial_is_visible(
+    tmp_path: Path,
+):
+    marker = tmp_path / "marker"
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="danger",
+                content=f"!touch {marker}",
+                source="config",
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            tool_permissions={"shell_exec": "deny"},
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+    )
+
+    await runtime.run("/danger", session_id="session-shell-command-denied")
 
     text = provider.requests[0].provider_request.messages[0].text
-    assert f"!touch {marker}" in text
-    assert f"!`touch {marker}`" in text
     assert not marker.exists()
+    assert "<command_shell_result " in text
+    assert 'status="permission_denied"' in text
+    assert "Permission denied" in text
+
+
+@pytest.mark.asyncio
+async def test_command_arguments_and_body_shell_syntax_are_not_interpolated(
+    tmp_path: Path,
+):
+    marker = tmp_path / "marker"
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="inspect",
+                content="Inspect the supplied text.",
+                source="config",
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            tool_permissions={"shell_exec": "allow"},
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+    )
+
+    await runtime.run(
+        f"/inspect !touch {marker}\n!touch {marker}",
+        session_id="session-shell-command-scope",
+    )
+
+    request = provider.requests[0]
+    text = request.provider_request.messages[0].text
+    assert not marker.exists()
+    assert f"<command_arguments>\n!touch {marker}\n</command_arguments>" in text
+    assert f"<command_input>\n!touch {marker}\n</command_input>" in text
+    assert "<command_shell_result " not in text
+    assert request.metadata["command_shell_interpolation_count"] == 0
+    assert request.metadata["command_shell_interpolations"] == []
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from html import escape
 from pathlib import Path
 import re
@@ -81,6 +81,44 @@ class CommandDefinition:
 
 
 @dataclass
+class _RenderedCommandTemplate:
+    text: str
+    template_mask: tuple[bool, ...]
+
+
+@dataclass(frozen=True)
+class CommandShellInterpolation:
+    """A shell interpolation span found in rendered command template content."""
+
+    index: int
+    command: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class CommandShellExecutionResult:
+    """A normalized shell interpolation result ready for prompt rendering."""
+
+    interpolation: CommandShellInterpolation
+    tool_id: str
+    tool_call_id: str
+    status: str
+    success: bool
+    content: str
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "index": self.interpolation.index,
+            "command": self.interpolation.command,
+            "tool_id": self.tool_id,
+            "tool_call_id": self.tool_call_id,
+            "status": self.status,
+            "success": self.success,
+        }
+
+
+@dataclass
 class CommandExpansionResult:
     """The user prompt after expanding a configured slash command."""
 
@@ -91,6 +129,9 @@ class CommandExpansionResult:
     truncated: bool = False
     original_chars: int = 0
     max_chars: int = 0
+    command_content: str = ""
+    command_template_mask: tuple[bool, ...] = field(default_factory=tuple, repr=False)
+    command_shell_interpolations: list[dict[str, Any]] = field(default_factory=list)
 
 
 class CommandRegistry:
@@ -224,10 +265,15 @@ def expand_command(
     if definition is None:
         return None
 
-    rendered_content = _render_command_template(definition.content, arguments)
+    rendered_template = _render_command_template_with_mask(
+        definition.content,
+        arguments,
+    )
+    rendered_content = rendered_template.text
     original_chars = len(rendered_content)
     truncated = original_chars > max_command_chars
     command_content = rendered_content[:max_command_chars]
+    command_template_mask = rendered_template.template_mask[:max_command_chars]
     expanded_text = _render_expanded_command(
         definition=definition,
         command_content=command_content,
@@ -245,6 +291,8 @@ def expand_command(
         truncated=truncated,
         original_chars=original_chars,
         max_chars=max_command_chars,
+        command_content=command_content,
+        command_template_mask=command_template_mask,
     )
 
 
@@ -535,8 +583,237 @@ def _render_expanded_command(
     return "\n".join(parts)
 
 
+def find_command_shell_interpolations(
+    command_content: str,
+    *,
+    template_mask: Iterable[bool] | None = None,
+) -> list[CommandShellInterpolation]:
+    """Return shell interpolation spans whose syntax came from the template."""
+
+    if not command_content:
+        return []
+
+    mask = tuple(template_mask) if template_mask is not None else None
+    interpolations: list[CommandShellInterpolation] = []
+    offset = 0
+    for line in command_content.splitlines(keepends=True):
+        body_length = _line_body_length(line)
+        body = line[:body_length]
+        first = _first_non_space_index(body)
+        if (
+            first is not None
+            and body[first] == "!"
+            and _is_template_char(mask, offset + first)
+        ):
+            interpolation = _line_shell_interpolation(
+                body,
+                body_length=body_length,
+                offset=offset,
+                first=first,
+                mask=mask,
+                index=len(interpolations) + 1,
+            )
+            if interpolation is not None:
+                interpolations.append(interpolation)
+            offset += len(line)
+            continue
+
+        interpolations.extend(
+            _inline_shell_interpolations(
+                body,
+                body_length=body_length,
+                offset=offset,
+                mask=mask,
+                start_index=len(interpolations) + 1,
+            )
+        )
+        offset += len(line)
+
+    return interpolations
+
+
+def apply_command_shell_execution_results(
+    expansion: CommandExpansionResult,
+    results: Iterable[CommandShellExecutionResult],
+) -> CommandExpansionResult:
+    """Return ``expansion`` with shell interpolation spans replaced by results."""
+
+    ordered_results = sorted(results, key=lambda result: result.interpolation.start)
+    if not ordered_results:
+        return expansion
+
+    parts: list[str] = []
+    cursor = 0
+    for result in ordered_results:
+        interpolation = result.interpolation
+        parts.append(expansion.command_content[cursor : interpolation.start])
+        parts.append(_render_command_shell_result(result))
+        cursor = interpolation.end
+    parts.append(expansion.command_content[cursor:])
+    command_content = "".join(parts)
+    return replace(
+        expansion,
+        text=_render_expanded_command(
+            definition=expansion.definition,
+            command_content=command_content,
+            arguments=expansion.arguments,
+            remaining_text=expansion.remaining_text,
+            truncated=expansion.truncated,
+            original_chars=expansion.original_chars,
+            max_chars=expansion.max_chars,
+        ),
+        command_content=command_content,
+        command_template_mask=(),
+        command_shell_interpolations=[
+            result.to_metadata() for result in ordered_results
+        ],
+    )
+
+
+def _render_command_shell_result(result: CommandShellExecutionResult) -> str:
+    attrs = [
+        f'index="{result.interpolation.index}"',
+        f'status="{escape(result.status, quote=True)}"',
+        f'success="{str(result.success).lower()}"',
+        f'tool="{escape(result.tool_id, quote=True)}"',
+        f'tool_call_id="{escape(result.tool_call_id, quote=True)}"',
+        f'command="{escape(result.interpolation.command, quote=True)}"',
+    ]
+    return "\n".join(
+        [
+            f"<command_shell_result {' '.join(attrs)}>",
+            result.content,
+            "</command_shell_result>",
+        ]
+    )
+
+
+def _line_shell_interpolation(
+    line: str,
+    *,
+    body_length: int,
+    offset: int,
+    first: int,
+    mask: tuple[bool, ...] | None,
+    index: int,
+) -> CommandShellInterpolation | None:
+    if (
+        first + 1 < body_length
+        and line[first + 1] == "`"
+        and _is_template_char(mask, offset + first + 1)
+    ):
+        closing = _find_template_backtick(
+            line,
+            start=first + 2,
+            end=body_length,
+            offset=offset,
+            mask=mask,
+        )
+        if closing is not None:
+            return CommandShellInterpolation(
+                index=index,
+                command=line[first + 2 : closing],
+                start=offset + first,
+                end=offset + closing + 1,
+            )
+
+    return CommandShellInterpolation(
+        index=index,
+        command=line[first + 1 : body_length].strip(),
+        start=offset + first,
+        end=offset + body_length,
+    )
+
+
+def _inline_shell_interpolations(
+    line: str,
+    *,
+    body_length: int,
+    offset: int,
+    mask: tuple[bool, ...] | None,
+    start_index: int,
+) -> list[CommandShellInterpolation]:
+    interpolations: list[CommandShellInterpolation] = []
+    search_start = 0
+    while search_start < body_length:
+        start = line.find("!`", search_start, body_length)
+        if start < 0:
+            break
+        if not (
+            _is_template_char(mask, offset + start)
+            and _is_template_char(mask, offset + start + 1)
+        ):
+            search_start = start + 2
+            continue
+        closing = _find_template_backtick(
+            line,
+            start=start + 2,
+            end=body_length,
+            offset=offset,
+            mask=mask,
+        )
+        if closing is None:
+            break
+        interpolations.append(
+            CommandShellInterpolation(
+                index=start_index + len(interpolations),
+                command=line[start + 2 : closing],
+                start=offset + start,
+                end=offset + closing + 1,
+            )
+        )
+        search_start = closing + 1
+    return interpolations
+
+
+def _line_body_length(line: str) -> int:
+    body_length = len(line)
+    while body_length > 0 and line[body_length - 1] in "\r\n":
+        body_length -= 1
+    return body_length
+
+
+def _first_non_space_index(text: str) -> int | None:
+    for index, char in enumerate(text):
+        if not char.isspace():
+            return index
+    return None
+
+
+def _find_template_backtick(
+    text: str,
+    *,
+    start: int,
+    end: int,
+    offset: int,
+    mask: tuple[bool, ...] | None,
+) -> int | None:
+    cursor = text.find("`", start, end)
+    while cursor >= 0:
+        if _is_template_char(mask, offset + cursor):
+            return cursor
+        cursor = text.find("`", cursor + 1, end)
+    return None
+
+
+def _is_template_char(mask: tuple[bool, ...] | None, index: int) -> bool:
+    if mask is None:
+        return True
+    return 0 <= index < len(mask) and mask[index]
+
+
 def _render_command_template(content: str, arguments: str) -> str:
+    return _render_command_template_with_mask(content, arguments).text
+
+
+def _render_command_template_with_mask(
+    content: str,
+    arguments: str,
+) -> _RenderedCommandTemplate:
     positional = _split_command_arguments(arguments)
+    parts: list[str] = []
+    mask: list[bool] = []
+    cursor = 0
 
     def replace(match: re.Match[str]) -> str:
         variable = match.group(1)
@@ -547,7 +824,18 @@ def _render_command_template(content: str, arguments: str) -> str:
             return positional[index]
         return ""
 
-    return TEMPLATE_VARIABLE_RE.sub(replace, content)
+    for match in TEMPLATE_VARIABLE_RE.finditer(content):
+        literal = content[cursor : match.start()]
+        parts.append(literal)
+        mask.extend([True] * len(literal))
+        replacement = replace(match)
+        parts.append(replacement)
+        mask.extend([False] * len(replacement))
+        cursor = match.end()
+    literal = content[cursor:]
+    parts.append(literal)
+    mask.extend([True] * len(literal))
+    return _RenderedCommandTemplate("".join(parts), tuple(mask))
 
 
 def _split_command_arguments(arguments: str) -> list[str]:
@@ -614,8 +902,12 @@ def _canonical_metadata_key(key: str) -> str:
 __all__ = [
     "CommandDefinition",
     "CommandExpansionResult",
+    "CommandShellExecutionResult",
+    "CommandShellInterpolation",
     "CommandRegistry",
+    "apply_command_shell_execution_results",
     "command_definitions_from_config",
     "discover_commands",
     "expand_command",
+    "find_command_shell_interpolations",
 ]

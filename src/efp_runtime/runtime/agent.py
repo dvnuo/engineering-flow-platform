@@ -16,7 +16,14 @@ from ..compaction.strategy import (
     CompactionResult,
     ContextBudget,
 )
-from ..commands import CommandExpansionResult, CommandRegistry, expand_command
+from ..commands import (
+    CommandExpansionResult,
+    CommandRegistry,
+    CommandShellExecutionResult,
+    apply_command_shell_execution_results,
+    expand_command,
+    find_command_shell_interpolations,
+)
 from ..event_bus import RuntimeEventBus
 from ..events import RuntimeEvent
 from ..instructions import InstructionContextBuilder, ReadInstructionResolver
@@ -53,12 +60,13 @@ from ..tools.builtin import (
     create_structured_output_tool,
 )
 from ..tools.builtin.task import format_background_task_notification
-from ..tools.definition import OutputPolicy
+from ..tools.definition import OutputPolicy, ToolContext
 from ..tools.external import ExternalToolProvider, register_external_tools
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
+from ..types import ToolCall
 from ..workspace_snapshots import (
     WorkspaceSnapshot,
     WorkspaceSnapshotDiff,
@@ -270,6 +278,15 @@ class AgentRuntime:
             run_metadata["run_id"] = run_id
             if selected_agent_source is not None:
                 run_metadata["selected_agent_source"] = selected_agent_source
+            if command_expansion is not None:
+                command_expansion = await self._interpolate_command_shell(
+                    command_expansion,
+                    tool_runtime=run_tool_runtime,
+                    session_id=resolved_session_id,
+                    run_id=run_id,
+                    run_metadata=run_metadata,
+                )
+                user_text_for_request = command_expansion.text
             self._annotate_skill_metadata(run_metadata, active_skills)
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             agent_profile_messages = self._build_agent_profile_messages(profile)
@@ -793,6 +810,112 @@ class AgentRuntime:
         run_metadata["command_max_chars"] = expansion.max_chars
         return expansion
 
+    async def _interpolate_command_shell(
+        self,
+        expansion: CommandExpansionResult,
+        *,
+        tool_runtime: ToolRuntime,
+        session_id: str,
+        run_id: str,
+        run_metadata: dict[str, Any],
+    ) -> CommandExpansionResult:
+        interpolations = find_command_shell_interpolations(
+            expansion.command_content,
+            template_mask=expansion.command_template_mask,
+        )
+        if not interpolations:
+            run_metadata["command_shell_interpolation_count"] = 0
+            run_metadata["command_shell_interpolations"] = []
+            return expansion
+
+        results: list[CommandShellExecutionResult] = []
+        for interpolation in interpolations:
+            tool_call_id = _command_shell_tool_call_id(
+                expansion.definition.name,
+                interpolation.index,
+            )
+            tool_call = ToolCall(
+                tool_name="shell_exec",
+                arguments={
+                    "command": interpolation.command,
+                    "description": (
+                        "Custom command shell interpolation "
+                        f"{expansion.definition.name} #{interpolation.index}"
+                    ),
+                },
+                call_id=tool_call_id,
+            )
+            result = await tool_runtime.execute(
+                tool_call,
+                context=ToolContext(
+                    session_id=session_id,
+                    run_id=run_id,
+                    tool_call_id=tool_call_id,
+                    tool_name="shell_exec",
+                    metadata=_command_shell_context_metadata(
+                        expansion,
+                        interpolation.index,
+                    ),
+                    cancel_requested=lambda: self.run_state.is_cancelled(session_id),
+                ),
+            )
+            self._publish_command_shell_tool_events(
+                result.events,
+                session_id=session_id,
+                run_id=run_id,
+                tool_call=tool_call,
+            )
+            results.append(
+                CommandShellExecutionResult(
+                    interpolation=interpolation,
+                    tool_id=result.tool_name,
+                    tool_call_id=result.call_id,
+                    status=result.status,
+                    success=result.success,
+                    content=result.content,
+                )
+            )
+
+        expansion = apply_command_shell_execution_results(expansion, results)
+        run_metadata["command_shell_interpolation_count"] = len(results)
+        run_metadata["command_shell_interpolations"] = [
+            result.to_metadata() for result in results
+        ]
+        return expansion
+
+    def _publish_command_shell_tool_events(
+        self,
+        events: Iterable[Any],
+        *,
+        session_id: str,
+        run_id: str,
+        tool_call: ToolCall,
+    ) -> None:
+        for event in events:
+            if isinstance(event, RuntimeEvent):
+                if event.session_id is None:
+                    event.session_id = session_id
+                event.payload.setdefault("run_id", run_id)
+                event.payload.setdefault("tool_id", tool_call.tool_name)
+                event.payload.setdefault("tool_name", tool_call.tool_name)
+                event.payload.setdefault("tool_call_id", tool_call.call_id)
+                self.event_bus.publish(event)
+                continue
+
+            self.event_bus.publish(
+                RuntimeEvent(
+                    type="tool.event",
+                    session_id=session_id,
+                    payload={
+                        "event": event,
+                        "run_id": run_id,
+                        "tool_id": tool_call.tool_name,
+                        "tool_name": tool_call.tool_name,
+                        "tool_call_id": tool_call.call_id,
+                    },
+                )
+            )
+
     def _base_run_metadata(self, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         run_metadata = dict(self.config.metadata)
         run_metadata.update(metadata or {})
@@ -1043,6 +1166,31 @@ def _normalize_optional_name(name: Any | None) -> str | None:
         return None
     normalized = str(name).strip()
     return normalized or None
+
+
+def _command_shell_tool_call_id(command_name: str, index: int) -> str:
+    safe_name = "".join(
+        char if char.isalnum() or char in {"_", "-"} else "_"
+        for char in command_name
+    ).strip("_")
+    return f"command_shell_{safe_name or 'command'}_{index}"
+
+
+def _command_shell_context_metadata(
+    expansion: CommandExpansionResult,
+    index: int,
+) -> dict[str, Any]:
+    metadata = {
+        "command_name": expansion.definition.name,
+        "command_source": expansion.definition.source,
+        "command_arguments": expansion.arguments,
+        "command_shell_interpolation": True,
+        "command_shell_interpolation_index": index,
+        "command_metadata": deepcopy(expansion.definition.metadata),
+    }
+    if expansion.definition.source == "file":
+        metadata["command_file"] = str(expansion.definition.command_file)
+    return metadata
 
 
 def _parse_agent_mention(text: str) -> _AgentMentionCandidate | None:

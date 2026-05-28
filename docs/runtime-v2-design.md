@@ -859,9 +859,15 @@ The `@agent` mention parser is not a file-reference resolver: unresolved
 mentions such as `@README.md` or unknown `@name` tokens are left in the prompt
 so the prompt reference resolver and ordinary text handling keep their existing
 behavior.
-opencode-style shell interpolation such as `!cmd` or ``!`cmd` `` is also kept as
-plain text. Executing command-triggered shell snippets must go through the
-Runtime v2 tool runtime and permission path in a later design phase.
+Shell interpolation is supported only inside command template content after
+argument rendering and command-content truncation. A template line whose first
+non-space character is `!` runs the rest of that line, and inline
+``!`cmd` `` spans run the command between the backticks. Shell-looking text in
+slash command arguments or the remaining user body stays ordinary text in the
+`<command_arguments>` and `<command_input>` blocks. Interpolation executes
+through the normal `shell_exec` tool path, so validation, permissions,
+cancellation, output normalization, and tool lifecycle events use the same
+runtime path as model-requested shell calls.
 
 `/skill` remains the independent skill activation command. It is parsed before
 custom command expansion and continues to control active skill context rendered
