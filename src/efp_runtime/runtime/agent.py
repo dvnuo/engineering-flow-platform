@@ -33,6 +33,7 @@ from ..tools.builtin import (
     create_question_tool,
 )
 from ..tools.definition import OutputPolicy
+from ..tools.external import ExternalToolProvider, register_external_tools
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection
@@ -68,6 +69,8 @@ class AgentRuntime:
         store: SessionStore | None = None,
         tool_registry: ToolRegistry | None = None,
         tool_runtime: ToolRuntime | None = None,
+        external_tool_providers: Iterable[ExternalToolProvider] | None = None,
+        external_tools_allow_override: bool = False,
         permission_evaluator: PermissionEvaluator | None = None,
         adapter: LLMEventAdapter | None = None,
         skill_discovery: SkillDiscovery | None = None,
@@ -103,6 +106,8 @@ class AgentRuntime:
             config=self.config,
             tool_registry=tool_registry,
             tool_runtime=tool_runtime,
+            external_tool_providers=external_tool_providers,
+            external_tools_allow_override=external_tools_allow_override,
             permission_evaluator=permission_evaluator,
             skill_discovery=self.skill_discovery,
             question_broker=self.question_broker,
@@ -401,6 +406,8 @@ class AgentRuntime:
         run_metadata["plan_mode_read_only"] = self.config.plan_mode_read_only
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
         run_metadata["emit_llm_stream_events"] = self.config.emit_llm_stream_events
+        if self.config.workspace_root is not None:
+            run_metadata["workspace_root"] = str(self.config.workspace_root)
         run_metadata["tool_output_truncation_enabled"] = (
             self.config.workspace_root is not None
         )
@@ -517,6 +524,8 @@ def _resolve_tool_runtime(
     config: RuntimeConfig,
     tool_registry: ToolRegistry | None,
     tool_runtime: ToolRuntime | None,
+    external_tool_providers: Iterable[ExternalToolProvider] | None,
+    external_tools_allow_override: bool,
     permission_evaluator: PermissionEvaluator | None,
     skill_discovery: SkillDiscovery | None,
     question_broker: QuestionBroker,
@@ -575,6 +584,12 @@ def _resolve_tool_runtime(
                 registry.register(
                     build_skill_list_tool(skill_discovery or SkillDiscovery([]))
                 )
+    if external_tool_providers is not None:
+        register_external_tools(
+            registry,
+            external_tool_providers,
+            allow_override=external_tools_allow_override,
+        )
     resolved_permission_evaluator = permission_evaluator
     if resolved_permission_evaluator is None and config.tool_permissions:
         resolved_permission_evaluator = ConfiguredPermissionBroker(

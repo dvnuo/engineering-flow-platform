@@ -172,6 +172,24 @@ go directly through the normal provider error path.
 4. Execute only on allow.
 5. Normalize output into `ToolResult`.
 
+Runtime v2 also supports a transport-independent external tool provider bridge
+under `efp_runtime.tools.external`. A provider declares `ExternalToolSpec`
+records and implements `execute(tool_name, args, context)`. The bridge converts
+those specs into ordinary `ToolDef` entries and registers them in the same
+`ToolRegistry` used by built-in tools. Once registered, external tools are
+rendered in the same provider request schema and use the same argument
+validation, permission broker, enabled/disabled selection, output policy, and
+`ToolResult` normalization path as built-ins.
+
+This bridge is the Runtime v2 entry point for later MCP servers, project custom
+tools, and enterprise internal tools. It intentionally does not implement real
+MCP stdio or HTTP transports, load JavaScript or TypeScript plugins, start
+subprocess tool hosts, or bind Runtime v2 to an MCP SDK in this phase.
+`ExternalToolContext` carries the session id, message/tool call ids, workspace
+root, copied runtime metadata, provider name, and provider-local tool name so
+providers can receive session and worktree context without mutating the original
+`ToolContext`.
+
 Runtime v2 applies a unified model-visible output policy during normalization.
 Large tool outputs are truncated by line and UTF-8 byte limits before they are
 added to context. When a workspace-backed `AgentRuntime` creates the
