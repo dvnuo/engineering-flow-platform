@@ -93,6 +93,17 @@ of normalized `LLMEvent` values through `DefaultLLMEventAdapter`. Transport
 failures are mapped to provider error responses so the loop can finish with an
 error status without depending on SDK exception types.
 
+Provider exceptions are provider-neutral. Runtime v2 exposes
+`ProviderError`, `ProviderTransientError`, `ProviderContextOverflowError`, and
+`ProviderFatalError` with `retryable`, `code`, and `metadata` fields, but does
+not bind them to any SDK error classes. `RuntimeLoopRunner` retries transient
+provider invocation failures up to `RuntimeConfig.provider_max_retries`, with
+optional exponential backoff from
+`provider_retry_backoff_seconds` and `provider_retry_backoff_multiplier`.
+Each retry publishes a `provider.retry` runtime event and annotates retry
+requests with `provider_retry` metadata. Fatal or non-retryable provider errors
+go directly through the normal provider error path.
+
 ## Tools And Permissions
 
 `ToolRuntime` provides the single tool execution path:
@@ -322,3 +333,12 @@ LLM summarizer. System prompt, instruction, and skill context messages are
 retained, pending tool calls and the latest non-system block are protected, and
 provider request metadata records the configured budget plus compacted/kept
 part, message, pair, and character counts.
+
+If provider invocation raises `ProviderContextOverflowError` and
+`RuntimeConfig.enable_context_overflow_retry` is enabled, the same loop
+iteration is rendered once more with a stricter budget and retried. Existing
+part-aware compaction rules still protect pending tool calls and the latest
+non-system block. The overflow retry is single-shot to avoid infinite loops, and
+the retried request records `overflow_retry` metadata on the request and
+compaction metadata while the loop publishes a
+`provider.context_overflow_retry` event.

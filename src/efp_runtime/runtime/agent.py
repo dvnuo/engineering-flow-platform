@@ -160,6 +160,16 @@ class AgentRuntime:
                 max_context_parts=self.config.max_context_parts,
                 max_context_chars=self.config.max_context_chars,
                 context_reserve_chars=self.config.context_reserve_chars,
+                provider_max_retries=self.config.provider_max_retries,
+                provider_retry_backoff_seconds=(
+                    self.config.provider_retry_backoff_seconds
+                ),
+                provider_retry_backoff_multiplier=(
+                    self.config.provider_retry_backoff_multiplier
+                ),
+                enable_context_overflow_retry=(
+                    self.config.enable_context_overflow_retry
+                ),
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(resolved_session_id),
                 tool_selection=_config_tool_selection(self.config),
@@ -221,6 +231,16 @@ class AgentRuntime:
                 max_context_parts=self.config.max_context_parts,
                 max_context_chars=self.config.max_context_chars,
                 context_reserve_chars=self.config.context_reserve_chars,
+                provider_max_retries=self.config.provider_max_retries,
+                provider_retry_backoff_seconds=(
+                    self.config.provider_retry_backoff_seconds
+                ),
+                provider_retry_backoff_multiplier=(
+                    self.config.provider_retry_backoff_multiplier
+                ),
+                enable_context_overflow_retry=(
+                    self.config.enable_context_overflow_retry
+                ),
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(session_id),
                 tool_selection=_config_tool_selection(self.config),
@@ -372,6 +392,10 @@ def _resolve_config(
             else config.context_reserve_chars
         ),
         enable_compaction_summarizer=config.enable_compaction_summarizer,
+        provider_max_retries=config.provider_max_retries,
+        provider_retry_backoff_seconds=config.provider_retry_backoff_seconds,
+        provider_retry_backoff_multiplier=config.provider_retry_backoff_multiplier,
+        enable_context_overflow_retry=config.enable_context_overflow_retry,
         enabled_tools=(
             None if config.enabled_tools is None else list(config.enabled_tools)
         ),

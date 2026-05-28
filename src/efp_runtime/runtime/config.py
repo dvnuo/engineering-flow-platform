@@ -18,6 +18,10 @@ class RuntimeConfig:
     max_context_chars: int | None = None
     context_reserve_chars: int = 0
     enable_compaction_summarizer: bool = False
+    provider_max_retries: int = 2
+    provider_retry_backoff_seconds: float = 0.0
+    provider_retry_backoff_multiplier: float = 2.0
+    enable_context_overflow_retry: bool = True
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
     runtime_mode: str = "build"
@@ -60,6 +64,16 @@ class RuntimeConfig:
             raise ValueError("max_context_chars must be at least 1")
         if self.context_reserve_chars < 0:
             raise ValueError("context_reserve_chars must be at least 0")
+        if self.provider_max_retries < 0:
+            raise ValueError("provider_max_retries must be greater than or equal to 0")
+        if self.provider_retry_backoff_seconds < 0:
+            raise ValueError(
+                "provider_retry_backoff_seconds must be greater than or equal to 0"
+            )
+        if self.provider_retry_backoff_multiplier < 1:
+            raise ValueError(
+                "provider_retry_backoff_multiplier must be greater than or equal to 1"
+            )
         if self.max_prompt_reference_chars < 0:
             raise ValueError("max_prompt_reference_chars must be greater than or equal to 0")
         if self.max_prompt_directory_entries < 0:
@@ -80,6 +94,7 @@ class RuntimeConfig:
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
+        self.enable_context_overflow_retry = bool(self.enable_context_overflow_retry)
         self.enable_plan_tool = (
             None if self.enable_plan_tool is None else bool(self.enable_plan_tool)
         )

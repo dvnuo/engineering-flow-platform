@@ -1,6 +1,12 @@
 """LLM normalization for EFP Runtime v2."""
 
 from .adapter import DefaultLLMEventAdapter, LLMEventAdapter
+from .errors import (
+    ProviderContextOverflowError,
+    ProviderError,
+    ProviderFatalError,
+    ProviderTransientError,
+)
 from .events import LLMEvent, LLMEventType
 from .openai import (
     provider_request_to_openai_chat,
@@ -19,8 +25,12 @@ __all__ = [
     "DefaultLLMEventAdapter",
     "LLMEvent",
     "LLMEventAdapter",
+    "ProviderContextOverflowError",
+    "ProviderError",
+    "ProviderFatalError",
     "LLMEventType",
     "OpenAICompatibleProvider",
+    "ProviderTransientError",
     "ProviderTransport",
     "RecordingTransport",
     "provider_request_to_openai_chat",

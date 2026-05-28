@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterable, Iterable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import inspect
 import json
 from typing import Any, Callable, List, Optional, Union
@@ -15,6 +16,11 @@ from ..context.render import prepare_history_for_request
 from ..event_bus import RuntimeEventBus
 from ..events import RuntimeEvent
 from ..llm.adapter import DefaultLLMEventAdapter, LLMEventAdapter
+from ..llm.errors import (
+    ProviderContextOverflowError,
+    ProviderError,
+    ProviderTransientError,
+)
 from ..llm.events import LLMEvent
 from ..permissions import ASK, DENY, PermissionMetadata
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
@@ -95,6 +101,10 @@ class RuntimeLoopRunner:
         is_cancelled: Optional[CancelCallback] = None,
         tool_selection: Optional[ToolSelection] = None,
         compaction_summarizer: Optional[CompactionSummarizer] = None,
+        provider_max_retries: int = 2,
+        provider_retry_backoff_seconds: float = 0.0,
+        provider_retry_backoff_multiplier: float = 2.0,
+        enable_context_overflow_retry: bool = True,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -106,6 +116,16 @@ class RuntimeLoopRunner:
             raise ValueError("max_context_chars must be at least 1")
         if context_reserve_chars < 0:
             raise ValueError("context_reserve_chars must be at least 0")
+        if provider_max_retries < 0:
+            raise ValueError("provider_max_retries must be greater than or equal to 0")
+        if provider_retry_backoff_seconds < 0:
+            raise ValueError(
+                "provider_retry_backoff_seconds must be greater than or equal to 0"
+            )
+        if provider_retry_backoff_multiplier < 1:
+            raise ValueError(
+                "provider_retry_backoff_multiplier must be greater than or equal to 1"
+            )
         self.store = store
         self.provider = provider
         self.adapter = adapter or DefaultLLMEventAdapter()
@@ -119,6 +139,10 @@ class RuntimeLoopRunner:
         self.is_cancelled = is_cancelled
         self.tool_selection = _copy_tool_selection(tool_selection)
         self.compaction_summarizer = compaction_summarizer
+        self.provider_max_retries = provider_max_retries
+        self.provider_retry_backoff_seconds = provider_retry_backoff_seconds
+        self.provider_retry_backoff_multiplier = provider_retry_backoff_multiplier
+        self.enable_context_overflow_retry = enable_context_overflow_retry
 
     async def run(
         self,
@@ -270,43 +294,15 @@ class RuntimeLoopRunner:
                 iteration=iteration,
                 max_iterations=iteration_limit,
             )
-            compaction_summary = None
-            compaction_summary_metadata = None
-            if self.compaction_summarizer is not None and self._context_budget_enabled():
-                compaction_preparation = await CompactionController(
-                    self.compaction_summarizer
-                ).prepare(
-                    request_history,
-                    session_id=resolved_session_id,
-                    budget=ContextBudget(
-                        max_parts=self.max_context_parts,
-                        max_chars=self.max_context_chars,
-                        reserve_chars=self.context_reserve_chars,
-                    ),
-                    metadata=request_metadata,
-                )
-                if compaction_preparation.compaction_applied:
-                    compaction_summary = compaction_preparation.summary
-                    compaction_summary_metadata = compaction_preparation.summary_metadata
-            prepared_request = prepare_history_for_request(
-                request_history,
-                tools=enabled_tools,
-                metadata=request_metadata,
-                max_parts=self.max_context_parts,
-                max_chars=self.max_context_chars,
-                reserve_chars=self.context_reserve_chars,
-                compaction_summary=compaction_summary,
-                compaction_summary_metadata=compaction_summary_metadata,
-            )
-            request = RuntimeRequest(
+            request = await self._prepare_runtime_request(
                 session_id=resolved_session_id,
-                messages=history,
+                history=history,
+                request_history=request_history,
                 iteration=iteration,
                 max_iterations=iteration_limit,
                 metadata=request_metadata,
-                provider_request=prepared_request.request,
-                prepared_request=prepared_request,
                 tools=enabled_tools,
+                budget=self._context_budget(),
             )
             runtime_events.append(
                 RuntimeEvent(
@@ -318,7 +314,16 @@ class RuntimeLoopRunner:
 
             iterations = iteration
             try:
-                provider_output = await self._invoke_provider(request)
+                provider_output = await self._invoke_provider_with_retries(
+                    request,
+                    history=history,
+                    request_history=request_history,
+                    tools=enabled_tools,
+                    runtime_events=runtime_events,
+                    run_id=run_id,
+                    iteration=iteration,
+                    max_iterations=iteration_limit,
+                )
                 events = self._normalize_provider_output(provider_output)
                 processor_session = RuntimeSession(
                     session_id=resolved_session_id,
@@ -339,6 +344,7 @@ class RuntimeLoopRunner:
                             "iteration": iteration,
                             "phase": "provider",
                             "error_type": exc.__class__.__name__,
+                            **_exception_event_payload(exc),
                         },
                     )
                 )
@@ -468,8 +474,81 @@ class RuntimeLoopRunner:
             pending_question_request=pending_question_request,
         )
 
-    def _context_budget_enabled(self) -> bool:
-        return self.max_context_parts is not None or self.max_context_chars is not None
+    def _context_budget(self) -> ContextBudget:
+        return ContextBudget(
+            max_parts=self.max_context_parts,
+            max_chars=self.max_context_chars,
+            reserve_chars=self.context_reserve_chars,
+        )
+
+    def _context_budget_enabled(self, budget: Optional[ContextBudget] = None) -> bool:
+        resolved = budget or self._context_budget()
+        return resolved.max_parts is not None or resolved.max_chars is not None
+
+    def _overflow_retry_budget(self) -> ContextBudget:
+        max_parts = self.max_context_parts
+        max_chars = self.max_context_chars
+        if max_parts is not None:
+            max_parts = max(1, min(max_parts, 2))
+        if max_chars is not None:
+            max_chars = max(1, max_chars // 2)
+        if max_parts is None and max_chars is None:
+            max_parts = 8
+        return ContextBudget(
+            max_parts=max_parts,
+            max_chars=max_chars,
+            reserve_chars=self.context_reserve_chars,
+        )
+
+    async def _prepare_runtime_request(
+        self,
+        *,
+        session_id: str,
+        history: list[Message],
+        request_history: list[Message],
+        iteration: int,
+        max_iterations: int,
+        metadata: Mapping[str, Any],
+        tools: list[Any],
+        budget: ContextBudget,
+    ) -> RuntimeRequest:
+        request_metadata = dict(metadata)
+        compaction_summary = None
+        compaction_summary_metadata = None
+        if self.compaction_summarizer is not None and self._context_budget_enabled(
+            budget
+        ):
+            compaction_preparation = await CompactionController(
+                self.compaction_summarizer
+            ).prepare(
+                request_history,
+                session_id=session_id,
+                budget=budget,
+                metadata=request_metadata,
+            )
+            if compaction_preparation.compaction_applied:
+                compaction_summary = compaction_preparation.summary
+                compaction_summary_metadata = compaction_preparation.summary_metadata
+        prepared_request = prepare_history_for_request(
+            request_history,
+            tools=tools,
+            metadata=request_metadata,
+            max_parts=budget.max_parts,
+            max_chars=budget.max_chars,
+            reserve_chars=budget.reserve_chars,
+            compaction_summary=compaction_summary,
+            compaction_summary_metadata=compaction_summary_metadata,
+        )
+        return RuntimeRequest(
+            session_id=session_id,
+            messages=history,
+            iteration=iteration,
+            max_iterations=max_iterations,
+            metadata=request_metadata,
+            provider_request=prepared_request.request,
+            prepared_request=prepared_request,
+            tools=tools,
+        )
 
     def _ensure_session(
         self,
@@ -518,6 +597,145 @@ class RuntimeLoopRunner:
         if inspect.isawaitable(raw_result):
             raw_result = await raw_result
         return raw_result
+
+    async def _invoke_provider_with_retries(
+        self,
+        request: RuntimeRequest,
+        *,
+        history: list[Message],
+        request_history: list[Message],
+        tools: list[Any],
+        runtime_events: List[RuntimeEvent],
+        run_id: str,
+        iteration: int,
+        max_iterations: int,
+    ) -> ProviderOutput:
+        current_request = request
+        retry_count = 0
+        overflow_retry_count = 0
+        backoff_seconds = self.provider_retry_backoff_seconds
+
+        while True:
+            try:
+                return await self._invoke_provider(current_request)
+            except ProviderContextOverflowError as exc:
+                _apply_provider_retry_metadata(
+                    current_request,
+                    retry_count=retry_count,
+                    max_retries=self.provider_max_retries,
+                    exc=exc,
+                )
+                if (
+                    not self.enable_context_overflow_retry
+                    or overflow_retry_count >= 1
+                ):
+                    raise
+                overflow_retry_count += 1
+                overflow_budget = self._overflow_retry_budget()
+                overflow_metadata = _overflow_retry_metadata(
+                    current_request.metadata,
+                    attempt=overflow_retry_count,
+                    budget=overflow_budget,
+                )
+                overflow_request = await self._prepare_runtime_request(
+                    session_id=current_request.session_id,
+                    history=history,
+                    request_history=request_history,
+                    iteration=iteration,
+                    max_iterations=max_iterations,
+                    metadata=overflow_metadata,
+                    tools=tools,
+                    budget=overflow_budget,
+                )
+                overflow_request = _with_provider_retry_metadata(
+                    overflow_request,
+                    retry_count=retry_count,
+                    max_retries=self.provider_max_retries,
+                    exc=exc,
+                )
+                _apply_overflow_retry_metadata(
+                    overflow_request,
+                    attempt=overflow_retry_count,
+                    budget=overflow_budget,
+                )
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="provider.context_overflow_retry",
+                        message="Provider context overflow triggered compacted retry.",
+                        session_id=current_request.session_id,
+                        payload={
+                            "run_id": run_id,
+                            "iteration": iteration,
+                            "attempt": overflow_retry_count,
+                            "error_type": exc.__class__.__name__,
+                            "code": exc.code,
+                            "compaction": dict(
+                                overflow_request.prepared_request.compaction_metadata
+                            ),
+                        },
+                    )
+                )
+                current_request = overflow_request
+            except ProviderTransientError as exc:
+                if retry_count >= self.provider_max_retries:
+                    _apply_provider_retry_metadata(
+                        current_request,
+                        retry_count=retry_count,
+                        max_retries=self.provider_max_retries,
+                        exc=exc,
+                    )
+                    raise
+                retry_count += 1
+                runtime_events.append(
+                    _provider_retry_event(
+                        session_id=current_request.session_id,
+                        run_id=run_id,
+                        iteration=iteration,
+                        attempt=retry_count,
+                        max_retries=self.provider_max_retries,
+                        delay=backoff_seconds,
+                        exc=exc,
+                    )
+                )
+                current_request = _with_provider_retry_metadata(
+                    current_request,
+                    retry_count=retry_count,
+                    max_retries=self.provider_max_retries,
+                    exc=exc,
+                )
+                if backoff_seconds > 0:
+                    await asyncio.sleep(backoff_seconds)
+                    backoff_seconds *= self.provider_retry_backoff_multiplier
+            except ProviderError as exc:
+                if not exc.retryable or retry_count >= self.provider_max_retries:
+                    _apply_provider_retry_metadata(
+                        current_request,
+                        retry_count=retry_count,
+                        max_retries=self.provider_max_retries,
+                        exc=exc,
+                    )
+                    raise
+                retry_count += 1
+                runtime_events.append(
+                    _provider_retry_event(
+                        session_id=current_request.session_id,
+                        run_id=run_id,
+                        iteration=iteration,
+                        attempt=retry_count,
+                        max_retries=self.provider_max_retries,
+                        delay=backoff_seconds,
+                        exc=exc,
+                    )
+                )
+                current_request = _with_provider_retry_metadata(
+                    current_request,
+                    retry_count=retry_count,
+                    max_retries=self.provider_max_retries,
+                    exc=exc,
+                )
+                if backoff_seconds > 0:
+                    await asyncio.sleep(backoff_seconds)
+                    backoff_seconds *= self.provider_retry_backoff_multiplier
 
     def _normalize_provider_output(
         self,
@@ -944,6 +1162,10 @@ async def run_runtime_loop(
     tool_selection: Optional[ToolSelection] = None,
     tools: Optional[Mapping[str, bool]] = None,
     compaction_summarizer: Optional[CompactionSummarizer] = None,
+    provider_max_retries: int = 2,
+    provider_retry_backoff_seconds: float = 0.0,
+    provider_retry_backoff_multiplier: float = 2.0,
+    enable_context_overflow_retry: bool = True,
 ) -> RuntimeLoopResult:
     runner = RuntimeLoopRunner(
         store=store,
@@ -959,6 +1181,10 @@ async def run_runtime_loop(
         is_cancelled=is_cancelled,
         tool_selection=tool_selection,
         compaction_summarizer=compaction_summarizer,
+        provider_max_retries=provider_max_retries,
+        provider_retry_backoff_seconds=provider_retry_backoff_seconds,
+        provider_retry_backoff_multiplier=provider_retry_backoff_multiplier,
+        enable_context_overflow_retry=enable_context_overflow_retry,
     )
     return await runner.run(
         user_text=user_text,
@@ -1266,6 +1492,165 @@ def _request_metadata(
     )
     request_metadata["loop"] = merged_loop_metadata
     return request_metadata
+
+
+def _provider_retry_event(
+    *,
+    session_id: str,
+    run_id: str,
+    iteration: int,
+    attempt: int,
+    max_retries: int,
+    delay: float,
+    exc: ProviderError,
+) -> RuntimeEvent:
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "iteration": iteration,
+        "attempt": attempt,
+        "max_retries": max_retries,
+        "delay_seconds": delay,
+    }
+    payload.update(_provider_error_info(exc))
+    return RuntimeEvent(
+        type="provider.retry",
+        message=str(exc) or exc.__class__.__name__,
+        session_id=session_id,
+        payload=payload,
+    )
+
+
+def _with_provider_retry_metadata(
+    request: RuntimeRequest,
+    *,
+    retry_count: int,
+    max_retries: int,
+    exc: ProviderError,
+) -> RuntimeRequest:
+    retry_metadata = _provider_retry_metadata(
+        retry_count=retry_count,
+        max_retries=max_retries,
+        exc=exc,
+    )
+    runtime_metadata = dict(request.metadata)
+    runtime_metadata["provider_retry"] = retry_metadata
+
+    provider_metadata = dict(request.provider_request.metadata)
+    provider_metadata["provider_retry"] = dict(retry_metadata)
+    provider_request = replace(request.provider_request, metadata=provider_metadata)
+    prepared_request = replace(request.prepared_request, request=provider_request)
+    return replace(
+        request,
+        metadata=runtime_metadata,
+        provider_request=provider_request,
+        prepared_request=prepared_request,
+    )
+
+
+def _apply_provider_retry_metadata(
+    request: RuntimeRequest,
+    *,
+    retry_count: int,
+    max_retries: int,
+    exc: ProviderError,
+) -> None:
+    retry_metadata = _provider_retry_metadata(
+        retry_count=retry_count,
+        max_retries=max_retries,
+        exc=exc,
+    )
+    request.metadata["provider_retry"] = retry_metadata
+    request.provider_request.metadata["provider_retry"] = dict(retry_metadata)
+    request.prepared_request.request.metadata["provider_retry"] = dict(retry_metadata)
+
+
+def _provider_retry_metadata(
+    *,
+    retry_count: int,
+    max_retries: int,
+    exc: ProviderError,
+) -> dict[str, Any]:
+    return {
+        "retry_count": retry_count,
+        "max_retries": max_retries,
+        "last_error": _provider_error_info(exc),
+    }
+
+
+def _provider_error_info(exc: ProviderError) -> dict[str, Any]:
+    return {
+        "error_type": exc.__class__.__name__,
+        "code": exc.code,
+        "retryable": exc.retryable,
+        "message": str(exc) or exc.__class__.__name__,
+        "error_metadata": dict(exc.metadata),
+    }
+
+
+def _overflow_retry_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    attempt: int,
+    budget: ContextBudget,
+) -> dict[str, Any]:
+    request_metadata = dict(metadata)
+    request_metadata["overflow_retry"] = True
+    request_metadata["context_overflow_retry"] = _overflow_retry_info(
+        attempt=attempt,
+        budget=budget,
+    )
+    return request_metadata
+
+
+def _apply_overflow_retry_metadata(
+    request: RuntimeRequest,
+    *,
+    attempt: int,
+    budget: ContextBudget,
+) -> None:
+    overflow_info = _overflow_retry_info(attempt=attempt, budget=budget)
+    for metadata in (
+        request.metadata,
+        request.provider_request.metadata,
+        request.prepared_request.request.metadata,
+    ):
+        metadata["overflow_retry"] = True
+        metadata["context_overflow_retry"] = dict(overflow_info)
+        compaction_metadata = metadata.get("compaction")
+        if isinstance(compaction_metadata, Mapping):
+            compaction_payload = dict(compaction_metadata)
+        else:
+            compaction_payload = {}
+        compaction_payload.update(overflow_info)
+        metadata["compaction"] = compaction_payload
+    request.prepared_request.compaction_metadata.update(overflow_info)
+
+
+def _overflow_retry_info(
+    *,
+    attempt: int,
+    budget: ContextBudget,
+) -> dict[str, Any]:
+    return {
+        "overflow_retry": True,
+        "overflow_attempt": attempt,
+        "max_parts": budget.max_parts,
+        "max_chars": budget.max_chars,
+        "reserve_chars": budget.reserve_chars,
+    }
+
+
+def _exception_event_payload(exc: BaseException) -> dict[str, Any]:
+    payload: dict[str, Any] = {"error": str(exc) or exc.__class__.__name__}
+    if isinstance(exc, ProviderError):
+        payload.update(
+            {
+                "code": exc.code,
+                "retryable": exc.retryable,
+                "provider_error_metadata": dict(exc.metadata),
+            }
+        )
+    return payload
 
 
 __all__ = [

@@ -222,6 +222,24 @@ def _child_config(
             if base_config is None
             else base_config.enable_compaction_summarizer
         ),
+        provider_max_retries=(
+            2 if base_config is None else base_config.provider_max_retries
+        ),
+        provider_retry_backoff_seconds=(
+            0.0
+            if base_config is None
+            else base_config.provider_retry_backoff_seconds
+        ),
+        provider_retry_backoff_multiplier=(
+            2.0
+            if base_config is None
+            else base_config.provider_retry_backoff_multiplier
+        ),
+        enable_context_overflow_retry=(
+            True
+            if base_config is None
+            else base_config.enable_context_overflow_retry
+        ),
         enabled_tools=(
             None
             if base_config is None or base_config.enabled_tools is None
