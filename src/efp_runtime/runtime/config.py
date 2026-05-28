@@ -34,6 +34,11 @@ class RuntimeConfig:
     resolve_prompt_references: bool = True
     max_prompt_reference_chars: int = 20000
     max_prompt_directory_entries: int = 200
+    tool_output_max_lines: int | None = 2000
+    tool_output_max_bytes: int | None = 50 * 1024
+    tool_output_truncation_direction: str = "head"
+    archive_truncated_tool_outputs: bool = True
+    tool_output_dir: str | Path | None = None
 
     def __post_init__(self) -> None:
         if self.max_iterations < 1:
@@ -52,6 +57,12 @@ class RuntimeConfig:
             raise ValueError("max_prompt_directory_entries must be greater than or equal to 0")
         if self.max_instruction_chars < 0:
             raise ValueError("max_instruction_chars must be greater than or equal to 0")
+        if self.tool_output_max_lines is not None and self.tool_output_max_lines < 0:
+            raise ValueError("tool_output_max_lines must be greater than or equal to 0 or None")
+        if self.tool_output_max_bytes is not None and self.tool_output_max_bytes < 0:
+            raise ValueError("tool_output_max_bytes must be greater than or equal to 0 or None")
+        if self.tool_output_truncation_direction not in ("head", "tail"):
+            raise ValueError("tool_output_truncation_direction must be 'head' or 'tail'")
         self.enabled_tools = (
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
@@ -65,6 +76,7 @@ class RuntimeConfig:
         self.attach_read_instructions = bool(self.attach_read_instructions)
         self.skill_directories = list(self.skill_directories)
         self.active_skills = list(self.active_skills)
+        self.archive_truncated_tool_outputs = bool(self.archive_truncated_tool_outputs)
 
 
 __all__ = ["RuntimeConfig"]

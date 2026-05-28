@@ -12,6 +12,7 @@ from ..permissions import ALLOW, ASK, DENY, PermissionBroker, PermissionEvaluato
 from ..types import ToolCall, ToolResult
 from .definition import OutputPolicy, ToolContext, ValidationError
 from .registry import ToolRegistry
+from .truncation import ToolOutputTruncator, TruncationLimits
 
 
 class ToolRuntime:
@@ -23,10 +24,12 @@ class ToolRuntime:
         *,
         permission_evaluator: PermissionEvaluator | None = None,
         default_output_policy: OutputPolicy | None = None,
+        output_truncator: ToolOutputTruncator | None = None,
     ):
         self.registry = registry
         self.permission_evaluator = permission_evaluator or PermissionBroker()
         self.default_output_policy = default_output_policy or OutputPolicy()
+        self.output_truncator = output_truncator
 
     async def execute(
         self,
@@ -210,7 +213,20 @@ class ToolRuntime:
         context: ToolContext,
     ) -> ToolResult:
         if isinstance(raw_output, ToolResult):
-            content, truncated, metadata = _apply_output_policy(raw_output.content, policy)
+            if _has_tool_truncation_metadata(raw_output):
+                content = raw_output.content
+                truncated = raw_output.truncated or raw_output.metadata.get("truncated") is True
+                metadata = _preserved_tool_result_metadata(
+                    raw_output.content,
+                    raw_output.metadata,
+                    truncated=truncated,
+                )
+            else:
+                content, truncated, metadata = _apply_output_policy(
+                    raw_output.content,
+                    policy,
+                    output_truncator=self.output_truncator,
+                )
             return ToolResult(
                 call_id=call_id,
                 tool_name=tool_name,
@@ -236,7 +252,11 @@ class ToolRuntime:
             )
 
         content = _stringify_output(raw_output)
-        content, truncated, metadata = _apply_output_policy(content, policy)
+        content, truncated, metadata = _apply_output_policy(
+            content,
+            policy,
+            output_truncator=self.output_truncator,
+        )
         return ToolResult(
             call_id=call_id,
             tool_name=tool_name,
@@ -261,8 +281,23 @@ class ToolRuntime:
 
 
 def _merge_output_policy(default: OutputPolicy, override: OutputPolicy) -> OutputPolicy:
+    policy_defaults = OutputPolicy()
+    direction = (
+        default.truncation_direction
+        if override.truncation_direction == policy_defaults.truncation_direction
+        else override.truncation_direction
+    )
+    archive_full_output = (
+        default.archive_full_output
+        if override.archive_full_output == policy_defaults.archive_full_output
+        else override.archive_full_output
+    )
     return OutputPolicy(
         max_chars=override.max_chars if override.max_chars is not None else default.max_chars,
+        max_lines=override.max_lines if override.max_lines is not None else default.max_lines,
+        max_bytes=override.max_bytes if override.max_bytes is not None else default.max_bytes,
+        truncation_direction=direction,
+        archive_full_output=archive_full_output,
         truncate=override.truncate,
         include_raw_output=override.include_raw_output,
     )
@@ -283,24 +318,144 @@ def _stringify_output(output: Any) -> str:
         return str(output)
 
 
-def _apply_output_policy(content: str, policy: OutputPolicy) -> tuple[str, bool, dict[str, Any]]:
+def _apply_output_policy(
+    content: str,
+    policy: OutputPolicy,
+    *,
+    output_truncator: ToolOutputTruncator | None = None,
+) -> tuple[str, bool, dict[str, Any]]:
+    if output_truncator is None:
+        return _apply_char_output_policy(content, policy)
+
+    if not policy.truncate:
+        metadata = _output_size_metadata(content, truncated=False)
+        if _exceeds_output_policy(content, policy, output_truncator):
+            metadata["over_limit"] = True
+        return content, False, metadata
+
+    limits = _policy_truncation_limits(policy, output_truncator)
+    result = output_truncator.truncate(
+        content,
+        limits=limits,
+        allow_archive=policy.archive_full_output,
+    )
+    visible_content = result.content
+    truncated = result.truncated
+    metadata = dict(result.metadata)
+
+    if policy.max_chars is None or len(visible_content) <= policy.max_chars:
+        return visible_content, truncated, metadata
+
+    visible_content, truncated_chars = _truncate_by_chars(
+        visible_content,
+        policy.max_chars,
+    )
+    metadata["truncated"] = True
+    metadata["truncated_chars"] = truncated_chars
+    metadata["truncated_by"] = _append_truncated_by(
+        metadata.get("truncated_by"),
+        "chars",
+    )
+    return visible_content, True, metadata
+
+
+def _apply_char_output_policy(
+    content: str,
+    policy: OutputPolicy,
+) -> tuple[str, bool, dict[str, Any]]:
     metadata: dict[str, Any] = {"original_chars": len(content)}
     if policy.max_chars is None or len(content) <= policy.max_chars:
         return content, False, metadata
     if not policy.truncate:
         metadata["over_limit"] = True
         return content, False, metadata
-    if policy.max_chars <= 0:
-        metadata["truncated_chars"] = len(content)
-        return "", True, metadata
 
-    marker = "\n[truncated]"
-    keep_chars = max(policy.max_chars - len(marker), 0)
-    truncated_content = content[:keep_chars].rstrip()
-    if keep_chars < policy.max_chars:
-        truncated_content = f"{truncated_content}{marker}"[: policy.max_chars]
-    metadata["truncated_chars"] = len(content) - len(truncated_content)
+    truncated_content, truncated_chars = _truncate_by_chars(content, policy.max_chars)
+    metadata["truncated_chars"] = truncated_chars
     return truncated_content, True, metadata
+
+
+def _truncate_by_chars(content: str, max_chars: int) -> tuple[str, int]:
+    if max_chars <= 0:
+        return "", len(content)
+    marker = "\n[truncated]"
+    keep_chars = max(max_chars - len(marker), 0)
+    truncated_content = content[:keep_chars].rstrip()
+    if keep_chars < max_chars:
+        truncated_content = f"{truncated_content}{marker}"[:max_chars]
+    return truncated_content, len(content) - len(truncated_content)
+
+
+def _has_tool_truncation_metadata(result: ToolResult) -> bool:
+    return result.truncated is True or "truncated" in result.metadata
+
+
+def _preserved_tool_result_metadata(
+    content: str,
+    tool_metadata: Mapping[str, Any],
+    *,
+    truncated: bool,
+) -> dict[str, Any]:
+    metadata = _output_size_metadata(content, truncated=truncated)
+    metadata.update(dict(tool_metadata))
+    return metadata
+
+
+def _output_size_metadata(content: str, *, truncated: bool) -> dict[str, Any]:
+    return {
+        "original_chars": len(content),
+        "original_bytes": len(content.encode("utf-8")),
+        "original_lines": len(content.splitlines()),
+        "truncated": truncated,
+    }
+
+
+def _policy_truncation_limits(
+    policy: OutputPolicy,
+    output_truncator: ToolOutputTruncator,
+) -> TruncationLimits:
+    default_limits = output_truncator.limits
+    policy_defaults = OutputPolicy()
+    direction = policy.truncation_direction or default_limits.direction
+    if (
+        policy.truncation_direction == policy_defaults.truncation_direction
+        and default_limits.direction != policy_defaults.truncation_direction
+    ):
+        direction = default_limits.direction
+    return TruncationLimits(
+        max_lines=(
+            policy.max_lines if policy.max_lines is not None else default_limits.max_lines
+        ),
+        max_bytes=(
+            policy.max_bytes if policy.max_bytes is not None else default_limits.max_bytes
+        ),
+        direction=direction,
+    )
+
+
+def _exceeds_output_policy(
+    content: str,
+    policy: OutputPolicy,
+    output_truncator: ToolOutputTruncator,
+) -> bool:
+    limits = _policy_truncation_limits(policy, output_truncator)
+    if limits.max_lines is not None and len(content.splitlines()) > limits.max_lines:
+        return True
+    if limits.max_bytes is not None and len(content.encode("utf-8")) > limits.max_bytes:
+        return True
+    return policy.max_chars is not None and len(content) > policy.max_chars
+
+
+def _append_truncated_by(value: Any, reason: str) -> list[str]:
+    if isinstance(value, list):
+        reasons = [str(item) for item in value]
+    elif value:
+        reasons = [str(value)]
+    else:
+        reasons = []
+    if reason not in reasons:
+        reasons.append(reason)
+    return reasons
 
 
 def _tool_execution_context(

@@ -100,6 +100,17 @@ error status without depending on SDK exception types.
 4. Execute only on allow.
 5. Normalize output into `ToolResult`.
 
+Runtime v2 applies a unified model-visible output policy during normalization.
+Large tool outputs are truncated by line and UTF-8 byte limits before they are
+added to context. When a workspace-backed `AgentRuntime` creates the
+`ToolRuntime`, the complete output is archived under
+`.efp_runtime/tool-output` inside the workspace, and the visible tool result is
+replaced with a preview plus a note that points at the saved output. If
+`ToolResult.metadata` contains `output_path`, the model or caller can inspect
+specific sections later with `read_file` or `grep` instead of reading the full
+large file back into context. Tools that explicitly set their own truncation
+metadata are treated as already normalized and are not truncated a second time.
+
 Validation errors and permission denies return structured tool results and do
 not execute the tool callable. A low-level ASK decision is represented as a
 `permission_requested` `ToolResult`, but the Runtime v2 loop treats that result

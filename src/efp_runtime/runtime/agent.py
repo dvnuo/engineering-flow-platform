@@ -24,9 +24,11 @@ from ..skills.context import SkillContextBuilder
 from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_tool
 from ..tools.builtin import create_core_tool_registry, create_question_tool
+from ..tools.definition import OutputPolicy
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection
+from ..tools.truncation import ToolOutputTruncator, TruncationLimits
 from .config import RuntimeConfig
 from .run_state import RuntimeRunState
 
@@ -345,6 +347,11 @@ def _resolve_config(
         resolve_prompt_references=config.resolve_prompt_references,
         max_prompt_reference_chars=config.max_prompt_reference_chars,
         max_prompt_directory_entries=config.max_prompt_directory_entries,
+        tool_output_max_lines=config.tool_output_max_lines,
+        tool_output_max_bytes=config.tool_output_max_bytes,
+        tool_output_truncation_direction=config.tool_output_truncation_direction,
+        archive_truncated_tool_outputs=config.archive_truncated_tool_outputs,
+        tool_output_dir=config.tool_output_dir,
     )
 
 
@@ -395,7 +402,51 @@ def _resolve_tool_runtime(
                         max_sidecar_chars=config.max_skill_sidecar_chars,
                     )
                 )
-    return ToolRuntime(registry, permission_evaluator=permission_evaluator)
+    return ToolRuntime(
+        registry,
+        permission_evaluator=permission_evaluator,
+        default_output_policy=_tool_output_policy(config),
+        output_truncator=_resolve_tool_output_truncator(
+            workspace_root=workspace_root,
+            config=config,
+        ),
+    )
+
+
+def _tool_output_policy(config: RuntimeConfig) -> OutputPolicy:
+    return OutputPolicy(
+        max_lines=config.tool_output_max_lines,
+        max_bytes=config.tool_output_max_bytes,
+        truncation_direction=config.tool_output_truncation_direction,
+        archive_full_output=config.archive_truncated_tool_outputs,
+    )
+
+
+def _resolve_tool_output_truncator(
+    *,
+    workspace_root: str | Path | None,
+    config: RuntimeConfig,
+) -> ToolOutputTruncator | None:
+    if workspace_root is None:
+        return None
+
+    root = Path(workspace_root).expanduser().resolve()
+    if config.tool_output_dir is None:
+        output_dir = root / ".efp_runtime" / "tool-output"
+    else:
+        output_dir = Path(config.tool_output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = root / output_dir
+
+    return ToolOutputTruncator(
+        output_dir,
+        limits=TruncationLimits(
+            max_lines=config.tool_output_max_lines,
+            max_bytes=config.tool_output_max_bytes,
+            direction=config.tool_output_truncation_direction,
+        ),
+        archive_full_output=config.archive_truncated_tool_outputs,
+    )
 
 
 def _resolve_skill_discovery(

@@ -18,6 +18,10 @@ class OutputPolicy:
     """Controls how tool output is serialized for model-visible context."""
 
     max_chars: int | None = None
+    max_lines: int | None = None
+    max_bytes: int | None = None
+    truncation_direction: str = "head"
+    archive_full_output: bool = True
     truncate: bool = True
     include_raw_output: bool = True
 
