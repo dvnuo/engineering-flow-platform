@@ -118,6 +118,70 @@ and no explicit tool registry/runtime, it creates the Runtime v2 built-in tool
 registry for that workspace. The facade does not call Portal or the legacy agent
 runtime.
 
+## Workspace Config Loader
+
+Runtime v2 exposes an explicit local config-loading entry point:
+
+```python
+from efp_runtime.config_loader import load_runtime_config
+
+loaded = load_runtime_config(workspace_root)
+runtime_config = loaded.config
+agent_registry = loaded.agent_registry
+```
+
+`load_runtime_config(...)` returns a `RuntimeConfigLoadResult` containing the
+constructed `RuntimeConfig`, an optional `AgentRegistry`, the successfully loaded
+file paths, the merged raw config object, and loader metadata. The facade does
+not call this loader automatically in this phase. Portal, CLI, tests, and other
+callers must opt in and pass the returned objects where they want them.
+
+The default lookup order is:
+
+1. `opencode.json`
+2. `opencode.jsonc`
+3. `.opencode.json`
+4. `.opencode/config.json`
+5. `.opencode/config.jsonc`
+
+Only files that exist are loaded. Multiple files are merged in that order:
+mappings are deep-merged, lists are appended with stable de-duplication, and
+scalar values from later files override earlier files. Explicit `paths=` can be
+passed to load additional local files; relative paths are resolved under the
+workspace root. JSONC files support line comments, block comments, and trailing
+commas without treating `//` inside JSON strings as comments. Invalid JSON raises
+`ValueError` with the file path in the message.
+
+The loader maps the following opencode-style and snake_case keys into
+`RuntimeConfig`:
+
+- `permission` / `permissions` to `tool_permissions`.
+- `enabledTools` / `enabled_tools`.
+- `disabledTools` / `disabled_tools`.
+- `instructions`, as string paths or `{"path": ...}` / `{"text": ...}` entries,
+  to `instruction_paths` and `instruction_texts`.
+- `systemPrompt` / `system_prompt`, as a string or list, to
+  `system_prompt_texts`.
+- `skillDirectories` / `skill_directories`.
+- `activeSkills` / `active_skills`.
+- `runtime.mode` or `runtime_mode`.
+
+Configured path fields are resolved as workspace-local `Path` objects without
+requiring those files or directories to already exist. `agents` may be a mapping
+or a list. Mapping entries use the mapping key as the profile name unless a
+`name` field is supplied; list entries require `name`. Agent fields map to
+`AgentProfile` as `name`, `prompt`, `tools`, `maxIterations` /
+`max_iterations`, `skills` / `active_skills`, and `metadata`. `defaultAgent` /
+`default_agent` selects the registry fallback, otherwise `general` is used.
+
+Keys that Runtime v2 does not consume in this phase, including `model`, `mcp`,
+`commands`, and `plugins`, are preserved in
+`RuntimeConfigLoadResult.metadata["unconsumed_config"]`; the full merged object
+is preserved in `metadata["raw_config"]` and `RuntimeConfigLoadResult.raw`.
+Loading config is side-effect free: it only reads local files, does not start
+MCP servers or subprocess tool providers, does not load Portal, and does not
+instantiate LLM or tool providers.
+
 ## Session Checkpoints
 
 Runtime v2 session stores support explicit checkpoint and restore operations for
