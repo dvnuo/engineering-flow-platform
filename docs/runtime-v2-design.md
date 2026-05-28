@@ -185,11 +185,13 @@ The loader maps the following opencode-style and snake_case keys into
 - `runtime.mode` or `runtime_mode`.
 
 Configured path fields are resolved as workspace-local `Path` objects without
-requiring those files or directories to already exist. If `.opencode/command`
-or `.opencode/commands` exists under the workspace root, the loader also adds
-the existing project command defaults in that order. Configured
-`commandDirectories` / `command_directories` entries are appended after those
-defaults.
+requiring those files or directories to already exist. With
+`include_defaults=True`, the loader adds existing default command directories
+first: `~/.config/opencode/commands`, then workspace-local `.opencode/command`,
+then workspace-local `.opencode/commands`. Missing default command directories
+are ignored. Passing `include_defaults=False` disables these default command
+directories. Configured `commandDirectories` / `command_directories` entries
+are appended after defaults.
 With `include_defaults=True`, existing user-level skill directories are added
 first: `~/.claude/skills`, then `~/.agents/skills`. Existing project-local
 skill directories are added next: `.opencode/skill`, `.opencode/skills`,
@@ -789,15 +791,19 @@ sidecars, subject to the configured maximum character limit.
 
 ## Custom Commands
 
-Runtime v2 supports configured custom slash command directories through
+Runtime v2 supports custom slash command directories through
 `RuntimeConfig.command_directories` and explicit `CommandRegistry` injection on
 `AgentRuntime`. Command files are markdown or text prompt templates discovered
 from those directories, including hidden configured roots such as
-`.opencode/command`; hidden subdirectories are skipped by default. The config
-loader discovers existing project defaults from `.opencode/command` first and
-`.opencode/commands` second, then appends configured command directories. The
-config loader also supports opencode-style `command` and compatible `commands`
-mappings:
+`.opencode/command`; hidden subdirectories are skipped by default. With default
+discovery enabled, the config loader discovers existing command directories in
+this order: `~/.config/opencode/commands`, workspace-local `.opencode/command`,
+workspace-local `.opencode/commands`, then configured `commandDirectories` /
+`command_directories`. Later discovered markdown commands with the same
+normalized name override earlier ones, so project commands override global user
+commands, plural project commands override singular project commands, and
+configured command directories override all defaults. The config loader also
+supports opencode-style `command` and compatible `commands` mappings:
 
 ```json
 {

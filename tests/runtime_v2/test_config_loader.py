@@ -502,7 +502,9 @@ def test_builtin_read_focused_agents_carry_permission_metadata(tmp_path: Path):
 
 def test_loader_returns_command_definitions_registry_and_default_directory(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     default_commands = tmp_path / ".opencode" / "commands"
     default_commands.mkdir(parents=True)
     (default_commands / "test.md").write_text("Markdown override.", encoding="utf-8")
@@ -543,7 +545,11 @@ def test_loader_returns_command_definitions_registry_and_default_directory(
     assert "commandDirectories" not in result.metadata["unconsumed_config"]
 
 
-def test_loader_returns_singular_default_command_directory(tmp_path: Path):
+def test_loader_returns_singular_default_command_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     default_commands = tmp_path / ".opencode" / "command"
     default_commands.mkdir(parents=True)
     (default_commands / "test.md").write_text("Singular command.", encoding="utf-8")
@@ -555,18 +561,24 @@ def test_loader_returns_singular_default_command_directory(tmp_path: Path):
     assert result.command_registry.get("test").content == "Singular command."
 
 
-def test_loader_orders_singular_plural_then_configured_command_directories(
+def test_loader_orders_global_singular_plural_then_configured_command_directories(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    home = tmp_path / "home"
+    global_commands = home / ".config" / "opencode" / "commands"
     singular_commands = tmp_path / ".opencode" / "command"
     plural_commands = tmp_path / ".opencode" / "commands"
     project_commands = tmp_path / "project-commands"
+    global_commands.mkdir(parents=True)
     singular_commands.mkdir(parents=True)
     plural_commands.mkdir(parents=True)
     project_commands.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (global_commands / "dup.md").write_text("Global command.", encoding="utf-8")
     (singular_commands / "dup.md").write_text("Singular command.", encoding="utf-8")
     (plural_commands / "dup.md").write_text("Plural command.", encoding="utf-8")
-    (project_commands / "custom.md").write_text("Configured command.", encoding="utf-8")
+    (project_commands / "dup.md").write_text("Configured command.", encoding="utf-8")
     _write_json(
         tmp_path / "opencode.json",
         {
@@ -577,13 +589,49 @@ def test_loader_orders_singular_plural_then_configured_command_directories(
     result = load_runtime_config(tmp_path)
 
     assert result.config.command_directories == [
+        global_commands.resolve(),
         singular_commands.resolve(),
         plural_commands.resolve(),
         project_commands.resolve(),
     ]
     assert result.command_registry is not None
-    assert result.command_registry.get("dup").content == "Plural command."
-    assert result.command_registry.get("custom").content == "Configured command."
+    assert result.command_registry.get("dup").content == "Configured command."
+
+
+def test_include_defaults_false_skips_default_command_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    global_commands = home / ".config" / "opencode" / "commands"
+    singular_commands = tmp_path / ".opencode" / "command"
+    plural_commands = tmp_path / ".opencode" / "commands"
+    project_commands = tmp_path / "project-commands"
+    global_commands.mkdir(parents=True)
+    singular_commands.mkdir(parents=True)
+    plural_commands.mkdir(parents=True)
+    project_commands.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (global_commands / "dup.md").write_text("Global command.", encoding="utf-8")
+    (singular_commands / "dup.md").write_text("Singular command.", encoding="utf-8")
+    (plural_commands / "dup.md").write_text("Plural command.", encoding="utf-8")
+    (project_commands / "dup.md").write_text("Configured command.", encoding="utf-8")
+    _write_json(
+        tmp_path / "custom.json",
+        {
+            "commandDirectories": ["project-commands"],
+        },
+    )
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=["custom.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.command_directories == [project_commands.resolve()]
+    assert result.command_registry is not None
+    assert result.command_registry.get("dup").content == "Configured command."
 
 
 def test_loader_consumes_commands_alias(tmp_path: Path):

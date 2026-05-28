@@ -360,7 +360,11 @@ def _runtime_config_from_raw(
     if active_skills is not None:
         kwargs["active_skills"] = active_skills
 
-    command_directories = _command_directories(raw, workspace_root=workspace_root)
+    command_directories = _command_directories(
+        raw,
+        workspace_root=workspace_root,
+        include_defaults=include_defaults,
+    )
     if command_directories is not None:
         kwargs["command_directories"] = command_directories
 
@@ -516,14 +520,12 @@ def _command_directories(
     raw: Mapping[str, Any],
     *,
     workspace_root: Path,
+    include_defaults: bool,
 ) -> list[Path] | None:
-    paths: list[Path] = []
-    for default_directory in (
-        workspace_root / ".opencode" / "command",
-        workspace_root / ".opencode" / "commands",
-    ):
-        if default_directory.is_dir():
-            paths.append(default_directory.resolve(strict=False))
+    paths = default_command_directories(
+        workspace_root,
+        include_defaults=include_defaults,
+    )
 
     configured = _merged_alias_paths(
         raw,
@@ -536,6 +538,32 @@ def _command_directories(
     if not paths and configured is None:
         return None
     return _dedupe_paths(paths)
+
+
+def default_command_directories(
+    workspace_root: str | Path,
+    *,
+    include_defaults: bool = True,
+) -> list[Path]:
+    """Return existing default command directories in load order."""
+
+    if not include_defaults:
+        return []
+    root = _workspace_root_path(workspace_root)
+    directories: list[Path] = []
+    global_directory = Path("~/.config/opencode/commands").expanduser().resolve(
+        strict=False,
+    )
+    if global_directory.is_dir():
+        directories.append(global_directory)
+    for default_directory in (
+        root / ".opencode" / "command",
+        root / ".opencode" / "commands",
+    ):
+        path = default_directory.resolve(strict=False)
+        if path.is_dir():
+            directories.append(path)
+    return directories
 
 
 def _loader_metadata(
@@ -794,6 +822,7 @@ def _resolve_workspace_path(workspace_root: Path, path: Any) -> Path:
 __all__ = [
     "DEFAULT_CONFIG_FILE_NAMES",
     "RuntimeConfigLoadResult",
+    "default_command_directories",
     "find_runtime_config_files",
     "load_runtime_config",
 ]
