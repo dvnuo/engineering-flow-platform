@@ -834,9 +834,12 @@ Runtime v2 has a small configurable system prompt stack. By default,
 current iteration limit, the optional `question` tool, plan mode, and saved
 truncated tool output referenced by `output_path`.
 
-System prompt and reminder messages are transient provider-only system context.
-They are not appended to the session store, are not copied into user messages,
-and are rebuilt for each `run()` or `resume()` request.
+The default prompt is provider-only coding-agent context. Runtime reminders are
+separate transient system messages driven by request metadata, so per-run loop
+guidance can be added or omitted without changing configured prompts. System
+prompt and reminder messages are not appended to the session store, are not
+copied into user messages, and are rebuilt for each `run()` or `resume()`
+request.
 Plan mode does not persist extra system prompt text either; only ordinary
 user, assistant, and tool history is stored.
 

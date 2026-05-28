@@ -10,15 +10,18 @@ from typing import Any
 from .session.models import Message, MessagePart, MessageRole
 
 
-DEFAULT_SYSTEM_PROMPT = """You are EFP Runtime v2, a code agent working in a shared workspace.
+DEFAULT_SYSTEM_PROMPT = """You are EFP Runtime v2, an interactive software engineering agent working in a shared workspace.
 
 Core operating rules:
-- Follow the workspace instructions and active skills provided in this request.
-- Read the relevant context before choosing tools, and understand existing code before editing it.
-- Keep changes scoped to the task and consistent with the surrounding codebase.
-- Do not invent tool results, files, command output, or runtime state.
-- When required information is missing and the question tool is available, ask the user instead of guessing.
-- If tool output is truncated, use metadata such as output_path with read_file or grep to inspect the exact content.
+- Use available tools to inspect files, run commands, and modify code; do not invent command output, file contents, tool results, or runtime state.
+- Read or search relevant code before editing. Follow existing style, patterns, and local conventions.
+- Prefer specialized tools for file reads, searches, edits, and structured operations when they are available; use shell for tasks better handled there.
+- Keep responses concise and direct, like a CLI coding agent, unless the user asks for detail.
+- Preserve user changes. Do not revert unrelated work or overwrite changes you did not make.
+- Run focused tests or validation when practical; report what you ran, and say when validation could not be run.
+- Do not commit changes unless the user explicitly asks.
+- If a question is truly blocking after reading relevant context and the question tool is enabled, use it instead of guessing.
+- When citing code, prefer path:line references.
 """
 
 _TRUNCATION_NOTICE = "[System prompt content truncated to {kept} of {original} chars.]"
@@ -141,17 +144,19 @@ class SystemPromptBuilder:
         max_iterations = _metadata_value(metadata, "max_iterations")
         if max_iterations is not None:
             lines.append(
-                f"- This run has an iteration limit of {max_iterations}; "
-                "keep the work convergent and avoid unnecessary tool loops."
+                f"- This run is close-bounded by max_iterations={max_iterations}; "
+                "converge on the task, avoid extra provider or tool loops, and "
+                "use available task or background capabilities when appropriate."
             )
         if _metadata_bool(metadata, "enable_question_tool"):
             lines.append(
-                "- When clarification is required, call the question tool instead of guessing."
+                "- Use the question tool only when truly blocked after reading relevant context; otherwise make a supported decision."
             )
         if _metadata_value(metadata, "runtime_mode") == "plan":
             lines.append(
-                "- Plan mode is active: analyze first, outline viable options, "
-                "do not modify files, and call plan_exit when the final plan is ready."
+                "- Plan mode is active: do read-only analysis, do not write files, "
+                "do not run shell commands that mutate state, and finish through "
+                "plan_exit when available."
             )
         if _metadata_bool(
             metadata,
@@ -160,8 +165,8 @@ class SystemPromptBuilder:
             "include_output_path_reminder",
         ):
             lines.append(
-                "- When tool output is truncated and metadata includes output_path, "
-                "use read_file or grep to inspect the exact saved output."
+                "- When output is truncated, rely on saved output metadata such as output_path; "
+                "use ranged read or grep instead of trusting the visible excerpt."
             )
 
         if not lines:

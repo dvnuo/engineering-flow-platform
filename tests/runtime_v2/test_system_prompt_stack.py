@@ -19,6 +19,16 @@ from efp_runtime.system_prompt import DEFAULT_SYSTEM_PROMPT, SystemPromptBuilder
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_default_system_prompt_contains_coding_agent_operating_rules():
+    assert "interactive software engineering agent" in DEFAULT_SYSTEM_PROMPT
+    assert "do not invent command output" in DEFAULT_SYSTEM_PROMPT
+    assert "file contents, tool results, or runtime state" in DEFAULT_SYSTEM_PROMPT
+    assert "Read or search relevant code before editing" in DEFAULT_SYSTEM_PROMPT
+    assert "concise and direct, like a CLI coding agent" in DEFAULT_SYSTEM_PROMPT
+    assert "Preserve user changes" in DEFAULT_SYSTEM_PROMPT
+    assert "Do not commit changes unless the user explicitly asks" in DEFAULT_SYSTEM_PROMPT
+
+
 @pytest.mark.asyncio
 async def test_default_runtime_prepends_system_prompt_before_instructions_and_skills(
     tmp_path: Path,
@@ -111,6 +121,38 @@ def test_system_prompt_paths_load_workspace_files_with_truncation_metadata(
     assert "truncated to 3 of 6 chars" in message.parts[0].text
 
 
+def test_inline_and_file_prompts_appear_between_default_and_runtime_reminders(
+    tmp_path: Path,
+):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    prompt_file = prompt_dir / "team.txt"
+    prompt_file.write_text("Team file prompt.", encoding="utf-8")
+
+    messages = SystemPromptBuilder(
+        workspace_root=tmp_path,
+        system_prompt_texts=["Inline prompt."],
+        system_prompt_paths=["prompts/team.txt"],
+    ).build_messages(metadata={"max_iterations": 2})
+
+    assert [message.role for message in messages] == [
+        MessageRole.SYSTEM,
+        MessageRole.SYSTEM,
+        MessageRole.SYSTEM,
+        MessageRole.SYSTEM,
+    ]
+    assert [message.metadata["source"] for message in messages] == [
+        "default_system_prompt",
+        "inline",
+        "file",
+        "runtime_reminders",
+    ]
+    assert "EFP Runtime v2" in messages[0].parts[0].text
+    assert messages[1].parts[0].text == "Inline prompt."
+    assert messages[2].parts[0].text == "Team file prompt."
+    assert "max_iterations=2" in messages[3].parts[0].text
+
+
 def test_system_prompt_paths_reject_path_traversal_and_outside_files(tmp_path: Path):
     outside = tmp_path.parent / f"{tmp_path.name}-outside-system.txt"
     outside.write_text("outside secret", encoding="utf-8")
@@ -141,9 +183,12 @@ def test_runtime_reminders_can_be_enabled_and_disabled():
     assert len(enabled) == 1
     reminder = enabled[0]
     assert reminder.metadata["source"] == "runtime_reminders"
-    assert "iteration limit of 3" in reminder.parts[0].text
-    assert "question tool" in reminder.parts[0].text
+    assert "close-bounded by max_iterations=3" in reminder.parts[0].text
+    assert "avoid extra provider or tool loops" in reminder.parts[0].text
+    assert "only when truly blocked after reading relevant context" in reminder.parts[0].text
     assert "output_path" in reminder.parts[0].text
+    assert "saved output metadata" in reminder.parts[0].text
+    assert "ranged read or grep" in reminder.parts[0].text
 
     disabled = SystemPromptBuilder(
         workspace_root=None,
@@ -151,6 +196,21 @@ def test_runtime_reminders_can_be_enabled_and_disabled():
         include_runtime_reminders=False,
     ).build_messages(metadata={"max_iterations": 3, "enable_question_tool": True})
     assert disabled == []
+
+
+def test_plan_mode_reminder_is_read_only_and_finishes_with_plan_exit():
+    messages = SystemPromptBuilder(
+        workspace_root=None,
+        include_default_system_prompt=False,
+    ).build_messages(metadata={"runtime_mode": "plan"})
+
+    assert len(messages) == 1
+    text = messages[0].parts[0].text
+    assert "Plan mode is active" in text
+    assert "read-only analysis" in text
+    assert "do not write files" in text
+    assert "do not run shell commands that mutate state" in text
+    assert "plan_exit" in text
 
 
 @pytest.mark.asyncio
