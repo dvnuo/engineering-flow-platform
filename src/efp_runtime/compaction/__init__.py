@@ -9,6 +9,12 @@ from .controller import (
     DeterministicCompactionSummarizer,
     maybe_summarize_compaction,
 )
+from .summary import (
+    COMPACTION_SUMMARY_HEADINGS,
+    build_compaction_prompt,
+    latest_compaction_summary,
+    render_anchored_compaction_summary,
+)
 from .strategy import (
     BudgetCompactionStrategy,
     CompactionResult,
@@ -18,6 +24,7 @@ from .strategy import (
 
 __all__ = [
     "BudgetCompactionStrategy",
+    "COMPACTION_SUMMARY_HEADINGS",
     "CompactionController",
     "CompactionPreparation",
     "CompactionRequest",
@@ -27,5 +34,8 @@ __all__ = [
     "ContextBudget",
     "DeterministicCompactionSummarizer",
     "PartAwareCompactionStrategy",
+    "build_compaction_prompt",
+    "latest_compaction_summary",
     "maybe_summarize_compaction",
+    "render_anchored_compaction_summary",
 ]

@@ -928,6 +928,13 @@ compaction uses the same part-aware rules with a very small part budget when no
 explicit budget is supplied, so pending tool calls and the latest ordinary block
 remain in history while older compactable messages become summary context.
 
+Compaction summaries use anchored Markdown headings in a stable order: goal,
+constraints, progress, decisions, next steps, critical context, and relevant
+files. Custom summarizers receive a bounded structured prompt with compacted
+source, retained source, counts, and the latest previous summary when present,
+so repeated compactions update the prior summary instead of starting from an
+empty note.
+
 If provider invocation raises `ProviderContextOverflowError` and
 `RuntimeConfig.enable_context_overflow_retry` is enabled, the same loop
 iteration is rendered once more with a stricter budget and retried. Existing

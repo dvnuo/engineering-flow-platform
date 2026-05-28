@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from efp_runtime.compaction import COMPACTION_SUMMARY_HEADINGS
 from efp_runtime.context import prepare_history_for_request
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, ScriptedLLMProvider
 from efp_runtime.models import Message, MessagePart, MessageRole, ToolCall, ToolResult
@@ -92,6 +93,7 @@ async def test_max_context_chars_compacts_provider_request_metadata():
     assert compaction["kept_chars"] > len("latest request")
     assert [message.role for message in request.provider_request.messages] == ["system", "user"]
     assert request.provider_request.messages[0].context[0].type == "compaction_summary"
+    _assert_headings_in_order(request.provider_request.messages[0].context[0].text or "")
     assert request.provider_request.messages[1].text == "latest request"
 
 
@@ -125,6 +127,7 @@ def test_context_budget_keeps_tool_call_result_pair_together():
 
     assert prepared.compaction_applied is True
     assert prepared.compaction_metadata["compacted_tool_pair_count"] == 0
+    _assert_headings_in_order(prepared.request.messages[0].context[0].text or "")
     calls = [
         call.call_id
         for message in prepared.request.messages
@@ -271,3 +274,11 @@ print(json.dumps({
         "strategy": "BudgetCompactionStrategy",
         "budget": 10,
     }
+
+
+def _assert_headings_in_order(text: str) -> None:
+    position = -1
+    for heading in COMPACTION_SUMMARY_HEADINGS:
+        next_position = text.find(heading)
+        assert next_position > position, heading
+        position = next_position

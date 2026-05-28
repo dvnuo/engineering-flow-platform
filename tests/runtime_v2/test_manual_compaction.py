@@ -12,7 +12,11 @@ from efp_runtime import (
     MessageRole,
     ToolCall,
 )
-from efp_runtime.compaction import CompactionRequest, CompactionSummary
+from efp_runtime.compaction import (
+    COMPACTION_SUMMARY_HEADINGS,
+    CompactionRequest,
+    CompactionSummary,
+)
 from efp_runtime.loop import ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 
@@ -92,6 +96,8 @@ async def test_force_compact_persists_summary_and_keeps_latest_message():
     assert compaction_part.compaction.original_message_count == 2
     assert compaction_part.compaction.tool_pair_count == 0
     assert compaction_part.text == compaction_part.compaction.summary
+    _assert_headings_in_order(compaction_part.text)
+    assert "- Compacted: 2p,2m,0 pairs." in compaction_part.text
     assert [message.message_id for message in store.read_history("session-compact")] == [
         compaction_message.message_id,
         "msg-latest-user",
@@ -129,6 +135,7 @@ async def test_enabled_summarizer_summary_is_persisted():
     _message, part = _first_compaction_part(session)
     assert part.text == "Persisted custom summary."
     assert part.compaction.summary == "Persisted custom summary."
+    assert part.text == part.compaction.summary
     assert part.compaction.metadata["summary_id"] == "summary-manual"
     assert part.compaction.metadata["reason"] == "user_requested"
     assert part.compaction.metadata["summarizer"]["used"] is True
@@ -151,12 +158,52 @@ async def test_disabled_summarizer_uses_deterministic_summary_without_calling_cu
 
     assert calls == []
     _message, part = _first_compaction_part(session)
-    assert part.text == (
-        "Compacted 2 message part(s) from 2 message(s). "
-        "Tool call/result pair(s) compacted: 0."
-    )
+    _assert_headings_in_order(part.text or "")
+    assert "- Compacted: 2p,2m,0 pairs." in (part.text or "")
     assert part.compaction.metadata["manual_compaction"] is True
     assert "summarizer" not in part.compaction.metadata
+
+
+@pytest.mark.asyncio
+async def test_second_manual_compaction_carries_previous_summary_context():
+    store = InMemorySessionStore()
+    _seed_text_session(store, "session-repeat")
+    runtime = _runtime(store=store)
+
+    first = await runtime.compact_session("session-repeat")
+    _first_message, first_part = _first_compaction_part(first)
+    first_summary = first_part.compaction.summary
+    store.append_message(
+        "session-repeat",
+        role=MessageRole.ASSISTANT,
+        parts=[
+            MessagePart.text_part(
+                "follow-up touches src/efp_runtime/runtime/agent.py"
+            )
+        ],
+        message_id="msg-follow-up-answer",
+        status="complete",
+    )
+    store.append_message(
+        "session-repeat",
+        role=MessageRole.USER,
+        parts=[MessagePart.text_part("latest request after follow-up")],
+        message_id="msg-follow-up-user",
+        status="complete",
+    )
+
+    second = await runtime.compact_session("session-repeat")
+
+    _second_message, second_part = _first_compaction_part(second)
+    assert second_part.text == second_part.compaction.summary
+    _assert_headings_in_order(second_part.text or "")
+    assert "- Previous summary context:" in (second_part.text or "")
+    assert f"  {first_summary.splitlines()[0]}" in (second_part.text or "")
+    assert (
+        "  - Source message ids: msg-old-user, msg-old-assistant"
+        in (second_part.text or "")
+    )
+    assert "src/efp_runtime/runtime/agent.py" in (second_part.text or "")
 
 
 @pytest.mark.asyncio
@@ -256,3 +303,11 @@ async def test_force_false_under_budget_leaves_history_unchanged():
         for part in message.parts
     )
     assert runtime.event_bus.history("session-under-budget") == []
+
+
+def _assert_headings_in_order(text: str) -> None:
+    position = -1
+    for heading in COMPACTION_SUMMARY_HEADINGS:
+        next_position = text.find(heading)
+        assert next_position > position, heading
+        position = next_position

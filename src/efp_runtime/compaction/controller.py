@@ -8,6 +8,11 @@ import inspect
 from typing import Any, Optional, Protocol, Union
 
 from ..session.models import Message
+from .summary import (
+    build_compaction_prompt,
+    latest_compaction_summary,
+    render_anchored_compaction_summary,
+)
 from .strategy import BudgetCompactionStrategy, CompactionResult, ContextBudget
 
 
@@ -20,12 +25,16 @@ class CompactionRequest:
     compacted_messages: list[Message]
     kept_messages: list[Message]
     metadata: dict[str, Any] = field(default_factory=dict)
+    prompt: str = ""
+    previous_summary: str | None = None
+    prompt_metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "messages", list(self.messages))
         object.__setattr__(self, "compacted_messages", list(self.compacted_messages))
         object.__setattr__(self, "kept_messages", list(self.kept_messages))
         object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(self, "prompt_metadata", dict(self.prompt_metadata))
 
 
 @dataclass(frozen=True)
@@ -68,7 +77,7 @@ class CompactionPreparation:
 
 
 class DeterministicCompactionSummarizer:
-    """Stable fallback summarizer matching the deterministic strategy summary."""
+    """Stable fallback summarizer using anchored Markdown sections."""
 
     def __call__(self, request: CompactionRequest) -> CompactionSummary:
         part_count = int(
@@ -81,11 +90,24 @@ class DeterministicCompactionSummarizer:
         )
         tool_pair_count = int(request.metadata.get("compacted_tool_pair_count") or 0)
         return CompactionSummary(
-            summary=(
-                f"Compacted {part_count} message part(s) from {message_count} "
-                f"message(s). Tool call/result pair(s) compacted: {tool_pair_count}."
+            summary=render_anchored_compaction_summary(
+                session_id=request.session_id,
+                compacted_messages=request.compacted_messages,
+                kept_messages=request.kept_messages,
+                previous_summary=request.previous_summary,
+                metadata={
+                    **request.metadata,
+                    "compacted_part_count": part_count,
+                    "compacted_message_count": message_count,
+                    "compacted_tool_pair_count": tool_pair_count,
+                },
             ),
-            metadata={"summary_source": "deterministic"},
+            metadata={
+                "summary_source": "deterministic",
+                "compacted_part_count": part_count,
+                "compacted_message_count": message_count,
+                "compacted_tool_pair_count": tool_pair_count,
+            },
         )
 
 
@@ -122,12 +144,24 @@ class CompactionController:
         )
         request_metadata = dict(metadata or {})
         request_metadata.update(compaction_metadata)
+        previous_summary = latest_compaction_summary(source_messages)
+        prompt, prompt_metadata = build_compaction_prompt(
+            session_id=session_id,
+            messages=source_messages,
+            compacted_messages=result.compacted_messages,
+            kept_messages=result.kept_messages,
+            previous_summary=previous_summary,
+            metadata=request_metadata,
+        )
         request = CompactionRequest(
             session_id=session_id,
             messages=source_messages,
             compacted_messages=result.compacted_messages,
             kept_messages=result.kept_messages,
             metadata=request_metadata,
+            prompt=prompt,
+            previous_summary=previous_summary,
+            prompt_metadata=prompt_metadata,
         )
         summary, summary_metadata = await _invoke_summarizer(
             self.summarizer,

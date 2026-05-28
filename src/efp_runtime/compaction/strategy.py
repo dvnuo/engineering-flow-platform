@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Any, Mapping
 
+from .summary import latest_compaction_summary, render_anchored_compaction_summary
 from ..session.models import (
     CompactionPart,
     Message,
@@ -275,7 +276,10 @@ def _pending_tool_call_ids(refs: list[_PartRef]) -> set[str]:
 
 def _is_protected_block(block: _Block, *, pending_call_ids: set[str]) -> bool:
     for ref in block.refs:
-        if ref.message.role is MessageRole.SYSTEM:
+        if (
+            ref.message.role is MessageRole.SYSTEM
+            and ref.part.type is not MessagePartType.COMPACTION
+        ):
             return True
         if (
             ref.part.type is MessagePartType.TOOL_CALL
@@ -315,11 +319,18 @@ def _build_compaction_message(compacted_blocks: list[_Block]) -> Message:
     message_refs = {ref.message_index: ref.message for block in compacted_blocks for ref in block.refs}
     message_count = len(message_refs)
     tool_pair_count = sum(1 for block in compacted_blocks if block.is_tool_pair)
-    source_message_ids = [message.message_id for _, message in sorted(message_refs.items())]
+    source_messages = [message for _, message in sorted(message_refs.items())]
+    source_message_ids = [message.message_id for message in source_messages]
     session_id = next(iter(message_refs.values())).session_id if message_refs else ""
-    summary = (
-        f"Compacted {part_count} message part(s) from {message_count} message(s). "
-        f"Tool call/result pair(s) compacted: {tool_pair_count}."
+    summary = render_anchored_compaction_summary(
+        session_id=session_id,
+        compacted_messages=source_messages,
+        previous_summary=latest_compaction_summary(source_messages),
+        metadata={
+            "compacted_part_count": part_count,
+            "compacted_message_count": message_count,
+            "compacted_tool_pair_count": tool_pair_count,
+        },
     )
     compaction = CompactionPart(
         summary=summary,

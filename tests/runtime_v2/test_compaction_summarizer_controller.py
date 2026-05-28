@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from efp_runtime.compaction import (
+    COMPACTION_SUMMARY_HEADINGS,
     CompactionRequest,
     CompactionSummary,
     ContextBudget,
@@ -16,7 +17,14 @@ from efp_runtime.compaction import (
 )
 from efp_runtime.context import prepare_history_for_request
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, ScriptedLLMProvider
-from efp_runtime.models import Message, MessagePart, MessageRole, ToolCall, ToolResult
+from efp_runtime.models import (
+    CompactionPart,
+    Message,
+    MessagePart,
+    MessageRole,
+    ToolCall,
+    ToolResult,
+)
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.models import Session
 from efp_runtime.session.store import InMemorySessionStore
@@ -109,6 +117,15 @@ async def test_summarizer_receives_source_context_and_overrides_provider_summary
         "latest request"
     ]
     assert request.metadata["compacted_message_count"] == 2
+    _assert_headings_in_order(request.prompt)
+    assert request.prompt_metadata["source_message_count"] == 3
+    assert request.prompt_metadata["source_part_count"] == 3
+    assert request.prompt_metadata["compacted_message_count"] == 2
+    assert request.prompt_metadata["compacted_part_count"] == 2
+    assert request.prompt_metadata["kept_message_count"] == 1
+    assert request.prompt_metadata["kept_part_count"] == 1
+    assert request.prompt_metadata["previous_summary_present"] is False
+    assert request.prompt_metadata["source_context_truncated"] is False
 
     provider_request = provider.requests[0].provider_request
     summary_context = provider_request.messages[0].context[0]
@@ -138,6 +155,60 @@ async def test_async_summarizer_is_awaited():
 
 
 @pytest.mark.asyncio
+async def test_async_summarizer_receives_previous_summary_context():
+    previous_summary = (
+        "## Goal\nKeep prior objective.\n\n"
+        "## Critical Context\n- Prior file: src/efp_runtime/old.py"
+    )
+    calls: list[CompactionRequest] = []
+
+    async def fake(request: CompactionRequest) -> str:
+        calls.append(request)
+        return "Updated summary."
+
+    messages = [
+        Message(
+            role="system",
+            session_id="session-previous",
+            message_id="msg-previous-summary",
+            parts=[
+                MessagePart.compaction_part(
+                    CompactionPart(
+                        summary=previous_summary,
+                        source_message_ids=["msg-original"],
+                    )
+                )
+            ],
+            status="complete",
+        ),
+        Message.from_text(
+            "assistant",
+            "older answer",
+            session_id="session-previous",
+            message_id="msg-older-answer",
+        ),
+        Message.from_text(
+            "user",
+            "latest request",
+            session_id="session-previous",
+            message_id="msg-latest",
+        ),
+    ]
+
+    await maybe_summarize_compaction(
+        messages,
+        session_id="session-previous",
+        budget=ContextBudget(max_parts=2),
+        summarizer=fake,
+    )
+
+    assert len(calls) == 1
+    assert calls[0].previous_summary == previous_summary
+    assert previous_summary in calls[0].prompt
+    assert calls[0].prompt_metadata["previous_summary_present"] is True
+
+
+@pytest.mark.asyncio
 async def test_summarizer_failure_uses_deterministic_fallback_metadata():
     def broken(request: CompactionRequest) -> str:
         raise RuntimeError("summary failed")
@@ -150,10 +221,11 @@ async def test_summarizer_failure_uses_deterministic_fallback_metadata():
     assert result.status == LoopStatus.COMPLETED
     provider_request = provider.requests[0].provider_request
     summary_context = provider_request.messages[0].context[0]
-    assert summary_context.text == (
-        "Compacted 2 message part(s) from 2 message(s). "
-        "Tool call/result pair(s) compacted: 0."
-    )
+    _assert_headings_in_order(summary_context.text)
+    assert "- Compacted: 2p,2m,0 pairs." in summary_context.text
+    assert "- Source message ids: msg-old-user, msg-old-assistant" in summary_context.text
+    assert provider_request.metadata["compaction"]["summary_source"] == "deterministic"
+    assert provider_request.metadata["compaction"]["compacted_part_count"] == 2
     summarizer = provider_request.metadata["compaction"]["summarizer"]
     assert summarizer["used"] is True
     assert summarizer["fallback"] is True
@@ -384,3 +456,11 @@ def _first_summary_context(provider_request):
         if message.context:
             return message.context[0]
     raise AssertionError("compaction summary context not found")
+
+
+def _assert_headings_in_order(text: str) -> None:
+    position = -1
+    for heading in COMPACTION_SUMMARY_HEADINGS:
+        next_position = text.find(heading)
+        assert next_position > position, heading
+        position = next_position
