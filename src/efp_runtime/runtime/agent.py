@@ -218,6 +218,50 @@ class AgentRuntime:
         self.agent_registry = agent_registry
         self.default_agent = _normalize_optional_name(default_agent)
 
+    def create_session(
+        self,
+        session_id: str | None = None,
+        title: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Session:
+        return self.store.create_session(
+            session_id=session_id,
+            title=title,
+            metadata=metadata,
+        )
+
+    def get_session(self, session_id: str) -> Session:
+        return self.store.get_session(session_id)
+
+    def list_sessions(self) -> list[Session]:
+        return self.store.list_sessions()
+
+    def delete_session(self, session_id: str) -> bool:
+        return self.store.delete_session(session_id)
+
+    def fork_session(
+        self,
+        session_id: str,
+        *,
+        message_id: str | None = None,
+        new_session_id: str | None = None,
+    ) -> Session:
+        return self.store.fork_session(
+            session_id,
+            message_id=message_id,
+            new_session_id=new_session_id,
+        )
+
+    def session_children(self, parent_session_id: str) -> list[Session]:
+        return [
+            session
+            for session in self.list_sessions()
+            if session.metadata.get("parent_session_id") == parent_session_id
+        ]
+
+    def session_messages(self, session_id: str) -> list[Message]:
+        return self.store.read_history(session_id)
+
     async def run(
         self,
         user_text: str,

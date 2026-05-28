@@ -118,6 +118,14 @@ and no explicit tool registry/runtime, it creates the Runtime v2 built-in tool
 registry for that workspace. The facade does not call Portal or the legacy agent
 runtime.
 
+The facade also exposes direct session management helpers:
+`create_session(...)`, `get_session(...)`, `list_sessions()`,
+`delete_session(...)`, `fork_session(...)`, `session_children(...)`, and
+`session_messages(...)`. These methods proxy the configured session store and do
+not alter `run(...)`, `resume(...)`, compaction, checkpoint, or tool execution
+behavior. `session_children(parent_session_id)` filters listed sessions whose
+metadata records that parent, preserving the store list order.
+
 ## Workspace Config Loader
 
 Runtime v2 exposes an explicit local config-loading entry point:
@@ -328,6 +336,12 @@ start subagents. Agent `permission` metadata is preserved and is applied only
 when that profile is selected for a primary or child run.
 
 ## Session Checkpoints
+
+Session list, delete, and fork operations manage whole sessions. Forking copies
+structured history into a new session, optionally truncated through a specific
+message id, and rebinds copied message and part session ids to the fork id. The
+forked session preserves source metadata and records `parent_session_id`; forks
+from a specific message also record `forked_from_message_id`.
 
 Runtime v2 session stores support explicit checkpoint and restore operations for
 callers that need to bracket a group of tool executions or review steps. A

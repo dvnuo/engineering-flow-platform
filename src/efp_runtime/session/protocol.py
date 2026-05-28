@@ -24,6 +24,21 @@ class SessionStore(Protocol):
     def get_session(self, session_id: str) -> Session:
         ...
 
+    def list_sessions(self) -> list[Session]:
+        ...
+
+    def delete_session(self, session_id: str) -> bool:
+        ...
+
+    def fork_session(
+        self,
+        session_id: str,
+        *,
+        message_id: Optional[str] = None,
+        new_session_id: Optional[str] = None,
+    ) -> Session:
+        ...
+
     def append_message(
         self,
         session_id: str,

@@ -52,6 +52,79 @@ def test_store_creates_sessions_appends_messages_and_reads_history():
     assert history[1].parts[2].type is MessagePartType.TASK
 
 
+def test_store_lists_deletes_and_removes_checkpoints():
+    store = InMemorySessionStore()
+    store.create_session(session_id="session-b")
+    store.create_session(session_id="session-a", title="A")
+    store.create_checkpoint("session-a", checkpoint_id="checkpoint-a")
+
+    listed = store.list_sessions()
+    assert [session.session_id for session in listed] == [
+        "session-a",
+        "session-b",
+    ]
+    listed[0].title = "mutated"
+    assert store.get_session("session-a").title == "A"
+    assert store.delete_session("session-a") is True
+    assert store.delete_session("session-a") is False
+    assert [session.session_id for session in store.list_sessions()] == ["session-b"]
+    assert "session-a" not in store._checkpoints
+
+
+def test_store_forks_session_through_message_and_rebinds_history():
+    store = InMemorySessionStore()
+    session = store.create_session(
+        session_id="session-source",
+        title="Source",
+        metadata={"suite": "memory"},
+    )
+    store.append_message(
+        session.session_id,
+        role="user",
+        message_id="msg-1",
+        parts=[MessagePart.text_part("one", part_id="part-1")],
+    )
+    store.append_message(
+        session.session_id,
+        role="assistant",
+        message_id="msg-2",
+        parts=[MessagePart.text_part("two", part_id="part-2")],
+    )
+    store.append_message(
+        session.session_id,
+        role="user",
+        message_id="msg-3",
+        parts=[MessagePart.text_part("three", part_id="part-3")],
+    )
+
+    fork = store.fork_session(
+        session.session_id,
+        message_id="msg-2",
+        new_session_id="session-fork",
+    )
+
+    assert fork.title == "Source"
+    assert [message.message_id for message in fork.messages] == ["msg-1", "msg-2"]
+    assert fork.metadata == {
+        "suite": "memory",
+        "parent_session_id": "session-source",
+        "forked_from_message_id": "msg-2",
+    }
+    assert all(message.session_id == "session-fork" for message in fork.messages)
+    assert all(
+        part.session_id == "session-fork" and part.message_id == message.message_id
+        for message in fork.messages
+        for part in message.parts
+    )
+    assert [message.message_id for message in store.read_history(session.session_id)] == [
+        "msg-1",
+        "msg-2",
+        "msg-3",
+    ]
+    with pytest.raises(ValueError, match="session already exists"):
+        store.fork_session(session.session_id, new_session_id="session-fork")
+
+
 def test_store_preserves_tool_call_result_pairing():
     store = InMemorySessionStore()
     session = store.create_session(session_id="session-tools")

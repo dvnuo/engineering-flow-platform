@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from efp_runtime import MessageRole
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 
@@ -90,6 +91,79 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert request.metadata["skill_context_count"] == 0
     assert request.metadata["loop"]["iteration"] == 1
     assert request.provider_request.metadata["loop"]["max_iterations"] == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_session_management_facade_with_default_store(tmp_path: Path):
+    provider = ScriptedLLMProvider(
+        [
+            {"content": "Original answer."},
+            {"content": "Fork resumed."},
+            {"content": "Fork continued."},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+    )
+
+    created = runtime.create_session(
+        session_id="session-b",
+        title="Runtime source",
+        metadata={"suite": "facade"},
+    )
+    assert runtime.get_session(created.session_id).title == "Runtime source"
+
+    result = await runtime.run("Start source.", session_id=created.session_id)
+    assert result.status == LoopStatus.COMPLETED
+    source_messages = runtime.session_messages(created.session_id)
+    assert [message.role for message in source_messages] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+    ]
+    assert source_messages[1].parts[0].text == "Original answer."
+
+    fork = runtime.fork_session(
+        created.session_id,
+        message_id=source_messages[0].message_id,
+        new_session_id="session-a",
+    )
+    assert [session.session_id for session in runtime.list_sessions()] == [
+        "session-a",
+        "session-b",
+    ]
+    assert fork.metadata == {
+        "suite": "facade",
+        "parent_session_id": "session-b",
+        "forked_from_message_id": source_messages[0].message_id,
+    }
+    assert [session.session_id for session in runtime.session_children("session-b")] == [
+        "session-a"
+    ]
+
+    resume_result = await runtime.resume(fork.session_id)
+    assert resume_result.status == LoopStatus.COMPLETED
+    assert runtime.session_messages(fork.session_id)[1].parts[0].text == "Fork resumed."
+
+    run_result = await runtime.run("Continue fork.", session_id=fork.session_id)
+    assert run_result.status == LoopStatus.COMPLETED
+    fork_messages = runtime.session_messages(fork.session_id)
+    assert [message.role for message in fork_messages] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+    ]
+    assert fork_messages[-1].parts[0].text == "Fork continued."
+    assert [message.parts[0].text for message in runtime.session_messages("session-b")] == [
+        "Start source.",
+        "Original answer.",
+    ]
+
+    assert runtime.delete_session(fork.session_id) is True
+    assert runtime.delete_session(fork.session_id) is False
+    assert runtime.session_children("session-b") == []
+    assert [session.session_id for session in runtime.list_sessions()] == ["session-b"]
 
 
 def test_runtime_facade_imports_standalone_with_pythonpath_src():

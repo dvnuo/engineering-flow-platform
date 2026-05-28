@@ -209,7 +209,11 @@ def test_file_store_tool_pairs(tmp_path: Path):
 
 def test_file_store_forks_session_through_message(tmp_path: Path):
     store = FileSessionStore(tmp_path)
-    session = store.create_session(session_id="session-source")
+    session = store.create_session(
+        session_id="session-source",
+        title="Source",
+        metadata={"suite": "file"},
+    )
     store.append_message(
         session.session_id,
         role="user",
@@ -236,6 +240,12 @@ def test_file_store_forks_session_through_message(tmp_path: Path):
     )
 
     assert [message.message_id for message in fork.messages] == ["msg-1", "msg-2"]
+    assert fork.title == "Source"
+    assert fork.metadata == {
+        "suite": "file",
+        "parent_session_id": "session-source",
+        "forked_from_message_id": "msg-2",
+    }
     assert [message.message_id for message in store.read_history(session.session_id)] == [
         "msg-1",
         "msg-2",
@@ -243,6 +253,7 @@ def test_file_store_forks_session_through_message(tmp_path: Path):
     ]
     reloaded_fork = FileSessionStore(tmp_path).get_session("session-fork")
     assert [message.message_id for message in reloaded_fork.messages] == ["msg-1", "msg-2"]
+    assert reloaded_fork.metadata == fork.metadata
     assert all(message.session_id == "session-fork" for message in reloaded_fork.messages)
     assert all(
         part.session_id == "session-fork"

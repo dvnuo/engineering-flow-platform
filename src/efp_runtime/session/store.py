@@ -44,6 +44,55 @@ class InMemorySessionStore:
         with self._lock:
             return deepcopy(self._require_session(session_id))
 
+    def list_sessions(self) -> List[Session]:
+        with self._lock:
+            sessions = sorted(
+                self._sessions.values(),
+                key=lambda session: session.session_id,
+            )
+            return deepcopy(sessions)
+
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock:
+            if session_id not in self._sessions:
+                return False
+            del self._sessions[session_id]
+            self._checkpoints.pop(session_id, None)
+            return True
+
+    def fork_session(
+        self,
+        session_id: str,
+        *,
+        message_id: Optional[str] = None,
+        new_session_id: Optional[str] = None,
+    ) -> Session:
+        with self._lock:
+            source = self._require_session(session_id)
+            fork_id = new_session_id or new_id("session")
+            if fork_id in self._sessions:
+                raise ValueError(f"session already exists: {fork_id}")
+
+            messages = deepcopy(source.messages)
+            if message_id is not None:
+                message_index = self._message_index(source, message_id)
+                messages = messages[: message_index + 1]
+
+            metadata = deepcopy(source.metadata)
+            metadata["parent_session_id"] = source.session_id
+            if message_id is not None:
+                metadata["forked_from_message_id"] = message_id
+
+            forked = Session(
+                session_id=fork_id,
+                title=source.title,
+                messages=messages,
+                metadata=metadata,
+            )
+            self._rebind_session(forked)
+            self._sessions[fork_id] = forked
+            return deepcopy(forked)
+
     def append_message(
         self,
         session_id: str,

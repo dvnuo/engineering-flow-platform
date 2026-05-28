@@ -168,7 +168,7 @@ class FileSessionStore:
                 session_id=fork_id,
                 title=source.title,
                 messages=messages,
-                metadata=deepcopy(source.metadata),
+                metadata=self._fork_metadata(source, message_id=message_id),
             )
             self._rebind_session(forked)
             self._write_session_locked(forked)
@@ -451,6 +451,18 @@ class FileSessionStore:
             snapshot.messages = snapshot.messages[: message_index + 1]
         self._rebind_session(snapshot)
         return snapshot
+
+    def _fork_metadata(
+        self,
+        source: Session,
+        *,
+        message_id: Optional[str],
+    ) -> dict:
+        metadata = deepcopy(source.metadata)
+        metadata["parent_session_id"] = source.session_id
+        if message_id is not None:
+            metadata["forked_from_message_id"] = message_id
+        return metadata
 
     def _find_part(self, session: Session, part_id: str) -> Optional[MessagePart]:
         for message in session.messages:
