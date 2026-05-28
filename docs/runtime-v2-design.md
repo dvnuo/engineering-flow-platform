@@ -100,17 +100,23 @@ error status without depending on SDK exception types.
 4. Execute only on allow.
 5. Normalize output into `ToolResult`.
 
-Validation errors, permission asks, and permission denies return structured
-tool results and do not execute the tool callable.
+Validation errors and permission denies return structured tool results and do
+not execute the tool callable. A low-level ASK decision is represented as a
+`permission_requested` `ToolResult`, but the Runtime v2 loop treats that result
+as an interactive pause rather than appending it to session history.
 
 The default permission evaluator is a `PermissionBroker`. ASK decisions create a
 deterministic `PermissionRequest`, store it in the broker's pending set, and
 return `permission_requested` with the full request payload in
-`ToolResult.metadata["permission_request"]`. The runtime does not block inside
-the same tool execution call; approving a request with `always=False` creates a
-one-use allow rule for the matching retry, while `always=True` creates a
-persistent allow rule for the same tool/category. Deny follows the same rule
-scope model.
+`ToolResult.metadata["permission_request"]`. When the loop sees that status it
+publishes `tool.permission_requested`, finishes the run as
+`waiting_for_permission`, and leaves the assistant tool call unpaired. After the
+caller approves or denies the request, `resume(session_id)` executes that same
+pending assistant tool call before making the next provider request and does not
+append an empty user message. Approving with `always=False` creates a one-use
+allow rule for the matching retry, while `always=True` creates a persistent
+allow rule for the same tool/category. Deny follows the same rule scope model
+and is appended as a final tool result on resume.
 
 The core built-in registry is workspace-contained and intentionally independent
 from the legacy runtime. It includes read/list/write, grep/glob, shell execution,

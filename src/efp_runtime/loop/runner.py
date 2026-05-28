@@ -28,6 +28,7 @@ class LoopStatus:
     ERROR = "error"
     MAX_ITERATIONS = "max_iterations"
     CANCELLED = "cancelled"
+    WAITING_FOR_PERMISSION = "waiting_for_permission"
 
 
 @dataclass
@@ -37,10 +38,17 @@ class RuntimeLoopResult:
     iterations: int
     status: str
     runtime_events: List[RuntimeEvent] = field(default_factory=list)
+    pending_permission_request: Optional[dict[str, Any]] = None
 
 
 ProviderCallable = Callable[[RuntimeRequest], ProviderResult]
 CancelCallback = Callable[..., Any]
+
+
+@dataclass
+class _ToolExecutionOutcome:
+    cancelled: bool = False
+    pending_permission_request: Optional[dict[str, Any]] = None
 
 
 class _RuntimeEventLog(list):
@@ -95,25 +103,32 @@ class RuntimeLoopRunner:
         max_iterations: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
         context_messages: Optional[list[Message]] = None,
+        append_user_message: bool = True,
     ) -> RuntimeLoopResult:
         iteration_limit = max_iterations if max_iterations is not None else self.max_iterations
         if iteration_limit < 1:
             raise ValueError("max_iterations must be at least 1")
 
-        resolved_session_id = self._ensure_session(session_id=session_id, session=session)
-        user_parts = [MessagePart.text_part(user_text)] if user_text else []
-        self.store.append_message(
-            resolved_session_id,
-            role=MessageRole.USER,
-            parts=user_parts,
-            metadata={"source": "loop.user"},
-            status="complete",
+        resolved_session_id = self._ensure_session(
+            session_id=session_id,
+            session=session,
+            allow_create=append_user_message,
         )
+        if append_user_message:
+            user_parts = [MessagePart.text_part(user_text)] if user_text else []
+            self.store.append_message(
+                resolved_session_id,
+                role=MessageRole.USER,
+                parts=user_parts,
+                metadata={"source": "loop.user"},
+                status="complete",
+            )
 
         runtime_events: List[RuntimeEvent] = _RuntimeEventLog(self.event_bus)
         final_assistant_message: Optional[Message] = None
         status = LoopStatus.COMPLETED
         iterations = 0
+        pending_permission_request: Optional[dict[str, Any]] = None
         run_metadata = dict(metadata or {})
         run_id = str(run_metadata.get("run_id") or new_id("run"))
         run_metadata["run_id"] = run_id
@@ -153,6 +168,28 @@ class RuntimeLoopRunner:
                 status = LoopStatus.CANCELLED
                 publish_cancelled("before_iteration")
                 break
+
+            pending_tool_calls = self._pending_tool_calls(resolved_session_id)
+            if pending_tool_calls:
+                final_assistant_message = _last_assistant_message(
+                    self.store.read_history(resolved_session_id)
+                )
+                pending_outcome = await self._execute_tool_calls(
+                    session_id=resolved_session_id,
+                    tool_calls=pending_tool_calls,
+                    runtime_events=runtime_events,
+                    run_id=run_id,
+                )
+                if pending_outcome.cancelled or await self._cancel_requested(
+                    resolved_session_id
+                ):
+                    status = LoopStatus.CANCELLED
+                    publish_cancelled("tool_execution")
+                    break
+                if pending_outcome.pending_permission_request is not None:
+                    status = LoopStatus.WAITING_FOR_PERMISSION
+                    pending_permission_request = pending_outcome.pending_permission_request
+                    break
 
             iteration = iterations + 1
             history = self.store.read_history(resolved_session_id)
@@ -264,15 +301,21 @@ class RuntimeLoopRunner:
                 status = LoopStatus.COMPLETED
                 break
 
-            tool_execution_cancelled = await self._execute_tool_calls(
+            tool_execution_outcome = await self._execute_tool_calls(
                 session_id=resolved_session_id,
                 tool_calls=tool_calls,
                 runtime_events=runtime_events,
                 run_id=run_id,
             )
-            if tool_execution_cancelled or await self._cancel_requested(resolved_session_id):
+            if tool_execution_outcome.cancelled or await self._cancel_requested(
+                resolved_session_id
+            ):
                 status = LoopStatus.CANCELLED
                 publish_cancelled("tool_execution")
+                break
+            if tool_execution_outcome.pending_permission_request is not None:
+                status = LoopStatus.WAITING_FOR_PERMISSION
+                pending_permission_request = tool_execution_outcome.pending_permission_request
                 break
 
             if iterations >= iteration_limit:
@@ -316,6 +359,7 @@ class RuntimeLoopRunner:
             iterations=iterations,
             status=status,
             runtime_events=runtime_events,
+            pending_permission_request=pending_permission_request,
         )
 
     def _ensure_session(
@@ -323,18 +367,23 @@ class RuntimeLoopRunner:
         *,
         session_id: Optional[str],
         session: Optional[Session],
+        allow_create: bool = True,
     ) -> str:
         if session is not None and session_id is not None and session.session_id != session_id:
             raise ValueError("session_id does not match session.session_id")
 
         resolved_session_id = session.session_id if session is not None else session_id
         if resolved_session_id is None:
+            if not allow_create:
+                raise ValueError("session_id or session is required when append_user_message=False")
             return self.store.create_session().session_id
 
         try:
             self.store.get_session(resolved_session_id)
             return resolved_session_id
         except KeyError:
+            if not allow_create and session is None:
+                raise
             pass
 
         if session is None:
@@ -414,6 +463,23 @@ class RuntimeLoopRunner:
         )
         return stored_message
 
+    def _pending_tool_calls(self, session_id: str) -> List[ToolCall]:
+        history = self.store.read_history(session_id)
+        pairs = self.store.tool_pairs(session_id)
+        for message in reversed(history):
+            if message.role is not MessageRole.ASSISTANT:
+                continue
+            calls: List[ToolCall] = []
+            for part in message.parts:
+                if part.type is not MessagePartType.TOOL_CALL or part.tool_call is None:
+                    continue
+                pair = pairs.get(part.tool_call.call_id)
+                if pair is None or pair[1] is None:
+                    calls.append(part.tool_call)
+            if calls:
+                return calls
+        return []
+
     async def _execute_tool_calls(
         self,
         *,
@@ -421,10 +487,10 @@ class RuntimeLoopRunner:
         tool_calls: List[ToolCall],
         runtime_events: List[RuntimeEvent],
         run_id: str,
-    ) -> bool:
+    ) -> _ToolExecutionOutcome:
         for tool_call in tool_calls:
             if await self._cancel_requested(session_id):
-                return True
+                return _ToolExecutionOutcome(cancelled=True)
             runtime_events.append(
                 RuntimeEvent(
                     type="tool_call_start",
@@ -440,10 +506,21 @@ class RuntimeLoopRunner:
                 tool_call,
                 context=ToolContext(session_id=session_id),
             )
+            permission_request = _permission_request_payload(result.metadata)
+            permission_event_published = False
             for event in result.events:
                 if isinstance(event, RuntimeEvent):
                     if event.session_id is None:
                         event.session_id = session_id
+                    if event.type == "tool.permission_requested":
+                        permission_event_published = True
+                        event.payload.update(
+                            _permission_requested_payload(
+                                run_id=run_id,
+                                tool_call=tool_call,
+                                permission_request=permission_request,
+                            )
+                        )
                     runtime_events.append(event)
                 else:
                     runtime_events.append(
@@ -453,6 +530,24 @@ class RuntimeLoopRunner:
                             payload={"event": event},
                         )
                     )
+
+            if result.status == "permission_requested":
+                if not permission_event_published:
+                    runtime_events.append(
+                        RuntimeEvent(
+                            type="tool.permission_requested",
+                            session_id=session_id,
+                            message=result.content,
+                            payload=_permission_requested_payload(
+                                run_id=run_id,
+                                tool_call=tool_call,
+                                permission_request=permission_request,
+                            ),
+                        )
+                    )
+                return _ToolExecutionOutcome(
+                    pending_permission_request=permission_request,
+                )
 
             self.store.append_message(
                 session_id,
@@ -474,7 +569,7 @@ class RuntimeLoopRunner:
                     },
                 )
             )
-        return False
+        return _ToolExecutionOutcome()
 
 
 async def run_runtime_loop(
@@ -490,6 +585,7 @@ async def run_runtime_loop(
     max_context_parts: Optional[int] = None,
     metadata: Optional[dict[str, Any]] = None,
     context_messages: Optional[list[Message]] = None,
+    append_user_message: bool = True,
     event_bus: Optional[RuntimeEventBus] = None,
     is_cancelled: Optional[CancelCallback] = None,
 ) -> RuntimeLoopResult:
@@ -509,7 +605,15 @@ async def run_runtime_loop(
         session=session,
         metadata=metadata,
         context_messages=context_messages,
+        append_user_message=append_user_message,
     )
+
+
+def _last_assistant_message(messages: Iterable[Message]) -> Optional[Message]:
+    for message in reversed(list(messages)):
+        if message.role is MessageRole.ASSISTANT:
+            return message
+    return None
 
 
 def _assistant_tool_calls(message: Message) -> List[ToolCall]:
@@ -520,6 +624,27 @@ def _assistant_tool_calls(message: Message) -> List[ToolCall]:
         if part.type is MessagePartType.TOOL_CALL and part.tool_call is not None:
             calls.append(part.tool_call)
     return calls
+
+
+def _permission_request_payload(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    raw_request = metadata.get("permission_request")
+    if isinstance(raw_request, Mapping):
+        return dict(raw_request)
+    return {}
+
+
+def _permission_requested_payload(
+    *,
+    run_id: str,
+    tool_call: ToolCall,
+    permission_request: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "tool_call_id": tool_call.call_id,
+        "tool_name": tool_call.tool_name,
+        "permission_request": dict(permission_request),
+    }
 
 
 def _message_with_unique_part_ids(

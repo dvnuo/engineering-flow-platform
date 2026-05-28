@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable, Mapping
+import json
 from pathlib import Path
 from typing import Any, Union
 
@@ -120,6 +121,74 @@ class AgentRuntime:
         self.run_state.finish(resolved_session_id, result.status)
         return result
 
+    async def resume(
+        self,
+        session_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeLoopResult:
+        self.store.get_session(session_id)
+        run_id = self.run_state.begin(session_id)
+        try:
+            context_messages = self._build_skill_context_messages(self.active_skills)
+            run_metadata = dict(self.config.metadata)
+            run_metadata.update(metadata or {})
+            run_metadata["run_id"] = run_id
+            run_metadata["active_skills"] = list(self.active_skills)
+            run_metadata["resume"] = True
+            runner = RuntimeLoopRunner(
+                store=self.store,
+                provider=self.provider,
+                adapter=self.adapter,
+                tool_runtime=self.tool_runtime,
+                max_iterations=self.config.max_iterations,
+                max_context_parts=self.config.max_context_parts,
+                event_bus=self.event_bus,
+                is_cancelled=lambda: self.run_state.is_cancelled(session_id),
+            )
+            result = await runner.run(
+                user_text="",
+                session_id=session_id,
+                metadata=run_metadata,
+                context_messages=context_messages,
+                append_user_message=False,
+            )
+        except asyncio.CancelledError:
+            self.run_state.finish(session_id, LoopStatus.CANCELLED)
+            raise
+        except Exception:
+            self.run_state.finish(session_id, LoopStatus.ERROR)
+            raise
+
+        self.run_state.finish(session_id, result.status)
+        return result
+
+    def approve_permission(self, request_id: str, *, always: bool = False):
+        approve = getattr(self.tool_runtime.permission_evaluator, "approve", None)
+        if not callable(approve):
+            raise TypeError("permission evaluator does not support approve")
+        return approve(request_id, always=always)
+
+    def deny_permission(
+        self,
+        request_id: str,
+        *,
+        always: bool = False,
+        reason: str | None = None,
+    ):
+        deny = getattr(self.tool_runtime.permission_evaluator, "deny", None)
+        if not callable(deny):
+            raise TypeError("permission evaluator does not support deny")
+        return deny(request_id, always=always, reason=reason)
+
+    def pending_permissions(self) -> list[dict[str, Any]]:
+        pending = getattr(self.tool_runtime.permission_evaluator, "pending", None)
+        if not callable(pending):
+            raise TypeError("permission evaluator does not support pending")
+        return [_permission_request_to_dict(request) for request in pending()]
+
+    def pending_permission_requests(self) -> list[dict[str, Any]]:
+        return self.pending_permissions()
+
     def cancel(self, session_id: str) -> bool:
         return self.run_state.cancel(session_id)
 
@@ -231,6 +300,20 @@ def _unique_skill_names(names: Iterable[str]) -> list[str]:
         if normalized and normalized not in unique:
             unique.append(normalized)
     return unique
+
+
+def _permission_request_to_dict(request: Any) -> dict[str, Any]:
+    if hasattr(request, "to_dict"):
+        payload = request.to_dict()
+    elif isinstance(request, Mapping):
+        payload = dict(request)
+    else:
+        raise TypeError("pending permission request must be mapping-like")
+    encoded = json.dumps(payload, sort_keys=True, default=str)
+    decoded = json.loads(encoded)
+    if not isinstance(decoded, dict):
+        raise TypeError("pending permission request must encode to a JSON object")
+    return decoded
 
 
 __all__ = ["AgentRuntime"]
