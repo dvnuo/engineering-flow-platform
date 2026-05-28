@@ -187,6 +187,8 @@ async def test_profile_active_skills_enter_child_context_without_base_pollution(
         skill_directories=[tmp_path],
         active_skills=["base-skill"],
         max_iterations=1,
+        include_default_system_prompt=False,
+        include_runtime_reminders=False,
     )
     runner = create_subagent_task_runner(
         provider=provider,

@@ -22,6 +22,11 @@ class RuntimeConfig:
     disabled_tools: list[str] = field(default_factory=list)
     enable_question_tool: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+    include_default_system_prompt: bool = True
+    system_prompt_texts: list[str] = field(default_factory=list)
+    system_prompt_paths: list[str | Path] = field(default_factory=list)
+    max_system_prompt_chars: int = 20000
+    include_runtime_reminders: bool = True
     instruction_paths: list[str | Path] = field(default_factory=list)
     instruction_texts: list[str] = field(default_factory=list)
     include_default_instructions: bool = True
@@ -55,6 +60,8 @@ class RuntimeConfig:
             raise ValueError("max_prompt_reference_chars must be greater than or equal to 0")
         if self.max_prompt_directory_entries < 0:
             raise ValueError("max_prompt_directory_entries must be greater than or equal to 0")
+        if self.max_system_prompt_chars < 0:
+            raise ValueError("max_system_prompt_chars must be greater than or equal to 0")
         if self.max_instruction_chars < 0:
             raise ValueError("max_instruction_chars must be greater than or equal to 0")
         if self.tool_output_max_lines is not None and self.tool_output_max_lines < 0:
@@ -70,6 +77,10 @@ class RuntimeConfig:
         self.enable_question_tool = bool(self.enable_question_tool)
         self.disabled_tools = list(self.disabled_tools)
         self.metadata = dict(self.metadata)
+        self.include_default_system_prompt = bool(self.include_default_system_prompt)
+        self.system_prompt_texts = list(self.system_prompt_texts)
+        self.system_prompt_paths = list(self.system_prompt_paths)
+        self.include_runtime_reminders = bool(self.include_runtime_reminders)
         self.instruction_paths = list(self.instruction_paths)
         self.instruction_texts = list(self.instruction_texts)
         self.include_default_instructions = bool(self.include_default_instructions)

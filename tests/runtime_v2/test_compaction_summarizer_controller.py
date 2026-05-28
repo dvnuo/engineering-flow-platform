@@ -276,7 +276,7 @@ async def test_agent_runtime_passes_enabled_compaction_summarizer_to_runner():
 
     assert result.status == LoopStatus.COMPLETED
     assert len(calls) == 1
-    summary_context = provider.requests[0].provider_request.messages[0].context[0]
+    summary_context = _first_summary_context(provider.requests[0].provider_request)
     assert summary_context.text == "Facade compacted summary."
 
 
@@ -312,7 +312,7 @@ async def test_agent_runtime_does_not_call_summarizer_when_config_disabled():
 
     assert result.status == LoopStatus.COMPLETED
     assert calls == []
-    summary_context = provider.requests[0].provider_request.messages[0].context[0]
+    summary_context = _first_summary_context(provider.requests[0].provider_request)
     assert summary_context.text != "Should not appear."
     assert "summarizer" not in provider.requests[0].provider_request.metadata["compaction"]
 
@@ -377,3 +377,10 @@ def _tool_ids(messages):
             if part.type.value == "tool_result" and part.tool_result is not None:
                 results.append(part.tool_result.call_id)
     return calls, results
+
+
+def _first_summary_context(provider_request):
+    for message in provider_request.messages:
+        if message.context:
+            return message.context[0]
+    raise AssertionError("compaction summary context not found")

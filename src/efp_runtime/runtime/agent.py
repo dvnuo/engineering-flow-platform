@@ -23,6 +23,7 @@ from ..skills.commands import SkillCommandResult, parse_skill_commands
 from ..skills.context import SkillContextBuilder
 from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_tool
+from ..system_prompt import SystemPromptBuilder
 from ..tools.builtin import create_core_tool_registry, create_question_tool
 from ..tools.definition import OutputPolicy
 from ..tools.registry import ToolRegistry
@@ -55,6 +56,7 @@ class AgentRuntime:
         skill_discovery: SkillDiscovery | None = None,
         skill_context_builder: SkillContextBuilder | None = None,
         instruction_context_builder: InstructionContextBuilder | None = None,
+        system_prompt_builder: SystemPromptBuilder | None = None,
         event_bus: RuntimeEventBus | None = None,
         run_state: RuntimeRunState | None = None,
         compaction_summarizer: CompactionSummarizer | None = None,
@@ -96,6 +98,10 @@ class AgentRuntime:
             config=self.config,
             instruction_context_builder=instruction_context_builder,
         )
+        self.system_prompt_builder = _resolve_system_prompt_builder(
+            config=self.config,
+            system_prompt_builder=system_prompt_builder,
+        )
         self.active_skills = _unique_skill_names(self.config.active_skills)
         self.event_bus = event_bus or RuntimeEventBus()
         self.run_state = run_state or RuntimeRunState()
@@ -112,21 +118,27 @@ class AgentRuntime:
         resolved_session_id = session_id or self.store.create_session().session_id
         run_id = self.run_state.begin(resolved_session_id)
         try:
-            instruction_context_messages = self._build_instruction_context_messages()
-            skill_context_messages = self._build_skill_context_messages(active_skills)
-            context_messages = [*instruction_context_messages, *skill_context_messages]
-            self.active_skills = active_skills
-
-            run_metadata = dict(self.config.metadata)
-            run_metadata.update(metadata or {})
+            run_metadata = self._base_run_metadata(metadata)
             run_metadata["run_id"] = run_id
-            run_metadata["instruction_context_count"] = len(instruction_context_messages)
             run_metadata["active_skills"] = list(active_skills)
             run_metadata["skill_command"] = {
                 "add": list(skill_command.add),
                 "clear": skill_command.clear,
                 "cleaned_text": skill_command.cleaned_text,
             }
+            system_prompt_messages = self._build_system_prompt_messages(run_metadata)
+            instruction_context_messages = self._build_instruction_context_messages()
+            skill_context_messages = self._build_skill_context_messages(active_skills)
+            context_messages = [
+                *system_prompt_messages,
+                *instruction_context_messages,
+                *skill_context_messages,
+            ]
+            self.active_skills = active_skills
+
+            run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
+            run_metadata["instruction_context_count"] = len(instruction_context_messages)
+            run_metadata["skill_context_count"] = len(skill_context_messages)
             user_parts = self._resolve_user_parts(skill_command.cleaned_text)
             runner = RuntimeLoopRunner(
                 store=self.store,
@@ -174,15 +186,21 @@ class AgentRuntime:
         self.store.get_session(session_id)
         run_id = self.run_state.begin(session_id)
         try:
-            instruction_context_messages = self._build_instruction_context_messages()
-            skill_context_messages = self._build_skill_context_messages(self.active_skills)
-            context_messages = [*instruction_context_messages, *skill_context_messages]
-            run_metadata = dict(self.config.metadata)
-            run_metadata.update(metadata or {})
+            run_metadata = self._base_run_metadata(metadata)
             run_metadata["run_id"] = run_id
-            run_metadata["instruction_context_count"] = len(instruction_context_messages)
             run_metadata["active_skills"] = list(self.active_skills)
             run_metadata["resume"] = True
+            system_prompt_messages = self._build_system_prompt_messages(run_metadata)
+            instruction_context_messages = self._build_instruction_context_messages()
+            skill_context_messages = self._build_skill_context_messages(self.active_skills)
+            context_messages = [
+                *system_prompt_messages,
+                *instruction_context_messages,
+                *skill_context_messages,
+            ]
+            run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
+            run_metadata["instruction_context_count"] = len(instruction_context_messages)
+            run_metadata["skill_context_count"] = len(skill_context_messages)
             runner = RuntimeLoopRunner(
                 store=self.store,
                 provider=self.provider,
@@ -262,6 +280,9 @@ class AgentRuntime:
     def _build_instruction_context_messages(self):
         return self.instruction_context_builder.build_messages()
 
+    def _build_system_prompt_messages(self, metadata: Mapping[str, Any]):
+        return self.system_prompt_builder.build_messages(metadata=metadata)
+
     def _build_skill_context_messages(self, active_skills: list[str]):
         if not active_skills:
             return []
@@ -286,6 +307,16 @@ class AgentRuntime:
             max_directory_entries=self.config.max_prompt_directory_entries,
         )
         return resolved_prompt.parts
+
+    def _base_run_metadata(self, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+        run_metadata = dict(self.config.metadata)
+        run_metadata.update(metadata or {})
+        run_metadata["max_iterations"] = self.config.max_iterations
+        run_metadata["enable_question_tool"] = self.config.enable_question_tool
+        run_metadata["tool_output_truncation_enabled"] = (
+            self.config.workspace_root is not None
+        )
+        return run_metadata
 
 
 def _resolve_config(
@@ -335,6 +366,11 @@ def _resolve_config(
         disabled_tools=list(config.disabled_tools),
         enable_question_tool=config.enable_question_tool,
         metadata=resolved_metadata,
+        include_default_system_prompt=config.include_default_system_prompt,
+        system_prompt_texts=list(config.system_prompt_texts),
+        system_prompt_paths=list(config.system_prompt_paths),
+        max_system_prompt_chars=config.max_system_prompt_chars,
+        include_runtime_reminders=config.include_runtime_reminders,
         instruction_paths=list(config.instruction_paths),
         instruction_texts=list(config.instruction_texts),
         include_default_instructions=config.include_default_instructions,
@@ -497,6 +533,24 @@ def _resolve_instruction_context_builder(
         instruction_texts=config.instruction_texts,
         include_default_files=config.include_default_instructions,
         max_instruction_chars=config.max_instruction_chars,
+    )
+
+
+def _resolve_system_prompt_builder(
+    *,
+    config: RuntimeConfig,
+    system_prompt_builder: SystemPromptBuilder | None,
+) -> SystemPromptBuilder:
+    if system_prompt_builder is not None:
+        return system_prompt_builder
+
+    return SystemPromptBuilder(
+        workspace_root=config.workspace_root,
+        include_default_system_prompt=config.include_default_system_prompt,
+        system_prompt_texts=config.system_prompt_texts,
+        system_prompt_paths=config.system_prompt_paths,
+        max_system_prompt_chars=config.max_system_prompt_chars,
+        include_runtime_reminders=config.include_runtime_reminders,
     )
 
 

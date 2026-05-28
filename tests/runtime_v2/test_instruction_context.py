@@ -133,7 +133,12 @@ async def test_agent_runtime_run_injects_instruction_context_without_persisting_
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
     )
 
     await runtime.run("Use instructions.", session_id="session-instructions")
@@ -179,7 +184,12 @@ async def test_resume_injects_instruction_context_without_empty_user_message(
     provider = ScriptedLLMProvider([{"content": "Resumed."}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
         store=store,
     )
 
@@ -216,6 +226,8 @@ async def test_instruction_context_precedes_active_skill_context(tmp_path: Path)
             skill_directories=[skills_root],
             active_skills=["review-pr"],
             max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
         ),
     )
 

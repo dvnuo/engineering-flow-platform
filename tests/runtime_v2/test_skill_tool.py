@@ -188,6 +188,8 @@ async def test_active_skill_and_skill_tool_coexist_without_active_skill_pollutio
             skill_directories=[skills_dir],
             active_skills=["active-skill"],
             max_iterations=2,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
         ),
     )
 

@@ -28,6 +28,8 @@ async def test_config_active_skills_are_injected_before_user_history(tmp_path: P
             skill_directories=[tmp_path],
             active_skills=["review-pr"],
             max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
         ),
     )
 
@@ -51,7 +53,12 @@ async def test_injected_skill_context_builder_is_used_without_config_directories
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(active_skills=["review-pr"], max_iterations=1),
+        config=RuntimeConfig(
+            active_skills=["review-pr"],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
         skill_context_builder=SkillContextBuilder(SkillDiscovery([tmp_path])),
     )
 
@@ -68,7 +75,12 @@ async def test_skill_command_adds_active_skill_and_cleans_user_text(tmp_path: Pa
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(skill_directories=[tmp_path], max_iterations=1),
+        config=RuntimeConfig(
+            skill_directories=[tmp_path],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
     )
 
     await runtime.run("/skill review-pr\nPlease inspect the diff.", session_id="session-command")
@@ -91,7 +103,12 @@ async def test_skill_command_only_still_sends_context(tmp_path: Path):
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(skill_directories=[tmp_path], max_iterations=1),
+        config=RuntimeConfig(
+            skill_directories=[tmp_path],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
     )
 
     await runtime.run("/skill review-pr", session_id="session-command-only")
@@ -113,6 +130,8 @@ async def test_skill_clear_removes_active_skills_and_stops_injection(tmp_path: P
             skill_directories=[tmp_path],
             active_skills=["review-pr"],
             max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
         ),
     )
 

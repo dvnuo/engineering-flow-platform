@@ -173,6 +173,12 @@ class BudgetCompactionStrategy:
             if _is_protected_block(block, pending_call_ids=pending_call_ids)
         }
         kept_indices = set(protected_indices)
+        latest_unprotected_index = _latest_unprotected_block_index(
+            blocks,
+            protected_indices=protected_indices,
+        )
+        if latest_unprotected_index is not None:
+            kept_indices.add(latest_unprotected_index)
 
         for index in reversed(range(len(blocks))):
             if index in kept_indices:
@@ -278,6 +284,17 @@ def _is_protected_block(block: _Block, *, pending_call_ids: set[str]) -> bool:
         ):
             return True
     return False
+
+
+def _latest_unprotected_block_index(
+    blocks: list[_Block],
+    *,
+    protected_indices: set[int],
+) -> int | None:
+    for index in reversed(range(len(blocks))):
+        if index not in protected_indices:
+            return index
+    return None
 
 
 def _selection_usage(blocks: list[_Block], kept_indices: set[int]) -> tuple[int, int]:

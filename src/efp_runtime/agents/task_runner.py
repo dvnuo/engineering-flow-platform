@@ -225,7 +225,27 @@ def _child_config(
         disabled_tools=(
             [] if base_config is None else list(base_config.disabled_tools)
         ),
+        enable_question_tool=(
+            False if base_config is None else base_config.enable_question_tool
+        ),
         metadata=base_metadata,
+        include_default_system_prompt=(
+            True
+            if base_config is None
+            else base_config.include_default_system_prompt
+        ),
+        system_prompt_texts=(
+            [] if base_config is None else list(base_config.system_prompt_texts)
+        ),
+        system_prompt_paths=(
+            [] if base_config is None else list(base_config.system_prompt_paths)
+        ),
+        max_system_prompt_chars=(
+            20000 if base_config is None else base_config.max_system_prompt_chars
+        ),
+        include_runtime_reminders=(
+            True if base_config is None else base_config.include_runtime_reminders
+        ),
         skill_directories=(
             [] if base_config is None else list(base_config.skill_directories)
         ),

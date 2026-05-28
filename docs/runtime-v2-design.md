@@ -58,6 +58,9 @@ Each loop iteration builds a `RuntimeRequest` for the provider. It keeps the raw
 `Message` history for compatibility, and also carries a rendered
 `ProviderRequest`, the `PreparedProviderRequest` with compaction metadata, and
 the sorted `ToolDef` list used to render provider-neutral tool schemas.
+`AgentRuntime` prepends provider-only context before persisted history in this
+order: system prompt and runtime reminders, workspace instructions, active
+skills, then session history.
 
 `STEP_FINISH` updates the active assistant message. Tool result events append a
 separate tool message and do not make that tool message the active assistant
@@ -224,13 +227,33 @@ sidecar files, including Python files. By default it lists sidecar files in
 `<skill_files>`; callers may request bounded text content for sidecars, subject
 to the configured maximum character limit.
 
+## System Prompt Stack
+
+Runtime v2 has a small configurable system prompt stack. By default,
+`AgentRuntime` adds a stable base code-agent prompt, then optional explicit
+`RuntimeConfig.system_prompt_texts` and UTF-8 workspace-local
+`RuntimeConfig.system_prompt_paths`. It can also add runtime reminders for the
+current iteration limit, the optional `question` tool, and saved truncated tool
+output referenced by `output_path`.
+
+System prompt and reminder messages are transient provider-only system context.
+They are not appended to the session store, are not copied into user messages,
+and are rebuilt for each `run()` or `resume()` request.
+
+The full provider request context order is:
+
+1. System prompt and runtime reminder messages.
+2. Workspace instruction messages.
+3. Active skill messages.
+4. Persisted session history.
+
 ## Instructions
 
 Runtime v2 loads workspace instruction files from `AGENTS.md`, `CLAUDE.md`, and
 `CONTEXT.md`, plus any explicit `RuntimeConfig.instruction_paths` and
 `RuntimeConfig.instruction_texts`. These are rendered as transient system
-context in the provider request before active skill context and before persisted
-session history.
+context in the provider request after the system prompt stack, before active
+skill context, and before persisted session history.
 
 Instruction context is not appended to the session store and is not copied into
 user messages. Each run rebuilds the provider-only context from the configured
@@ -264,6 +287,7 @@ one side of a tool call/result pair in the retained history.
 Runtime v2 can compact by either part count or an approximate character budget.
 The character budget is deterministic: text, reasoning, errors, tool arguments,
 tool results, and structured context metadata are counted without invoking an
-LLM summarizer. System and skill context messages are retained, pending tool
-calls are protected, and provider request metadata records the configured
-budget plus compacted/kept part, message, pair, and character counts.
+LLM summarizer. System prompt, instruction, and skill context messages are
+retained, pending tool calls and the latest non-system block are protected, and
+provider request metadata records the configured budget plus compacted/kept
+part, message, pair, and character counts.

@@ -147,7 +147,7 @@ async def test_agent_runtime_writes_prompt_reference_parts_to_history_and_reques
     assert history[0].parts[1].attachment is not None
     assert history[0].parts[1].attachment.metadata["content"] == "alpha\nbeta\n"
 
-    request_message = provider.requests[0].provider_request.messages[0]
+    request_message = provider.requests[0].provider_request.messages[-1]
     assert request_message.role == "user"
     assert request_message.parts[0].text == "Use @notes.txt"
     assert request_message.attachments[0].text_ref == "notes.txt"
@@ -158,7 +158,7 @@ async def test_agent_runtime_writes_prompt_reference_parts_to_history_and_reques
         provider.requests[0].provider_request,
         model="gpt-test",
     )
-    assert "alpha" in payload["messages"][0]["content"]
+    assert any("alpha" in message["content"] for message in payload["messages"])
 
 
 @pytest.mark.asyncio
@@ -179,8 +179,9 @@ async def test_agent_runtime_can_keep_prompt_references_as_plain_text(tmp_path: 
     history = runtime.store.read_history("session-plain")
     assert [part.type for part in history[0].parts] == [MessagePartType.TEXT]
     assert history[0].parts[0].text == "Use @notes.txt"
-    assert provider.requests[0].provider_request.messages[0].text == "Use @notes.txt"
-    assert provider.requests[0].provider_request.messages[0].attachments == []
+    request_message = provider.requests[0].provider_request.messages[-1]
+    assert request_message.text == "Use @notes.txt"
+    assert request_message.attachments == []
 
 
 def test_prompt_resolver_imports_standalone_with_pythonpath_src():
