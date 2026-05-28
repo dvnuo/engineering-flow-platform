@@ -27,6 +27,7 @@ from .invalid import create_invalid_tool
 from .lsp import create_lsp_tool
 from .plan import create_plan_exit_tool
 from .question import create_question_tool
+from .repository import create_repo_clone_tool, create_repo_overview_tool
 from .search import create_glob_tool, create_grep_tool
 from .shell import create_bash_tool, create_shell_exec_tool
 from .task import (
@@ -107,6 +108,8 @@ def create_core_tool_registry(
     registry.register(create_glob_tool(root))
     registry.register(create_grep_tool(root))
     registry.register(create_invalid_tool())
+    registry.register(create_repo_clone_tool(root))
+    registry.register(create_repo_overview_tool(root))
     if include_lsp_tool or lsp_client is not None:
         registry.register(
             create_lsp_tool(root, client=lsp_client, permission=lsp_permission)

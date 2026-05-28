@@ -658,15 +658,32 @@ aliases: `read_file` / `read`, `write_file` / `write`, `fetch` / `webfetch`,
 and `todo_write` / `todowrite`. The legacy ids and their behavior remain
 available. The registry also includes grep/glob, shell execution, single-file
 edit, unified-diff apply_patch, session-local todo planning, invalid-argument
-feedback, and HTTP(S) fetch tools. Mutating filesystem tools default to ask
-permission; read/search, todo planning, invalid feedback, and fetch tools
-default to allow. Fetch tools are categorized as medium-risk network access so
-callers can override them to ask permission when needed. `fetch` and `webfetch`
-support opencode-style `format` values of `markdown` (default), `text`, and
-`html`: HTML responses are rendered to readable text or lightweight Markdown
-unless raw HTML is requested, while non-HTML text is returned as decoded text.
-Responses are rejected when the declared or actual body exceeds 5 MiB, and
-`max_chars` still controls model-visible truncation.
+feedback, repository clone/overview tools, and HTTP(S) fetch tools. Mutating
+filesystem tools and repository tools default to ask permission; read/search,
+todo planning, invalid feedback, and fetch tools default to allow. Fetch tools
+are categorized as medium-risk network access so callers can override them to
+ask permission when needed. `fetch` and `webfetch` support opencode-style
+`format` values of `markdown` (default), `text`, and `html`: HTML responses are
+rendered to readable text or lightweight Markdown unless raw HTML is requested,
+while non-HTML text is returned as decoded text. Responses are rejected when the
+declared or actual body exceeds 5 MiB, and `max_chars` still controls
+model-visible truncation.
+
+`repo_clone` prepares a git repository under the workspace-local cache
+`.efp_runtime/repositories/` unless a workspace-relative `target_dir` is
+provided. Repository inputs can be an existing local path, a full URL, or GitHub
+shorthand such as `owner/repo`, which is normalized to a GitHub HTTPS clone URL.
+Clone targets are constrained to the workspace, safe cache names include a short
+hash suffix, and git is executed with bounded subprocess timeouts. Existing
+cached clones return `status="cached"` unless `refresh=true`, which performs a
+deterministic fetch, optional checkout, and fast-forward-only pull.
+
+`repo_overview` inspects either a workspace-contained path or a repository
+previously prepared by `repo_clone`. It returns a bounded directory structure,
+detected dependency files, ecosystems, Node.js package manager when a lockfile
+identifies one, common entrypoints, and git branch/head metadata when available.
+Large dependency directories such as `.git`, `node_modules`, `.venv`, `dist`,
+`build`, and language build caches are skipped from the visible structure.
 
 The `todo_write` and `todowrite` ids share one session-local in-memory todo
 store. Todo items normalize to `content`, `status`, and `priority`; `status`

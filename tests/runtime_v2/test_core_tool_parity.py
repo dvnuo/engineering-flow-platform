@@ -364,6 +364,8 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
         "list_dir",
         "read",
         "read_file",
+        "repo_clone",
+        "repo_overview",
         "shell_exec",
         "shell_kill",
         "shell_status",
@@ -401,6 +403,12 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
     assert registry.require("shell_exec").permission.action == ASK
     assert registry.require("shell_kill").permission.action == ASK
     assert registry.require("shell_kill").permission.risk == "medium"
+    assert registry.require("repo_clone").permission.action == ASK
+    assert registry.require("repo_clone").permission.category == "repository"
+    assert registry.require("repo_clone").permission.risk == "medium"
+    assert registry.require("repo_overview").permission.action == ASK
+    assert registry.require("repo_overview").permission.category == "repository"
+    assert registry.require("repo_overview").permission.risk == "low"
 
     target = tmp_path / "notes.txt"
     target.write_text("alpha\n", encoding="utf-8")

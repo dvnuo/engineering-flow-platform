@@ -96,6 +96,7 @@ PLAN_MODE_MUTATING_TOOLS = {
     "apply_patch",
     "bash",
     "edit",
+    "repo_clone",
     "shell_exec",
     "shell_kill",
     "task",

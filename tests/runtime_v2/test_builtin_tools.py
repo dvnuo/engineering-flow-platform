@@ -400,6 +400,8 @@ print(json.dumps({
             "list_dir",
             "read",
             "read_file",
+            "repo_clone",
+            "repo_overview",
             "shell_exec",
             "shell_kill",
             "shell_status",
