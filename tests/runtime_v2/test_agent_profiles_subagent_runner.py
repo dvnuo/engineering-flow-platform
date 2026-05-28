@@ -684,9 +684,11 @@ async def test_profile_active_skills_enter_child_context_without_base_pollution(
     assert result.state == "completed"
     request = provider.requests[0]
     assert request.provider_request.messages[0].role == "system"
-    assert '<skill_content name="review-pr">' in request.provider_request.messages[0].text
-    assert "# Skill: review-pr" in request.provider_request.messages[0].text
-    assert request.provider_request.messages[1].role == "user"
+    assert "<available_skills>" in request.provider_request.messages[0].text
+    assert request.provider_request.messages[1].role == "system"
+    assert '<skill_content name="review-pr">' in request.provider_request.messages[1].text
+    assert "# Skill: review-pr" in request.provider_request.messages[1].text
+    assert request.provider_request.messages[2].role == "user"
     assert request.metadata["active_skills"] == ["review-pr"]
     assert request.provider_request.metadata["active_skills"] == ["review-pr"]
     assert base_config.active_skills == ["base-skill"]

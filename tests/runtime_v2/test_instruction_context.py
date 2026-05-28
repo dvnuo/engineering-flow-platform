@@ -234,11 +234,17 @@ async def test_instruction_context_precedes_active_skill_context(tmp_path: Path)
     await runtime.run("Inspect this.", session_id="session-instruction-skill")
 
     messages = provider.requests[0].provider_request.messages
-    assert [message.role for message in messages] == ["system", "system", "user"]
+    assert [message.role for message in messages] == [
+        "system",
+        "system",
+        "system",
+        "user",
+    ]
     assert messages[0].text.startswith("Instructions from:")
     assert "Project instructions." in messages[0].text
-    assert messages[1].text.startswith('<skill_content name="review-pr">')
-    assert messages[2].text == "Inspect this."
+    assert "<available_skills>" in messages[1].text
+    assert messages[2].text.startswith('<skill_content name="review-pr">')
+    assert messages[3].text == "Inspect this."
 
 
 def test_instruction_import_does_not_load_legacy_modules():

@@ -502,7 +502,8 @@ async def test_active_skill_and_skill_tool_coexist_without_active_skill_pollutio
 
     assert result.status == LoopStatus.COMPLETED
     assert runtime.active_skills == ["active-skill"]
-    assert provider.requests[0].provider_request.messages[0].text.startswith(
+    assert "<available_skills>" in provider.requests[0].provider_request.messages[0].text
+    assert provider.requests[0].provider_request.messages[1].text.startswith(
         '<skill_content name="active-skill">'
     )
     assert "skill" in [schema.id for schema in provider.requests[0].provider_request.tools]

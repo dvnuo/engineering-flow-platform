@@ -774,9 +774,10 @@ async def test_skill_slash_fallback_activates_discovered_skill(tmp_path: Path):
 
     request = provider.requests[0]
     assert request.provider_request.messages[0].role == "system"
-    assert '<skill_content name="review-pr">' in request.provider_request.messages[0].text
-    assert request.provider_request.messages[1].role == "user"
-    assert request.provider_request.messages[1].text == "check the diff"
+    assert "<available_skills>" in request.provider_request.messages[0].text
+    assert '<skill_content name="review-pr">' in request.provider_request.messages[1].text
+    assert request.provider_request.messages[2].role == "user"
+    assert request.provider_request.messages[2].text == "check the diff"
     assert request.metadata["active_skills"] == ["review-pr"]
     assert request.metadata["skill_command"] == {
         "add": ["review-pr"],
@@ -808,7 +809,7 @@ async def test_skill_slash_fallback_handles_multiline_form(tmp_path: Path):
     )
 
     request = provider.requests[0]
-    assert request.provider_request.messages[1].text == "Please inspect this diff"
+    assert request.provider_request.messages[2].text == "Please inspect this diff"
     assert request.metadata["skill_command"]["cleaned_text"] == "Please inspect this diff"
     assert request.metadata["skill_slash_command"] == "review-pr"
     assert request.metadata["skill_slash_arguments"] == ""
@@ -838,7 +839,8 @@ async def test_custom_command_wins_over_same_named_skill(tmp_path: Path):
     assert request.metadata["command_arguments"] == "target"
     assert "skill_slash_command" not in request.metadata
     assert request.metadata["active_skills"] == []
-    assert '<command name="review-pr"' in request.provider_request.messages[0].text
+    assert "<available_skills>" in request.provider_request.messages[0].text
+    assert '<command name="review-pr"' in request.provider_request.messages[1].text
 
 
 @pytest.mark.asyncio
@@ -865,9 +867,10 @@ async def test_skill_command_does_not_trigger_custom_command(tmp_path: Path):
     request = provider.requests[0]
     assert runtime.active_skills == ["review-pr"]
     assert request.provider_request.messages[0].role == "system"
-    assert '<skill_content name="review-pr">' in request.provider_request.messages[0].text
-    assert request.provider_request.messages[1].role == "user"
-    assert request.provider_request.messages[1].text == "Please inspect the diff."
+    assert "<available_skills>" in request.provider_request.messages[0].text
+    assert '<skill_content name="review-pr">' in request.provider_request.messages[1].text
+    assert request.provider_request.messages[2].role == "user"
+    assert request.provider_request.messages[2].text == "Please inspect the diff."
     assert "command_name" not in request.metadata
 
 

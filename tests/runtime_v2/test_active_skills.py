@@ -38,12 +38,16 @@ async def test_config_active_skills_are_injected_before_user_history(tmp_path: P
     request = provider.requests[0]
     provider_messages = request.provider_request.messages
     assert provider_messages[0].role == "system"
-    assert provider_messages[0].text.startswith('<skill_content name="review-pr">')
-    assert "# Skill: review-pr" in provider_messages[0].text
-    assert provider_messages[1].role == "user"
-    assert provider_messages[1].text == "Use the configured skill."
+    assert "<available_skills>" in provider_messages[0].text
+    assert provider_messages[1].role == "system"
+    assert provider_messages[1].text.startswith('<skill_content name="review-pr">')
+    assert "# Skill: review-pr" in provider_messages[1].text
+    assert provider_messages[2].role == "user"
+    assert provider_messages[2].text == "Use the configured skill."
     assert [message.role for message in request.messages] == [MessageRole.USER]
     assert request.metadata["active_skills"] == ["review-pr"]
+    assert request.metadata["available_skill_context_count"] == 1
+    assert request.metadata["skill_context_count"] == 1
     assert request.provider_request.metadata["active_skills"] == ["review-pr"]
 
 
@@ -88,7 +92,9 @@ async def test_skill_command_adds_active_skill_and_cleans_user_text(tmp_path: Pa
     request = provider.requests[0]
     assert runtime.active_skills == ["review-pr"]
     assert request.provider_request.messages[0].role == "system"
-    assert request.provider_request.messages[1].text == "Please inspect the diff."
+    assert "<available_skills>" in request.provider_request.messages[0].text
+    assert '<skill_content name="review-pr">' in request.provider_request.messages[1].text
+    assert request.provider_request.messages[2].text == "Please inspect the diff."
     assert request.messages[0].parts[0].text == "Please inspect the diff."
     assert request.metadata["skill_command"] == {
         "add": ["review-pr"],
@@ -114,8 +120,12 @@ async def test_skill_command_only_still_sends_context(tmp_path: Path):
     await runtime.run("/skill review-pr", session_id="session-command-only")
 
     request = provider.requests[0]
-    assert [message.role for message in request.provider_request.messages] == ["system"]
-    assert "# Skill: review-pr" in request.provider_request.messages[0].text
+    assert [message.role for message in request.provider_request.messages] == [
+        "system",
+        "system",
+    ]
+    assert "<available_skills>" in request.provider_request.messages[0].text
+    assert "# Skill: review-pr" in request.provider_request.messages[1].text
     assert [message.role for message in request.messages] == [MessageRole.USER]
     assert request.messages[0].parts == []
 
@@ -139,9 +149,16 @@ async def test_skill_clear_removes_active_skills_and_stops_injection(tmp_path: P
 
     request = provider.requests[0]
     assert runtime.active_skills == []
-    assert [message.role for message in request.provider_request.messages] == ["user"]
-    assert request.provider_request.messages[0].text == "Continue without it."
+    assert [message.role for message in request.provider_request.messages] == [
+        "system",
+        "user",
+    ]
+    assert "<available_skills>" in request.provider_request.messages[0].text
+    assert "<skill_content" not in request.provider_request.messages[0].text
+    assert request.provider_request.messages[1].text == "Continue without it."
     assert request.metadata["active_skills"] == []
+    assert request.metadata["available_skill_context_count"] == 1
+    assert request.metadata["skill_context_count"] == 0
     assert request.metadata["skill_command"]["clear"] is True
 
 

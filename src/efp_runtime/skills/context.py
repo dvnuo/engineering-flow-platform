@@ -18,6 +18,10 @@ RELATIVE_PATH_GUIDANCE = (
     "this base directory."
 )
 SAMPLED_FILE_NOTE = "Note: file list is sampled."
+AVAILABLE_SKILLS_GUIDANCE = (
+    "Skills provide specialized instructions and workflows for specific tasks.",
+    "Use the skill tool to load a skill when a task matches its description.",
+)
 
 
 class SkillContextBuilder:
@@ -83,6 +87,57 @@ def skill_package_to_system_message(
     )
 
 
+def available_skills_system_message(
+    skills: Iterable[SkillPackage],
+) -> Message | None:
+    """Render the visible skill registry as transient provider-only context."""
+
+    available_skills = sorted(
+        [skill for skill in skills if str(skill.name).strip()],
+        key=_skill_sort_key,
+    )
+    if not available_skills:
+        return None
+
+    metadata = {
+        "kind": "available_skills",
+        "source": "available_skills",
+        "skill_count": len(available_skills),
+    }
+    return Message(
+        role=MessageRole.SYSTEM,
+        parts=[
+            MessagePart.text_part(
+                _render_available_skills_text(available_skills),
+                metadata=metadata,
+            )
+        ],
+        metadata=metadata,
+        status="complete",
+    )
+
+
+def _render_available_skills_text(skills: Iterable[SkillPackage]) -> str:
+    lines = [
+        *AVAILABLE_SKILLS_GUIDANCE,
+        "",
+        "<available_skills>",
+    ]
+    for skill in skills:
+        lines.extend(
+            [
+                "  <skill>",
+                f"    <name>{escape(str(skill.name), quote=False)}</name>",
+                "    <description>"
+                f"{escape(str(skill.description or ''), quote=False)}"
+                "</description>",
+                "  </skill>",
+            ]
+        )
+    lines.append("</available_skills>")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _render_skill_context_text(
     skill: SkillPackage,
     *,
@@ -128,6 +183,10 @@ def _file_uri(path: Path) -> str:
     if not uri.endswith("/"):
         uri = f"{uri}/"
     return uri
+
+
+def _skill_sort_key(skill: SkillPackage) -> tuple[str, str]:
+    return (str(skill.name).strip().lower(), str(skill.skill_file))
 
 
 def _render_skill_file_lines(

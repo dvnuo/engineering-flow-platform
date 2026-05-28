@@ -53,7 +53,7 @@ from ..skills.commands import (
     parse_skill_commands,
     parse_skill_slash_command_line,
 )
-from ..skills.context import SkillContextBuilder
+from ..skills.context import SkillContextBuilder, available_skills_system_message
 from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_list_tool, build_skill_tool
 from ..system_prompt import SystemPromptBuilder
@@ -71,7 +71,7 @@ from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
-from ..types import ToolCall
+from ..types import SkillPackage, ToolCall
 from ..workspace_snapshots import (
     WorkspaceSnapshot,
     WorkspaceSnapshotDiff,
@@ -304,12 +304,16 @@ class AgentRuntime:
                 else []
             )
             instruction_context_messages = self._build_instruction_context_messages()
+            available_skill_context_messages = (
+                self._build_available_skill_context_messages()
+            )
             skill_context_messages = self._build_skill_context_messages(active_skills)
             context_messages = [
                 *system_prompt_messages,
                 *structured_output_messages,
                 *agent_profile_messages,
                 *instruction_context_messages,
+                *available_skill_context_messages,
                 *skill_context_messages,
             ]
             if profile is None:
@@ -321,6 +325,9 @@ class AgentRuntime:
                 structured_output_messages
             )
             run_metadata["instruction_context_count"] = len(instruction_context_messages)
+            run_metadata["available_skill_context_count"] = len(
+                available_skill_context_messages
+            )
             run_metadata["skill_context_count"] = len(skill_context_messages)
             user_parts = self._resolve_user_parts(user_text_for_request)
             runner = RuntimeLoopRunner(
@@ -422,11 +429,15 @@ class AgentRuntime:
                 else []
             )
             instruction_context_messages = self._build_instruction_context_messages()
+            available_skill_context_messages = (
+                self._build_available_skill_context_messages()
+            )
             skill_context_messages = self._build_skill_context_messages(active_skills)
             context_messages = [
                 *system_prompt_messages,
                 *structured_output_messages,
                 *instruction_context_messages,
+                *available_skill_context_messages,
                 *skill_context_messages,
             ]
             run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
@@ -434,6 +445,9 @@ class AgentRuntime:
                 structured_output_messages
             )
             run_metadata["instruction_context_count"] = len(instruction_context_messages)
+            run_metadata["available_skill_context_count"] = len(
+                available_skill_context_messages
+            )
             run_metadata["skill_context_count"] = len(skill_context_messages)
             runner = RuntimeLoopRunner(
                 store=self.store,
@@ -744,6 +758,17 @@ class AgentRuntime:
                 status="complete",
             )
         ]
+
+    def _build_available_skill_context_messages(self) -> list[Message]:
+        if self.skill_discovery is None:
+            return []
+        message = available_skills_system_message(
+            _visible_skills_for_permissions(
+                self.skill_discovery.discover(),
+                tool_permissions=self.config.tool_permissions,
+            )
+        )
+        return [] if message is None else [message]
 
     def _build_skill_context_messages(self, active_skills: list[str]):
         if not active_skills:
@@ -1800,6 +1825,24 @@ def _visible_skill_names_for_permissions(
             tool_id="skill",
             category="skill",
             subject=name,
+        )
+    ]
+
+
+def _visible_skills_for_permissions(
+    skills: Iterable[SkillPackage],
+    *,
+    tool_permissions: Mapping[str, Any] | None,
+) -> list[SkillPackage]:
+    permission_config = PermissionConfig(tool_permissions)
+    return [
+        skill
+        for skill in skills
+        if not is_permission_subject_hidden(
+            permission_config,
+            tool_id="skill",
+            category="skill",
+            subject=skill.name,
         )
     ]
 

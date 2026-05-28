@@ -56,15 +56,141 @@ async def test_default_runtime_prepends_system_prompt_before_instructions_and_sk
     assert "EFP Runtime v2" in messages[0].text
 
     instruction_index = _message_index(messages, "Instructions from:")
+    available_skill_index = _message_index(messages, "<available_skills>")
     skill_index = _message_index(messages, '<skill_content name="review-pr">')
     user_index = _message_index(messages, "Inspect this.")
-    assert 0 < instruction_index < skill_index < user_index
+    assert 0 < instruction_index < available_skill_index < skill_index < user_index
     assert request.metadata["system_prompt_context_count"] == 2
     assert request.metadata["instruction_context_count"] == 1
+    assert request.metadata["available_skill_context_count"] == 1
     assert request.metadata["skill_context_count"] == 1
     assert request.provider_request.metadata["system_prompt_context_count"] == 2
     assert request.provider_request.metadata["instruction_context_count"] == 1
+    assert request.provider_request.metadata["available_skill_context_count"] == 1
     assert request.provider_request.metadata["skill_context_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_available_skills_context_is_injected_without_active_skill(
+    tmp_path: Path,
+):
+    skills_root = tmp_path / "skills"
+    _write_skill(
+        skills_root,
+        "review-pr",
+        description="Review <pull> & requests",
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            skill_directories=[skills_root],
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+            max_iterations=1,
+        ),
+    )
+
+    result = await runtime.run("Inspect this.", session_id="session-available-skills")
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    messages = request.provider_request.messages
+    assert messages[-1].role == "user"
+    assert messages[-1].text == "Inspect this."
+    available_message = messages[_message_index(messages, "<available_skills>")]
+    assert available_message.metadata["message_metadata"]["kind"] == "available_skills"
+    assert (
+        available_message.metadata["message_metadata"]["source"] == "available_skills"
+    )
+    assert (
+        available_message.parts[0].metadata["part_metadata"]["kind"]
+        == "available_skills"
+    )
+    assert (
+        "Skills provide specialized instructions and workflows for specific tasks."
+        in available_message.text
+    )
+    assert (
+        "Use the skill tool to load a skill when a task matches its description."
+        in available_message.text
+    )
+    assert "<name>review-pr</name>" in available_message.text
+    assert (
+        "<description>Review &lt;pull&gt; &amp; requests</description>"
+        in available_message.text
+    )
+    assert request.metadata["available_skill_context_count"] == 1
+    assert request.metadata["skill_context_count"] == 0
+    assert request.provider_request.metadata["available_skill_context_count"] == 1
+    assert request.provider_request.metadata["skill_context_count"] == 0
+    history = runtime.store.read_history("session-available-skills")
+    assert [message.role for message in history] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_available_skills_context_hides_denied_skills(tmp_path: Path):
+    skills_root = tmp_path / "skills"
+    _write_skill(skills_root, "internal-docs", description="Internal docs")
+    _write_skill(skills_root, "public-docs", description="Public docs")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            skill_directories=[skills_root],
+            tool_permissions={"skill": {"internal-*": "deny"}},
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+            max_iterations=1,
+        ),
+    )
+
+    result = await runtime.run("Use docs.", session_id="session-hidden-skills")
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    available_message = request.provider_request.messages[
+        _message_index(request.provider_request.messages, "<available_skills>")
+    ]
+    assert "<name>public-docs</name>" in available_message.text
+    assert "<description>Public docs</description>" in available_message.text
+    assert "internal-docs" not in available_message.text
+    assert "Internal docs" not in available_message.text
+    assert request.metadata["available_skill_context_count"] == 1
+    assert request.metadata["available_skill_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_available_skills_context_is_omitted_when_no_skills(tmp_path: Path):
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir()
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            skill_directories=[skills_root],
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+            max_iterations=1,
+        ),
+    )
+
+    result = await runtime.run("No skills.", session_id="session-no-skills")
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    assert "<available_skills>" not in "\n".join(
+        message.text for message in request.provider_request.messages
+    )
+    assert request.provider_request.messages[-1].role == "user"
+    assert request.metadata["available_skill_context_count"] == 0
+    assert request.provider_request.metadata["available_skill_context_count"] == 0
 
 
 @pytest.mark.asyncio

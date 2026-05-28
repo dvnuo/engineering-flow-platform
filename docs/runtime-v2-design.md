@@ -768,6 +768,18 @@ rendered as transient system context in the provider request before session
 history. It is not appended to the persisted session store, so repeated runs do
 not duplicate skill messages in history.
 
+When skill discovery is configured and at least one visible skill exists,
+`AgentRuntime` also injects a transient provider-only available-skills system
+message. This message tells the model that skills provide specialized
+instructions and workflows, instructs it to use the `skill` tool when a task
+matches a skill description, and renders the visible registry as
+`<available_skills>` entries containing escaped `<name>` and `<description>`
+text. Permission-hidden skills are omitted. The message is inserted after the
+default, inline, file, runtime-reminder, and instruction contexts, and before
+any active skill full context, so the model sees the registry before loaded
+skill content. Run metadata reports `available_skill_context_count` separately;
+`skill_context_count` remains the count of active full skill context messages.
+
 Runtime v2 exposes `skill_list` and `skill` tools when skill discovery is
 configured for the default core tool registry. `skill_list` is the lightweight
 registry view: it lists available skill names, descriptions, active skills, and
