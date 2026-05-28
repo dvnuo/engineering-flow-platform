@@ -312,6 +312,9 @@ def _child_config(
         disabled_tools=(
             [] if base_config is None else list(base_config.disabled_tools)
         ),
+        tool_permissions=(
+            {} if base_config is None else dict(base_config.tool_permissions)
+        ),
         runtime_mode=(
             "build" if base_config is None else base_config.runtime_mode
         ),

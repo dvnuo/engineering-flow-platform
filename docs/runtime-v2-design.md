@@ -215,6 +215,29 @@ allow rule for the matching retry, while `always=True` creates a persistent
 allow rule for the same tool/category. Deny follows the same rule scope model
 and is appended as a final tool result on resume.
 
+`RuntimeConfig.tool_permissions` adds an opencode-style execution permission
+layer on top of the static permission metadata carried by each tool definition.
+Keys can be exact tool ids such as `shell_exec`, `read_file`, `write_file`,
+`apply_patch`, `skill`, or `task_status`; category aliases such as `bash`,
+`edit`, `read`, `list`, `grep`, `glob`, `task`, `todowrite`, `webfetch`, `lsp`,
+`skill`, `question`, and `doom_loop`; wildcard patterns such as `mcp_*` or
+`external_*`; or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
+`"deny"`, or a mapping like
+`{"action": "ask", "reason": "...", "risk": "medium", "patterns": ["..."]}`.
+Runtime config matching is ordered by exact tool id, wildcard specificity,
+category/metadata category, `*`, then the tool definition's original
+`PermissionMetadata`.
+
+This config controls execution permission only. It does not remove tools from
+provider schemas. `enabled_tools`, `disabled_tools`, per-run `tools={...}`, and
+plan-mode read-only selection still control what tools are visible to the
+provider. For example, `tool_permissions={"edit": "deny"}` keeps edit tools in
+the schema but denies execution; `disabled_tools=["edit"]` hides the `edit`
+tool from the provider request. Configured `"ask"` decisions still create normal
+`PermissionBroker` pending requests, so `pending_permissions()`,
+`approve_permission(...)`, `deny_permission(...)`, and `resume(...)` keep the
+same flow as static ASK permissions.
+
 Runtime v2 also pauses likely tool-call doom loops before executing the next
 tool. By default, if the same assistant tool call is requested three times in a
 row with the same stable JSON arguments, the loop asks for permission with

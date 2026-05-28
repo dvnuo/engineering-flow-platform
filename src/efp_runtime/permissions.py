@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+import fnmatch
 import hashlib
 import json
 from typing import Any, Protocol
@@ -30,6 +31,105 @@ class PermissionMetadata:
     resource: str = ""
     risk: str = "low"
     data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PermissionConfigRule:
+    """A normalized runtime permission config entry."""
+
+    key: str
+    action: PermissionAction
+    reason: str = ""
+    risk: str | None = None
+    patterns: tuple[str, ...] = ()
+    order: int = 0
+
+
+@dataclass(frozen=True)
+class PermissionConfigMatch:
+    """The config rule selected for one permission evaluation."""
+
+    rule: PermissionConfigRule
+    match_type: str
+
+
+class PermissionConfig:
+    """Opencode-style runtime permission config matcher."""
+
+    def __init__(self, permissions: Mapping[str, Any] | None = None):
+        self._rules = tuple(_permission_config_rules(permissions or {}))
+
+    @property
+    def rules(self) -> tuple[PermissionConfigRule, ...]:
+        return self._rules
+
+    def match(
+        self,
+        *,
+        tool_id: str,
+        metadata: PermissionMetadata,
+    ) -> PermissionConfigMatch | None:
+        tool_id = str(tool_id)
+
+        exact = self._match_exact(tool_id)
+        if exact is not None:
+            return PermissionConfigMatch(rule=exact, match_type="exact")
+
+        wildcard = self._match_wildcard(tool_id)
+        if wildcard is not None:
+            return PermissionConfigMatch(rule=wildcard, match_type="wildcard")
+
+        category = self._match_category(tool_id=tool_id, metadata=metadata)
+        if category is not None:
+            return PermissionConfigMatch(rule=category, match_type="category")
+
+        fallback = self._match_fallback()
+        if fallback is not None:
+            return PermissionConfigMatch(rule=fallback, match_type="fallback")
+
+        return None
+
+    def _match_exact(self, tool_id: str) -> PermissionConfigRule | None:
+        for rule in self._rules:
+            if rule.key == tool_id:
+                return rule
+        return None
+
+    def _match_wildcard(self, tool_id: str) -> PermissionConfigRule | None:
+        matches = [
+            rule
+            for rule in self._rules
+            if _is_permission_wildcard(rule.key)
+            and rule.key != "*"
+            and fnmatch.fnmatchcase(tool_id, rule.key)
+        ]
+        if not matches:
+            return None
+        return sorted(matches, key=lambda rule: (-len(rule.key), rule.order))[0]
+
+    def _match_category(
+        self,
+        *,
+        tool_id: str,
+        metadata: PermissionMetadata,
+    ) -> PermissionConfigRule | None:
+        category = metadata.category or ""
+        for rule in self._rules:
+            if _is_permission_wildcard(rule.key):
+                continue
+            if _permission_category_matches(
+                rule.key,
+                tool_id=tool_id,
+                category=category,
+            ):
+                return rule
+        return None
+
+    def _match_fallback(self) -> PermissionConfigRule | None:
+        for rule in self._rules:
+            if rule.key == "*":
+                return rule
+        return None
 
 
 @dataclass(init=False, frozen=True)
@@ -419,6 +519,41 @@ class PermissionBroker:
         return PermissionDecision.ask(request)
 
 
+class ConfiguredPermissionBroker(PermissionBroker):
+    """Permission broker with opencode-style runtime config overrides."""
+
+    def __init__(
+        self,
+        tool_permissions: Mapping[str, Any] | None = None,
+        rules: Iterable[PermissionRule] | None = None,
+    ):
+        super().__init__(rules)
+        self.permission_config = PermissionConfig(tool_permissions)
+
+    async def evaluate(
+        self,
+        *,
+        tool_id: str,
+        args: dict[str, Any],
+        metadata: PermissionMetadata,
+        context: Any = None,
+    ) -> PermissionDecision:
+        match = self.permission_config.match(tool_id=tool_id, metadata=metadata)
+        if match is None:
+            return await super().evaluate(
+                tool_id=tool_id,
+                args=args,
+                metadata=metadata,
+                context=context,
+            )
+        return await super().evaluate(
+            tool_id=tool_id,
+            args=args,
+            metadata=_metadata_from_permission_config(metadata, match),
+            context=context,
+        )
+
+
 def _rule_from_request(
     request: PermissionRequest,
     *,
@@ -458,6 +593,170 @@ def _rule_matches(
     if not patterns:
         return True
     return any(pattern == "*" or pattern in args_text for pattern in patterns)
+
+
+def normalize_tool_permissions(
+    permissions: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return a copied and validated runtime permission config mapping."""
+
+    if permissions is None:
+        return {}
+    if not isinstance(permissions, Mapping):
+        raise TypeError("tool_permissions must be a mapping")
+
+    normalized: dict[str, Any] = {}
+    for raw_key, raw_value in permissions.items():
+        if not isinstance(raw_key, str):
+            raise TypeError("tool_permissions keys must be strings")
+        key = raw_key.strip()
+        if not key:
+            raise ValueError("tool_permissions keys must not be empty")
+
+        if isinstance(raw_value, str):
+            normalized[key] = _validate_permission_action(raw_value, key=key)
+            continue
+
+        if not isinstance(raw_value, Mapping):
+            raise TypeError(
+                "tool_permissions values must be strings or mappings"
+            )
+
+        value = dict(raw_value)
+        action = value.get("action")
+        if action is None:
+            raise ValueError(
+                f"tool_permissions[{key!r}] mapping requires an action"
+            )
+        value["action"] = _validate_permission_action(action, key=key)
+        if "reason" in value and value["reason"] is not None:
+            value["reason"] = str(value["reason"])
+        if "risk" in value and value["risk"] is not None:
+            value["risk"] = str(value["risk"])
+        if "patterns" in value:
+            value["patterns"] = _normalize_patterns(value["patterns"])
+        elif "pattern" in value:
+            value["patterns"] = _normalize_patterns(value["pattern"])
+        normalized[key] = value
+    return normalized
+
+
+def _permission_config_rules(
+    permissions: Mapping[str, Any],
+) -> list[PermissionConfigRule]:
+    normalized = normalize_tool_permissions(permissions)
+    rules: list[PermissionConfigRule] = []
+    for order, (key, value) in enumerate(normalized.items()):
+        if isinstance(value, str):
+            rules.append(
+                PermissionConfigRule(
+                    key=key,
+                    action=value,
+                    order=order,
+                )
+            )
+            continue
+
+        rules.append(
+            PermissionConfigRule(
+                key=key,
+                action=value["action"],
+                reason=str(value.get("reason") or ""),
+                risk=(
+                    None
+                    if value.get("risk") is None
+                    else str(value.get("risk"))
+                ),
+                patterns=tuple(_normalize_patterns(value.get("patterns"))),
+                order=order,
+            )
+        )
+    return rules
+
+
+def _validate_permission_action(value: Any, *, key: str) -> PermissionAction:
+    if not isinstance(value, str):
+        raise TypeError(f"tool_permissions[{key!r}] action must be a string")
+    if value not in (ALLOW, ASK, DENY):
+        raise ValueError(
+            f"tool_permissions[{key!r}] action must be 'allow', 'ask', or 'deny'"
+        )
+    return value
+
+
+_PERMISSION_CATEGORY_ALIASES: dict[str, frozenset[str]] = {
+    "read": frozenset({"read_file"}),
+    "edit": frozenset({"write_file", "edit", "apply_patch"}),
+    "glob": frozenset({"glob"}),
+    "grep": frozenset({"grep"}),
+    "list": frozenset({"list_dir"}),
+    "bash": frozenset({"shell_exec", "shell_status", "shell_kill"}),
+    "task": frozenset({"task", "task_status", "task_cancel"}),
+    "todowrite": frozenset({"todo_write"}),
+    "webfetch": frozenset({"fetch"}),
+    "websearch": frozenset({"websearch", "web_search"}),
+    "lsp": frozenset({"lsp"}),
+    "skill": frozenset({"skill", "skill_list"}),
+    "question": frozenset({"question"}),
+    "doom_loop": frozenset(),
+}
+
+
+_PERMISSION_ALIAS_METADATA_CATEGORIES: dict[str, frozenset[str]] = {
+    "bash": frozenset({"shell"}),
+    "task": frozenset({"task"}),
+    "lsp": frozenset({"lsp"}),
+    "skill": frozenset({"skill"}),
+    "question": frozenset({"question"}),
+    "doom_loop": frozenset({"doom_loop"}),
+}
+
+
+def _is_permission_wildcard(key: str) -> bool:
+    return any(char in key for char in "*?[")
+
+
+def _permission_category_matches(
+    key: str,
+    *,
+    tool_id: str,
+    category: str,
+) -> bool:
+    if category and key == category:
+        return True
+    alias_tool_ids = _PERMISSION_CATEGORY_ALIASES.get(key)
+    if alias_tool_ids is not None and tool_id in alias_tool_ids:
+        return True
+    alias_categories = _PERMISSION_ALIAS_METADATA_CATEGORIES.get(key)
+    if alias_categories is not None and category in alias_categories:
+        return True
+    return False
+
+
+def _metadata_from_permission_config(
+    metadata: PermissionMetadata,
+    match: PermissionConfigMatch,
+) -> PermissionMetadata:
+    rule = match.rule
+    data = dict(metadata.data)
+    data["permission_config_key"] = rule.key
+    data["permission_config_match"] = match.match_type
+    if rule.patterns:
+        data["patterns"] = list(rule.patterns)
+
+    if rule.action == DENY:
+        reason = rule.reason or f"Permission denied by runtime config: {rule.key}"
+    else:
+        reason = rule.reason or metadata.reason
+
+    return PermissionMetadata(
+        action=rule.action,
+        reason=reason,
+        category=metadata.category,
+        resource=metadata.resource,
+        risk=rule.risk or metadata.risk,
+        data=data,
+    )
 
 
 def _make_request_id(

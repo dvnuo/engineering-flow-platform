@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..permissions import normalize_tool_permissions
 from ..usage import validate_usage_pricing
 
 
@@ -29,6 +30,7 @@ class RuntimeConfig:
     usage_pricing: dict[str, float] = field(default_factory=dict)
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
+    tool_permissions: dict[str, Any] = field(default_factory=dict)
     runtime_mode: str = "build"
     enable_plan_tool: bool | None = None
     plan_mode_read_only: bool = True
@@ -123,6 +125,7 @@ class RuntimeConfig:
             self.background_shell_max_buffer_bytes
         )
         self.disabled_tools = list(self.disabled_tools)
+        self.tool_permissions = normalize_tool_permissions(self.tool_permissions)
         self.metadata = dict(self.metadata)
         self.include_default_system_prompt = bool(self.include_default_system_prompt)
         self.system_prompt_texts = list(self.system_prompt_texts)

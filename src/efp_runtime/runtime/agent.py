@@ -15,7 +15,7 @@ from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
 from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
 from ..lsp import LSPClient
-from ..permissions import PermissionEvaluator
+from ..permissions import ConfiguredPermissionBroker, PermissionEvaluator
 from ..prompt import resolve_prompt_references
 from ..questions import QuestionBroker
 from ..session.protocol import SessionStore
@@ -476,6 +476,7 @@ def _resolve_config(
             None if config.enabled_tools is None else list(config.enabled_tools)
         ),
         disabled_tools=list(config.disabled_tools),
+        tool_permissions=dict(config.tool_permissions),
         runtime_mode=config.runtime_mode,
         enable_plan_tool=config.enable_plan_tool,
         plan_mode_read_only=config.plan_mode_read_only,
@@ -574,9 +575,15 @@ def _resolve_tool_runtime(
                 registry.register(
                     build_skill_list_tool(skill_discovery or SkillDiscovery([]))
                 )
+    resolved_permission_evaluator = permission_evaluator
+    if resolved_permission_evaluator is None and config.tool_permissions:
+        resolved_permission_evaluator = ConfiguredPermissionBroker(
+            config.tool_permissions
+        )
+
     return ToolRuntime(
         registry,
-        permission_evaluator=permission_evaluator,
+        permission_evaluator=resolved_permission_evaluator,
         default_output_policy=_tool_output_policy(config),
         output_truncator=_resolve_tool_output_truncator(
             workspace_root=workspace_root,
