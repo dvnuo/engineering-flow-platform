@@ -241,7 +241,10 @@ and `metadata["built_in"] = True` marks their source. `plan` and `scout` carry
 read-only `metadata["permission"]` overlays, while `explore` asks before
 mutating tool categories. Those permissions use the Phase18 profile overlay
 mechanism described below; they do not add provider/model routing or protocol
-integration.
+integration. Built-in plan/explore/scout overlays cover both legacy EFP tool ids
+and opencode-style aliases for mutating tools, so switching between names such
+as `write_file` / `write` or `shell_exec` / `bash` does not bypass the profile
+policy.
 
 The registry merge order is predictable: built-in profiles are loaded first,
 discovered markdown agents are loaded next in stable directory/file order and
@@ -420,13 +423,14 @@ to the next provider iteration. Set
 Runtime v2 supports a minimal `plan` runtime mode alongside the default `build`
 mode. In plan mode, `AgentRuntime` registers the `plan_exit` built-in tool by
 default and, while `RuntimeConfig.plan_mode_read_only=True`, hides mutating
-tools from the provider request schema: `apply_patch`, `edit`, `write`,
-`write_file`, `bash`, `shell_exec`, and `shell_kill`. These tools remain
-registered in the underlying registry so the policy is enforced through tool
+tools from the provider request schema: `apply_patch`, `edit`, `write_file`,
+`write`, `shell_exec`, `bash`, `shell_kill`, `task`, and `task_cancel`. The set
+intentionally includes legacy EFP ids and opencode-style aliases, and may name
+tools that are not present in a particular registry. Registered mutating tools
+remain in the underlying registry so the policy is enforced through tool
 selection rather than by changing registry shape. Caller-supplied
 `disabled_tools` still apply, and caller-supplied `enabled_tools` cannot expose
-those mutating tools unless
-`plan_mode_read_only=False`.
+those mutating tools unless `plan_mode_read_only=False`.
 
 `plan_exit` lets the model submit a final structured plan. Its `ToolResult`
 contains the plan, status, summary, next steps, and risks in `output`, and marks

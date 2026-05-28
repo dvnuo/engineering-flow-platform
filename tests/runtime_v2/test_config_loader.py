@@ -294,16 +294,21 @@ def test_builtin_read_focused_agents_carry_permission_metadata(tmp_path: Path):
     assert registry is not None
     plan = registry.resolve("plan")
     explore = registry.resolve("explore")
-    assert normalize_agent_permission_overlay(plan.metadata) == {
+    scout = registry.resolve("scout")
+    deny_overlay = {
         "edit": "deny",
+        "write_file": "deny",
+        "write": "deny",
+        "apply_patch": "deny",
+        "shell_exec": "deny",
         "bash": "deny",
         "task": "deny",
+        "task_cancel": "deny",
     }
-    assert normalize_agent_permission_overlay(explore.metadata) == {
-        "edit": "ask",
-        "bash": "ask",
-        "task": "ask",
-    }
+    ask_overlay = {tool_id: "ask" for tool_id in deny_overlay}
+    assert normalize_agent_permission_overlay(plan.metadata) == deny_overlay
+    assert normalize_agent_permission_overlay(scout.metadata) == deny_overlay
+    assert normalize_agent_permission_overlay(explore.metadata) == ask_overlay
 
 
 def test_loader_returns_command_definitions_registry_and_default_directory(

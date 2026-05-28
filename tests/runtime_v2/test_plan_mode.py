@@ -15,6 +15,8 @@ from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import MessagePartType, MessageRole
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.tools.builtin import create_core_tool_registry
+from efp_runtime.tools.definition import ToolDef
+from efp_runtime.tools.registry import ToolRegistry
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +93,122 @@ async def test_plan_mode_exposes_plan_exit_and_hides_mutating_tools(tmp_path: Pa
     assert "plan_exit" in schema_ids
     assert MUTATING_TOOL_IDS.isdisjoint(request_tool_ids)
     assert MUTATING_TOOL_IDS.isdisjoint(schema_ids)
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_custom_alias_registry_hides_mutating_aliases(tmp_path: Path):
+    provider = ScriptedLLMProvider([{"content": "planned"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            runtime_mode="plan",
+            max_iterations=1,
+        ),
+        tool_registry=ToolRegistry(
+            [
+                _tool("read"),
+                _tool("write"),
+                _tool("bash"),
+                _tool("shell_exec"),
+                _tool("shell_status"),
+            ]
+        ),
+    )
+
+    result = await runtime.run(
+        "Plan with aliased tools.",
+        session_id="session-plan-alias-tools",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request_tool_ids = [tool.id for tool in provider.requests[0].tools]
+    schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
+    assert request_tool_ids == ["read", "shell_status"]
+    assert schema_ids == ["read", "shell_status"]
+    assert provider.requests[0].metadata["enabled_tool_ids"] == [
+        "read",
+        "shell_status",
+    ]
+    assert provider.requests[0].metadata["disabled_tool_ids"] == [
+        "bash",
+        "shell_exec",
+        "write",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_disabled_alias_calls_append_results_without_execution(
+    tmp_path: Path,
+):
+    called: list[dict[str, Any]] = []
+
+    async def execute(args, context):
+        called.append({"args": args, "tool_name": context.tool_name})
+        return "should not run"
+
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    _tool_call("call-write", "write", {"path": "blocked.txt"}),
+                    _tool_call("call-bash", "bash", {"command": "printf blocked"}),
+                ]
+            },
+            {"content": "continued after disabled aliases"},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            runtime_mode="plan",
+            max_iterations=3,
+        ),
+        tool_registry=ToolRegistry(
+            [
+                _tool("read"),
+                _tool("write", execute=execute),
+                _tool("bash", execute=execute),
+                _tool("shell_exec", execute=execute),
+                _tool("shell_status"),
+            ]
+        ),
+    )
+
+    result = await runtime.run(
+        "Plan but provider calls disabled aliases.",
+        session_id="session-plan-disabled-alias-calls",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.iterations == 2
+    assert called == []
+    assert len(provider.requests) == 2
+    assert [tool.id for tool in provider.requests[0].tools] == [
+        "read",
+        "shell_status",
+    ]
+
+    history = runtime.store.read_history("session-plan-disabled-alias-calls")
+    disabled_results = [
+        message.parts[0].tool_result
+        for message in history
+        if message.role is MessageRole.TOOL
+    ]
+    assert [
+        (result.call_id, result.tool_name, result.status, result.error)
+        for result in disabled_results
+    ] == [
+        ("call-write", "write", "disabled", "Tool is disabled: write"),
+        ("call-bash", "bash", "disabled", "Tool is disabled: bash"),
+    ]
+    assert all(result.success is False for result in disabled_results)
+    assert [
+        event.payload["tool_name"]
+        for event in result.runtime_events
+        if event.type == "tool.disabled"
+    ] == ["write", "bash"]
 
 
 @pytest.mark.asyncio
@@ -339,3 +457,19 @@ def _tool_call(call_id: str, tool_name: str, arguments: dict[str, Any]) -> dict[
             "arguments": json.dumps(arguments, sort_keys=True),
         },
     }
+
+
+def _tool(
+    tool_id: str,
+    *,
+    execute=None,
+) -> ToolDef:
+    async def default_execute(args, context):
+        return {"tool_id": tool_id, "args": args, "session_id": context.session_id}
+
+    return ToolDef(
+        id=tool_id,
+        description=f"{tool_id} tool",
+        input_schema={"type": "object", "properties": {}},
+        execute=execute or default_execute,
+    )

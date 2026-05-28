@@ -10,16 +10,23 @@ from .profile import AgentProfile
 
 DEFAULT_AGENT_PROFILE_NAMES = ("general", "build", "plan", "explore", "scout")
 
+_MUTATING_PERMISSION_TOOL_IDS = (
+    "edit",
+    "write_file",
+    "write",
+    "apply_patch",
+    "shell_exec",
+    "bash",
+    "task",
+    "task_cancel",
+)
+
 _READ_ONLY_PERMISSION = {
-    "edit": "deny",
-    "bash": "deny",
-    "task": "deny",
+    tool_id: "deny" for tool_id in _MUTATING_PERMISSION_TOOL_IDS
 }
 
 _READ_FOCUSED_ASK_PERMISSION = {
-    "edit": "ask",
-    "bash": "ask",
-    "task": "ask",
+    tool_id: "ask" for tool_id in _MUTATING_PERMISSION_TOOL_IDS
 }
 
 

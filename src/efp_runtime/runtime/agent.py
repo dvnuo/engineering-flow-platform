@@ -60,11 +60,12 @@ PLAN_MODE_MUTATING_TOOLS = {
     "apply_patch",
     "bash",
     "edit",
-    "write",
-    "write_file",
     "shell_exec",
     "shell_kill",
+    "task",
     "task_cancel",
+    "write",
+    "write_file",
 }
 
 
