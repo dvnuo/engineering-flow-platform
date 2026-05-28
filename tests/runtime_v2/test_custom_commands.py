@@ -14,9 +14,11 @@ from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.commands import (
     CommandDefinition,
     CommandRegistry,
+    builtin_command_definitions,
     command_definitions_from_config,
     expand_command,
 )
+from efp_runtime.config_loader import load_runtime_config
 from efp_runtime.llm.provider import OpenAICompatibleProvider, RecordingTransport
 from efp_runtime.loop import ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
@@ -144,6 +146,21 @@ def test_command_and_commands_aliases_override_in_stable_order():
     assert second.get("dup").content == "from command"
 
 
+def test_builtin_command_templates_keep_arguments_and_dot_workspace_root():
+    commands = {
+        command.name: command for command in builtin_command_definitions(None)
+    }
+
+    assert commands["init"].source == "builtin"
+    assert "Workspace root: ." in commands["init"].content
+    assert "Target file: ./AGENTS.md" in commands["init"].content
+    assert "$ARGUMENTS" in commands["init"].content
+    assert commands["review"].source == "builtin"
+    assert commands["review"].subtask is True
+    assert "git show $ARGUMENTS" in commands["review"].content
+    assert "git diff $ARGUMENTS...HEAD" in commands["review"].content
+
+
 def test_markdown_file_command_overrides_config_command(tmp_path: Path):
     command_dir = _write_command(tmp_path, "fix.md", "File command.")
     registry = CommandRegistry.from_sources(
@@ -223,6 +240,120 @@ async def test_slash_command_expands_into_provider_user_message(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_builtin_init_available_without_config_or_command_directory(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    await runtime.run("/init prefer pytest", session_id="session-builtin-init")
+
+    request = provider.requests[0]
+    text = request.provider_request.messages[0].text
+    root = str(tmp_path.resolve())
+    assert request.metadata["command_name"] == "init"
+    assert request.metadata["command_source"] == "builtin"
+    assert request.metadata["command_file"] == ""
+    assert root in text
+    assert f"{root}/AGENTS.md" in text
+    assert "prefer pytest" in text
+
+
+@pytest.mark.asyncio
+async def test_builtin_review_available_without_config_or_command_directory(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    await runtime.run("/review feature/rework", session_id="session-builtin-review")
+
+    request = provider.requests[0]
+    text = request.provider_request.messages[0].text
+    assert request.metadata["command_name"] == "review"
+    assert request.metadata["command_source"] == "builtin"
+    assert request.metadata["command_subtask"] is True
+    assert "Review the requested code changes." in text
+    assert "git diff" in text
+    assert "git diff --cached" in text
+    assert "git diff feature/rework...HEAD" in text
+    assert "feature/rework" in text
+    assert "Report findings first" in text
+
+
+@pytest.mark.asyncio
+async def test_config_command_overrides_builtin_init(tmp_path: Path):
+    (tmp_path / "opencode.json").write_text(
+        json.dumps(
+            {
+                "command": {
+                    "init": {
+                        "template": "Config init $ARGUMENTS",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_runtime_config(tmp_path)
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=loaded.config,
+        command_registry=loaded.command_registry,
+    )
+
+    await runtime.run("/init docs", session_id="session-config-init")
+
+    request = provider.requests[0]
+    text = _last_user_text(request)
+    assert request.metadata["command_name"] == "init"
+    assert request.metadata["command_source"] == "config"
+    assert "Config init docs" in text
+    assert "Create or update the workspace agent guide." not in text
+
+
+@pytest.mark.asyncio
+async def test_markdown_command_overrides_builtin_review(tmp_path: Path):
+    command_file = tmp_path / ".opencode" / "commands" / "review.md"
+    command_file.parent.mkdir(parents=True)
+    command_file.write_text("File review $ARGUMENTS", encoding="utf-8")
+    loaded = load_runtime_config(tmp_path)
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=loaded.config,
+        command_registry=loaded.command_registry,
+    )
+
+    await runtime.run("/review branch-name", session_id="session-file-review")
+
+    request = provider.requests[0]
+    text = _last_user_text(request)
+    assert request.metadata["command_name"] == "review"
+    assert request.metadata["command_source"] == "file"
+    assert request.metadata["command_file"] == str(command_file)
+    assert "File review branch-name" in text
+    assert "Review the requested code changes." not in text
+
+
+@pytest.mark.asyncio
 async def test_injected_command_registry_expands_without_config_directories():
     definition = CommandDefinition(
         name="build",
@@ -249,6 +380,9 @@ async def test_injected_command_registry_expands_without_config_directories():
         ),
         tool_registry=ToolRegistry([_tool("shell_exec")]),
     )
+
+    assert runtime.command_registry is registry
+    assert runtime.command_registry.get("init") is None
 
     await runtime.run("/build target --fast", session_id="session-injected-command")
     definition.metadata["tools"].append("write_file")
@@ -1016,6 +1150,13 @@ def _write_command(tmp_path: Path, filename: str, content: str) -> Path:
     command_dir.mkdir(exist_ok=True)
     (command_dir / filename).write_text(content, encoding="utf-8")
     return command_dir
+
+
+def _last_user_text(request: Any) -> str:
+    for message in reversed(request.provider_request.messages):
+        if message.role == "user":
+            return message.text
+    raise AssertionError("provider request did not contain a user message")
 
 
 def _write_skill(

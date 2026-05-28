@@ -21,6 +21,7 @@ from ..commands import (
     CommandRegistry,
     CommandShellExecutionResult,
     apply_command_shell_execution_results,
+    builtin_command_definitions,
     expand_command,
     find_command_shell_interpolations,
 )
@@ -1715,9 +1716,10 @@ def _resolve_command_registry(
 ) -> CommandRegistry | None:
     if command_registry is not None:
         return command_registry
-    if not config.command_directories:
-        return None
-    return CommandRegistry.from_sources(command_directories=config.command_directories)
+    return CommandRegistry.from_sources(
+        definitions=builtin_command_definitions(config.workspace_root),
+        command_directories=config.command_directories,
+    )
 
 
 def _resolve_instruction_context_builder(

@@ -26,6 +26,7 @@ from .agents.registry import AgentRegistry
 from .commands import (
     CommandDefinition,
     CommandRegistry,
+    builtin_command_definitions,
     command_definitions_from_config,
 )
 from .runtime.config import RuntimeConfig
@@ -146,6 +147,7 @@ def load_runtime_config(
     )
     command_definitions = command_definitions_from_config(raw)
     command_registry = _command_registry_from_sources(
+        workspace_root=root,
         definitions=command_definitions,
         command_directories=config.command_directories,
     )
@@ -461,13 +463,15 @@ def _agent_config_entries(
 
 def _command_registry_from_sources(
     *,
+    workspace_root: str | Path | None,
     definitions: list[CommandDefinition],
     command_directories: list[str | Path],
 ) -> CommandRegistry | None:
-    if not definitions and not command_directories:
-        return None
     return CommandRegistry.from_sources(
-        definitions=definitions,
+        definitions=[
+            *builtin_command_definitions(workspace_root),
+            *definitions,
+        ],
         command_directories=command_directories,
     )
 

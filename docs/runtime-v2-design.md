@@ -793,11 +793,27 @@ sidecars, subject to the configured maximum character limit.
 
 Runtime v2 supports custom slash command directories through
 `RuntimeConfig.command_directories` and explicit `CommandRegistry` injection on
-`AgentRuntime`. Command files are markdown or text prompt templates discovered
-from those directories, including hidden configured roots such as
-`.opencode/command`; hidden subdirectories are skipped by default. With default
-discovery enabled, the config loader discovers existing command directories in
-this order: `~/.config/opencode/commands`, workspace-local `.opencode/command`,
+`AgentRuntime`. When no explicit `command_registry` is injected, Runtime v2
+seeds the registry with built-in `/init` and `/review` commands even if no
+command directories are configured. Explicit `command_registry` injection is
+used as supplied and is not wrapped with built-ins.
+
+Built-in commands are ordinary `CommandDefinition` records with
+`source="builtin"`, so they use the same variable rendering, prompt reference
+resolution, metadata propagation, and shell interpolation path as every other
+command. `/init` asks the model to create or update the workspace-root
+`AGENTS.md`; its template renders the current workspace root path, or `.` when
+the runtime has no workspace root, and includes `$ARGUMENTS` for caller focus.
+`/review` asks for a findings-first code review and includes `$ARGUMENTS` as the
+review target. Its metadata sets `subtask=true`, which is reported as
+`command_subtask=True`; this metadata is observational and does not start a
+subagent.
+
+Command files are markdown or text prompt templates discovered from configured
+directories, including hidden configured roots such as `.opencode/command`;
+hidden subdirectories are skipped by default. With default discovery enabled,
+the config loader discovers existing command directories in this order:
+`~/.config/opencode/commands`, workspace-local `.opencode/command`,
 workspace-local `.opencode/commands`, then configured `commandDirectories` /
 `command_directories`. Later discovered markdown commands with the same
 normalized name override earlier ones, so project commands override global user
@@ -820,9 +836,13 @@ supports opencode-style `command` and compatible `commands` mappings:
 }
 ```
 
-Config commands are registered before directory commands. Later discoveries
-with the same normalized name replace earlier ones, so project markdown command
-files can override config commands.
+Registration order is built-ins first, then config commands, then directory
+commands. Later entries with the same normalized name replace earlier ones, so
+config can override built-in `/init` or `/review`, and project markdown command
+files can override both config and built-in commands. `load_runtime_config(...)`
+keeps `RuntimeConfigLoadResult.command_definitions` limited to config-defined
+commands; `RuntimeConfigLoadResult.command_registry` contains the full registry,
+including built-ins.
 
 When command expansion is enabled, `AgentRuntime.run(...)` checks the first
 effective non-empty user line after `/skill` lines have been parsed. A discovered
@@ -853,14 +873,14 @@ such as `$HOME` are preserved. The expansion still includes
 `<command_arguments>` and `<command_input>` blocks so the model can see the raw
 arguments and remaining body text.
 
-Command metadata flows into run metadata as `command_source`, optional
-`command_agent`, optional `command_model`, optional `command_subtask`, and a
-copied `command_metadata` object. When command `model` is present, Runtime v2
-also records `requested_model`. For generic providers that field remains
-metadata only. `OpenAICompatibleProvider` honors it when building the outgoing
-payload `model`, but it does not switch provider instances, endpoint, transport,
-tools, schemas, mode, or sampling settings. `subtask` is recorded only; it does
-not start a subagent in this phase.
+Command metadata flows into run metadata as `command_source` (`builtin`,
+`config`, or `file`), optional `command_agent`, optional `command_model`,
+optional `command_subtask`, and a copied `command_metadata` object. When command
+`model` is present, Runtime v2 also records `requested_model`. For generic
+providers that field remains metadata only. `OpenAICompatibleProvider` honors it
+when building the outgoing payload `model`, but it does not switch provider
+instances, endpoint, transport, tools, schemas, mode, or sampling settings.
+`subtask` is recorded only; it does not start a subagent in this phase.
 
 Command `tools` metadata is treated as a per-run tool override base. A list such
 as `tools: [read_file, edit]` enables those tools, equivalent to

@@ -545,6 +545,23 @@ def test_loader_returns_command_definitions_registry_and_default_directory(
     assert "commandDirectories" not in result.metadata["unconsumed_config"]
 
 
+def test_loader_registers_builtin_commands_outside_config_definitions(
+    tmp_path: Path,
+):
+    result = load_runtime_config(tmp_path, include_defaults=False)
+
+    assert result.command_definitions == []
+    assert result.command_registry is not None
+    init = result.command_registry.get("init")
+    review = result.command_registry.get("review")
+    assert init is not None
+    assert review is not None
+    assert init.source == "builtin"
+    assert review.source == "builtin"
+    assert review.subtask is True
+    assert str(tmp_path.resolve()) in init.content
+
+
 def test_loader_returns_singular_default_command_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

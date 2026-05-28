@@ -30,6 +30,35 @@ CONFIG_TEMPLATE_KEYS = ("template", "content")
 TEMPLATE_VARIABLE_RE = re.compile(r"\$(ARGUMENTS|[1-9][0-9]*)(?![A-Za-z0-9_])")
 
 
+def builtin_command_definitions(
+    workspace_root: str | Path | None,
+) -> list["CommandDefinition"]:
+    """Return Runtime v2 built-in slash commands in base registration order."""
+
+    root_text = _builtin_workspace_root_text(workspace_root)
+    agents_path = f"{root_text}/AGENTS.md" if root_text != "." else "./AGENTS.md"
+    return [
+        CommandDefinition(
+            name="init",
+            description="Create or update AGENTS.md for this workspace",
+            argument_hint="[focus]",
+            content=_builtin_init_template(
+                workspace_root=root_text,
+                agents_path=agents_path,
+            ),
+            source="builtin",
+        ),
+        CommandDefinition(
+            name="review",
+            description="Review working tree, commit, branch, or PR changes",
+            argument_hint="[commit|branch|PR|URL]",
+            content=_builtin_review_template(),
+            source="builtin",
+            subtask=True,
+        ),
+    ]
+
+
 @dataclass
 class CommandDefinition:
     """A prompt template loaded from a configured command file."""
@@ -854,6 +883,47 @@ def _command_file_for_display(definition: CommandDefinition) -> str:
     return "" if command_file == "." else command_file
 
 
+def _builtin_workspace_root_text(workspace_root: str | Path | None) -> str:
+    if workspace_root is None:
+        return "."
+    return str(Path(workspace_root).expanduser().resolve(strict=False))
+
+
+def _builtin_init_template(*, workspace_root: str, agents_path: str) -> str:
+    return f"""Create or update the workspace agent guide.
+
+Workspace root: {workspace_root}
+Target file: {agents_path}
+Additional user focus or constraints: $ARGUMENTS
+
+Inspect the repository before editing. Capture high-signal facts future agents need:
+development, test, build, lint, and formatting commands; architecture boundaries;
+important entry points; generated or vendored paths to avoid; environment setup;
+and project conventions that are easy to miss.
+
+If {agents_path} already exists, preserve useful guidance and remove stale or
+duplicated notes. Keep the final file concise, repository-specific, and
+actionable."""
+
+
+def _builtin_review_template() -> str:
+    return """Review the requested code changes.
+
+Review target: $ARGUMENTS
+
+Choose the comparison source from the target:
+- No target: inspect `git diff`, `git diff --cached`, and `git status --short`.
+- Commit or revision: inspect `git show $ARGUMENTS`.
+- Branch or ref: inspect `git diff $ARGUMENTS...HEAD`.
+- Pull request number or URL: prefer `gh pr view $ARGUMENTS` and
+  `gh pr diff $ARGUMENTS` when available.
+
+Report findings first, ordered by severity. Focus on correctness, regressions,
+security, data loss, missing tests, and risky behavior changes. Avoid generic
+summaries unless there are no findings; then say that clearly and note any
+residual test gaps."""
+
+
 def _normalize_command_name(name: str) -> str:
     return str(name or "").strip().lstrip("/")
 
@@ -906,6 +976,7 @@ __all__ = [
     "CommandShellInterpolation",
     "CommandRegistry",
     "apply_command_shell_execution_results",
+    "builtin_command_definitions",
     "command_definitions_from_config",
     "discover_commands",
     "expand_command",
