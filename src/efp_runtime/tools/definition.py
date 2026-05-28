@@ -29,9 +29,31 @@ class ToolContext:
     session_id: str | None = None
     request_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    run_id: str | None = None
+    iteration: int | None = None
+
+    def to_metadata(self) -> dict[str, Any]:
+        """Return metadata with first-class execution context mirrored into it."""
+
+        metadata = dict(self.metadata or {})
+        _set_missing_metadata(metadata, "tool_call_id", self.tool_call_id)
+        _set_missing_metadata(metadata, "tool_name", self.tool_name)
+        _set_missing_metadata(metadata, "run_id", self.run_id)
+        _set_missing_metadata(metadata, "iteration", self.iteration)
+        return metadata
 
 
 AsyncToolExecute = Callable[[dict[str, Any], ToolContext], Awaitable[Any]]
+
+
+def _set_missing_metadata(metadata: dict[str, Any], key: str, value: Any) -> None:
+    if value is None:
+        return
+    existing = metadata.get(key)
+    if existing is None or existing == "":
+        metadata[key] = value
 
 
 @dataclass(frozen=True)

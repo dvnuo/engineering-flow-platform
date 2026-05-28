@@ -96,7 +96,12 @@ async def test_foreground_runner_receives_full_request_and_session_id():
         command="inspect-ci",
         background=False,
         session_id="session-task",
-        metadata={"trace_id": "trace-1", "request_id": "request-1"},
+        metadata={
+            "trace_id": "trace-1",
+            "tool_call_id": "call-task",
+            "tool_name": "task",
+            "request_id": "request-1",
+        },
     )
     assert result.metadata["task_id"] == "task-explicit"
     assert result.metadata["description"] == "Summarize build failure"

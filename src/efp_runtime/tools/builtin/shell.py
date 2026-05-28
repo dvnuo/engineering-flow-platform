@@ -92,29 +92,35 @@ def create_shell_exec_tool(
             max_chars=max_output_chars,
             max_lines=max_output_lines,
         )
+        output_path = save_workspace_output(
+            root,
+            full_content,
+            name_hint=_output_name_hint(context, command, cwd_relative, description),
+        )
+        tool_call_id = _result_call_id(context)
+        run_id = _context_value(context, "run_id")
         metadata: dict[str, Any] = {
             "description": description,
             "cwd": cwd_relative,
             "exit_code": exit_code,
             "timed_out": timed_out,
             "duration_ms": duration_ms,
+            "output_path": output_path,
+            "full_output_chars": len(full_content),
+            "visible_output_chars": len(content),
             "truncated": truncated,
             "stdout_chars": len(stdout),
             "stderr_chars": len(stderr),
             "timeout_ms": timeout_ms,
             "max_output_chars": max_output_chars,
             "max_output_lines": max_output_lines,
+            "tool_call_id": tool_call_id,
         }
-        if truncated:
-            output_path = save_workspace_output(
-                root,
-                full_content,
-                name_hint=_output_name_hint(context, command, cwd_relative, description),
-            )
-            metadata["output_path"] = output_path
+        if run_id:
+            metadata["run_id"] = run_id
 
         return ToolResult(
-            call_id=_result_call_id(context),
+            call_id=tool_call_id,
             tool_name="shell_exec",
             content=content,
             output=output,
@@ -233,7 +239,7 @@ def _tagged_output(tag: str, content: str) -> str:
 
 
 def _result_call_id(context: ToolContext) -> str:
-    call_id = _context_metadata_value(context, "tool_call_id")
+    call_id = _context_value(context, "tool_call_id")
     if call_id:
         return call_id
     if context.request_id:
@@ -247,7 +253,7 @@ def _output_name_hint(
     cwd: str,
     description: str,
 ) -> str:
-    call_id = _context_metadata_value(context, "tool_call_id")
+    call_id = _context_value(context, "tool_call_id")
     if call_id:
         return call_id
 
@@ -264,8 +270,10 @@ def _output_name_hint(
     return f"shell-{digest}"
 
 
-def _context_metadata_value(context: ToolContext, key: str) -> str | None:
-    value = context.metadata.get(key) if isinstance(context.metadata, dict) else None
-    if value is None:
+def _context_value(context: ToolContext, key: str) -> str | None:
+    value = getattr(context, key, None)
+    if (value is None or value == "") and isinstance(context.metadata, dict):
+        value = context.metadata.get(key)
+    if value is None or value == "":
         return None
     return str(value)

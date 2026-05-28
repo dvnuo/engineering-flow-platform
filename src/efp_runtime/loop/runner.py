@@ -224,6 +224,8 @@ class RuntimeLoopRunner:
                     tool_calls=pending_tool_calls,
                     runtime_events=runtime_events,
                     run_id=run_id,
+                    iteration=None,
+                    resume_pending=True,
                     enabled_tool_ids=enabled_tool_id_set,
                 )
                 if pending_outcome.cancelled or await self._cancel_requested(
@@ -373,6 +375,8 @@ class RuntimeLoopRunner:
                 tool_calls=tool_calls,
                 runtime_events=runtime_events,
                 run_id=run_id,
+                iteration=iteration,
+                resume_pending=False,
                 enabled_tool_ids=enabled_tool_id_set,
             )
             if tool_execution_outcome.cancelled or await self._cancel_requested(
@@ -558,6 +562,8 @@ class RuntimeLoopRunner:
         tool_calls: List[ToolCall],
         runtime_events: List[RuntimeEvent],
         run_id: str,
+        iteration: Optional[int],
+        resume_pending: bool,
         enabled_tool_ids: set[str],
     ) -> _ToolExecutionOutcome:
         for tool_call in tool_calls:
@@ -567,11 +573,11 @@ class RuntimeLoopRunner:
                 RuntimeEvent(
                     type="tool_call_start",
                     session_id=session_id,
-                    payload={
-                        "run_id": run_id,
-                        "tool_call_id": tool_call.call_id,
-                        "tool_name": tool_call.tool_name,
-                    },
+                    payload=_tool_event_context_payload(
+                        run_id=run_id,
+                        tool_call=tool_call,
+                        iteration=iteration,
+                    ),
                 )
             )
             if tool_call.tool_name not in enabled_tool_ids:
@@ -581,11 +587,11 @@ class RuntimeLoopRunner:
                         type="tool.disabled",
                         message=result.error,
                         session_id=session_id,
-                        payload={
-                            "run_id": run_id,
-                            "tool_call_id": tool_call.call_id,
-                            "tool_name": tool_call.tool_name,
-                        },
+                        payload=_tool_event_context_payload(
+                            run_id=run_id,
+                            tool_call=tool_call,
+                            iteration=iteration,
+                        ),
                     )
                 )
                 self._append_tool_result(
@@ -598,7 +604,13 @@ class RuntimeLoopRunner:
 
             result = await self.tool_runtime.execute(
                 tool_call,
-                context=ToolContext(session_id=session_id),
+                context=_tool_context(
+                    session_id=session_id,
+                    tool_call=tool_call,
+                    run_id=run_id,
+                    iteration=iteration,
+                    resume_pending=resume_pending,
+                ),
             )
             permission_request = _permission_request_payload(result.metadata)
             permission_event_published = False
@@ -606,6 +618,12 @@ class RuntimeLoopRunner:
                 if isinstance(event, RuntimeEvent):
                     if event.session_id is None:
                         event.session_id = session_id
+                    _fill_tool_event_context(
+                        event,
+                        run_id=run_id,
+                        tool_call=tool_call,
+                        iteration=iteration,
+                    )
                     if event.type == "tool.permission_requested":
                         permission_event_published = True
                         event.payload.update(
@@ -798,6 +816,69 @@ def _disabled_tool_result(tool_call: ToolCall) -> ToolResult:
         content=message,
         metadata={"disabled": True},
     )
+
+
+def _tool_context(
+    *,
+    session_id: str,
+    tool_call: ToolCall,
+    run_id: str,
+    iteration: Optional[int],
+    resume_pending: bool,
+) -> ToolContext:
+    metadata: dict[str, Any] = {
+        "tool_call_id": tool_call.call_id,
+        "tool_name": tool_call.tool_name,
+        "run_id": run_id,
+    }
+    if iteration is not None:
+        metadata["iteration"] = iteration
+    elif resume_pending:
+        metadata["iteration"] = "resume"
+        metadata["resume"] = True
+
+    return ToolContext(
+        session_id=session_id,
+        request_id=run_id,
+        metadata=metadata,
+        tool_call_id=tool_call.call_id,
+        tool_name=tool_call.tool_name,
+        run_id=run_id,
+        iteration=iteration,
+    )
+
+
+def _tool_event_context_payload(
+    *,
+    run_id: str,
+    tool_call: ToolCall,
+    iteration: Optional[int],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "tool_call_id": tool_call.call_id,
+        "tool_name": tool_call.tool_name,
+    }
+    if iteration is not None:
+        payload["iteration"] = iteration
+    return payload
+
+
+def _fill_tool_event_context(
+    event: RuntimeEvent,
+    *,
+    run_id: str,
+    tool_call: ToolCall,
+    iteration: Optional[int],
+) -> None:
+    payload = _tool_event_context_payload(
+        run_id=run_id,
+        tool_call=tool_call,
+        iteration=iteration,
+    )
+    for key, value in payload.items():
+        if event.payload.get(key) in (None, ""):
+            event.payload[key] = value
 
 
 def _permission_request_payload(metadata: Mapping[str, Any]) -> dict[str, Any]:
