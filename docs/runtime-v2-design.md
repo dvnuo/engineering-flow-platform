@@ -85,6 +85,30 @@ separate tool message and do not make that tool message the active assistant
 message, so later usage and completion state are not attached to the wrong
 message.
 
+## Usage Telemetry
+
+Runtime v2 aggregates provider-neutral usage from `LLMEvent.usage`. The
+provider adapter may keep the provider's original usage dictionary on the
+assistant message, but the loop also normalizes common token fields into a run
+summary: input, output, reasoning, cached input, total tokens, and estimated
+cost. The accumulator understands common aliases such as `prompt_tokens` for
+input and `completion_tokens` for output, plus nested cached/reasoning detail
+fields when providers expose them.
+
+When `RuntimeConfig.track_usage=True` (the default), `RuntimeLoopResult.usage`
+contains the cumulative run summary. The loop also publishes `usage.updated`
+runtime events after step-finish usage is observed, adds per-iteration and
+cumulative usage to `iteration_finish`, and includes the final usage summary in
+`run_finish`. Provider request metadata includes `track_usage` and whether
+usage pricing is enabled, so providers and workflows can observe the requested
+telemetry mode without changing provider output shapes.
+
+`RuntimeConfig.usage_pricing` is caller-provided estimation data, not provider
+truth and not a built-in price table. Values are per-1M token prices such as
+`input_per_1m`, `output_per_1m`, `reasoning_per_1m`, and
+`cached_input_per_1m`; empty pricing keeps `cost_usd=None`. Runtime v2 does not
+fetch pricing data or bind usage accounting to any specific provider.
+
 ## Runtime Facade
 
 `efp_runtime.runtime.AgentRuntime` is the high-level Runtime v2 facade. It wires

@@ -245,6 +245,12 @@ def _child_config(
             if base_config is None
             else base_config.emit_llm_stream_events
         ),
+        track_usage=(
+            True if base_config is None else base_config.track_usage
+        ),
+        usage_pricing=(
+            {} if base_config is None else dict(base_config.usage_pricing)
+        ),
         enabled_tools=(
             None
             if base_config is None or base_config.enabled_tools is None

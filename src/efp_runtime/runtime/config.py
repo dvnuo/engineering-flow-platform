@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..usage import validate_usage_pricing
+
 
 @dataclass
 class RuntimeConfig:
@@ -23,6 +25,8 @@ class RuntimeConfig:
     provider_retry_backoff_multiplier: float = 2.0
     enable_context_overflow_retry: bool = True
     emit_llm_stream_events: bool = True
+    track_usage: bool = True
+    usage_pricing: dict[str, float] = field(default_factory=dict)
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
     runtime_mode: str = "build"
@@ -106,6 +110,8 @@ class RuntimeConfig:
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
         self.enable_context_overflow_retry = bool(self.enable_context_overflow_retry)
         self.emit_llm_stream_events = bool(self.emit_llm_stream_events)
+        self.track_usage = bool(self.track_usage)
+        self.usage_pricing = validate_usage_pricing(self.usage_pricing)
         self.enable_plan_tool = (
             None if self.enable_plan_tool is None else bool(self.enable_plan_tool)
         )

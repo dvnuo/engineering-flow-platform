@@ -31,6 +31,13 @@ from ..tools.definition import ToolContext
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection, resolve_tool_selection
 from ..types import ToolCall, ToolResult, new_id
+from ..usage import (
+    UsageSummary,
+    estimate_cost,
+    merge_usage,
+    normalize_usage,
+    validate_usage_pricing,
+)
 from .provider import LLMProvider, ProviderOutput, ProviderResult, RuntimeRequest
 from .stream_events import bridge_llm_stream_events
 
@@ -53,6 +60,7 @@ class RuntimeLoopResult:
     runtime_events: List[RuntimeEvent] = field(default_factory=list)
     pending_permission_request: Optional[dict[str, Any]] = None
     pending_question_request: Optional[dict[str, Any]] = None
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
 ProviderCallable = Callable[[RuntimeRequest], ProviderResult]
@@ -107,6 +115,8 @@ class RuntimeLoopRunner:
         provider_retry_backoff_multiplier: float = 2.0,
         enable_context_overflow_retry: bool = True,
         emit_llm_stream_events: bool = True,
+        track_usage: bool = True,
+        usage_pricing: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -146,6 +156,8 @@ class RuntimeLoopRunner:
         self.provider_retry_backoff_multiplier = provider_retry_backoff_multiplier
         self.enable_context_overflow_retry = enable_context_overflow_retry
         self.emit_llm_stream_events = bool(emit_llm_stream_events)
+        self.track_usage = bool(track_usage)
+        self.usage_pricing = validate_usage_pricing(usage_pricing or {})
 
     async def run(
         self,
@@ -212,10 +224,19 @@ class RuntimeLoopRunner:
         run_id = str(run_metadata.get("run_id") or new_id("run"))
         run_metadata["run_id"] = run_id
         run_metadata["emit_llm_stream_events"] = self.emit_llm_stream_events
+        _record_usage_metadata(
+            run_metadata,
+            track_usage=self.track_usage,
+            pricing_enabled=bool(self.usage_pricing),
+        )
         _record_tool_selection_metadata(
             run_metadata,
             enabled_tool_ids=enabled_tool_ids,
             disabled_tool_ids=disabled_tool_ids,
+        )
+        run_usage = _summary_with_estimated_cost(
+            UsageSummary(),
+            self.usage_pricing,
         )
         cancel_event_published = False
 
@@ -247,6 +268,10 @@ class RuntimeLoopRunner:
                     "enabled_tool_ids": list(enabled_tool_ids),
                     "disabled_tool_ids": list(disabled_tool_ids),
                     "emit_llm_stream_events": self.emit_llm_stream_events,
+                    "track_usage": self.track_usage,
+                    "usage_pricing_enabled": bool(
+                        self.track_usage and self.usage_pricing
+                    ),
                 },
             )
         )
@@ -319,6 +344,50 @@ class RuntimeLoopRunner:
             )
 
             iterations = iteration
+            iteration_usage = _summary_with_estimated_cost(
+                UsageSummary(),
+                self.usage_pricing,
+            )
+
+            def record_step_usage(event: LLMEvent) -> None:
+                nonlocal run_usage, iteration_usage
+                if not self.track_usage:
+                    return
+                if event.type_value != "step_finish" or not event.usage:
+                    return
+                step_usage = _summary_with_estimated_cost(
+                    normalize_usage(event.usage),
+                    self.usage_pricing,
+                )
+                iteration_usage = _summary_with_estimated_cost(
+                    merge_usage([iteration_usage, step_usage]),
+                    self.usage_pricing,
+                )
+                run_usage = _summary_with_estimated_cost(
+                    merge_usage([run_usage, step_usage]),
+                    self.usage_pricing,
+                )
+                _annotate_latest_step_usage_event(
+                    runtime_events,
+                    step_usage=step_usage,
+                    iteration_usage=iteration_usage,
+                    run_usage=run_usage,
+                )
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="usage.updated",
+                        session_id=resolved_session_id,
+                        payload={
+                            "run_id": run_id,
+                            "iteration": iteration,
+                            "pricing_enabled": bool(self.usage_pricing),
+                            "step_usage": _usage_payload(step_usage),
+                            "iteration_usage": _usage_payload(iteration_usage),
+                            "usage": _usage_payload(run_usage),
+                        },
+                    )
+                )
+
             try:
                 provider_output = await self._invoke_provider_with_retries(
                     request,
@@ -338,6 +407,10 @@ class RuntimeLoopRunner:
                     run_id=run_id,
                     iteration=iteration,
                     enabled=self.emit_llm_stream_events,
+                )
+                observed_events = _observe_usage_events(
+                    observed_events,
+                    on_event=record_step_usage,
                 )
                 processor_session = RuntimeSession(
                     session_id=resolved_session_id,
@@ -378,16 +451,20 @@ class RuntimeLoopRunner:
                 assistant_message,
             )
             tool_calls = _assistant_tool_calls(final_assistant_message)
+            iteration_finish_payload = {
+                "run_id": run_id,
+                "iteration": iteration,
+                "tool_call_count": len(tool_calls),
+            }
+            if self.track_usage:
+                iteration_finish_payload["usage"] = _usage_payload(iteration_usage)
+                iteration_finish_payload["run_usage"] = _usage_payload(run_usage)
             runtime_events.append(
                 RuntimeEvent(
                     type="iteration_finish",
                     session_id=resolved_session_id,
                     message_id=final_assistant_message.message_id,
-                    payload={
-                        "run_id": run_id,
-                        "iteration": iteration,
-                        "tool_call_count": len(tool_calls),
-                    },
+                    payload=iteration_finish_payload,
                 )
             )
 
@@ -466,6 +543,8 @@ class RuntimeLoopRunner:
         }
         if terminal_reason is not None:
             finish_payload["terminal_reason"] = terminal_reason
+        if self.track_usage:
+            finish_payload["usage"] = _usage_payload(run_usage)
         runtime_events.append(
             RuntimeEvent(
                 type="run_finish",
@@ -486,6 +565,7 @@ class RuntimeLoopRunner:
             runtime_events=runtime_events,
             pending_permission_request=pending_permission_request,
             pending_question_request=pending_question_request,
+            usage=_usage_payload(run_usage) if self.track_usage else {},
         )
 
     def _context_budget(self) -> ContextBudget:
@@ -1186,6 +1266,8 @@ async def run_runtime_loop(
     provider_retry_backoff_multiplier: float = 2.0,
     enable_context_overflow_retry: bool = True,
     emit_llm_stream_events: bool = True,
+    track_usage: bool = True,
+    usage_pricing: Optional[Mapping[str, Any]] = None,
 ) -> RuntimeLoopResult:
     runner = RuntimeLoopRunner(
         store=store,
@@ -1206,6 +1288,8 @@ async def run_runtime_loop(
         provider_retry_backoff_multiplier=provider_retry_backoff_multiplier,
         enable_context_overflow_retry=enable_context_overflow_retry,
         emit_llm_stream_events=emit_llm_stream_events,
+        track_usage=track_usage,
+        usage_pricing=usage_pricing,
     )
     return await runner.run(
         user_text=user_text,
@@ -1324,6 +1408,77 @@ def _record_tool_selection_metadata(
             merged_tools_metadata["caller_value"] = tools_metadata
     merged_tools_metadata.update({"enabled": enabled, "disabled": disabled})
     metadata["tools"] = merged_tools_metadata
+
+
+def _record_usage_metadata(
+    metadata: dict[str, Any],
+    *,
+    track_usage: bool,
+    pricing_enabled: bool,
+) -> None:
+    resolved_pricing_enabled = bool(track_usage and pricing_enabled)
+    metadata["track_usage"] = bool(track_usage)
+    metadata["usage_pricing_enabled"] = resolved_pricing_enabled
+
+    usage_metadata = metadata.get("usage_telemetry")
+    if isinstance(usage_metadata, Mapping):
+        merged_usage_metadata = dict(usage_metadata)
+    else:
+        merged_usage_metadata = {}
+        if usage_metadata is not None:
+            merged_usage_metadata["caller_value"] = usage_metadata
+    merged_usage_metadata.update(
+        {
+            "track_usage": bool(track_usage),
+            "pricing_enabled": resolved_pricing_enabled,
+        }
+    )
+    metadata["usage_telemetry"] = merged_usage_metadata
+
+
+async def _observe_usage_events(
+    events: Union[AsyncIterable[LLMEvent], Iterable[LLMEvent]],
+    *,
+    on_event: Callable[[LLMEvent], None],
+) -> AsyncIterable[LLMEvent]:
+    if hasattr(events, "__aiter__"):
+        async for event in events:  # type: ignore[union-attr]
+            on_event(event)
+            yield event
+        return
+
+    for event in events:  # type: ignore[union-attr]
+        on_event(event)
+        yield event
+
+
+def _summary_with_estimated_cost(
+    summary: UsageSummary,
+    pricing: Mapping[str, Any],
+) -> UsageSummary:
+    summary.cost_usd = estimate_cost(summary, pricing)
+    return summary
+
+
+def _usage_payload(summary: UsageSummary) -> dict[str, Any]:
+    return summary.to_dict()
+
+
+def _annotate_latest_step_usage_event(
+    runtime_events: List[RuntimeEvent],
+    *,
+    step_usage: UsageSummary,
+    iteration_usage: UsageSummary,
+    run_usage: UsageSummary,
+) -> None:
+    if not runtime_events:
+        return
+    event = runtime_events[-1]
+    if event.type != "llm.step_finish":
+        return
+    event.payload["usage_summary"] = _usage_payload(step_usage)
+    event.payload["iteration_usage"] = _usage_payload(iteration_usage)
+    event.payload["run_usage"] = _usage_payload(run_usage)
 
 
 def _disabled_tool_result(tool_call: ToolCall) -> ToolResult:

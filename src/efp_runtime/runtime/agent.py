@@ -179,6 +179,8 @@ class AgentRuntime:
                     self.config.enable_context_overflow_retry
                 ),
                 emit_llm_stream_events=self.config.emit_llm_stream_events,
+                track_usage=self.config.track_usage,
+                usage_pricing=self.config.usage_pricing,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(resolved_session_id),
                 tool_selection=_config_tool_selection(self.config),
@@ -251,6 +253,8 @@ class AgentRuntime:
                     self.config.enable_context_overflow_retry
                 ),
                 emit_llm_stream_events=self.config.emit_llm_stream_events,
+                track_usage=self.config.track_usage,
+                usage_pricing=self.config.usage_pricing,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(session_id),
                 tool_selection=_config_tool_selection(self.config),
@@ -453,6 +457,8 @@ def _resolve_config(
         provider_retry_backoff_multiplier=config.provider_retry_backoff_multiplier,
         enable_context_overflow_retry=config.enable_context_overflow_retry,
         emit_llm_stream_events=config.emit_llm_stream_events,
+        track_usage=config.track_usage,
+        usage_pricing=dict(config.usage_pricing),
         enabled_tools=(
             None if config.enabled_tools is None else list(config.enabled_tools)
         ),
