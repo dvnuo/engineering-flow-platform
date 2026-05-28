@@ -180,6 +180,17 @@ workspace root. JSONC files support line comments, block comments, and trailing
 commas without treating `//` inside JSON strings as comments. Invalid JSON raises
 `ValueError` with the file path in the message.
 
+Before JSON/JSONC parsing, config file text supports two local substitutions
+inside JSON string values. `{env:NAME}` is replaced with the environment
+variable value, or an empty string when the variable is unset. `{file:path}` is
+replaced with the trimmed UTF-8 contents of a local file. `~/...` file
+references expand against the user home, absolute paths are used as written,
+and relative paths resolve from the directory containing the config file. A
+missing `{file:path}` raises `ValueError` that includes the token text, resolved
+file path, and config file path. Inserted values are escaped for JSON string
+context so quotes, backslashes, and newlines remain valid. Tokens inside JSONC
+line comments are ignored before those comments are stripped.
+
 The loader maps the following opencode-style and snake_case keys into
 `RuntimeConfig`:
 

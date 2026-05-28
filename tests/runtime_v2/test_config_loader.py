@@ -270,6 +270,107 @@ def test_jsonc_comments_trailing_commas_and_comment_like_strings(tmp_path: Path)
     assert result.config.enabled_tools == ["read_file"]
 
 
+def test_config_variable_substitutes_env_in_json_string(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("EFP_TEST_MODEL", 'local/"model"\nnext')
+    _write_json(tmp_path / "opencode.json", {"model": "prefix-{env:EFP_TEST_MODEL}"})
+
+    result = load_runtime_config(tmp_path)
+
+    expected = 'prefix-local/"model"\nnext'
+    assert result.raw["model"] == expected
+    assert result.metadata["raw_config"]["model"] == expected
+    assert result.metadata["unconsumed_config"]["model"] == expected
+
+
+def test_config_variable_missing_env_becomes_empty_string(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("EFP_TEST_MISSING_MODEL", raising=False)
+    _write_json(tmp_path / "opencode.json", {"model": "{env:EFP_TEST_MISSING_MODEL}"})
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.raw["model"] == ""
+    assert result.metadata["raw_config"]["model"] == ""
+
+
+def test_config_variable_reads_file_relative_to_config_directory(tmp_path: Path):
+    config_path = tmp_path / ".opencode" / "config.jsonc"
+    secret_path = config_path.parent / "secret.txt"
+    secret_path.parent.mkdir(parents=True)
+    secret_path.write_text("  local secret\n", encoding="utf-8")
+    _write_json(config_path, {"systemPrompt": ["{file:secret.txt}"]})
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.raw["systemPrompt"] == ["local secret"]
+    assert result.config.system_prompt_texts == ["local secret"]
+
+
+def test_config_variable_reads_file_from_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    (home / "secret.txt").write_text("home secret\n", encoding="utf-8")
+    _write_json(tmp_path / "opencode.json", {"systemPrompt": ["{file:~/secret.txt}"]})
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.raw["systemPrompt"] == ["home secret"]
+    assert result.config.system_prompt_texts == ["home secret"]
+
+
+def test_config_variable_json_escapes_file_content_inside_string(tmp_path: Path):
+    secret_path = tmp_path / "secret.txt"
+    secret_path.write_text('  quote "one"\npath C:\\tmp\n', encoding="utf-8")
+    _write_json(tmp_path / "opencode.json", {"systemPrompt": ["{file:secret.txt}"]})
+
+    result = load_runtime_config(tmp_path)
+
+    expected = 'quote "one"\npath C:\\tmp'
+    assert result.raw["systemPrompt"] == [expected]
+    assert result.config.system_prompt_texts == [expected]
+
+
+def test_config_variable_missing_file_error_includes_context(tmp_path: Path):
+    config_path = tmp_path / ".opencode" / "config.jsonc"
+    _write_json(config_path, {"systemPrompt": ["{file:missing.txt}"]})
+
+    with pytest.raises(ValueError) as error:
+        load_runtime_config(tmp_path)
+
+    resolved = (config_path.parent / "missing.txt").resolve(strict=False)
+    message = str(error.value)
+    assert "{file:missing.txt}" in message
+    assert str(resolved) in message
+    assert str(config_path) in message
+
+
+def test_config_variable_file_token_in_jsonc_line_comment_is_ignored(tmp_path: Path):
+    path = tmp_path / "opencode.jsonc"
+    path.write_text(
+        """
+        {
+          "systemPrompt": ["ok"], // {file:missing.txt}
+          // "systemPrompt": ["{file:also-missing.txt}"],
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.raw["systemPrompt"] == ["ok"]
+    assert result.config.system_prompt_texts == ["ok"]
+
+
 def test_runtime_config_field_mapping(tmp_path: Path):
     _write_json(
         tmp_path / "custom.json",

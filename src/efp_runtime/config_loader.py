@@ -11,6 +11,7 @@ from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -230,6 +231,7 @@ def _resolve_config_paths(workspace_root: Path, paths: Any) -> list[Path]:
 def _read_config_file(path: Path) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
+        text = _substitute_config_variables(text, path)
         if path.suffix.lower() == ".jsonc":
             text = _remove_trailing_commas(_strip_jsonc_comments(text))
         loaded = json.loads(text)
@@ -241,6 +243,113 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     if not isinstance(loaded, Mapping):
         raise ValueError(f"Runtime config file must contain a JSON object: {path}")
     return dict(loaded)
+
+
+def _substitute_config_variables(text: str, path: Path) -> str:
+    output: list[str] = []
+    index = 0
+    in_string = False
+    escaped = False
+    length = len(text)
+
+    while index < length:
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < length else ""
+
+        if in_string:
+            if not escaped:
+                token_end = _config_variable_token_end(text, index)
+                if token_end is not None:
+                    token = text[index:token_end]
+                    value = _config_variable_value(token, path)
+                    output.append(_json_string_fragment(value))
+                    index = token_end
+                    continue
+
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+
+        if char == "/" and next_char == "/":
+            while index < length and text[index] not in "\r\n":
+                output.append(text[index])
+                index += 1
+            continue
+
+        if char == "/" and next_char == "*":
+            output.extend((char, next_char))
+            index += 2
+            while index < length:
+                output.append(text[index])
+                if text[index] == "*" and index + 1 < length and text[index + 1] == "/":
+                    output.append(text[index + 1])
+                    index += 2
+                    break
+                index += 1
+            continue
+
+        token_end = _config_variable_token_end(text, index)
+        if token_end is not None:
+            token = text[index:token_end]
+            output.append(_config_variable_value(token, path))
+            index = token_end
+            continue
+
+        output.append(char)
+        index += 1
+
+    return "".join(output)
+
+
+def _config_variable_token_end(text: str, start: int) -> int | None:
+    if not (text.startswith("{env:", start) or text.startswith("{file:", start)):
+        return None
+    end = text.find("}", start + 1)
+    if end < 0:
+        return None
+    return end + 1
+
+
+def _config_variable_value(token: str, path: Path) -> str:
+    if token.startswith("{env:"):
+        return os.environ.get(token[5:-1], "")
+    if token.startswith("{file:"):
+        resolved = _resolve_config_file_reference(token[6:-1], path)
+        if not resolved.is_file():
+            raise ValueError(
+                f"Config variable {token!r} in {path} "
+                f"references missing file {resolved}"
+            )
+        try:
+            return resolved.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ValueError(
+                f"Config variable {token!r} in {path} "
+                f"could not read file {resolved}: {exc}"
+            ) from exc
+    return token
+
+
+def _resolve_config_file_reference(reference: str, path: Path) -> Path:
+    raw_path = Path(reference.strip()).expanduser()
+    candidate = raw_path if raw_path.is_absolute() else path.parent / raw_path
+    return candidate.resolve(strict=False)
+
+
+def _json_string_fragment(value: str) -> str:
+    return json.dumps(value)[1:-1]
 
 
 def _strip_jsonc_comments(text: str) -> str:
