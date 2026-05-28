@@ -12,14 +12,22 @@ import pytest
 from efp_runtime.agents import (
     AgentProfile,
     AgentRegistry,
+    create_agent_task_tool,
+    create_agent_task_tools,
     create_subagent_task_runner,
 )
 from efp_runtime.agents.task_runner import _child_config
-from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest, ScriptedLLMProvider
+from efp_runtime.loop import (
+    LoopStatus,
+    RuntimeLoopRunner,
+    RuntimeRequest,
+    ScriptedLLMProvider,
+)
+from efp_runtime.models import ToolCall
 from efp_runtime.runtime import RuntimeConfig
 from efp_runtime.session.models import MessagePartType, MessageRole
 from efp_runtime.tools.builtin.task import TaskToolRequest, create_task_tool
-from efp_runtime.tools.definition import ToolDef
+from efp_runtime.tools.definition import ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
 
@@ -81,6 +89,150 @@ def test_agent_profile_and_registry_resolution():
         AgentProfile(name="bad", max_iterations=0)
 
 
+def test_agent_registry_profiles_returns_stable_sorted_profiles():
+    beta = AgentProfile(name="beta")
+    alpha = AgentProfile(name="alpha")
+    registry = AgentRegistry([beta, alpha], default_agent=None)
+
+    assert registry.profiles() == [alpha, beta]
+    assert registry.profiles()[0] is alpha
+    assert registry.profiles()[1] is beta
+
+
+def test_create_agent_task_tool_description_lists_custom_profiles():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tool = create_agent_task_tool(
+        provider=provider,
+        profiles=[
+            AgentProfile(
+                name="general",
+                description="General Runtime v2 work.",
+            ),
+            AgentProfile(
+                name="debugger",
+                description="Debug failing tests.",
+                metadata={"mode": "subagent"},
+            ),
+            AgentProfile(
+                name="reviewer",
+                description="Review code changes.",
+                metadata={"mode": "all"},
+            ),
+        ],
+    )
+
+    assert tool.description == "\n".join(
+        [
+            "Delegate a task to an injected Runtime v2 task runner.",
+            "",
+            "Available agent types:",
+            "- debugger: Debug failing tests.",
+            "- general: General Runtime v2 work.",
+            "- reviewer: Review code changes.",
+        ]
+    )
+
+
+def test_agent_task_tool_description_filters_primary_profiles_and_empty_text():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tool = create_agent_task_tool(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="build", description="Build work."),
+            AgentProfile(name="plan", description="Plan work."),
+            AgentProfile(
+                name="builder",
+                description="Build mode.",
+                metadata={"mode": "build"},
+            ),
+            AgentProfile(
+                name="hidden",
+                description="Hidden.",
+                metadata={"hidden": True},
+            ),
+            AgentProfile(name="manual", metadata={"mode": "subagent"}),
+            AgentProfile(
+                name="primary",
+                description="Primary.",
+                metadata={"mode": "primary"},
+            ),
+            AgentProfile(
+                name="scout",
+                description="Search quickly.",
+                metadata={"mode": "scout"},
+            ),
+        ],
+    )
+
+    assert "- manual: This subagent should only be called manually by the user." in (
+        tool.description
+    )
+    assert "- scout: Search quickly." in tool.description
+    assert "- build:" not in tool.description
+    assert "- plan:" not in tool.description
+    assert "- builder:" not in tool.description
+    assert "- hidden:" not in tool.description
+    assert "- primary:" not in tool.description
+
+
+def test_agent_task_tool_description_reports_no_available_subagents():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tool = create_agent_task_tool(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="plan", description="Plan work."),
+            AgentProfile(name="build", description="Build work."),
+            AgentProfile(name="hidden", metadata={"hidden": True}),
+        ],
+    )
+
+    assert tool.description == "\n".join(
+        [
+            "Delegate a task to an injected Runtime v2 task runner.",
+            "",
+            "Available agent types:",
+            "No subagents are available.",
+        ]
+    )
+
+
+def test_create_agent_task_tools_background_keeps_task_description_consistent():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tools = create_agent_task_tools(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="general", description="General work."),
+            AgentProfile(name="debugger", description="Debug failures."),
+        ],
+        allow_background=True,
+    )
+
+    assert [tool.id for tool in tools] == ["task", "task_status", "task_cancel"]
+    assert tools[0].description == "\n".join(
+        [
+            "Delegate a task to an injected Runtime v2 task runner.",
+            "",
+            "Available agent types:",
+            "- debugger: Debug failures.",
+            "- general: General work.",
+        ]
+    )
+    assert (
+        tools[1].description
+        == "Read status and results from background subagent tasks."
+    )
+    assert tools[2].description == "Cancel a running background subagent task."
+
+
+def test_agent_task_tool_description_lists_default_general_profile():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tool = create_agent_task_tool(provider=provider)
+
+    assert "- general: This subagent should only be called manually by the user." in (
+        tool.description
+    )
+
+
 @pytest.mark.asyncio
 async def test_subagent_runner_selects_profile_and_builds_child_prompt():
     provider = ScriptedLLMProvider([{"content": "child complete"}])
@@ -131,6 +283,45 @@ async def test_subagent_runner_selects_profile_and_builds_child_prompt():
     assert request.metadata["agent_profile"] == "debugger"
     assert request.metadata["subagent_type"] == "debugger"
     assert request.session_id == result.metadata["child_session_id"]
+
+
+@pytest.mark.asyncio
+async def test_create_agent_task_tool_foreground_execution_still_selects_profile():
+    provider = ScriptedLLMProvider([{"content": "debug complete"}])
+    tool = create_agent_task_tool(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="general"),
+            AgentProfile(
+                name="debugger",
+                description="Debug failures.",
+                prompt="Use the debugger profile.",
+            ),
+        ],
+        base_config=RuntimeConfig(max_iterations=1),
+    )
+    runtime = ToolRuntime(ToolRegistry([tool]))
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-agent-task",
+            tool_id="task",
+            args={
+                "description": "Analyze logs",
+                "prompt": "Find the failing step.",
+                "subagent_type": "debugger",
+                "task_id": "task-agent-foreground",
+            },
+        ),
+        context=ToolContext(session_id="parent-agent-task"),
+    )
+
+    assert result.status == "success"
+    assert result.output["text"] == "debug complete"
+    request = provider.requests[0]
+    assert request.metadata["agent_profile"] == "debugger"
+    assert request.metadata["parent_session_id"] == "parent-agent-task"
+    assert "Use the debugger profile." in request.messages[0].parts[0].text
 
 
 @pytest.mark.asyncio

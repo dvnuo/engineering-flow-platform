@@ -23,6 +23,7 @@ from ..session.models import Message, MessagePartType
 from ..session.protocol import SessionStore
 from ..session.store import InMemorySessionStore
 from ..tools.builtin.task import (
+    DEFAULT_TASK_TOOL_DESCRIPTION,
     TaskToolRequest,
     TaskToolResult,
     TaskToolRunner,
@@ -38,6 +39,11 @@ from .registry import AgentRegistry
 
 
 EMPTY_SUBAGENT_RESULT_MESSAGE = "Subagent completed without assistant text."
+MANUAL_SUBAGENT_DESCRIPTION = (
+    "This subagent should only be called manually by the user."
+)
+_PRIMARY_TASK_PROFILE_NAMES = {"build", "plan"}
+_PRIMARY_TASK_PROFILE_MODES = {"primary", "build", "plan"}
 
 
 @dataclass(frozen=True)
@@ -169,17 +175,21 @@ def create_agent_task_tool(
 ) -> ToolDef:
     """Create a Runtime v2 task tool backed by the subagent task runner."""
 
+    if provider is None:
+        raise ValueError("provider is required")
+    registry = _resolve_registry(profiles)
     return create_task_tool(
         create_subagent_task_runner(
             provider=provider,
             workspace_root=workspace_root,
-            profiles=profiles,
+            profiles=registry,
             base_config=base_config,
             store_factory=store_factory,
             tool_runtime_factory=tool_runtime_factory,
             session_id_prefix=session_id_prefix,
         ),
         tool_id=tool_id,
+        description=create_agent_task_tool_description(registry),
         allow_background=allow_background,
         background_manager=background_manager,
     )
@@ -202,20 +212,25 @@ def create_agent_task_tools(
 ) -> list[ToolDef]:
     """Create task-related tools sharing one background manager when enabled."""
 
+    if provider is None:
+        raise ValueError("provider is required")
+    registry = _resolve_registry(profiles)
     runner = create_subagent_task_runner(
         provider=provider,
         workspace_root=workspace_root,
-        profiles=profiles,
+        profiles=registry,
         base_config=base_config,
         store_factory=store_factory,
         tool_runtime_factory=tool_runtime_factory,
         session_id_prefix=session_id_prefix,
     )
+    description = create_agent_task_tool_description(registry)
     if not allow_background:
         return [
             create_task_tool(
                 runner,
                 tool_id=tool_id,
+                description=description,
                 allow_background=False,
             )
         ]
@@ -225,6 +240,7 @@ def create_agent_task_tools(
         create_task_tool(
             runner,
             tool_id=tool_id,
+            description=description,
             allow_background=True,
             background_manager=manager,
         ),
@@ -241,6 +257,41 @@ def _resolve_registry(
     if isinstance(profiles, AgentRegistry):
         return profiles
     return AgentRegistry(profiles, default_agent="general")
+
+
+def create_agent_task_tool_description(registry: AgentRegistry) -> str:
+    """Return provider-facing task tool text for visible subagent profiles."""
+
+    profile_lines = [
+        _agent_type_description_line(profile)
+        for profile in registry.profiles()
+        if _is_task_profile(profile)
+    ]
+    lines = [
+        DEFAULT_TASK_TOOL_DESCRIPTION,
+        "",
+        "Available agent types:",
+    ]
+    if profile_lines:
+        lines.extend(profile_lines)
+    else:
+        lines.append("No subagents are available.")
+    return "\n".join(lines)
+
+
+def _agent_type_description_line(profile: AgentProfile) -> str:
+    description = profile.description.strip() or MANUAL_SUBAGENT_DESCRIPTION
+    return f"- {profile.name}: {description}"
+
+
+def _is_task_profile(profile: AgentProfile) -> bool:
+    if profile.metadata.get("hidden") is True:
+        return False
+    name = profile.name.strip().lower()
+    if name in _PRIMARY_TASK_PROFILE_NAMES:
+        return False
+    mode = str(profile.metadata.get("mode") or "").strip().lower()
+    return mode not in _PRIMARY_TASK_PROFILE_MODES
 
 
 def _child_config(

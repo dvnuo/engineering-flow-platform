@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 BACKGROUND_UNSUPPORTED_MESSAGE = (
     "Background task execution is not supported by this runtime yet."
 )
+DEFAULT_TASK_TOOL_DESCRIPTION = (
+    "Delegate a task to an injected Runtime v2 task runner."
+)
 
 TaskToolResponse = Union[str, "TaskToolResult", Mapping[str, Any]]
 TaskToolRunnerReturn = Union[TaskToolResponse, Awaitable[TaskToolResponse]]
@@ -65,6 +68,7 @@ def create_task_tool(
     runner: TaskToolRunner,
     *,
     tool_id: str = "task",
+    description: str | None = None,
     allow_background: bool = False,
     background_manager: "BackgroundTaskManager | None" = None,
 ) -> ToolDef:
@@ -158,7 +162,11 @@ def create_task_tool(
 
     return ToolDef(
         id=tool_id,
-        description="Delegate a task to an injected Runtime v2 task runner.",
+        description=(
+            DEFAULT_TASK_TOOL_DESCRIPTION
+            if description is None
+            else str(description)
+        ),
         input_schema={
             "type": "object",
             "required": ["description", "prompt", "subagent_type"],
@@ -613,6 +621,7 @@ def _exception_text(exc: BaseException) -> str:
 
 __all__ = [
     "BACKGROUND_UNSUPPORTED_MESSAGE",
+    "DEFAULT_TASK_TOOL_DESCRIPTION",
     "TaskToolRequest",
     "TaskToolResult",
     "TaskToolRunner",

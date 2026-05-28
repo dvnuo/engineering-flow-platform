@@ -53,6 +53,9 @@ class AgentRegistry:
     def names(self) -> list[str]:
         return sorted(self._profiles)
 
+    def profiles(self) -> list[AgentProfile]:
+        return [self._profiles[name] for name in self.names()]
+
     @classmethod
     def from_mappings(
         cls,

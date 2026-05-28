@@ -35,6 +35,10 @@ def test_create_task_tool_schema_and_id():
     tool = create_task_tool(runner, tool_id="task")
 
     assert tool.id == "task"
+    assert (
+        tool.description
+        == "Delegate a task to an injected Runtime v2 task runner."
+    )
     assert tool.input_schema == {
         "type": "object",
         "required": ["description", "prompt", "subagent_type"],
