@@ -10,6 +10,7 @@ from typing import Any, Union
 
 from ..compaction.controller import CompactionSummarizer
 from ..event_bus import RuntimeEventBus
+from ..instructions import InstructionContextBuilder
 from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
 from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
@@ -49,6 +50,7 @@ class AgentRuntime:
         adapter: LLMEventAdapter | None = None,
         skill_discovery: SkillDiscovery | None = None,
         skill_context_builder: SkillContextBuilder | None = None,
+        instruction_context_builder: InstructionContextBuilder | None = None,
         event_bus: RuntimeEventBus | None = None,
         run_state: RuntimeRunState | None = None,
         compaction_summarizer: CompactionSummarizer | None = None,
@@ -77,6 +79,10 @@ class AgentRuntime:
             skill_discovery=skill_discovery,
             skill_context_builder=skill_context_builder,
         )
+        self.instruction_context_builder = _resolve_instruction_context_builder(
+            config=self.config,
+            instruction_context_builder=instruction_context_builder,
+        )
         self.active_skills = _unique_skill_names(self.config.active_skills)
         self.event_bus = event_bus or RuntimeEventBus()
         self.run_state = run_state or RuntimeRunState()
@@ -93,12 +99,15 @@ class AgentRuntime:
         resolved_session_id = session_id or self.store.create_session().session_id
         run_id = self.run_state.begin(resolved_session_id)
         try:
-            context_messages = self._build_skill_context_messages(active_skills)
+            instruction_context_messages = self._build_instruction_context_messages()
+            skill_context_messages = self._build_skill_context_messages(active_skills)
+            context_messages = [*instruction_context_messages, *skill_context_messages]
             self.active_skills = active_skills
 
             run_metadata = dict(self.config.metadata)
             run_metadata.update(metadata or {})
             run_metadata["run_id"] = run_id
+            run_metadata["instruction_context_count"] = len(instruction_context_messages)
             run_metadata["active_skills"] = list(active_skills)
             run_metadata["skill_command"] = {
                 "add": list(skill_command.add),
@@ -151,10 +160,13 @@ class AgentRuntime:
         self.store.get_session(session_id)
         run_id = self.run_state.begin(session_id)
         try:
-            context_messages = self._build_skill_context_messages(self.active_skills)
+            instruction_context_messages = self._build_instruction_context_messages()
+            skill_context_messages = self._build_skill_context_messages(self.active_skills)
+            context_messages = [*instruction_context_messages, *skill_context_messages]
             run_metadata = dict(self.config.metadata)
             run_metadata.update(metadata or {})
             run_metadata["run_id"] = run_id
+            run_metadata["instruction_context_count"] = len(instruction_context_messages)
             run_metadata["active_skills"] = list(self.active_skills)
             run_metadata["resume"] = True
             runner = RuntimeLoopRunner(
@@ -222,6 +234,9 @@ class AgentRuntime:
 
     def cancel(self, session_id: str) -> bool:
         return self.run_state.cancel(session_id)
+
+    def _build_instruction_context_messages(self):
+        return self.instruction_context_builder.build_messages()
 
     def _build_skill_context_messages(self, active_skills: list[str]):
         if not active_skills:
@@ -293,6 +308,10 @@ def _resolve_config(
         ),
         disabled_tools=list(config.disabled_tools),
         metadata=resolved_metadata,
+        instruction_paths=list(config.instruction_paths),
+        instruction_texts=list(config.instruction_texts),
+        include_default_instructions=config.include_default_instructions,
+        max_instruction_chars=config.max_instruction_chars,
         skill_directories=list(config.skill_directories),
         active_skills=list(config.active_skills),
         include_skill_sidecar_content=config.include_skill_sidecar_content,
@@ -346,6 +365,23 @@ def _resolve_skill_context_builder(
         discovery,
         include_sidecar_content=config.include_skill_sidecar_content,
         max_sidecar_chars=config.max_skill_sidecar_chars,
+    )
+
+
+def _resolve_instruction_context_builder(
+    *,
+    config: RuntimeConfig,
+    instruction_context_builder: InstructionContextBuilder | None,
+) -> InstructionContextBuilder:
+    if instruction_context_builder is not None:
+        return instruction_context_builder
+
+    return InstructionContextBuilder(
+        workspace_root=config.workspace_root,
+        instruction_paths=config.instruction_paths,
+        instruction_texts=config.instruction_texts,
+        include_default_files=config.include_default_instructions,
+        max_instruction_chars=config.max_instruction_chars,
     )
 
 

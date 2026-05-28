@@ -175,6 +175,24 @@ rendered as transient system context in the provider request before session
 history. It is not appended to the persisted session store, so repeated runs do
 not duplicate skill messages in history.
 
+## Instructions
+
+Runtime v2 loads workspace instruction files from `AGENTS.md`, `CLAUDE.md`, and
+`CONTEXT.md`, plus any explicit `RuntimeConfig.instruction_paths` and
+`RuntimeConfig.instruction_texts`. These are rendered as transient system
+context in the provider request before active skill context and before persisted
+session history.
+
+Instruction context is not appended to the session store and is not copied into
+user messages. Each run rebuilds the provider-only context from the configured
+sources, so persisted history remains limited to user, assistant, tool, task,
+and compaction records created by the runtime loop.
+
+This phase only performs request-time context injection. It does not implement
+opencode's read-time nearby instruction attachment, does not scan outside
+`workspace_root` for default files, and does not read global home instruction
+files unless a caller explicitly configures such a path.
+
 ## Compaction
 
 Compaction operates on message parts. Tool calls and their matching results are

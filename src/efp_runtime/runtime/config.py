@@ -20,6 +20,10 @@ class RuntimeConfig:
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    instruction_paths: list[str | Path] = field(default_factory=list)
+    instruction_texts: list[str] = field(default_factory=list)
+    include_default_instructions: bool = True
+    max_instruction_chars: int = 20000
     skill_directories: list[str | Path] = field(default_factory=list)
     active_skills: list[str] = field(default_factory=list)
     include_skill_sidecar_content: bool = False
@@ -41,12 +45,17 @@ class RuntimeConfig:
             raise ValueError("max_prompt_reference_chars must be greater than or equal to 0")
         if self.max_prompt_directory_entries < 0:
             raise ValueError("max_prompt_directory_entries must be greater than or equal to 0")
+        if self.max_instruction_chars < 0:
+            raise ValueError("max_instruction_chars must be greater than or equal to 0")
         self.enabled_tools = (
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
         self.disabled_tools = list(self.disabled_tools)
         self.metadata = dict(self.metadata)
+        self.instruction_paths = list(self.instruction_paths)
+        self.instruction_texts = list(self.instruction_texts)
+        self.include_default_instructions = bool(self.include_default_instructions)
         self.skill_directories = list(self.skill_directories)
         self.active_skills = list(self.active_skills)
 
