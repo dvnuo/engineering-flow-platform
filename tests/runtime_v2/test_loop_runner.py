@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, ScriptedLLMProvider
-from efp_runtime.session.models import MessagePartType, MessageRole
+from efp_runtime.session.models import Message, MessagePartType, MessageRole, Session
 from efp_runtime.session.store import InMemorySessionStore
 from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
@@ -41,6 +41,13 @@ async def test_text_only_provider_response_creates_final_assistant_text():
     assert [message.role for message in history] == [MessageRole.USER, MessageRole.ASSISTANT]
     assert history[0].parts[0].text == "Say done."
     assert history[1].status == "complete"
+
+    request = provider.requests[0]
+    assert request.provider_request.messages[0].role == "user"
+    assert request.provider_request.messages[0].text == "Say done."
+    assert request.prepared_request.request is request.provider_request
+    assert request.metadata["loop"]["iteration"] == 1
+    assert request.metadata["loop"]["max_iterations"] == 4
 
 
 @pytest.mark.asyncio
@@ -116,6 +123,51 @@ async def test_tool_call_result_then_second_provider_response_creates_final_text
         MessageRole.ASSISTANT,
         MessageRole.TOOL,
     ]
+    assert [tool.id for tool in provider.requests[0].tools] == ["echo"]
+    assert [tool.id for tool in provider.requests[1].tools] == ["echo"]
+    assert [schema.id for schema in provider.requests[0].provider_request.tools] == ["echo"]
+    assert provider.requests[0].provider_request.tools[0].json_schema["required"] == ["text"]
+
+
+@pytest.mark.asyncio
+async def test_max_context_parts_compacts_provider_request_metadata():
+    store = InMemorySessionStore()
+    provider = ScriptedLLMProvider([{"content": "Compacted answer."}])
+    runner = RuntimeLoopRunner(
+        store=store,
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+        max_context_parts=2,
+    )
+    session = Session(
+        session_id="session-compact",
+        messages=[
+            Message.from_text("user", "old request", session_id="session-compact"),
+            Message.from_text("assistant", "old answer", session_id="session-compact"),
+        ],
+    )
+
+    result = await runner.run(
+        session=session,
+        user_text="latest request",
+        metadata={"caller": "test"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    assert request.prepared_request.compaction_applied is True
+    assert request.prepared_request.compaction_metadata == {
+        "max_parts": 2,
+        "compacted_part_count": 2,
+        "compacted_message_count": 2,
+        "compacted_tool_pair_count": 0,
+    }
+    assert request.provider_request.metadata["caller"] == "test"
+    assert request.provider_request.metadata["compaction"]["max_parts"] == 2
+    assert request.provider_request.metadata["compaction"]["compacted_part_count"] == 2
+    assert [message.role for message in request.provider_request.messages] == ["system", "user"]
+    assert request.provider_request.messages[0].context[0].type == "compaction_summary"
+    assert request.provider_request.messages[1].text == "latest request"
 
 
 @pytest.mark.asyncio

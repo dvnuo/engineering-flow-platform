@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import inspect
 from typing import Any, Callable, List, Optional, Union
 
+from ..context.render import prepare_history_for_request
 from ..events import RuntimeEvent
 from ..llm.adapter import DefaultLLMEventAdapter, LLMEventAdapter
 from ..llm.events import LLMEvent
@@ -50,14 +51,18 @@ class RuntimeLoopRunner:
         adapter: Optional[LLMEventAdapter] = None,
         tool_runtime: ToolRuntime,
         max_iterations: int = 4,
+        max_context_parts: Optional[int] = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
+        if max_context_parts is not None and max_context_parts < 1:
+            raise ValueError("max_context_parts must be at least 1")
         self.store = store
         self.provider = provider
         self.adapter = adapter or DefaultLLMEventAdapter()
         self.tool_runtime = tool_runtime
         self.max_iterations = max_iterations
+        self.max_context_parts = max_context_parts
 
     async def run(
         self,
@@ -89,12 +94,29 @@ class RuntimeLoopRunner:
 
         while iterations < iteration_limit:
             iteration = iterations + 1
-            request = RuntimeRequest(
+            history = self.store.read_history(resolved_session_id)
+            tools = self.tool_runtime.registry.list()
+            request_metadata = _request_metadata(
+                metadata,
                 session_id=resolved_session_id,
-                messages=self.store.read_history(resolved_session_id),
                 iteration=iteration,
                 max_iterations=iteration_limit,
-                metadata=dict(metadata or {}),
+            )
+            prepared_request = prepare_history_for_request(
+                history,
+                tools=tools,
+                metadata=request_metadata,
+                max_parts=self.max_context_parts,
+            )
+            request = RuntimeRequest(
+                session_id=resolved_session_id,
+                messages=history,
+                iteration=iteration,
+                max_iterations=iteration_limit,
+                metadata=request_metadata,
+                provider_request=prepared_request.request,
+                prepared_request=prepared_request,
+                tools=tools,
             )
             runtime_events.append(
                 RuntimeEvent(
@@ -319,6 +341,7 @@ async def run_runtime_loop(
     adapter: Optional[LLMEventAdapter] = None,
     tool_runtime: ToolRuntime,
     max_iterations: int = 4,
+    max_context_parts: Optional[int] = None,
     metadata: Optional[dict[str, Any]] = None,
 ) -> RuntimeLoopResult:
     runner = RuntimeLoopRunner(
@@ -327,6 +350,7 @@ async def run_runtime_loop(
         adapter=adapter,
         tool_runtime=tool_runtime,
         max_iterations=max_iterations,
+        max_context_parts=max_context_parts,
     )
     return await runner.run(
         user_text=user_text,
@@ -362,6 +386,35 @@ def _message_with_unique_part_ids(
 
 def _session_part_ids(messages: Iterable[Message]) -> set[str]:
     return {part.part_id for message in messages for part in message.parts}
+
+
+def _request_metadata(
+    metadata: Optional[dict[str, Any]],
+    *,
+    session_id: str,
+    iteration: int,
+    max_iterations: int,
+) -> dict[str, Any]:
+    request_metadata = dict(metadata or {})
+    request_metadata["session_id"] = session_id
+    request_metadata["iteration"] = iteration
+    request_metadata["max_iterations"] = max_iterations
+    loop_metadata = request_metadata.get("loop")
+    if isinstance(loop_metadata, Mapping):
+        merged_loop_metadata = dict(loop_metadata)
+    else:
+        merged_loop_metadata = {}
+        if loop_metadata is not None:
+            merged_loop_metadata["caller_value"] = loop_metadata
+    merged_loop_metadata.update(
+        {
+            "session_id": session_id,
+            "iteration": iteration,
+            "max_iterations": max_iterations,
+        }
+    )
+    request_metadata["loop"] = merged_loop_metadata
+    return request_metadata
 
 
 __all__ = [

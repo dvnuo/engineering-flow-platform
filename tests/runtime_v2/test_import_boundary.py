@@ -15,6 +15,7 @@ import sys
 
 import efp_runtime
 import efp_runtime.llm.adapter
+import efp_runtime.runtime
 import efp_runtime.session.processor
 import efp_runtime.tools.runtime
 
@@ -50,6 +51,10 @@ def test_runtime_v2_source_does_not_import_legacy_runtime_modules():
         "Agent.process(",
         "SkillSession(",
         "SkillsExecutor(",
+        "src.bash_tools",
+        "src.github",
+        "src.jira",
+        "src.confluence",
     ]
     for token in forbidden_imports:
         assert token not in combined

@@ -6,8 +6,10 @@ from collections.abc import AsyncIterable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, List, Protocol, Union
 
+from ..llm.request import PreparedProviderRequest, ProviderRequest
 from ..llm.events import LLMEvent
 from ..session.models import Message
+from ..tools.definition import ToolDef
 
 
 ProviderOutput = Union[
@@ -27,6 +29,15 @@ class RuntimeRequest:
     iteration: int
     max_iterations: int
     metadata: dict[str, Any] = field(default_factory=dict)
+    provider_request: ProviderRequest = field(
+        default_factory=lambda: ProviderRequest(messages=[])
+    )
+    prepared_request: PreparedProviderRequest = field(
+        default_factory=lambda: PreparedProviderRequest(
+            request=ProviderRequest(messages=[]),
+        )
+    )
+    tools: List[ToolDef] = field(default_factory=list)
 
 
 class LLMProvider(Protocol):

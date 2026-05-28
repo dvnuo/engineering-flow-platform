@@ -53,10 +53,24 @@ The adapter emits `LLMEvent` values for text deltas, tool input, completed tool
 calls, tool results, step start/finish, and errors. The session processor
 consumes those events into structured messages.
 
+Each loop iteration builds a `RuntimeRequest` for the provider. It keeps the raw
+`Message` history for compatibility, and also carries a rendered
+`ProviderRequest`, the `PreparedProviderRequest` with compaction metadata, and
+the sorted `ToolDef` list used to render provider-neutral tool schemas.
+
 `STEP_FINISH` updates the active assistant message. Tool result events append a
 separate tool message and do not make that tool message the active assistant
 message, so later usage and completion state are not attached to the wrong
 message.
+
+## Runtime Facade
+
+`efp_runtime.runtime.AgentRuntime` is the high-level Runtime v2 facade. It wires
+an injected provider to an in-memory session store, `ToolRuntime`, context
+rendering, compaction, and the loop runner. When configured with a workspace root
+and no explicit tool registry/runtime, it creates the Runtime v2 built-in tool
+registry for that workspace. The facade does not call Portal or the legacy agent
+runtime.
 
 ## Tools And Permissions
 
