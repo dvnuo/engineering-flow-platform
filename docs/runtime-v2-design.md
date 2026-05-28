@@ -905,6 +905,15 @@ retained, pending tool calls and the latest non-system block are protected, and
 provider request metadata records the configured budget plus compacted/kept
 part, message, pair, and character counts.
 
+`AgentRuntime.compact_session(...)` provides manual persistent compaction for
+stored session history. Unlike request-local budget compaction, which only
+changes the provider request for a single turn, manual compaction replaces older
+stored messages with a persisted compaction summary message. Future
+`read_history` calls and later turns see the compacted form. Forced manual
+compaction uses the same part-aware rules with a very small part budget when no
+explicit budget is supplied, so pending tool calls and the latest ordinary block
+remain in history while older compactable messages become summary context.
+
 If provider invocation raises `ProviderContextOverflowError` and
 `RuntimeConfig.enable_context_overflow_retry` is enabled, the same loop
 iteration is rendered once more with a stricter budget and retried. Existing

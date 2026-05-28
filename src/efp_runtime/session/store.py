@@ -88,6 +88,14 @@ class InMemorySessionStore:
             session = self._require_session(session_id)
             return deepcopy(session.messages)
 
+    def replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
+        with self._lock:
+            session = self._require_session(session_id)
+            session.messages = [deepcopy(message) for message in messages]
+            self._rebind_session(session)
+            session.touch()
+            return deepcopy(session)
+
     def tool_pairs(self, session_id: str) -> Dict[str, ToolPair]:
         with self._lock:
             session = self._require_session(session_id)

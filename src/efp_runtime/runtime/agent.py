@@ -10,9 +10,15 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
-from ..compaction.controller import CompactionSummarizer
+from ..compaction.controller import CompactionController, CompactionSummarizer
+from ..compaction.strategy import (
+    BudgetCompactionStrategy,
+    CompactionResult,
+    ContextBudget,
+)
 from ..commands import CommandExpansionResult, CommandRegistry, expand_command
 from ..event_bus import RuntimeEventBus
+from ..events import RuntimeEvent
 from ..instructions import InstructionContextBuilder, ReadInstructionResolver
 from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
@@ -32,7 +38,7 @@ from ..prompt import resolve_prompt_references
 from ..questions import QuestionBroker
 from ..session.protocol import SessionStore
 from ..session.checkpoint import SessionCheckpoint
-from ..session.models import Message, MessagePart, MessageRole, Session
+from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.store import InMemorySessionStore
 from ..skills.commands import SkillCommandResult, parse_skill_commands
 from ..skills.context import SkillContextBuilder
@@ -458,6 +464,79 @@ class AgentRuntime:
         self.run_state.finish(session_id, result.status)
         return result
 
+    async def compact_session(
+        self,
+        session_id: str,
+        *,
+        max_parts: int | None = None,
+        max_chars: int | None = None,
+        context_reserve_chars: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        force: bool = True,
+    ) -> Session:
+        self.store.get_session(session_id)
+        history = self.store.read_history(session_id)
+        budget = _manual_compaction_budget(
+            self.config,
+            max_parts=max_parts,
+            max_chars=max_chars,
+            context_reserve_chars=context_reserve_chars,
+            force=force,
+        )
+        strategy = BudgetCompactionStrategy(budget=budget)
+        operation_metadata = _manual_compaction_operation_metadata(
+            metadata,
+            force=force,
+        )
+        summary: str | None = None
+        if (
+            self.config.enable_compaction_summarizer
+            and self.compaction_summarizer is not None
+        ):
+            preparation = await CompactionController(self.compaction_summarizer).prepare(
+                history,
+                session_id=session_id,
+                metadata=operation_metadata,
+                compaction_strategy=strategy,
+            )
+            result = preparation.result
+            summary = preparation.summary
+            compaction_metadata = dict(preparation.compaction_metadata)
+        else:
+            result = strategy.compact(history)
+            compaction_metadata = (
+                _manual_compaction_result_metadata(budget, result)
+                if result.compacted
+                else {}
+            )
+
+        if not result.compacted:
+            return self.store.get_session(session_id)
+
+        compaction_metadata.update(operation_metadata)
+        compacted_messages = _apply_manual_compaction_metadata(
+            result.messages,
+            source_messages=history,
+            summary=summary,
+            metadata=compaction_metadata,
+        )
+        updated_session = self._replace_history(session_id, compacted_messages)
+        message_id, part_id = _first_new_compaction_identifiers(
+            updated_session.messages,
+            source_messages=history,
+        )
+        self.event_bus.publish(
+            RuntimeEvent(
+                type="session_compacted",
+                message="Session history compacted.",
+                session_id=session_id,
+                message_id=message_id,
+                part_id=part_id,
+                payload=dict(compaction_metadata),
+            )
+        )
+        return updated_session
+
     def approve_permission(self, request_id: str, *, always: bool = False):
         approve = getattr(self.tool_runtime.permission_evaluator, "approve", None)
         if not callable(approve):
@@ -799,6 +878,113 @@ class AgentRuntime:
         if not callable(method):
             raise TypeError("session store does not support checkpoints")
         return method
+
+    def _replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
+        method = getattr(self.store, "replace_history", None)
+        if not callable(method):
+            raise TypeError("session store does not support history replacement")
+        return method(session_id, messages)
+
+
+def _manual_compaction_budget(
+    config: RuntimeConfig,
+    *,
+    max_parts: int | None,
+    max_chars: int | None,
+    context_reserve_chars: int | None,
+    force: bool,
+) -> ContextBudget:
+    explicit_limit = max_parts is not None or max_chars is not None
+    if force and not explicit_limit:
+        return ContextBudget(
+            max_parts=1,
+            reserve_chars=context_reserve_chars if context_reserve_chars is not None else 0,
+        )
+    return ContextBudget(
+        max_parts=max_parts if max_parts is not None else config.max_context_parts,
+        max_chars=max_chars if max_chars is not None else config.max_context_chars,
+        reserve_chars=(
+            context_reserve_chars
+            if context_reserve_chars is not None
+            else config.context_reserve_chars
+        ),
+    )
+
+
+def _manual_compaction_operation_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    force: bool,
+) -> dict[str, Any]:
+    operation_metadata = dict(metadata or {})
+    operation_metadata["manual_compaction"] = True
+    operation_metadata["compaction_trigger"] = "manual"
+    operation_metadata["force"] = force
+    return operation_metadata
+
+
+def _manual_compaction_result_metadata(
+    budget: ContextBudget,
+    result: CompactionResult,
+) -> dict[str, Any]:
+    return {
+        "max_parts": budget.max_parts,
+        "max_chars": budget.max_chars,
+        "reserve_chars": budget.reserve_chars,
+        "compacted_part_count": result.compacted_part_count,
+        "compacted_message_count": result.compacted_message_count,
+        "compacted_tool_pair_count": result.compacted_tool_pair_count,
+        "compacted_chars": result.compacted_chars,
+        "kept_chars": result.kept_chars,
+    }
+
+
+def _apply_manual_compaction_metadata(
+    messages: Iterable[Message],
+    *,
+    source_messages: Iterable[Message],
+    summary: str | None,
+    metadata: Mapping[str, Any],
+) -> list[Message]:
+    source_message_ids = {message.message_id for message in source_messages}
+    marker = {
+        "manual_compaction": True,
+        "compaction_trigger": "manual",
+    }
+    updated_messages: list[Message] = []
+    for message in messages:
+        updated_message = deepcopy(message)
+        if updated_message.message_id in source_message_ids:
+            updated_messages.append(updated_message)
+            continue
+
+        updated_message.metadata.update(marker)
+        for part in updated_message.parts:
+            if part.type is not MessagePartType.COMPACTION or part.compaction is None:
+                continue
+            part.metadata.update(marker)
+            if summary is not None:
+                part.compaction.summary = summary
+                part.text = summary
+            part.compaction.auto = False
+            part.compaction.metadata.update(dict(metadata))
+        updated_messages.append(updated_message)
+    return updated_messages
+
+
+def _first_new_compaction_identifiers(
+    messages: Iterable[Message],
+    *,
+    source_messages: Iterable[Message],
+) -> tuple[str | None, str | None]:
+    source_message_ids = {message.message_id for message in source_messages}
+    for message in messages:
+        if message.message_id in source_message_ids:
+            continue
+        for part in message.parts:
+            if part.type is MessagePartType.COMPACTION:
+                return message.message_id, part.part_id
+    return None, None
 
 
 def _normalize_optional_name(name: Any | None) -> str | None:

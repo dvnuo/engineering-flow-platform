@@ -103,6 +103,15 @@ class FileSessionStore:
         with self._lock:
             return deepcopy(self._read_session_locked(session_id).messages)
 
+    def replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
+        with self._lock:
+            session = self._read_session_locked(session_id)
+            session.messages = [deepcopy(message) for message in messages]
+            self._rebind_session(session)
+            session.touch()
+            self._write_session_locked(session)
+            return deepcopy(session)
+
     def tool_pairs(self, session_id: str) -> Dict[str, ToolPair]:
         with self._lock:
             session = self._read_session_locked(session_id)

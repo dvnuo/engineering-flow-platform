@@ -45,6 +45,9 @@ class SessionStore(Protocol):
     def read_history(self, session_id: str) -> List[Message]:
         ...
 
+    def replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
+        ...
+
     def tool_pairs(self, session_id: str) -> Dict[str, ToolPair]:
         ...
 
