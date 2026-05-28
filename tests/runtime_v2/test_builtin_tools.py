@@ -177,20 +177,22 @@ async def test_grep_finds_matches(tmp_path: Path):
     )
 
     assert result.status == "success"
-    assert result.output == {
-        "pattern": "needle",
-        "path": ".",
-        "matches": [
-            {
-                "path": "a.txt",
-                "line_number": 2,
-                "column": 1,
-                "line": "needle here",
-            }
-        ],
-        "files_searched": 2,
-        "truncated": False,
-    }
+    assert result.output["pattern"] == "needle"
+    assert result.output["path"] == "."
+    assert result.output["matches"] == [
+        {
+            "path": "a.txt",
+            "line_number": 2,
+            "column": 1,
+            "line": "needle here",
+        }
+    ]
+    assert result.output["files_searched"] == 2
+    assert result.output["truncated"] is False
+    assert result.output["include"] is None
+    assert result.output["total_matches"] == 1
+    assert result.output["returned_matches"] == 1
+    assert result.content == "Found 1 matches\na.txt:\n  Line 2: needle here"
 
 
 @pytest.mark.asyncio

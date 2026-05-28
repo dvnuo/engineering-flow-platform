@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,8 @@ async def test_glob_matches_sorted_workspace_relative_paths(tmp_path: Path):
     (tmp_path / "pkg" / "b.py").write_text("print('b')\n", encoding="utf-8")
     (tmp_path / "pkg" / "nested" / "a.py").write_text("print('a')\n", encoding="utf-8")
     (tmp_path / "pkg" / "nested" / "notes.txt").write_text("skip\n", encoding="utf-8")
+    os.utime(tmp_path / "pkg" / "b.py", (100, 100))
+    os.utime(tmp_path / "pkg" / "nested" / "a.py", (200, 200))
     runtime = ToolRuntime(create_core_tool_registry(tmp_path))
 
     result = await runtime.execute(
@@ -42,9 +45,10 @@ async def test_glob_matches_sorted_workspace_relative_paths(tmp_path: Path):
     )
 
     assert result.status == "success"
-    assert result.output["paths"] == ["pkg/b.py", "pkg/nested/a.py"]
+    assert result.output["paths"] == ["pkg/nested/a.py", "pkg/b.py"]
     assert result.output["matches"] == result.output["paths"]
     assert result.output["truncated"] is False
+    assert result.content == "pkg/nested/a.py\npkg/b.py"
 
     limited = await runtime.execute(
         ToolCall(
@@ -55,8 +59,9 @@ async def test_glob_matches_sorted_workspace_relative_paths(tmp_path: Path):
     )
 
     assert limited.status == "success"
-    assert limited.output["paths"] == ["pkg/b.py"]
+    assert limited.output["paths"] == ["pkg/nested/a.py"]
     assert limited.output["truncated"] is True
+    assert "Results are truncated" in limited.content
 
 
 @pytest.mark.asyncio

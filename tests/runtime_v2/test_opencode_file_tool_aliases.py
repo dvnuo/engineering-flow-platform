@@ -85,6 +85,10 @@ async def test_read_alias_reads_whole_file_using_file_path(tmp_path: Path):
     assert result.output["has_more"] is False
     assert result.output["next_offset"] is None
     assert result.output["range_truncated"] is False
+    assert result.output["default_limit_applied"] is True
+    assert result.output["max_visible_bytes"] == 50 * 1024
+    assert result.output["max_line_length"] == 2000
+    assert result.output["truncated_by"] == []
     assert result.content == (
         "<path>src/app.txt</path>\n"
         "<type>file</type>\n"
@@ -116,7 +120,118 @@ async def test_read_alias_reads_line_range_with_next_offset(tmp_path: Path):
     assert result.output["has_more"] is True
     assert result.output["next_offset"] == 4
     assert result.output["range_truncated"] is True
+    assert result.output["default_limit_applied"] is False
+    assert result.output["truncated_by"] == ["lines"]
     assert "<content>\ntwo\nthree\n</content>" in result.content
+
+
+@pytest.mark.asyncio
+async def test_read_alias_defaults_to_2000_visible_lines(tmp_path: Path):
+    lines = [f"line {index}\n" for index in range(1, 2006)]
+    (tmp_path / "large.txt").write_text("".join(lines), encoding="utf-8")
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(id="call-read-default-limit", tool_id="read", args={"filePath": "large.txt"})
+    )
+
+    assert result.status == "success"
+    assert result.output["content"] == "".join(lines[:2000])
+    assert result.output["start_line"] == 1
+    assert result.output["end_line"] == 2000
+    assert result.output["total_lines"] == 2005
+    assert result.output["line_count"] == 2000
+    assert result.output["has_more"] is True
+    assert result.output["next_offset"] == 2001
+    assert result.output["range_truncated"] is True
+    assert result.output["default_limit_applied"] is True
+    assert result.output["truncated_by"] == ["lines"]
+
+
+@pytest.mark.asyncio
+async def test_read_alias_limit_zero_returns_empty_range_metadata(tmp_path: Path):
+    (tmp_path / "log.txt").write_text("one\ntwo\n", encoding="utf-8")
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-read-zero",
+            tool_id="read",
+            args={"filePath": "log.txt", "limit": 0},
+        )
+    )
+
+    assert result.status == "success"
+    assert result.output["content"] == ""
+    assert result.output["line_count"] == 0
+    assert result.output["has_more"] is True
+    assert result.output["next_offset"] == 1
+    assert result.output["range_truncated"] is True
+    assert result.output["default_limit_applied"] is False
+    assert result.output["truncated_by"] == ["lines"]
+
+
+@pytest.mark.asyncio
+async def test_read_alias_caps_bytes_and_long_lines(tmp_path: Path):
+    suffix = "... (line truncated to 2000 chars)"
+    (tmp_path / "long.txt").write_text(("x" * 2500 + "\n") * 40, encoding="utf-8")
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(id="call-read-byte-cap", tool_id="read", args={"filePath": "long.txt"})
+    )
+
+    assert result.status == "success"
+    assert result.output["returned_bytes"] <= 50 * 1024
+    assert result.output["line_count"] < result.output["total_lines"]
+    assert result.output["has_more"] is True
+    assert result.output["next_offset"] == result.output["line_count"] + 1
+    assert result.output["range_truncated"] is True
+    assert "line_length" in result.output["truncated_by"]
+    assert "bytes" in result.output["truncated_by"]
+    assert suffix in result.output["content"]
+    assert "x" * 2100 not in result.output["content"]
+
+
+@pytest.mark.asyncio
+async def test_read_alias_rejects_binary_content(tmp_path: Path):
+    (tmp_path / "blob.bin").write_bytes(b"text\x00binary")
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(id="call-read-binary", tool_id="read", args={"filePath": "blob.bin"})
+    )
+
+    assert result.status == "error"
+    assert result.success is False
+    assert "File is binary and cannot be read as text: blob.bin" in result.error
+
+
+@pytest.mark.asyncio
+async def test_read_alias_missing_file_includes_same_directory_suggestions(
+    tmp_path: Path,
+):
+    src = tmp_path / "src"
+    src.mkdir()
+    for name in ["Alpha1.py", "Alpha2.py", "Alpha3.py", "Alpha4.py"]:
+        (src / name).write_text("pass\n", encoding="utf-8")
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-read-missing",
+            tool_id="read",
+            args={"filePath": "src/alpha"},
+        )
+    )
+
+    assert result.status == "error"
+    assert "Path does not exist: src/alpha" in result.error
+    assert "Did you mean one of these?" in result.error
+    assert "src/Alpha1.py" in result.error
+    assert "src/Alpha2.py" in result.error
+    assert "src/Alpha3.py" in result.error
+    assert "src/Alpha4.py" not in result.error
 
 
 @pytest.mark.asyncio

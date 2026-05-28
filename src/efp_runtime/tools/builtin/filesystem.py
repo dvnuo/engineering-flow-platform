@@ -16,6 +16,14 @@ from .diff_preview import (
     unified_diff_preview,
 )
 
+READ_ALIAS_DEFAULT_LIMIT = 2000
+READ_ALIAS_MAX_VISIBLE_BYTES = 50 * 1024
+READ_ALIAS_MAX_LINE_LENGTH = 2000
+READ_ALIAS_MAX_LINE_SUFFIX = (
+    f"... (line truncated to {READ_ALIAS_MAX_LINE_LENGTH} chars)"
+)
+READ_ALIAS_BINARY_SAMPLE_BYTES = 4096
+
 
 def normalize_workspace_root(workspace_root: str | Path) -> Path:
     """Return a resolved workspace root directory."""
@@ -132,9 +140,7 @@ def create_read_tool(
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         path = resolve_workspace_path(root, args["filePath"])
         if not path.exists():
-            raise FileNotFoundError(
-                f"Path does not exist: {workspace_relative_path(root, path)}"
-            )
+            raise FileNotFoundError(_missing_path_message(root, path))
 
         if path.is_file():
             return _read_alias_file(
@@ -239,13 +245,15 @@ def _read_alias_file(
     encoding = args.get("encoding") or "utf-8"
     data, text = _read_text_file_strict(workspace_root, path, encoding)
     offset = args.get("offset", 1)
-    limit = args.get("limit")
+    default_limit_applied = "limit" not in args
+    limit = args.get("limit", READ_ALIAS_DEFAULT_LIMIT)
     _validate_read_range(offset=offset, limit=limit)
-    content, range_metadata = _read_text_range(
+    content, range_metadata = _read_alias_text_range(
         text,
         offset=offset,
         limit=limit,
         encoding=encoding,
+        default_limit_applied=default_limit_applied,
     )
     output = {
         "path": relative_path,
@@ -257,12 +265,106 @@ def _read_alias_file(
     }
     output.update(range_metadata)
     _attach_read_instructions(output, instruction_resolver, path)
+    content_truncated = range_metadata["range_truncated"] or bool(
+        range_metadata["truncated_by"]
+    )
     return ToolResult(
         call_id=context.tool_call_id or "read",
         tool_name="read",
         content=_format_read_file_content(path=relative_path, content=content),
         output=output,
+        metadata={
+            "truncated": content_truncated,
+            "truncated_by": list(range_metadata["truncated_by"]),
+        },
+        truncated=content_truncated,
     )
+
+
+def _read_alias_text_range(
+    text: str,
+    *,
+    offset: int,
+    limit: int,
+    encoding: str,
+    default_limit_applied: bool,
+) -> tuple[str, dict[str, Any]]:
+    lines = text.splitlines(keepends=True)
+    total_lines = len(lines)
+    start_index = offset - 1
+    selected_lines: list[str] = []
+    returned_bytes = 0
+    truncated_by: list[str] = []
+    byte_truncated = False
+
+    if start_index >= total_lines:
+        end_index = start_index
+        content = ""
+        line_count = 0
+        end_line = offset - 1
+        has_more = False
+        next_offset = None
+        range_truncated = False
+    else:
+        end_index = start_index
+        line_limit_index = min(start_index + limit, total_lines)
+        for index in range(start_index, line_limit_index):
+            line, line_truncated = _truncate_visible_line(lines[index])
+            if line_truncated:
+                _append_unique(truncated_by, "line_length")
+
+            line_bytes = len(line.encode(encoding, errors="replace"))
+            if returned_bytes + line_bytes > READ_ALIAS_MAX_VISIBLE_BYTES:
+                byte_truncated = True
+                _append_unique(truncated_by, "bytes")
+                break
+
+            selected_lines.append(line)
+            returned_bytes += line_bytes
+            end_index = index + 1
+
+        content = "".join(selected_lines)
+        line_count = len(selected_lines)
+        end_line = offset + line_count - 1 if line_count else offset - 1
+        has_more = end_index < total_lines
+        next_offset = end_index + 1 if has_more else None
+        if has_more and not byte_truncated:
+            _append_unique(truncated_by, "lines")
+        range_truncated = has_more
+
+    metadata = {
+        "start_line": offset,
+        "end_line": end_line,
+        "total_lines": total_lines,
+        "line_count": line_count,
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "range_truncated": range_truncated,
+        "returned_bytes": returned_bytes,
+        "default_limit_applied": default_limit_applied,
+        "max_visible_bytes": READ_ALIAS_MAX_VISIBLE_BYTES,
+        "max_line_length": READ_ALIAS_MAX_LINE_LENGTH,
+        "truncated_by": truncated_by,
+    }
+    return content, metadata
+
+
+def _truncate_visible_line(line: str) -> tuple[str, bool]:
+    body, ending = _split_line_ending(line)
+    if len(body) <= READ_ALIAS_MAX_LINE_LENGTH:
+        return line, False
+    return (
+        f"{body[:READ_ALIAS_MAX_LINE_LENGTH]}{READ_ALIAS_MAX_LINE_SUFFIX}{ending}",
+        True,
+    )
+
+
+def _split_line_ending(line: str) -> tuple[str, str]:
+    if line.endswith("\r\n"):
+        return line[:-2], "\r\n"
+    if line.endswith("\n") or line.endswith("\r"):
+        return line[:-1], line[-1]
+    return line, ""
 
 
 def _read_text_file_strict(
@@ -272,10 +374,8 @@ def _read_text_file_strict(
 ) -> tuple[bytes, str]:
     relative_path = workspace_relative_path(workspace_root, path)
     data = path.read_bytes()
-    if b"\x00" in data:
-        raise ValueError(
-            f"File is not a text file (contains null bytes): {relative_path}"
-        )
+    if _looks_binary(data[:READ_ALIAS_BINARY_SAMPLE_BYTES]):
+        raise ValueError(f"File is binary and cannot be read as text: {relative_path}")
     try:
         text = data.decode(encoding)
     except LookupError as exc:
@@ -287,6 +387,56 @@ def _read_text_file_strict(
             f"File cannot be decoded as {encoding}: {relative_path}"
         ) from exc
     return data, text
+
+
+def _looks_binary(sample: bytes) -> bool:
+    if not sample:
+        return False
+    if b"\x00" in sample:
+        return True
+
+    non_printable = 0
+    for byte in sample:
+        if byte < 9 or (13 < byte < 32):
+            non_printable += 1
+    return non_printable / len(sample) > 0.3
+
+
+def _missing_path_message(workspace_root: Path, path: Path) -> str:
+    relative_path = workspace_relative_path(workspace_root, path)
+    suggestions = _missing_path_suggestions(workspace_root, path)
+    if not suggestions:
+        return f"Path does not exist: {relative_path}"
+    return (
+        f"Path does not exist: {relative_path}\n\n"
+        "Did you mean one of these?\n"
+        + "\n".join(suggestions)
+    )
+
+
+def _missing_path_suggestions(workspace_root: Path, path: Path) -> list[str]:
+    parent = path.parent
+    try:
+        parent.relative_to(workspace_root)
+    except ValueError:
+        return []
+    if not parent.is_dir():
+        return []
+
+    needle = path.name.casefold()
+    suggestions: list[str] = []
+    for entry in sorted(parent.iterdir(), key=_sort_key):
+        name = entry.name.casefold()
+        if needle in name or name in needle:
+            suggestions.append(workspace_relative_path(workspace_root, entry))
+            if len(suggestions) >= 3:
+                break
+    return suggestions
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
 
 
 def _read_alias_directory(

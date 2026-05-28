@@ -805,17 +805,24 @@ priority. It skips the file being read and does not scan global home
 directories or fetch remote instruction sources.
 
 When called without `offset` or `limit`, `read_file` keeps the original
-structured output shape and returns the full decoded text. When either range
-argument is supplied, `offset` is a 1-based starting line and `limit` is the
-maximum number of lines to return; the output content contains only that text
-fragment and adds range metadata such as `start_line`, `end_line`,
-`total_lines`, `line_count`, `has_more`, `next_offset`, `range_truncated`, and
-`returned_bytes`. When nearby instructions are found, the output additionally
-contains `instructions` and `loaded_instruction_paths`; each instruction entry
-contains the workspace-relative path, content, truncation flag, and original
-character count. `RuntimeConfig(attach_read_instructions=False)` disables this
-read-time attachment independently of `include_default_instructions`, which only
-controls request-time system instruction injection.
+structured output shape and returns the full decoded text. The opencode-style
+`read` file alias is bounded by default: it starts at 1-based `offset`, returns
+up to `limit` lines when provided or 2000 lines otherwise, caps visible content,
+and exposes `next_offset` for continuation. For both tools, ranged reads add
+metadata such as `start_line`, `end_line`, `total_lines`, `line_count`,
+`has_more`, `next_offset`, `range_truncated`, and `returned_bytes`. When nearby
+instructions are found, the output additionally contains `instructions` and
+`loaded_instruction_paths`; each instruction entry contains the
+workspace-relative path, content, truncation flag, and original character count.
+`RuntimeConfig(attach_read_instructions=False)` disables this read-time
+attachment independently of `include_default_instructions`, which only controls
+request-time system instruction injection.
+
+The workspace search tools also favor bounded model-readable output. `grep`
+accepts an optional `include` file glob, returns recent-file-first grouped
+matches with `Found ...` summaries, and keeps structured match metadata.
+`glob` returns recent-first workspace-relative paths. Both default to 100
+visible results and include truncation hints when more results remain.
 
 
 ## Compaction
