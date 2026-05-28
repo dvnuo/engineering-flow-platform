@@ -21,12 +21,14 @@ from .session.models import (
     TaskPart,
 )
 from .session.processor import RuntimeSession, SessionProcessor
+from .session.file_store import FileSessionStore
 from .session.store import InMemorySessionStore
 from .types import Attachment, SkillPackage, ToolCall, ToolResult
 
 __all__ = [
     "Attachment",
     "CompactionPart",
+    "FileSessionStore",
     "InMemorySessionStore",
     "LLMEvent",
     "LLMEventType",

@@ -10,6 +10,7 @@ from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
 from ..loop.runner import ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
 from ..permissions import PermissionEvaluator
+from ..session.protocol import SessionStore
 from ..session.store import InMemorySessionStore
 from ..skills.commands import SkillCommandResult, parse_skill_commands
 from ..skills.context import SkillContextBuilder
@@ -32,7 +33,7 @@ class AgentRuntime:
         max_iterations: int | None = None,
         max_context_parts: int | None = None,
         metadata: Mapping[str, Any] | None = None,
-        store: InMemorySessionStore | None = None,
+        store: SessionStore | None = None,
         tool_registry: ToolRegistry | None = None,
         tool_runtime: ToolRuntime | None = None,
         permission_evaluator: PermissionEvaluator | None = None,

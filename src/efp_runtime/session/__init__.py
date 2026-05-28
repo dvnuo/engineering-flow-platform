@@ -10,11 +10,14 @@ from .models import (
     TaskPart,
 )
 from .processor import RuntimeSession, SessionProcessor
+from .file_store import FileSessionStore
+from .protocol import SessionStore
 from .status import RuntimeStatus
 from .store import InMemorySessionStore
 
 __all__ = [
     "CompactionPart",
+    "FileSessionStore",
     "InMemorySessionStore",
     "Message",
     "MessagePart",
@@ -24,5 +27,6 @@ __all__ = [
     "RuntimeStatus",
     "Session",
     "SessionProcessor",
+    "SessionStore",
     "TaskPart",
 ]

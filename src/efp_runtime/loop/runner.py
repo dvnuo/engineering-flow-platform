@@ -14,8 +14,8 @@ from ..llm.adapter import DefaultLLMEventAdapter, LLMEventAdapter
 from ..llm.events import LLMEvent
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.processor import RuntimeSession, SessionProcessor
+from ..session.protocol import SessionStore
 from ..session.status import RuntimeStatus
-from ..session.store import InMemorySessionStore
 from ..tools.definition import ToolContext
 from ..tools.runtime import ToolRuntime
 from ..types import ToolCall, new_id
@@ -46,7 +46,7 @@ class RuntimeLoopRunner:
     def __init__(
         self,
         *,
-        store: InMemorySessionStore,
+        store: SessionStore,
         provider: Union[LLMProvider, ProviderCallable],
         adapter: Optional[LLMEventAdapter] = None,
         tool_runtime: ToolRuntime,
@@ -338,7 +338,7 @@ async def run_runtime_loop(
     session_id: Optional[str] = None,
     session: Optional[Session] = None,
     user_text: str,
-    store: InMemorySessionStore,
+    store: SessionStore,
     provider: Union[LLMProvider, ProviderCallable],
     adapter: Optional[LLMEventAdapter] = None,
     tool_runtime: ToolRuntime,
