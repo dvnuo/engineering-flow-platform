@@ -121,8 +121,11 @@ added to context. When a workspace-backed `AgentRuntime` creates the
 `.efp_runtime/tool-output` inside the workspace, and the visible tool result is
 replaced with a preview plus a note that points at the saved output. If
 `ToolResult.metadata` contains `output_path`, the model or caller can inspect
-specific sections later with `read_file` or `grep` instead of reading the full
-large file back into context. Tools that explicitly set their own truncation
+specific sections later with `read_file` line ranges or `grep` instead of
+reading the full large file back into context. Large files and files referenced
+by `output_path` should be read incrementally with `read_file` `offset` and
+`limit` unless the full content is intentionally needed. Tools that explicitly
+set their own truncation
 metadata are treated as already normalized and are not truncated a second time.
 
 Validation errors and permission denies return structured tool results and do
@@ -311,8 +314,13 @@ the nearest default instruction file in each directory, using `AGENTS.md`,
 `CLAUDE.md`, then `CONTEXT.md` priority. It skips the file being read and does
 not scan global home directories or fetch remote instruction sources.
 
-When no nearby instruction is found, `read_file` keeps the original structured
-output shape. When nearby instructions are found, the output additionally
+When called without `offset` or `limit`, `read_file` keeps the original
+structured output shape and returns the full decoded text. When either range
+argument is supplied, `offset` is a 1-based starting line and `limit` is the
+maximum number of lines to return; the output content contains only that text
+fragment and adds range metadata such as `start_line`, `end_line`,
+`total_lines`, `line_count`, `has_more`, `next_offset`, `range_truncated`, and
+`returned_bytes`. When nearby instructions are found, the output additionally
 contains `instructions` and `loaded_instruction_paths`; each instruction entry
 contains the workspace-relative path, content, truncation flag, and original
 character count. `RuntimeConfig(attach_read_instructions=False)` disables this

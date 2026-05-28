@@ -65,12 +65,30 @@ def create_read_file_tool(
 
         encoding = args.get("encoding") or "utf-8"
         data = path.read_bytes()
+        text = data.decode(encoding, errors="replace")
+        range_requested = "offset" in args or "limit" in args
+
+        if range_requested:
+            offset = args.get("offset", 1)
+            limit = args.get("limit")
+            _validate_read_range(offset=offset, limit=limit)
+            content, range_metadata = _read_text_range(
+                text,
+                offset=offset,
+                limit=limit,
+                encoding=encoding,
+            )
+        else:
+            content = text
+            range_metadata = {}
+
         output = {
             "path": workspace_relative_path(root, path),
-            "content": data.decode(encoding, errors="replace"),
+            "content": content,
             "encoding": encoding,
             "bytes": len(data),
         }
+        output.update(range_metadata)
         if instruction_resolver is not None:
             instructions = instruction_resolver.resolve_for_path(path)
             if instructions:
@@ -82,13 +100,15 @@ def create_read_file_tool(
 
     return ToolDef(
         id="read_file",
-        description="Read a UTF-8 text file inside the workspace.",
+        description="Read a text file inside the workspace, optionally by line range.",
         input_schema={
             "type": "object",
             "required": ["path"],
             "properties": {
                 "path": {"type": "string"},
                 "encoding": {"type": "string"},
+                "offset": {"type": "integer", "minimum": 1},
+                "limit": {"type": "integer", "minimum": 0},
             },
             "additionalProperties": False,
         },
@@ -100,6 +120,56 @@ def create_read_file_tool(
             risk="low",
         ),
     )
+
+
+def _validate_read_range(*, offset: int, limit: int | None) -> None:
+    if offset < 1:
+        raise ValueError("offset must be greater than or equal to 1.")
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be greater than or equal to 0.")
+
+
+def _read_text_range(
+    text: str,
+    *,
+    offset: int,
+    limit: int | None,
+    encoding: str,
+) -> tuple[str, dict[str, Any]]:
+    lines = text.splitlines(keepends=True)
+    total_lines = len(lines)
+    start_index = offset - 1
+
+    if start_index >= total_lines:
+        content = ""
+        line_count = 0
+        end_line = offset - 1
+        has_more = False
+        next_offset = None
+        range_truncated = False
+    else:
+        end_index = (
+            total_lines if limit is None else min(start_index + limit, total_lines)
+        )
+        selected_lines = lines[start_index:end_index]
+        content = "".join(selected_lines)
+        line_count = len(selected_lines)
+        end_line = offset + line_count - 1 if line_count else offset - 1
+        has_more = end_index < total_lines
+        next_offset = end_index + 1 if has_more else None
+        range_truncated = limit is not None and has_more
+
+    metadata = {
+        "start_line": offset,
+        "end_line": end_line,
+        "total_lines": total_lines,
+        "line_count": line_count,
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "range_truncated": range_truncated,
+        "returned_bytes": len(content.encode(encoding, errors="replace")),
+    }
+    return content, metadata
 
 
 def create_list_dir_tool(workspace_root: str | Path) -> ToolDef:

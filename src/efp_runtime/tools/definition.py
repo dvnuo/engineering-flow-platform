@@ -152,6 +152,7 @@ def _validate_value(name: str, value: Any, schema: Mapping[str, Any]) -> None:
         raise ValidationError(f"Argument '{name}' must be {expected_text}.")
     if not _matches_type(value, expected):
         raise ValidationError(f"Argument '{name}' must be {expected}.")
+    _validate_numeric_bounds(name, value, schema)
     _validate_nested_value(name, value, schema)
 
 
@@ -192,3 +193,16 @@ def _matches_type(value: Any, expected: str) -> bool:
     if expected == "null":
         return value is None
     return True
+
+
+def _validate_numeric_bounds(name: str, value: Any, schema: Mapping[str, Any]) -> None:
+    minimum = schema.get("minimum")
+    if (
+        minimum is not None
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        if value < minimum:
+            raise ValidationError(
+                f"Argument '{name}' must be greater than or equal to {minimum}."
+            )
