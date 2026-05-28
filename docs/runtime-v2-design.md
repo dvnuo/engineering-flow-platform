@@ -124,6 +124,13 @@ single-file edit, unified-diff apply_patch, and a session-local todo_write
 planning tool. Mutating filesystem tools default to ask permission; read/search
 and todo planning tools default to allow.
 
+The `task` tool is an injectable foreground subagent boundary. It is not enabled
+by the core registry unless a caller provides a task runner; when enabled, the
+loop treats it like any other tool and appends its structured task output as a
+tool result for the next provider iteration. Runtime v2 does not implement
+background task synthetic-message injection yet; `background=true` is rejected
+with an explicit unsupported error by default.
+
 ## Skills
 
 Skills are discovered from `SKILL.md` or `skill.md` files. Loading a skill reads
