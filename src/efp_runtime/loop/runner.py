@@ -32,6 +32,7 @@ from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection, resolve_tool_selection
 from ..types import ToolCall, ToolResult, new_id
 from .provider import LLMProvider, ProviderOutput, ProviderResult, RuntimeRequest
+from .stream_events import bridge_llm_stream_events
 
 
 class LoopStatus:
@@ -105,6 +106,7 @@ class RuntimeLoopRunner:
         provider_retry_backoff_seconds: float = 0.0,
         provider_retry_backoff_multiplier: float = 2.0,
         enable_context_overflow_retry: bool = True,
+        emit_llm_stream_events: bool = True,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -143,6 +145,7 @@ class RuntimeLoopRunner:
         self.provider_retry_backoff_seconds = provider_retry_backoff_seconds
         self.provider_retry_backoff_multiplier = provider_retry_backoff_multiplier
         self.enable_context_overflow_retry = enable_context_overflow_retry
+        self.emit_llm_stream_events = bool(emit_llm_stream_events)
 
     async def run(
         self,
@@ -208,6 +211,7 @@ class RuntimeLoopRunner:
         run_metadata = dict(metadata or {})
         run_id = str(run_metadata.get("run_id") or new_id("run"))
         run_metadata["run_id"] = run_id
+        run_metadata["emit_llm_stream_events"] = self.emit_llm_stream_events
         _record_tool_selection_metadata(
             run_metadata,
             enabled_tool_ids=enabled_tool_ids,
@@ -242,6 +246,7 @@ class RuntimeLoopRunner:
                     "max_iterations": iteration_limit,
                     "enabled_tool_ids": list(enabled_tool_ids),
                     "disabled_tool_ids": list(disabled_tool_ids),
+                    "emit_llm_stream_events": self.emit_llm_stream_events,
                 },
             )
         )
@@ -325,13 +330,20 @@ class RuntimeLoopRunner:
                     max_iterations=iteration_limit,
                 )
                 events = self._normalize_provider_output(provider_output)
+                observed_events = bridge_llm_stream_events(
+                    events,
+                    runtime_events=runtime_events,
+                    session_id=resolved_session_id,
+                    run_id=run_id,
+                    iteration=iteration,
+                    enabled=self.emit_llm_stream_events,
+                )
                 processor_session = RuntimeSession(
                     session_id=resolved_session_id,
                     messages=self.store.read_history(resolved_session_id),
-                    runtime_events=runtime_events,
                 )
                 processor = SessionProcessor(processor_session)
-                assistant_message = await processor.consume(events)
+                assistant_message = await processor.consume(observed_events)
             except Exception as exc:  # noqa: BLE001 - runtime boundary reports provider failures.
                 status = LoopStatus.ERROR
                 runtime_events.append(
@@ -1166,6 +1178,7 @@ async def run_runtime_loop(
     provider_retry_backoff_seconds: float = 0.0,
     provider_retry_backoff_multiplier: float = 2.0,
     enable_context_overflow_retry: bool = True,
+    emit_llm_stream_events: bool = True,
 ) -> RuntimeLoopResult:
     runner = RuntimeLoopRunner(
         store=store,
@@ -1185,6 +1198,7 @@ async def run_runtime_loop(
         provider_retry_backoff_seconds=provider_retry_backoff_seconds,
         provider_retry_backoff_multiplier=provider_retry_backoff_multiplier,
         enable_context_overflow_retry=enable_context_overflow_retry,
+        emit_llm_stream_events=emit_llm_stream_events,
     )
     return await runner.run(
         user_text=user_text,

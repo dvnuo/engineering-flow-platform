@@ -170,6 +170,7 @@ class AgentRuntime:
                 enable_context_overflow_retry=(
                     self.config.enable_context_overflow_retry
                 ),
+                emit_llm_stream_events=self.config.emit_llm_stream_events,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(resolved_session_id),
                 tool_selection=_config_tool_selection(self.config),
@@ -241,6 +242,7 @@ class AgentRuntime:
                 enable_context_overflow_retry=(
                     self.config.enable_context_overflow_retry
                 ),
+                emit_llm_stream_events=self.config.emit_llm_stream_events,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(session_id),
                 tool_selection=_config_tool_selection(self.config),
@@ -345,6 +347,7 @@ class AgentRuntime:
         run_metadata["runtime_mode"] = self.config.runtime_mode
         run_metadata["plan_mode_read_only"] = self.config.plan_mode_read_only
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
+        run_metadata["emit_llm_stream_events"] = self.config.emit_llm_stream_events
         run_metadata["tool_output_truncation_enabled"] = (
             self.config.workspace_root is not None
         )
@@ -396,6 +399,7 @@ def _resolve_config(
         provider_retry_backoff_seconds=config.provider_retry_backoff_seconds,
         provider_retry_backoff_multiplier=config.provider_retry_backoff_multiplier,
         enable_context_overflow_retry=config.enable_context_overflow_retry,
+        emit_llm_stream_events=config.emit_llm_stream_events,
         enabled_tools=(
             None if config.enabled_tools is None else list(config.enabled_tools)
         ),

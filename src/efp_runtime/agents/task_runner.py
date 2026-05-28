@@ -240,6 +240,11 @@ def _child_config(
             if base_config is None
             else base_config.enable_context_overflow_retry
         ),
+        emit_llm_stream_events=(
+            True
+            if base_config is None
+            else base_config.emit_llm_stream_events
+        ),
         enabled_tools=(
             None
             if base_config is None or base_config.enabled_tools is None

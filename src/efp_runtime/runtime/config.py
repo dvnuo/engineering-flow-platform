@@ -22,6 +22,7 @@ class RuntimeConfig:
     provider_retry_backoff_seconds: float = 0.0
     provider_retry_backoff_multiplier: float = 2.0
     enable_context_overflow_retry: bool = True
+    emit_llm_stream_events: bool = True
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
     runtime_mode: str = "build"
@@ -95,6 +96,7 @@ class RuntimeConfig:
         )
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
         self.enable_context_overflow_retry = bool(self.enable_context_overflow_retry)
+        self.emit_llm_stream_events = bool(self.emit_llm_stream_events)
         self.enable_plan_tool = (
             None if self.enable_plan_tool is None else bool(self.enable_plan_tool)
         )

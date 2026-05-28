@@ -54,6 +54,24 @@ The adapter emits `LLMEvent` values for text deltas, tool input, completed tool
 calls, tool results, step start/finish, and errors. The session processor
 consumes those events into structured messages.
 
+The loop also bridges normalized provider stream events into transient
+`RuntimeEvent` records for observability. When
+`RuntimeConfig.emit_llm_stream_events=True` (the default), the runner appends
+`llm.step_start`, `llm.text_delta`, `llm.reasoning_delta`,
+`llm.tool_call_delta`, `llm.tool_call_done`, `llm.step_finish`, and `llm.error`
+events between `iteration_start` and `iteration_finish`. These events include
+the run id, iteration, original LLM event type, available event ids, text or
+reasoning deltas, and tool call ids, names, and argument deltas or final
+arguments. The bridge is observation-only: persisted session history still uses
+the same final `Message` and `MessagePart` structures produced by the session
+processor, and provider-only context is not written to history.
+
+`RuntimeEventBus` publishes the same bridged `llm.*` events as they are appended
+to the loop event log, so callers can subscribe to a session and drive UI
+streaming without reading or mutating the session store. Set
+`emit_llm_stream_events=False` to keep loop events at the older run, iteration,
+provider retry, and tool lifecycle level.
+
 Each loop iteration builds a `RuntimeRequest` for the provider. It keeps the raw
 `Message` history for compatibility, and also carries a rendered
 `ProviderRequest`, the `PreparedProviderRequest` with compaction metadata, and
