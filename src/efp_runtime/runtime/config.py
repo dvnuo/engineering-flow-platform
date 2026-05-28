@@ -16,6 +16,7 @@ class RuntimeConfig:
     max_context_parts: int | None = None
     max_context_chars: int | None = None
     context_reserve_chars: int = 0
+    enable_compaction_summarizer: bool = False
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -43,6 +44,7 @@ class RuntimeConfig:
         self.enabled_tools = (
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
+        self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
         self.disabled_tools = list(self.disabled_tools)
         self.metadata = dict(self.metadata)
         self.skill_directories = list(self.skill_directories)

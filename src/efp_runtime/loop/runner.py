@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 import inspect
 from typing import Any, Callable, List, Optional, Union
 
+from ..compaction.controller import CompactionController, CompactionSummarizer
+from ..compaction.strategy import ContextBudget
 from ..context.render import prepare_history_for_request
 from ..event_bus import RuntimeEventBus
 from ..events import RuntimeEvent
@@ -84,6 +86,7 @@ class RuntimeLoopRunner:
         event_bus: Optional[RuntimeEventBus] = None,
         is_cancelled: Optional[CancelCallback] = None,
         tool_selection: Optional[ToolSelection] = None,
+        compaction_summarizer: Optional[CompactionSummarizer] = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -104,6 +107,7 @@ class RuntimeLoopRunner:
         self.event_bus = event_bus
         self.is_cancelled = is_cancelled
         self.tool_selection = _copy_tool_selection(tool_selection)
+        self.compaction_summarizer = compaction_summarizer
 
     async def run(
         self,
@@ -242,6 +246,24 @@ class RuntimeLoopRunner:
                 iteration=iteration,
                 max_iterations=iteration_limit,
             )
+            compaction_summary = None
+            compaction_summary_metadata = None
+            if self.compaction_summarizer is not None and self._context_budget_enabled():
+                compaction_preparation = await CompactionController(
+                    self.compaction_summarizer
+                ).prepare(
+                    request_history,
+                    session_id=resolved_session_id,
+                    budget=ContextBudget(
+                        max_parts=self.max_context_parts,
+                        max_chars=self.max_context_chars,
+                        reserve_chars=self.context_reserve_chars,
+                    ),
+                    metadata=request_metadata,
+                )
+                if compaction_preparation.compaction_applied:
+                    compaction_summary = compaction_preparation.summary
+                    compaction_summary_metadata = compaction_preparation.summary_metadata
             prepared_request = prepare_history_for_request(
                 request_history,
                 tools=enabled_tools,
@@ -249,6 +271,8 @@ class RuntimeLoopRunner:
                 max_parts=self.max_context_parts,
                 max_chars=self.max_context_chars,
                 reserve_chars=self.context_reserve_chars,
+                compaction_summary=compaction_summary,
+                compaction_summary_metadata=compaction_summary_metadata,
             )
             request = RuntimeRequest(
                 session_id=resolved_session_id,
@@ -405,6 +429,9 @@ class RuntimeLoopRunner:
             runtime_events=runtime_events,
             pending_permission_request=pending_permission_request,
         )
+
+    def _context_budget_enabled(self) -> bool:
+        return self.max_context_parts is not None or self.max_context_chars is not None
 
     def _ensure_session(
         self,
@@ -675,6 +702,7 @@ async def run_runtime_loop(
     is_cancelled: Optional[CancelCallback] = None,
     tool_selection: Optional[ToolSelection] = None,
     tools: Optional[Mapping[str, bool]] = None,
+    compaction_summarizer: Optional[CompactionSummarizer] = None,
 ) -> RuntimeLoopResult:
     runner = RuntimeLoopRunner(
         store=store,
@@ -688,6 +716,7 @@ async def run_runtime_loop(
         event_bus=event_bus,
         is_cancelled=is_cancelled,
         tool_selection=tool_selection,
+        compaction_summarizer=compaction_summarizer,
     )
     return await runner.run(
         user_text=user_text,

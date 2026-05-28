@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Union
 
+from ..compaction.controller import CompactionSummarizer
 from ..event_bus import RuntimeEventBus
 from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
@@ -50,6 +51,7 @@ class AgentRuntime:
         skill_context_builder: SkillContextBuilder | None = None,
         event_bus: RuntimeEventBus | None = None,
         run_state: RuntimeRunState | None = None,
+        compaction_summarizer: CompactionSummarizer | None = None,
     ) -> None:
         self.config = _resolve_config(
             config,
@@ -62,6 +64,7 @@ class AgentRuntime:
         )
         self.provider = provider
         self.adapter = adapter
+        self.compaction_summarizer = compaction_summarizer
         self.store = store or InMemorySessionStore()
         self.tool_runtime = _resolve_tool_runtime(
             workspace_root=self.config.workspace_root,
@@ -115,6 +118,11 @@ class AgentRuntime:
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(resolved_session_id),
                 tool_selection=_config_tool_selection(self.config),
+                compaction_summarizer=(
+                    self.compaction_summarizer
+                    if self.config.enable_compaction_summarizer
+                    else None
+                ),
             )
             result = await runner.run(
                 user_text=skill_command.cleaned_text,
@@ -161,6 +169,11 @@ class AgentRuntime:
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(session_id),
                 tool_selection=_config_tool_selection(self.config),
+                compaction_summarizer=(
+                    self.compaction_summarizer
+                    if self.config.enable_compaction_summarizer
+                    else None
+                ),
             )
             result = await runner.run(
                 user_text="",
@@ -274,6 +287,7 @@ def _resolve_config(
             if context_reserve_chars is not None
             else config.context_reserve_chars
         ),
+        enable_compaction_summarizer=config.enable_compaction_summarizer,
         enabled_tools=(
             None if config.enabled_tools is None else list(config.enabled_tools)
         ),

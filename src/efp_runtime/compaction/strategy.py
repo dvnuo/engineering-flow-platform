@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from typing import Any, Mapping
 
@@ -49,6 +49,9 @@ class CompactionResult:
     compacted_tool_pair_count: int = 0
     compacted_chars: int = 0
     kept_chars: int = 0
+    source_messages: list[Message] = field(default_factory=list)
+    compacted_messages: list[Message] = field(default_factory=list)
+    kept_messages: list[Message] = field(default_factory=list)
 
     @property
     def compacted(self) -> bool:
@@ -106,7 +109,12 @@ class BudgetCompactionStrategy:
         refs = _flatten_messages(messages)
         total_chars = _messages_chars(messages)
         if not self._over_budget(part_count=len(refs), char_count=total_chars):
-            return CompactionResult(messages=list(messages), kept_chars=total_chars)
+            return CompactionResult(
+                messages=list(messages),
+                source_messages=list(messages),
+                kept_messages=list(messages),
+                kept_chars=total_chars,
+            )
 
         blocks = _group_part_blocks(refs)
         pending_call_ids = _pending_tool_call_ids(refs)
@@ -116,8 +124,14 @@ class BudgetCompactionStrategy:
             block for block in blocks if not any(ref.key in kept_keys for ref in block.refs)
         ]
         if not compacted_blocks:
-            return CompactionResult(messages=list(messages), kept_chars=total_chars)
+            return CompactionResult(
+                messages=list(messages),
+                source_messages=list(messages),
+                kept_messages=list(messages),
+                kept_chars=total_chars,
+            )
 
+        compacted_keys = {ref.key for block in compacted_blocks for ref in block.refs}
         compaction_message = _build_compaction_message(compacted_blocks)
         remaining_items = _rebuild_message_items(messages, kept_keys)
         final_messages = _insert_compaction_message(
@@ -127,6 +141,9 @@ class BudgetCompactionStrategy:
         )
         return CompactionResult(
             messages=final_messages,
+            source_messages=list(messages),
+            compacted_messages=_rebuild_messages(messages, compacted_keys),
+            kept_messages=_rebuild_messages(messages, kept_keys),
             compacted_part_count=sum(block.part_count for block in compacted_blocks),
             compacted_message_count=len(
                 {ref.message_index for block in compacted_blocks for ref in block.refs}

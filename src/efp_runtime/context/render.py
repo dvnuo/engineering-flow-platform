@@ -93,6 +93,8 @@ def prepare_history_for_request(
     max_chars: int | None = None,
     reserve_chars: int = 0,
     compaction_strategy: BudgetCompactionStrategy | None = None,
+    compaction_summary: str | None = None,
+    compaction_summary_metadata: Mapping[str, Any] | None = None,
 ) -> PreparedProviderRequest:
     """Optionally compact history before rendering a provider request."""
 
@@ -124,6 +126,11 @@ def prepare_history_for_request(
         messages = result.messages
         compaction_applied = result.compacted
         if result.compacted:
+            messages = _override_compaction_summary(
+                messages,
+                summary=compaction_summary,
+                metadata=compaction_summary_metadata,
+            )
             compaction_metadata = {
                 "max_parts": budget.max_parts,
                 "max_chars": budget.max_chars,
@@ -134,6 +141,7 @@ def prepare_history_for_request(
                 "compacted_chars": result.compacted_chars,
                 "kept_chars": result.kept_chars,
             }
+            compaction_metadata.update(_copy_mapping(compaction_summary_metadata or {}))
             request_metadata["compaction"] = dict(compaction_metadata)
 
     return PreparedProviderRequest(
@@ -168,6 +176,33 @@ def _render_message(message: Message) -> list[RequestMessage]:
 
     flush_current()
     return rendered
+
+
+def _override_compaction_summary(
+    messages: list[Message],
+    *,
+    summary: str | None,
+    metadata: Mapping[str, Any] | None,
+) -> list[Message]:
+    if summary is None and not metadata:
+        return messages
+
+    updated_messages: list[Message] = []
+    summary_metadata = _copy_mapping(metadata or {})
+    for message in messages:
+        if not any(part.type is MessagePartType.COMPACTION for part in message.parts):
+            updated_messages.append(message)
+            continue
+        updated_message = deepcopy(message)
+        for part in updated_message.parts:
+            if part.type is not MessagePartType.COMPACTION or part.compaction is None:
+                continue
+            if summary is not None:
+                part.compaction.summary = summary
+                part.text = summary
+            part.compaction.metadata.update(summary_metadata)
+        updated_messages.append(updated_message)
+    return updated_messages
 
 
 def _render_part(part: MessagePart) -> RequestMessagePart:
