@@ -188,14 +188,15 @@ Configured path fields are resolved as workspace-local `Path` objects without
 requiring those files or directories to already exist. If
 `.opencode/commands` exists under the workspace root, the loader also adds it
 as a project command directory.
-With `include_defaults=True`, existing project-local skill directories are also
-added before configured `skillDirectories`: `.opencode/skill`,
-`.opencode/skills`, `.claude/skills`, then `.agents/skills`. Missing default
-skill directories are ignored, and Runtime v2 does not scan user home or global
-skill directories in this phase. Passing `include_defaults=False` disables
-these default skill directories. Local `skills.paths` can also add workspace
-skill directories as a string or list; relative paths resolve under the
-workspace root and are de-duplicated with `skillDirectories`.
+With `include_defaults=True`, existing user-level skill directories are added
+first: `~/.claude/skills`, then `~/.agents/skills`. Existing project-local
+skill directories are added next: `.opencode/skill`, `.opencode/skills`,
+`.claude/skills`, then `.agents/skills`. Missing default skill directories are
+ignored. Passing `include_defaults=False` disables all default skill
+directories. Configured `skillDirectories` / `skill_directories` are appended
+after defaults, and local `skills.paths` entries are appended after those.
+Relative paths resolve under the workspace root and are de-duplicated with
+`skillDirectories`.
 
 `skills.urls` and remote skill pulling are not implemented in this phase.
 Unsupported keys under `skills` are preserved in
@@ -666,6 +667,13 @@ runtime/session stack.
 Skills are discovered from `SKILL.md` or `skill.md` files. Loading a skill reads
 markdown plus optional sidecar context. Python sidecar files are treated as text
 or binary files; runtime v2 never imports or executes them.
+
+Discovery walks configured skill roots in order. If two packages declare the
+same case-insensitive skill name, the later root wins; within one root,
+path-sorted discovery order is stable. The final model-facing skill list is
+sorted by name after duplicate winners are selected, so configured project
+skills can override same-name user-level defaults while provider prompts remain
+stable.
 
 Skill markdown supports either `---` frontmatter or the existing compact leading
 `name: ...` / `description: ...` header style. Runtime v2 parses only simple

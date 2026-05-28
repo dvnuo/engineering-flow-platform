@@ -39,7 +39,13 @@ def test_discovers_uppercase_and_lowercase_skill_files(tmp_path):
     assert skills[1].metadata["license"] == "Apache-2.0"
 
 
-def test_default_skill_directories_include_opencode_skill_before_plural(tmp_path):
+def test_default_skill_directories_include_opencode_skill_before_plural(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     opencode_skill = tmp_path / ".opencode" / "skill"
     opencode_skills = tmp_path / ".opencode" / "skills"
     opencode_skill.mkdir(parents=True)
@@ -52,7 +58,46 @@ def test_default_skill_directories_include_opencode_skill_before_plural(tmp_path
     assert default_skill_directories(tmp_path, include_defaults=False) == []
 
 
-def test_skill_discovery_loads_from_default_opencode_skill_directory(tmp_path):
+def test_default_skill_directories_include_global_before_project_defaults(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    global_claude = home / ".claude" / "skills"
+    global_agents = home / ".agents" / "skills"
+    opencode_skill = workspace / ".opencode" / "skill"
+    opencode_skills = workspace / ".opencode" / "skills"
+    claude_skills = workspace / ".claude" / "skills"
+    agents_skills = workspace / ".agents" / "skills"
+    for directory in (
+        global_claude,
+        global_agents,
+        opencode_skill,
+        opencode_skills,
+        claude_skills,
+        agents_skills,
+    ):
+        directory.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    assert default_skill_directories(workspace) == [
+        global_claude.resolve(),
+        global_agents.resolve(),
+        opencode_skill.resolve(),
+        opencode_skills.resolve(),
+        claude_skills.resolve(),
+        agents_skills.resolve(),
+    ]
+
+
+def test_skill_discovery_loads_from_default_opencode_skill_directory(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     opencode_skill = tmp_path / ".opencode" / "skill"
     opencode_skill.mkdir(parents=True)
     skill_dir = _write_skill(
@@ -67,6 +112,60 @@ def test_skill_discovery_loads_from_default_opencode_skill_directory(tmp_path):
     assert skill is not None
     assert skill.root == skill_dir
     assert skill.description == "Local opencode skill"
+
+
+def test_workspace_default_skill_overrides_same_name_global(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    global_root = home / ".claude" / "skills"
+    project_root = workspace / ".opencode" / "skill"
+    global_root.mkdir(parents=True)
+    project_root.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    _write_skill(global_root, "shared-skill", content="# Global")
+    project_skill = _write_skill(project_root, "shared-skill", content="# Project")
+
+    skill = SkillDiscovery(default_skill_directories(workspace)).get("SHARED-SKILL")
+
+    assert skill is not None
+    assert skill.root == project_skill
+    assert skill.content == "# Project"
+
+
+def test_duplicate_skill_names_use_later_configured_directory(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _write_skill(first, "shared-skill", content="# First")
+    winner = _write_skill(second, "Shared-Skill", content="# Second")
+
+    skills = discover_skills([first, second])
+    skill = SkillDiscovery([first, second]).get("shared-skill")
+
+    assert [item.name for item in skills] == ["Shared-Skill"]
+    assert skills[0].root == winner
+    assert skill is not None
+    assert skill.root == winner
+    assert skill.content == "# Second"
+
+
+def test_duplicate_skill_names_within_directory_use_stable_path_order(tmp_path):
+    old_root = tmp_path / "01-old"
+    new_root = tmp_path / "02-new"
+    old_root.mkdir()
+    new_root.mkdir()
+    _write_skill(old_root, "shared-skill", content="# Old")
+    winner = _write_skill(new_root, "shared-skill", content="# New")
+
+    skills = discover_skills([tmp_path])
+
+    assert [item.name for item in skills] == ["shared-skill"]
+    assert skills[0].root == winner
+    assert skills[0].content == "# New"
 
 
 def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp_path):

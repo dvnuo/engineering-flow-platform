@@ -10,6 +10,10 @@ from ..types import SkillPackage
 
 
 SKILL_FILE_NAMES = {"skill.md", "SKILL.md"}
+DEFAULT_GLOBAL_SKILL_DIRECTORIES = (
+    "~/.claude/skills",
+    "~/.agents/skills",
+)
 DEFAULT_PROJECT_SKILL_DIRECTORIES = (
     ".opencode/skill",
     ".opencode/skills",
@@ -27,29 +31,26 @@ class SkillDiscovery:
 
     def discover(self, *, refresh: bool = False) -> list[SkillPackage]:
         if self._skills is None or refresh:
-            self._skills = {skill.name: skill for skill in discover_skills(self.directories)}
-        return [self._skills[name] for name in sorted(self._skills)]
+            self._skills = {
+                _normalize_skill_name(skill.name): skill
+                for skill in discover_skills(self.directories)
+            }
+        return sorted(self._skills.values(), key=_skill_sort_key)
 
     def get(self, name: str, *, refresh: bool = False) -> SkillPackage | None:
-        normalized = name.strip()
+        normalized = _normalize_skill_name(name)
         if not normalized:
             return None
         if self._skills is None or refresh:
             self.discover(refresh=refresh)
         assert self._skills is not None
-        if normalized in self._skills:
-            return self._skills[normalized]
-        lower_map = {key.lower(): key for key in self._skills}
-        matched = lower_map.get(normalized.lower())
-        if matched is None:
-            return None
-        return self._skills[matched]
+        return self._skills.get(normalized)
 
 
 def discover_skills(directories: Iterable[str | Path]) -> list[SkillPackage]:
     """Discover all skill packages under the configured directories."""
 
-    packages: list[SkillPackage] = []
+    packages_by_name: dict[str, SkillPackage] = {}
     seen_roots: set[Path] = set()
     for configured_dir in directories:
         directory = Path(configured_dir).expanduser()
@@ -60,9 +61,9 @@ def discover_skills(directories: Iterable[str | Path]) -> list[SkillPackage]:
             if root in seen_roots:
                 continue
             seen_roots.add(root)
-            packages.append(_load_skill_package(skill_file))
-    packages.sort(key=lambda skill: (skill.name.lower(), str(skill.skill_file)))
-    return packages
+            skill = _load_skill_package(skill_file)
+            packages_by_name[_normalize_skill_name(skill.name)] = skill
+    return sorted(packages_by_name.values(), key=_skill_sort_key)
 
 
 def default_skill_directories(
@@ -70,12 +71,16 @@ def default_skill_directories(
     *,
     include_defaults: bool = True,
 ) -> list[Path]:
-    """Return existing project-local default skill directories in load order."""
+    """Return existing default skill directories in load order."""
 
     if not include_defaults:
         return []
     root = Path(workspace_root).expanduser().resolve(strict=False)
     directories: list[Path] = []
+    for directory in DEFAULT_GLOBAL_SKILL_DIRECTORIES:
+        path = Path(directory).expanduser().resolve(strict=False)
+        if path.is_dir():
+            directories.append(path)
     for directory in DEFAULT_PROJECT_SKILL_DIRECTORIES:
         path = (root / directory).resolve(strict=False)
         if path.is_dir():
@@ -97,7 +102,10 @@ def _iter_skill_files(directory: Path) -> list[Path]:
             and not _is_hidden(path.relative_to(directory))
         )
     ]
-    return sorted(candidates, key=lambda path: (str(path.parent), path.name.lower()))
+    return sorted(
+        candidates,
+        key=lambda path: (str(path.parent), path.name.lower(), path.name),
+    )
 
 
 def _load_skill_package(skill_file: Path) -> SkillPackage:
@@ -212,3 +220,11 @@ def _collect_sidecars(root: Path, skill_file: Path) -> list[Path]:
 
 def _is_hidden(path: Path) -> bool:
     return any(part.startswith(".") for part in path.parts)
+
+
+def _normalize_skill_name(name: str) -> str:
+    return str(name).strip().lower()
+
+
+def _skill_sort_key(skill: SkillPackage) -> tuple[str, str]:
+    return (_normalize_skill_name(skill.name), str(skill.skill_file))

@@ -14,6 +14,7 @@ from efp_runtime.config_loader import (
     load_runtime_config,
 )
 from efp_runtime.permissions import normalize_agent_permission_overlay
+from efp_runtime.skills.discovery import SkillDiscovery
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -128,15 +129,27 @@ def test_runtime_config_field_mapping(tmp_path: Path):
     assert config.runtime_mode == "plan"
 
 
-def test_default_project_skill_directories_precede_configured_directories(
+def test_default_skill_directories_precede_configured_directories(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    home = tmp_path / "home"
+    global_claude = home / ".claude" / "skills"
+    global_agents = home / ".agents" / "skills"
     opencode_skill = tmp_path / ".opencode" / "skill"
     opencode_skills = tmp_path / ".opencode" / "skills"
     claude_skills = tmp_path / ".claude" / "skills"
-    opencode_skill.mkdir(parents=True)
-    opencode_skills.mkdir(parents=True)
-    claude_skills.mkdir(parents=True)
+    agents_skills = tmp_path / ".agents" / "skills"
+    for directory in (
+        global_claude,
+        global_agents,
+        opencode_skill,
+        opencode_skills,
+        claude_skills,
+        agents_skills,
+    ):
+        directory.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
     _write_json(
         tmp_path / "opencode.json",
         {
@@ -150,14 +163,23 @@ def test_default_project_skill_directories_precede_configured_directories(
     result = load_runtime_config(tmp_path)
 
     assert result.config.skill_directories == [
+        global_claude.resolve(),
+        global_agents.resolve(),
         opencode_skill.resolve(),
         opencode_skills.resolve(),
         claude_skills.resolve(),
+        agents_skills.resolve(),
         (tmp_path / "skills").resolve(),
     ]
 
 
-def test_missing_default_project_skill_directories_are_ignored(tmp_path: Path):
+def test_missing_default_skill_directories_are_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     _write_json(
         tmp_path / "opencode.json",
         {
@@ -172,9 +194,13 @@ def test_missing_default_project_skill_directories_are_ignored(tmp_path: Path):
     ]
 
 
-def test_include_defaults_false_does_not_add_default_project_skill_directories(
+def test_include_defaults_false_does_not_add_default_skill_directories(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    home = tmp_path / "home"
+    (home / ".claude" / "skills").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
     (tmp_path / ".opencode" / "skill").mkdir(parents=True)
     (tmp_path / ".opencode" / "skills").mkdir(parents=True)
     _write_json(
@@ -217,7 +243,11 @@ def test_skills_paths_string_form_resolves_workspace_relative_path(tmp_path: Pat
 
 def test_skills_paths_list_form_dedupes_with_skill_directories(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     default_skills = tmp_path / ".opencode" / "skill"
     default_skills.mkdir(parents=True)
     _write_json(
@@ -242,6 +272,40 @@ def test_skills_paths_list_form_dedupes_with_skill_directories(
         (tmp_path / "extra-skills").resolve(),
     ]
     assert "skills" not in result.metadata["unconsumed_config"]
+
+
+def test_configured_skill_directory_overrides_same_name_global_and_project_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    global_root = home / ".claude" / "skills"
+    project_root = tmp_path / ".opencode" / "skill"
+    configured_root = tmp_path / "configured-skills"
+    for directory in (global_root, project_root, configured_root):
+        directory.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    _write_skill(global_root, "shared-skill", content="# Global")
+    _write_skill(project_root, "shared-skill", content="# Project")
+    winner = _write_skill(configured_root, "shared-skill", content="# Configured")
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "skillDirectories": ["configured-skills"],
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+    skill = SkillDiscovery(result.config.skill_directories).get("shared-skill")
+
+    assert result.config.skill_directories == [
+        global_root.resolve(),
+        project_root.resolve(),
+        configured_root.resolve(),
+    ]
+    assert skill is not None
+    assert skill.root == winner
+    assert skill.content == "# Configured"
 
 
 def test_unsupported_skills_urls_remain_unconsumed_config(tmp_path: Path):
@@ -786,3 +850,13 @@ def _write_text(path: Path, content: str):
     lines = content.strip("\n").splitlines()
     text = "\n".join(line[8:] if line.startswith("        ") else line for line in lines)
     path.write_text(text, encoding="utf-8")
+
+
+def _write_skill(root: Path, name: str, *, content: str) -> Path:
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\n---\n{content}\n",
+        encoding="utf-8",
+    )
+    return skill_dir
