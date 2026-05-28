@@ -14,6 +14,7 @@ from ..instructions import InstructionContextBuilder, ReadInstructionResolver
 from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
 from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
+from ..lsp import LSPClient
 from ..permissions import PermissionEvaluator
 from ..prompt import resolve_prompt_references
 from ..questions import QuestionBroker
@@ -61,6 +62,7 @@ class AgentRuntime:
         run_state: RuntimeRunState | None = None,
         compaction_summarizer: CompactionSummarizer | None = None,
         question_broker: QuestionBroker | None = None,
+        lsp_client: LSPClient | None = None,
     ) -> None:
         self.config = _resolve_config(
             config,
@@ -88,6 +90,7 @@ class AgentRuntime:
             permission_evaluator=permission_evaluator,
             skill_discovery=self.skill_discovery,
             question_broker=self.question_broker,
+            lsp_client=lsp_client,
         )
         self.skill_context_builder = _resolve_skill_context_builder(
             config=self.config,
@@ -365,6 +368,7 @@ def _resolve_config(
         ),
         disabled_tools=list(config.disabled_tools),
         enable_question_tool=config.enable_question_tool,
+        enable_lsp_tool=config.enable_lsp_tool,
         metadata=resolved_metadata,
         include_default_system_prompt=config.include_default_system_prompt,
         system_prompt_texts=list(config.system_prompt_texts),
@@ -400,6 +404,7 @@ def _resolve_tool_runtime(
     permission_evaluator: PermissionEvaluator | None,
     skill_discovery: SkillDiscovery | None,
     question_broker: QuestionBroker,
+    lsp_client: LSPClient | None,
 ) -> ToolRuntime:
     if tool_runtime is not None:
         if tool_registry is not None and tool_registry is not tool_runtime.registry:
@@ -426,8 +431,12 @@ def _resolve_tool_runtime(
                 question_broker=question_broker,
                 include_question_tool=config.enable_question_tool,
                 instruction_resolver=instruction_resolver,
+                lsp_client=lsp_client,
+                include_lsp_tool=config.enable_lsp_tool,
             )
         else:
+            if config.enable_lsp_tool or lsp_client is not None:
+                raise ValueError("workspace_root is required to enable the lsp tool")
             registry = ToolRegistry()
             if config.enable_question_tool:
                 registry.register(create_question_tool(question_broker))

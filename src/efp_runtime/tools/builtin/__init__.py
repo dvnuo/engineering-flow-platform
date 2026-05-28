@@ -10,6 +10,7 @@ from .filesystem import (
     create_write_file_tool,
 )
 from .invalid import create_invalid_tool
+from .lsp import create_lsp_tool
 from .question import create_question_tool
 from .registry import create_core_tool_registry
 from .search import create_glob_tool, create_grep_tool
@@ -30,6 +31,7 @@ __all__ = [
     "create_grep_tool",
     "create_invalid_tool",
     "create_list_dir_tool",
+    "create_lsp_tool",
     "create_question_tool",
     "create_read_file_tool",
     "create_shell_exec_tool",

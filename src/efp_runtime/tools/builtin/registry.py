@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ...instructions import ReadInstructionResolver
+from ...lsp import LSPClient
 from ...permissions import ALLOW, PermissionMetadata
 from ...questions import QuestionBroker
 from ...skills.discovery import SkillDiscovery
@@ -16,6 +17,7 @@ from .edit import create_edit_tool
 from .fetch import create_fetch_tool
 from .filesystem import create_filesystem_tools, normalize_workspace_root
 from .invalid import create_invalid_tool
+from .lsp import create_lsp_tool
 from .question import create_question_tool
 from .search import create_glob_tool, create_grep_tool
 from .shell import create_shell_exec_tool
@@ -40,6 +42,9 @@ def create_core_tool_registry(
     skill_permission: PermissionMetadata | None = None,
     max_skill_sidecar_chars: int = 4000,
     instruction_resolver: ReadInstructionResolver | None = None,
+    lsp_client: LSPClient | None = None,
+    include_lsp_tool: bool = False,
+    lsp_permission: PermissionMetadata | None = None,
 ) -> ToolRegistry:
     """Create a registry containing Runtime v2 core built-in tools."""
 
@@ -62,6 +67,10 @@ def create_core_tool_registry(
     registry.register(create_glob_tool(root))
     registry.register(create_grep_tool(root))
     registry.register(create_invalid_tool())
+    if include_lsp_tool or lsp_client is not None:
+        registry.register(
+            create_lsp_tool(root, client=lsp_client, permission=lsp_permission)
+        )
     registry.register(create_shell_exec_tool(root, permission=shell_permission))
     if task_runner is not None or include_task_tool:
         if task_runner is None:

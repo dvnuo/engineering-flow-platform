@@ -21,6 +21,7 @@ class RuntimeConfig:
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
     enable_question_tool: bool = False
+    enable_lsp_tool: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
     include_default_system_prompt: bool = True
     system_prompt_texts: list[str] = field(default_factory=list)
@@ -75,6 +76,7 @@ class RuntimeConfig:
         )
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
         self.enable_question_tool = bool(self.enable_question_tool)
+        self.enable_lsp_tool = bool(self.enable_lsp_tool)
         self.disabled_tools = list(self.disabled_tools)
         self.metadata = dict(self.metadata)
         self.include_default_system_prompt = bool(self.include_default_system_prompt)

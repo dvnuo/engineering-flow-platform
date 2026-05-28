@@ -149,6 +149,16 @@ default to ask permission; read/search, todo planning, invalid feedback, and
 fetch tools default to allow. The fetch tool is categorized as medium-risk
 network access so callers can override it to ask permission when needed.
 
+The `lsp` tool is an optional code-navigation boundary modeled after
+opencode-style LSP operations: definitions, references, hover, document and
+workspace symbols, implementations, and call hierarchy queries. Runtime v2 does
+not start or manage a language server process in this phase. Callers must inject
+an `LSPClient` adapter or explicitly enable the tool with
+`RuntimeConfig(enable_lsp_tool=True)` / `include_lsp_tool=True`; without an
+available client, tool calls return `No LSP client available for this file type.`
+The tool remains workspace-contained and validates file paths before calling the
+injected client.
+
 The `task` tool is an injectable foreground subagent boundary. It is not enabled
 by the core registry unless a caller provides a task runner; when enabled, the
 loop treats it like any other tool and appends its structured task output as a
