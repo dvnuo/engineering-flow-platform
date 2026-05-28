@@ -72,6 +72,15 @@ and no explicit tool registry/runtime, it creates the Runtime v2 built-in tool
 registry for that workspace. The facade does not call Portal or the legacy agent
 runtime.
 
+## Provider Projection
+
+Runtime v2 keeps provider boundaries explicit. `efp_runtime.llm.openai`
+projects a provider-neutral `ProviderRequest` into plain OpenAI-compatible
+dictionaries for Chat Completions or Responses transports. The projection layer
+does not import an OpenAI SDK, does not call the network, and keeps tool calls,
+tool results, context, attachments, and compaction summaries traceable in the
+payload and metadata.
+
 ## Tools And Permissions
 
 `ToolRuntime` provides the single tool execution path:
