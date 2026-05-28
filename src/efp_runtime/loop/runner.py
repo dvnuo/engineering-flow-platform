@@ -104,6 +104,7 @@ class RuntimeLoopRunner:
         metadata: Optional[dict[str, Any]] = None,
         context_messages: Optional[list[Message]] = None,
         append_user_message: bool = True,
+        user_parts: Optional[List[MessagePart]] = None,
     ) -> RuntimeLoopResult:
         iteration_limit = max_iterations if max_iterations is not None else self.max_iterations
         if iteration_limit < 1:
@@ -115,11 +116,16 @@ class RuntimeLoopRunner:
             allow_create=append_user_message,
         )
         if append_user_message:
-            user_parts = [MessagePart.text_part(user_text)] if user_text else []
+            if user_parts is not None:
+                resolved_user_parts = list(user_parts)
+            elif user_text:
+                resolved_user_parts = [MessagePart.text_part(user_text)]
+            else:
+                resolved_user_parts = []
             self.store.append_message(
                 resolved_session_id,
                 role=MessageRole.USER,
-                parts=user_parts,
+                parts=resolved_user_parts,
                 metadata={"source": "loop.user"},
                 status="complete",
             )
@@ -586,6 +592,7 @@ async def run_runtime_loop(
     metadata: Optional[dict[str, Any]] = None,
     context_messages: Optional[list[Message]] = None,
     append_user_message: bool = True,
+    user_parts: Optional[List[MessagePart]] = None,
     event_bus: Optional[RuntimeEventBus] = None,
     is_cancelled: Optional[CancelCallback] = None,
 ) -> RuntimeLoopResult:
@@ -606,6 +613,7 @@ async def run_runtime_loop(
         metadata=metadata,
         context_messages=context_messages,
         append_user_message=append_user_message,
+        user_parts=user_parts,
     )
 
 

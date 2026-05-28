@@ -19,12 +19,19 @@ class RuntimeConfig:
     active_skills: list[str] = field(default_factory=list)
     include_skill_sidecar_content: bool = False
     max_skill_sidecar_chars: int = 4000
+    resolve_prompt_references: bool = True
+    max_prompt_reference_chars: int = 20000
+    max_prompt_directory_entries: int = 200
 
     def __post_init__(self) -> None:
         if self.max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
         if self.max_context_parts is not None and self.max_context_parts < 1:
             raise ValueError("max_context_parts must be at least 1")
+        if self.max_prompt_reference_chars < 0:
+            raise ValueError("max_prompt_reference_chars must be greater than or equal to 0")
+        if self.max_prompt_directory_entries < 0:
+            raise ValueError("max_prompt_directory_entries must be greater than or equal to 0")
         self.metadata = dict(self.metadata)
         self.skill_directories = list(self.skill_directories)
         self.active_skills = list(self.active_skills)

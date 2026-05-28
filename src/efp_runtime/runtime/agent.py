@@ -13,6 +13,7 @@ from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
 from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
 from ..permissions import PermissionEvaluator
+from ..prompt import resolve_prompt_references
 from ..session.protocol import SessionStore
 from ..session.store import InMemorySessionStore
 from ..skills.commands import SkillCommandResult, parse_skill_commands
@@ -95,6 +96,7 @@ class AgentRuntime:
                 "clear": skill_command.clear,
                 "cleaned_text": skill_command.cleaned_text,
             }
+            user_parts = self._resolve_user_parts(skill_command.cleaned_text)
             runner = RuntimeLoopRunner(
                 store=self.store,
                 provider=self.provider,
@@ -107,6 +109,7 @@ class AgentRuntime:
             )
             result = await runner.run(
                 user_text=skill_command.cleaned_text,
+                user_parts=user_parts,
                 session_id=resolved_session_id,
                 metadata=run_metadata,
                 context_messages=context_messages,
@@ -202,6 +205,21 @@ class AgentRuntime:
             )
         return self.skill_context_builder.build_messages(active_skills)
 
+    def _resolve_user_parts(self, user_text: str):
+        if (
+            not self.config.resolve_prompt_references
+            or self.config.workspace_root is None
+            or not user_text
+        ):
+            return None
+        resolved_prompt = resolve_prompt_references(
+            user_text,
+            workspace_root=self.config.workspace_root,
+            max_file_chars=self.config.max_prompt_reference_chars,
+            max_directory_entries=self.config.max_prompt_directory_entries,
+        )
+        return resolved_prompt.parts
+
 
 def _resolve_config(
     config: RuntimeConfig | None,
@@ -232,6 +250,9 @@ def _resolve_config(
         active_skills=list(config.active_skills),
         include_skill_sidecar_content=config.include_skill_sidecar_content,
         max_skill_sidecar_chars=config.max_skill_sidecar_chars,
+        resolve_prompt_references=config.resolve_prompt_references,
+        max_prompt_reference_chars=config.max_prompt_reference_chars,
+        max_prompt_directory_entries=config.max_prompt_directory_entries,
     )
 
 
