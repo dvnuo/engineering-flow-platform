@@ -463,6 +463,27 @@ and can fall back to a configured default profile, usually `general`.
 the same `AgentProfile` shape used by config and subagent task runners, so
 primary-agent, subagent, and future `@mention` selection can share one registry.
 
+`AgentRuntime(agent_registry=..., default_agent=...)` also supports primary run
+profile selection. Callers choose a profile with
+`AgentRuntime.run(..., agent="review")`, pass an `AgentProfile` directly with
+`agent=profile`, or let `default_agent` resolve through the supplied registry
+when `run(...)` omits `agent`. Runtime v2 does not load profile files from disk
+inside the facade; config and agent discovery are separate caller concerns.
+
+For primary runs, a selected profile prompt is transient provider-only system
+context. It is inserted after the base system prompt stack, including runtime
+reminders, and before workspace instruction context, active skill context, and
+persisted session history. The profile prompt is not appended to the session
+store. Profile `tools`, `max_iterations`, and `active_skills` are per-run
+overrides: caller-supplied `tools={...}` wins over profile tool entries,
+profile `max_iterations` changes only the current loop limit, and profile
+`active_skills` are the base active skills for that run without leaking into
+the runtime instance's long-lived active skill list. `/skill` commands still
+add to or clear that run's profile skill base. Profile metadata, including
+future routing hints such as `model`, `mode`, or `temperature`, is recorded in
+run metadata as profile metadata only; this phase does not switch provider,
+model, mode, or sampling settings.
+
 `create_subagent_task_runner(...)` builds the task runner used by the injectable
 `task` tool. The runner does not start a legacy agent or separate process. It
 creates a child `AgentRuntime`, constructs a traceable child session id from the

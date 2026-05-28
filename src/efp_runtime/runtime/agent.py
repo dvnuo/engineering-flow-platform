@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from copy import deepcopy
 import json
 from pathlib import Path
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from ..compaction.controller import CompactionSummarizer
 from ..commands import CommandRegistry, expand_command
@@ -22,7 +22,7 @@ from ..prompt import resolve_prompt_references
 from ..questions import QuestionBroker
 from ..session.protocol import SessionStore
 from ..session.checkpoint import SessionCheckpoint
-from ..session.models import Session
+from ..session.models import Message, MessagePart, MessageRole, Session
 from ..session.store import InMemorySessionStore
 from ..skills.commands import SkillCommandResult, parse_skill_commands
 from ..skills.context import SkillContextBuilder
@@ -42,6 +42,10 @@ from ..tools.selection import ToolSelection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
 from .config import RuntimeConfig
 from .run_state import RuntimeRunState
+
+if TYPE_CHECKING:
+    from ..agents.profile import AgentProfile
+    from ..agents.registry import AgentRegistry
 
 
 PLAN_MODE_MUTATING_TOOLS = {
@@ -85,6 +89,8 @@ class AgentRuntime:
         compaction_summarizer: CompactionSummarizer | None = None,
         question_broker: QuestionBroker | None = None,
         lsp_client: LSPClient | None = None,
+        agent_registry: "AgentRegistry | None" = None,
+        default_agent: str | None = None,
     ) -> None:
         self.config = _resolve_config(
             config,
@@ -136,6 +142,8 @@ class AgentRuntime:
         self.active_skills = _unique_skill_names(self.config.active_skills)
         self.event_bus = event_bus or RuntimeEventBus()
         self.run_state = run_state or RuntimeRunState()
+        self.agent_registry = agent_registry
+        self.default_agent = _normalize_optional_name(default_agent)
 
     async def run(
         self,
@@ -143,13 +151,24 @@ class AgentRuntime:
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         tools: Mapping[str, bool] | None = None,
+        *,
+        agent: "str | AgentProfile | None" = None,
     ) -> RuntimeLoopResult:
+        profile = self._resolve_agent_profile(agent)
+        iteration_limit = _profile_max_iterations(profile, self.config.max_iterations)
         skill_command = parse_skill_commands(user_text)
-        active_skills = _apply_skill_command(self.active_skills, skill_command)
+        base_active_skills = (
+            _profile_active_skills(profile)
+            if profile is not None
+            else self.active_skills
+        )
+        active_skills = _apply_skill_command(base_active_skills, skill_command)
+        run_tools = _merge_profile_tools(profile, tools)
         resolved_session_id = session_id or self.store.create_session().session_id
         run_id = self.run_state.begin(resolved_session_id)
         try:
             run_metadata = self._base_run_metadata(metadata)
+            run_metadata["max_iterations"] = iteration_limit
             run_metadata["run_id"] = run_id
             self._annotate_skill_metadata(run_metadata, active_skills)
             run_metadata["skill_command"] = {
@@ -162,16 +181,25 @@ class AgentRuntime:
                 run_metadata,
             )
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
+            agent_profile_messages = self._build_agent_profile_messages(profile)
+            self._annotate_agent_profile_metadata(
+                run_metadata,
+                profile,
+                prompt_context_count=len(agent_profile_messages),
+            )
             instruction_context_messages = self._build_instruction_context_messages()
             skill_context_messages = self._build_skill_context_messages(active_skills)
             context_messages = [
                 *system_prompt_messages,
+                *agent_profile_messages,
                 *instruction_context_messages,
                 *skill_context_messages,
             ]
-            self.active_skills = active_skills
+            if profile is None:
+                self.active_skills = active_skills
 
             run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
+            run_metadata["agent_prompt_context_count"] = len(agent_profile_messages)
             run_metadata["instruction_context_count"] = len(instruction_context_messages)
             run_metadata["skill_context_count"] = len(skill_context_messages)
             user_parts = self._resolve_user_parts(user_text_for_request)
@@ -180,7 +208,7 @@ class AgentRuntime:
                 provider=self.provider,
                 adapter=self.adapter,
                 tool_runtime=self.tool_runtime,
-                max_iterations=self.config.max_iterations,
+                max_iterations=iteration_limit,
                 doom_loop_threshold=self.config.doom_loop_threshold,
                 max_context_parts=self.config.max_context_parts,
                 max_context_chars=self.config.max_context_chars,
@@ -213,7 +241,7 @@ class AgentRuntime:
                 session_id=resolved_session_id,
                 metadata=run_metadata,
                 context_messages=context_messages,
-                tools=tools,
+                tools=run_tools,
             )
         except asyncio.CancelledError:
             self.run_state.finish(resolved_session_id, LoopStatus.CANCELLED)
@@ -384,6 +412,26 @@ class AgentRuntime:
     def _build_system_prompt_messages(self, metadata: Mapping[str, Any]):
         return self.system_prompt_builder.build_messages(metadata=metadata)
 
+    def _build_agent_profile_messages(self, profile: Any | None) -> list[Message]:
+        if profile is None:
+            return []
+        prompt = _profile_prompt(profile)
+        if not prompt.strip():
+            return []
+        metadata = {
+            "kind": "agent_profile_context",
+            "source": "agent_profile_prompt",
+            "agent_name": _profile_name(profile),
+        }
+        return [
+            Message(
+                role=MessageRole.SYSTEM,
+                parts=[MessagePart.text_part(prompt, metadata=metadata)],
+                metadata=metadata,
+                status="complete",
+            )
+        ]
+
     def _build_skill_context_messages(self, active_skills: list[str]):
         if not active_skills:
             return []
@@ -464,6 +512,53 @@ class AgentRuntime:
         )
         return run_metadata
 
+    def _resolve_agent_profile(self, agent: Any | None) -> Any | None:
+        if agent is not None and not isinstance(agent, str):
+            if not _is_agent_profile(agent):
+                raise TypeError("agent must be an agent name, AgentProfile, or None")
+            return agent
+
+        requested = _normalize_optional_name(agent)
+        if requested is None:
+            requested = self.default_agent
+        if requested is None:
+            return None
+
+        if self.agent_registry is None:
+            raise _unknown_agent_profile_error(requested, None)
+
+        resolve = getattr(self.agent_registry, "resolve", None)
+        if not callable(resolve):
+            raise TypeError("agent_registry must expose resolve(name)")
+
+        try:
+            profile = resolve(requested)
+        except KeyError as exc:
+            raise _unknown_agent_profile_error(requested, self.agent_registry) from exc
+
+        if not _is_agent_profile(profile):
+            raise TypeError("agent_registry.resolve(name) must return an AgentProfile")
+        if _profile_name(profile) != requested:
+            raise _unknown_agent_profile_error(requested, self.agent_registry)
+        return profile
+
+    def _annotate_agent_profile_metadata(
+        self,
+        run_metadata: dict[str, Any],
+        profile: Any | None,
+        *,
+        prompt_context_count: int,
+    ) -> None:
+        if profile is None:
+            return
+        run_metadata["agent_name"] = _profile_name(profile)
+        run_metadata["agent_description"] = _profile_description(profile)
+        run_metadata["agent_metadata"] = _profile_metadata(profile)
+        run_metadata["agent_prompt_context_count"] = prompt_context_count
+        max_iterations = _profile_configured_max_iterations(profile)
+        if max_iterations is not None:
+            run_metadata["agent_max_iterations"] = max_iterations
+
     def _annotate_skill_metadata(
         self,
         run_metadata: dict[str, Any],
@@ -480,6 +575,120 @@ class AgentRuntime:
         if not callable(method):
             raise TypeError("session store does not support checkpoints")
         return method
+
+
+def _normalize_optional_name(name: Any | None) -> str | None:
+    if name is None:
+        return None
+    normalized = str(name).strip()
+    return normalized or None
+
+
+def _is_agent_profile(value: Any) -> bool:
+    return all(
+        hasattr(value, field_name)
+        for field_name in (
+            "name",
+            "description",
+            "prompt",
+            "tools",
+            "active_skills",
+            "max_iterations",
+            "metadata",
+        )
+    )
+
+
+def _profile_name(profile: Any) -> str:
+    return str(getattr(profile, "name", "")).strip()
+
+
+def _profile_description(profile: Any) -> str:
+    return str(getattr(profile, "description", "") or "")
+
+
+def _profile_prompt(profile: Any) -> str:
+    return str(getattr(profile, "prompt", "") or "")
+
+
+def _profile_metadata(profile: Any) -> dict[str, Any]:
+    metadata = getattr(profile, "metadata", {}) or {}
+    if not isinstance(metadata, Mapping):
+        raise TypeError("agent profile metadata must be a mapping")
+    return dict(metadata)
+
+
+def _profile_configured_max_iterations(profile: Any) -> int | None:
+    max_iterations = getattr(profile, "max_iterations", None)
+    if max_iterations is None:
+        return None
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
+        raise TypeError("agent profile max_iterations must be an int or None")
+    if max_iterations < 1:
+        raise ValueError("agent profile max_iterations must be at least 1")
+    return max_iterations
+
+
+def _profile_max_iterations(profile: Any | None, default: int) -> int:
+    if profile is None:
+        return default
+    return _profile_configured_max_iterations(profile) or default
+
+
+def _profile_active_skills(profile: Any) -> list[str]:
+    return _unique_skill_names(getattr(profile, "active_skills", []) or [])
+
+
+def _profile_tools(profile: Any | None) -> dict[str, bool] | None:
+    if profile is None:
+        return None
+    tools = getattr(profile, "tools", None)
+    if tools is None:
+        return None
+    return _copy_tool_overrides(tools)
+
+
+def _merge_profile_tools(
+    profile: Any | None,
+    tools: Mapping[str, bool] | None,
+) -> dict[str, bool] | None:
+    merged = _profile_tools(profile)
+    if tools is None:
+        return merged
+    caller_tools = _copy_tool_overrides(tools)
+    if merged is None:
+        return caller_tools
+    merged.update(caller_tools)
+    return merged
+
+
+def _copy_tool_overrides(tools: Mapping[str, bool]) -> dict[str, bool]:
+    copied: dict[str, bool] = {}
+    for tool_id, enabled in tools.items():
+        if not isinstance(enabled, bool):
+            raise TypeError("tool overrides must map tool ids to bool values")
+        copied[str(tool_id)] = enabled
+    return copied
+
+
+def _unknown_agent_profile_error(
+    requested: str,
+    registry: Any | None,
+) -> KeyError:
+    available = _agent_registry_names(registry)
+    available_text = ", ".join(available) if available else "<none>"
+    return KeyError(
+        f"Unknown agent profile: {requested}. Available agents: {available_text}"
+    )
+
+
+def _agent_registry_names(registry: Any | None) -> list[str]:
+    if registry is None:
+        return []
+    names = getattr(registry, "names", None)
+    if not callable(names):
+        return []
+    return [str(name) for name in names()]
 
 
 def _resolve_config(
