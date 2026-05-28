@@ -13,12 +13,16 @@ from .openai import (
     request_tool_schema_to_openai_responses_tool,
     request_tool_schema_to_openai_tool,
 )
+from .provider import OpenAICompatibleProvider, ProviderTransport, RecordingTransport
 
 __all__ = [
     "DefaultLLMEventAdapter",
     "LLMEvent",
     "LLMEventAdapter",
     "LLMEventType",
+    "OpenAICompatibleProvider",
+    "ProviderTransport",
+    "RecordingTransport",
     "provider_request_to_openai_chat",
     "provider_request_to_openai_responses",
     "request_message_to_openai_chat_messages",

@@ -124,10 +124,13 @@ class SessionProcessor:
             self._finalize_open_text_parts()
             assistant_message = self.last_assistant_message
             if assistant_message is not None:
-                assistant_message.status = "complete"
+                if assistant_message.status != "error":
+                    assistant_message.status = "complete"
                 assistant_message.usage.update(event.usage)
-                assistant_message.completed_at = utc_now_iso()
-            self.session.status = RuntimeStatus.FINISHED
+                if assistant_message.completed_at is None:
+                    assistant_message.completed_at = utc_now_iso()
+            if self.session.status is not RuntimeStatus.ERROR:
+                self.session.status = RuntimeStatus.FINISHED
             self._record_runtime_event("llm.step_finish", event)
             return
 

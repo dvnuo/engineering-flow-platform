@@ -82,6 +82,14 @@ does not import an OpenAI SDK, does not call the network, and keeps tool calls,
 tool results, context, attachments, and compaction summaries traceable in the
 payload and metadata.
 
+`efp_runtime.llm.provider.OpenAICompatibleProvider` is the transport facade for
+that projection. It implements the Runtime v2 provider boundary by building the
+OpenAI-compatible payload, calling an injected async `ProviderTransport`, and
+returning either the raw non-stream response for loop normalization or a stream
+of normalized `LLMEvent` values through `DefaultLLMEventAdapter`. Transport
+failures are mapped to provider error responses so the loop can finish with an
+error status without depending on SDK exception types.
+
 ## Tools And Permissions
 
 `ToolRuntime` provides the single tool execution path:

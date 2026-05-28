@@ -55,7 +55,7 @@ class DefaultLLMEventAdapter:
 
         yield LLMEvent(LLMEventType.MESSAGE_START, raw=raw)
 
-        reasoning = raw.get("reasoning")
+        reasoning = _extract_response_reasoning(raw)
         if isinstance(reasoning, str) and reasoning:
             yield LLMEvent(
                 LLMEventType.REASONING_DELTA,
@@ -64,7 +64,7 @@ class DefaultLLMEventAdapter:
                 raw=raw,
             )
 
-        content = _extract_text(raw.get("content"))
+        content = _extract_response_text(raw)
         if content:
             part_id = _stable_part_id("text", 0)
             yield LLMEvent(LLMEventType.TEXT_START, part_id=part_id, raw=raw)
@@ -319,9 +319,63 @@ async def _aiter_chunks(
         yield chunk
 
 
+def _extract_response_text(response: Mapping[str, Any]) -> str:
+    content = _extract_text(response.get("content"))
+    if content:
+        return content
+
+    chat_message = _extract_chat_response_message(response)
+    if chat_message is not None:
+        content = _extract_text(chat_message.get("content"))
+        if content:
+            return content
+
+    output_text = _extract_text(response.get("output_text"))
+    if output_text:
+        return output_text
+
+    chunks: List[str] = []
+    for item in _as_list(response.get("output")):
+        if not isinstance(item, Mapping):
+            continue
+        item_type = item.get("type")
+        if item_type in {"message", "assistant_message"}:
+            chunks.append(_extract_text(item.get("content")))
+        elif item_type in {"text", "output_text"}:
+            chunks.append(str(item.get("text") or ""))
+    return "".join(chunks)
+
+
+def _extract_response_reasoning(response: Mapping[str, Any]) -> Optional[str]:
+    reasoning = response.get("reasoning")
+    if isinstance(reasoning, str):
+        return reasoning
+
+    chat_message = _extract_chat_response_message(response)
+    if chat_message is not None:
+        reasoning = chat_message.get("reasoning") or chat_message.get("reasoning_content")
+        if isinstance(reasoning, str):
+            return reasoning
+
+    chunks: List[str] = []
+    for item in _as_list(response.get("output")):
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("type") == "reasoning":
+            chunks.append(
+                _extract_text(item.get("content")) or str(item.get("text") or "")
+            )
+    return "".join(chunks) or None
+
+
 def _extract_tool_calls(response: Mapping[str, Any]) -> List[ToolCall]:
     raw_function_calls = _as_list(response.get("function_calls"))
     raw_tool_calls = _as_list(response.get("tool_calls"))
+    chat_message = _extract_chat_response_message(response)
+    if chat_message is not None:
+        raw_function_calls.extend(_as_list(chat_message.get("function_calls")))
+        raw_tool_calls.extend(_as_list(chat_message.get("tool_calls")))
+    raw_function_calls.extend(_extract_responses_function_calls(response))
     normalized: List[ToolCall] = []
     seen = set()
 
@@ -335,6 +389,36 @@ def _extract_tool_calls(response: Mapping[str, Any]) -> List[ToolCall]:
         seen.add(dedupe_key)
         normalized.append(tool_call)
     return normalized
+
+
+def _extract_chat_response_message(response: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    choice = choices[0]
+    if not isinstance(choice, Mapping):
+        return None
+    message = choice.get("message")
+    if isinstance(message, Mapping):
+        return message
+    return None
+
+
+def _extract_responses_function_calls(response: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    calls: List[Mapping[str, Any]] = []
+    for item in _as_list(response.get("output")):
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("type") == "function_call":
+            calls.append(item)
+            continue
+        for content_item in _as_list(item.get("content")):
+            if (
+                isinstance(content_item, Mapping)
+                and content_item.get("type") == "function_call"
+            ):
+                calls.append(content_item)
+    return calls
 
 
 def _extract_tool_results(response: Mapping[str, Any]) -> List[ToolResult]:
