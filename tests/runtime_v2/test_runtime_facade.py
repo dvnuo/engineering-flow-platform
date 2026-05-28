@@ -52,6 +52,8 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
         "shell_kill",
         "shell_status",
         "todo_write",
+        "todowrite",
+        "webfetch",
         "write",
         "write_file",
     ]
@@ -76,6 +78,8 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
         "shell_kill",
         "shell_status",
         "todo_write",
+        "todowrite",
+        "webfetch",
         "write",
         "write_file",
     ]

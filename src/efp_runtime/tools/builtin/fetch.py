@@ -25,6 +25,35 @@ def create_fetch_tool(
     default_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     default_max_chars: int = DEFAULT_MAX_CHARS,
 ) -> ToolDef:
+    return _create_fetch_tool(
+        tool_id="fetch",
+        permission=permission,
+        default_timeout_seconds=default_timeout_seconds,
+        default_max_chars=default_max_chars,
+    )
+
+
+def create_webfetch_tool(
+    *,
+    permission: PermissionMetadata | None = None,
+    default_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    default_max_chars: int = DEFAULT_MAX_CHARS,
+) -> ToolDef:
+    return _create_fetch_tool(
+        tool_id="webfetch",
+        permission=permission,
+        default_timeout_seconds=default_timeout_seconds,
+        default_max_chars=default_max_chars,
+    )
+
+
+def _create_fetch_tool(
+    *,
+    tool_id: str,
+    permission: PermissionMetadata | None,
+    default_timeout_seconds: float,
+    default_max_chars: int,
+) -> ToolDef:
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         loop = asyncio.get_running_loop()
         output = await loop.run_in_executor(
@@ -38,7 +67,7 @@ def create_fetch_tool(
         )
         return ToolResult(
             call_id=context.tool_call_id or "",
-            tool_name="fetch",
+            tool_name=tool_id,
             content=output["content"],
             output=output,
             truncated=bool(output["truncated"]),
@@ -53,7 +82,7 @@ def create_fetch_tool(
         )
 
     return ToolDef(
-        id="fetch",
+        id=tool_id,
         description="Fetch content from an HTTP or HTTPS URL.",
         input_schema={
             "type": "object",

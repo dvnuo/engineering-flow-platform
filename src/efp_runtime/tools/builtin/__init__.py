@@ -8,7 +8,7 @@ from .background_shell import (
     create_shell_status_tool,
 )
 from .edit import create_edit_tool
-from .fetch import create_fetch_tool
+from .fetch import create_fetch_tool, create_webfetch_tool
 from .filesystem import (
     create_filesystem_tools,
     create_list_dir_tool,
@@ -32,7 +32,7 @@ from .task import (
     create_task_status_tool,
     create_task_tool,
 )
-from .todo import create_todo_write_tool
+from .todo import create_todo_write_tool, create_todowrite_tool
 
 __all__ = [
     "TaskToolRequest",
@@ -45,6 +45,7 @@ __all__ = [
     "create_core_tool_registry",
     "create_edit_tool",
     "create_fetch_tool",
+    "create_webfetch_tool",
     "create_filesystem_tools",
     "create_glob_tool",
     "create_grep_tool",
@@ -62,6 +63,7 @@ __all__ = [
     "create_task_status_tool",
     "create_task_tool",
     "create_todo_write_tool",
+    "create_todowrite_tool",
     "create_write_tool",
     "create_write_file_tool",
 ]

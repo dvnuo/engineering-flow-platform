@@ -395,6 +395,8 @@ print(json.dumps({
             "shell_kill",
             "shell_status",
             "todo_write",
+            "todowrite",
+            "webfetch",
             "write",
             "write_file",
         ],

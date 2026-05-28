@@ -35,6 +35,8 @@ DEFAULT_TOOL_IDS = [
     "shell_kill",
     "shell_status",
     "todo_write",
+    "todowrite",
+    "webfetch",
     "write",
     "write_file",
 ]
@@ -348,6 +350,8 @@ async def test_plan_mode_enabled_tools_cannot_bypass_read_only_policy(
         "shell_kill",
         "shell_status",
         "todo_write",
+        "todowrite",
+        "webfetch",
         "write",
         "write_file",
     ]

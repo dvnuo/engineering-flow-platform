@@ -21,7 +21,7 @@ from .background_shell import (
     create_shell_status_tool,
 )
 from .edit import create_edit_tool
-from .fetch import create_fetch_tool
+from .fetch import create_fetch_tool, create_webfetch_tool
 from .filesystem import create_filesystem_tools, normalize_workspace_root
 from .invalid import create_invalid_tool
 from .lsp import create_lsp_tool
@@ -35,7 +35,7 @@ from .task import (
     create_task_status_tool,
     create_task_tool,
 )
-from .todo import create_todo_write_tool
+from .todo import TodoStore, create_todo_write_tool, create_todowrite_tool
 
 if TYPE_CHECKING:
     from ...agents.background_tasks import BackgroundTaskManager
@@ -96,6 +96,7 @@ def create_core_tool_registry(
     registry.register(create_apply_patch_tool(root, permission=write_permission))
     registry.register(create_edit_tool(root, permission=write_permission))
     registry.register(create_fetch_tool(permission=fetch_permission))
+    registry.register(create_webfetch_tool(permission=fetch_permission))
     for tool in create_filesystem_tools(
         root,
         write_permission=write_permission,
@@ -148,7 +149,9 @@ def create_core_tool_registry(
             registry.register(create_task_cancel_tool(task_manager))
     if include_question_tool:
         registry.register(create_question_tool(question_broker))
-    registry.register(create_todo_write_tool())
+    todo_store: TodoStore = {}
+    registry.register(create_todo_write_tool(todos_by_session=todo_store))
+    registry.register(create_todowrite_tool(todos_by_session=todo_store))
     if include_plan_tool:
         registry.register(create_plan_exit_tool())
     if resolved_skill_discovery is not None:

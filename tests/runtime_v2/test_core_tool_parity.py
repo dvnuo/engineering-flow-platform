@@ -295,6 +295,8 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
         "shell_kill",
         "shell_status",
         "todo_write",
+        "todowrite",
+        "webfetch",
         "write",
         "write_file",
     ]
@@ -302,9 +304,13 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
     assert registry.require("fetch").permission.action == ALLOW
     assert registry.require("fetch").permission.category == "network"
     assert registry.require("fetch").permission.risk == "medium"
+    assert registry.require("webfetch").permission.action == ALLOW
+    assert registry.require("webfetch").permission.category == "network"
+    assert registry.require("webfetch").permission.risk == "medium"
     assert registry.require("invalid").permission.action == ALLOW
     assert registry.require("invalid").permission.category == "validation"
     assert registry.require("todo_write").permission.action == ALLOW
+    assert registry.require("todowrite").permission.action == ALLOW
     assert registry.require("shell_status").permission.action == ALLOW
     assert registry.require("shell_status").permission.risk == "low"
     assert registry.require("edit").permission.action == ASK

@@ -9,10 +9,35 @@ from ..definition import ToolContext, ToolDef
 
 
 TODO_STATUSES = ("pending", "in_progress", "completed")
+TodoStore = dict[str, list[dict[str, str]]]
 
 
-def create_todo_write_tool() -> ToolDef:
-    todos_by_session: dict[str, list[dict[str, str]]] = {}
+def create_todo_write_tool(
+    *,
+    todos_by_session: TodoStore | None = None,
+) -> ToolDef:
+    return _create_todo_tool(
+        tool_id="todo_write",
+        todos_by_session=todos_by_session,
+    )
+
+
+def create_todowrite_tool(
+    *,
+    todos_by_session: TodoStore | None = None,
+) -> ToolDef:
+    return _create_todo_tool(
+        tool_id="todowrite",
+        todos_by_session=todos_by_session,
+    )
+
+
+def _create_todo_tool(
+    *,
+    tool_id: str,
+    todos_by_session: TodoStore | None,
+) -> ToolDef:
+    store = todos_by_session if todos_by_session is not None else {}
 
     async def execute(args: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         normalized = [
@@ -23,13 +48,13 @@ def create_todo_write_tool() -> ToolDef:
             for todo in args["todos"]
         ]
         session_key = context.session_id or "default"
-        todos_by_session[session_key] = normalized
+        store[session_key] = normalized
         return {
             "todos": normalized,
         }
 
     return ToolDef(
-        id="todo_write",
+        id=tool_id,
         description="Store a session-local todo list for model-visible planning.",
         input_schema={
             "type": "object",
@@ -57,4 +82,5 @@ def create_todo_write_tool() -> ToolDef:
             resource="session",
             risk="low",
         ),
+        runtime_metadata={"todos_by_session": store},
     )

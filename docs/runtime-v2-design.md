@@ -442,15 +442,15 @@ request. The final assistant message remains the assistant message that made the
 tool call; the runtime does not synthesize assistant text after a terminal tool.
 
 The core built-in registry is workspace-contained and intentionally independent
-from the legacy runtime. It includes legacy EFP file ids `read_file`,
-`list_dir`, and `write_file`, plus opencode-style file aliases `read` and
-`write` that use `filePath` schemas. The legacy ids and their behavior remain
+from the legacy runtime. It preserves EFP ids while exposing opencode-style
+aliases: `read_file` / `read`, `write_file` / `write`, `fetch` / `webfetch`,
+and `todo_write` / `todowrite`. The legacy ids and their behavior remain
 available. The registry also includes grep/glob, shell execution, single-file
-edit, unified-diff apply_patch, session-local todo_write planning,
-invalid-argument feedback, and HTTP(S) fetch tools. Mutating filesystem tools
-default to ask permission; read/search, todo planning, invalid feedback, and
-fetch tools default to allow. The fetch tool is categorized as medium-risk
-network access so callers can override it to ask permission when needed.
+edit, unified-diff apply_patch, session-local todo planning, invalid-argument
+feedback, and HTTP(S) fetch tools. Mutating filesystem tools default to ask
+permission; read/search, todo planning, invalid feedback, and fetch tools
+default to allow. Fetch tools are categorized as medium-risk network access so
+callers can override them to ask permission when needed.
 
 Foreground `shell_exec` keeps the existing timeout behavior: the runtime waits
 for `communicate()`, kills the process on timeout, and returns the collected
