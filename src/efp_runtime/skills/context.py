@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -81,31 +82,54 @@ def _render_skill_context_text(
     max_sidecar_chars: int,
 ) -> str:
     lines = [
-        f"Skill: {skill.name}",
-        f"Description: {skill.description}" if skill.description else "Description:",
-        f"Skill file: {skill.skill_file}",
-        "",
-        "Instructions:",
-        skill.content,
-        "",
-        "Sidecars:",
+        f'<skill_content name="{escape(skill.name, quote=True)}">',
+        f"# Skill: {skill.name}",
     ]
-    if skill.sidecar_files:
-        for path in skill.sidecar_files:
-            lines.extend(
-                _render_sidecar_lines(
-                    skill.root,
-                    path,
-                    include_content=include_sidecar_content,
-                    max_chars=max_sidecar_chars,
-                )
+    if skill.description:
+        lines.append(f"Description: {skill.description}")
+    lines.extend(
+        [
+            "",
+            skill.content,
+            "",
+            f"Base directory for this skill: {_file_uri(skill.root)}",
+            "<skill_files>",
+        ]
+    )
+    lines.extend(
+        _render_skill_file_lines(
+            skill.root,
+            skill.skill_file,
+            include_content=False,
+            max_chars=max_sidecar_chars,
+        )
+    )
+    for path in skill.sidecar_files:
+        lines.extend(
+            _render_skill_file_lines(
+                skill.root,
+                path,
+                include_content=include_sidecar_content,
+                max_chars=max_sidecar_chars,
             )
-    else:
-        lines.append("- none")
+        )
+    lines.extend(
+        [
+            "</skill_files>",
+            "</skill_content>",
+        ]
+    )
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_sidecar_lines(
+def _file_uri(path: Path) -> str:
+    uri = path.resolve().as_uri()
+    if not uri.endswith("/"):
+        uri = f"{uri}/"
+    return uri
+
+
+def _render_skill_file_lines(
     root: Path,
     path: Path,
     *,
@@ -129,6 +153,21 @@ def _render_sidecar_lines(
             f"{sidecar['original_chars']} chars"
         )
     return [header, "  Content:", _indent_text(str(sidecar["content"]), prefix="  ")]
+
+
+def _render_sidecar_lines(
+    root: Path,
+    path: Path,
+    *,
+    include_content: bool,
+    max_chars: int,
+) -> list[str]:
+    return _render_skill_file_lines(
+        root,
+        path,
+        include_content=include_content,
+        max_chars=max_chars,
+    )
 
 
 def _relative_sidecar_path(root: Path, path: Path) -> str:

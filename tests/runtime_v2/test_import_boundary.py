@@ -46,6 +46,12 @@ def test_runtime_v2_source_does_not_import_legacy_runtime_modules():
     forbidden_imports = [
         "from src.agents.core",
         "import src.agents.core",
+        "from src.agents.skill_runtime",
+        "import src.agents.skill_runtime",
+        "from src.agents.skill_mode",
+        "import src.agents.skill_mode",
+        "from src.skills",
+        "import src.skills",
         "from src.agents.tool_result_policy",
         "import src.agents.tool_result_policy",
         "Agent.process(",

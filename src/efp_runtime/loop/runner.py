@@ -72,6 +72,7 @@ class RuntimeLoopRunner:
         session: Optional[Session] = None,
         max_iterations: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
+        context_messages: Optional[list[Message]] = None,
     ) -> RuntimeLoopResult:
         iteration_limit = max_iterations if max_iterations is not None else self.max_iterations
         if iteration_limit < 1:
@@ -95,6 +96,7 @@ class RuntimeLoopRunner:
         while iterations < iteration_limit:
             iteration = iterations + 1
             history = self.store.read_history(resolved_session_id)
+            request_history = [*(context_messages or []), *history]
             tools = self.tool_runtime.registry.list()
             request_metadata = _request_metadata(
                 metadata,
@@ -103,7 +105,7 @@ class RuntimeLoopRunner:
                 max_iterations=iteration_limit,
             )
             prepared_request = prepare_history_for_request(
-                history,
+                request_history,
                 tools=tools,
                 metadata=request_metadata,
                 max_parts=self.max_context_parts,
@@ -343,6 +345,7 @@ async def run_runtime_loop(
     max_iterations: int = 4,
     max_context_parts: Optional[int] = None,
     metadata: Optional[dict[str, Any]] = None,
+    context_messages: Optional[list[Message]] = None,
 ) -> RuntimeLoopResult:
     runner = RuntimeLoopRunner(
         store=store,
@@ -357,6 +360,7 @@ async def run_runtime_loop(
         session_id=session_id,
         session=session,
         metadata=metadata,
+        context_messages=context_messages,
     )
 
 

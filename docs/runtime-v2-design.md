@@ -30,8 +30,9 @@ PYTHONPATH=src python -c "import efp_runtime"
 ```
 
 Importing runtime v2 must not import `src.agents.core` or require optional
-legacy tool dependencies. The legacy root package `src/__init__.py` is left
-unchanged.
+legacy tool dependencies. It also must not import legacy skill/runtime modules
+such as `src.agents.skill_runtime`, `src.agents.skill_mode`, or `src.skills`.
+The legacy root package `src/__init__.py` is left unchanged.
 
 ## Data Model
 
@@ -99,6 +100,12 @@ tool results and do not execute the tool callable.
 Skills are discovered from `SKILL.md` or `skill.md` files. Loading a skill reads
 markdown plus optional sidecar context. Python sidecar files are treated as text
 or binary files; runtime v2 never imports or executes them.
+
+`AgentRuntime` can keep an instance-level active skill list from
+`RuntimeConfig.active_skills` and `/skill` command lines. Active skill context is
+rendered as transient system context in the provider request before session
+history. It is not appended to the persisted session store, so repeated runs do
+not duplicate skill messages in history.
 
 ## Compaction
 
