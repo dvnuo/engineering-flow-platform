@@ -281,7 +281,25 @@ async def test_todo_write_normalizes_and_validates_status(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_new_core_tool_permission_defaults(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path)
+    assert registry.ids() == [
+        "apply_patch",
+        "edit",
+        "fetch",
+        "glob",
+        "grep",
+        "invalid",
+        "list_dir",
+        "read_file",
+        "shell_exec",
+        "todo_write",
+        "write_file",
+    ]
     assert registry.require("glob").permission.action == ALLOW
+    assert registry.require("fetch").permission.action == ALLOW
+    assert registry.require("fetch").permission.category == "network"
+    assert registry.require("fetch").permission.risk == "medium"
+    assert registry.require("invalid").permission.action == ALLOW
+    assert registry.require("invalid").permission.category == "validation"
     assert registry.require("todo_write").permission.action == ALLOW
     assert registry.require("edit").permission.action == ASK
     assert registry.require("apply_patch").permission.action == ASK

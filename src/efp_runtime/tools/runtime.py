@@ -219,7 +219,7 @@ class ToolRuntime:
                 content=content,
                 output=raw_output.output if policy.include_raw_output else None,
                 error=raw_output.error,
-                metadata={**raw_output.metadata, **metadata},
+                metadata={**metadata, **raw_output.metadata},
                 truncated=raw_output.truncated or truncated,
                 events=[
                     *raw_output.events,

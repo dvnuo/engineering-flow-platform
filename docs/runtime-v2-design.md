@@ -129,9 +129,11 @@ to the next provider iteration. Set
 
 The core built-in registry is workspace-contained and intentionally independent
 from the legacy runtime. It includes read/list/write, grep/glob, shell execution,
-single-file edit, unified-diff apply_patch, and a session-local todo_write
-planning tool. Mutating filesystem tools default to ask permission; read/search
-and todo planning tools default to allow.
+single-file edit, unified-diff apply_patch, session-local todo_write planning,
+invalid-argument feedback, and HTTP(S) fetch tools. Mutating filesystem tools
+default to ask permission; read/search, todo planning, invalid feedback, and
+fetch tools default to allow. The fetch tool is categorized as medium-risk
+network access so callers can override it to ask permission when needed.
 
 The `task` tool is an injectable foreground subagent boundary. It is not enabled
 by the core registry unless a caller provides a task runner; when enabled, the

@@ -40,8 +40,10 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert runtime.tool_runtime.registry.ids() == [
         "apply_patch",
         "edit",
+        "fetch",
         "glob",
         "grep",
+        "invalid",
         "list_dir",
         "read_file",
         "shell_exec",
@@ -55,8 +57,10 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert [schema.id for schema in request.provider_request.tools] == [
         "apply_patch",
         "edit",
+        "fetch",
         "glob",
         "grep",
+        "invalid",
         "list_dir",
         "read_file",
         "shell_exec",

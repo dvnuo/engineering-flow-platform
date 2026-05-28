@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,45 @@ class AllowEvaluator:
         context: ToolContext | None = None,
     ) -> PermissionDecision:
         return PermissionDecision.allow()
+
+
+class LocalFetchHandler(BaseHTTPRequestHandler):
+    utf8_body = "hello 世界\n"
+    long_body = "0123456789"
+
+    def do_GET(self):  # noqa: N802 - http.server callback name.
+        if self.path == "/utf8":
+            self._send_text(self.utf8_body)
+            return
+        if self.path == "/long":
+            self._send_text(self.long_body)
+            return
+        self.send_error(404)
+
+    def log_message(self, format, *args):  # noqa: A002 - matches stdlib signature.
+        return
+
+    def _send_text(self, body: str) -> None:
+        data = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+@pytest.fixture
+def local_http_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LocalFetchHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.mark.asyncio
@@ -194,6 +235,114 @@ async def test_shell_succeeds_with_allow_evaluator(tmp_path: Path):
     assert result.content == "<stdout>\nok\n</stdout>"
 
 
+@pytest.mark.asyncio
+async def test_invalid_tool_returns_model_visible_argument_error(tmp_path: Path):
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-invalid",
+            tool_id="invalid",
+            args={"tool": "read_file", "error": "path must be a string"},
+        )
+    )
+
+    expected = (
+        "The arguments provided to the read_file tool are invalid: "
+        "path must be a string"
+    )
+    assert result.status == "success"
+    assert result.success is True
+    assert result.content == expected
+    assert result.output == {
+        "tool": "read_file",
+        "error": "path must be a string",
+        "message": expected,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_reads_utf8_text_from_local_http_server(
+    tmp_path: Path,
+    local_http_server: str,
+):
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+    url = f"{local_http_server}/utf8"
+
+    result = await runtime.execute(
+        ToolCall(id="call-fetch", tool_id="fetch", args={"url": url})
+    )
+
+    body = LocalFetchHandler.utf8_body
+    assert result.status == "success"
+    assert result.content == body
+    assert result.output == {
+        "url": url,
+        "status_code": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "content": body,
+        "bytes": len(body.encode("utf-8")),
+        "truncated": False,
+        "original_chars": len(body),
+    }
+    assert result.metadata["original_chars"] == len(body)
+
+
+@pytest.mark.asyncio
+async def test_fetch_rejects_non_http_urls(tmp_path: Path):
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(id="call-fetch", tool_id="fetch", args={"url": "file:///etc/passwd"})
+    )
+
+    assert result.status == "error"
+    assert result.success is False
+    assert "http:// or https://" in result.error
+
+
+@pytest.mark.asyncio
+async def test_fetch_validates_header_values_before_execution(tmp_path: Path):
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-fetch",
+            tool_id="fetch",
+            args={"url": "http://example.test", "headers": {"X-Test": 1}},
+        )
+    )
+
+    assert result.status == "validation_error"
+    assert "headers.X-Test" in result.error
+
+
+@pytest.mark.asyncio
+async def test_fetch_truncates_content_by_max_chars(
+    tmp_path: Path,
+    local_http_server: str,
+):
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+    url = f"{local_http_server}/long"
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-fetch",
+            tool_id="fetch",
+            args={"url": url, "max_chars": 4},
+        )
+    )
+
+    assert result.status == "success"
+    assert result.content == "0123"
+    assert result.truncated is True
+    assert result.output["content"] == "0123"
+    assert result.output["bytes"] == len(LocalFetchHandler.long_body.encode("utf-8"))
+    assert result.output["truncated"] is True
+    assert result.output["original_chars"] == len(LocalFetchHandler.long_body)
+    assert result.metadata["original_chars"] == len(LocalFetchHandler.long_body)
+
+
 def test_builtin_tools_import_standalone_without_legacy_modules():
     code = """
 import json
@@ -234,8 +383,10 @@ print(json.dumps({
         "ids": [
             "apply_patch",
             "edit",
+            "fetch",
             "glob",
             "grep",
+            "invalid",
             "list_dir",
             "read_file",
             "shell_exec",

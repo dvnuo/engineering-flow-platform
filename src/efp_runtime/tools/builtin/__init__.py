@@ -2,12 +2,14 @@
 
 from .apply_patch import create_apply_patch_tool
 from .edit import create_edit_tool
+from .fetch import create_fetch_tool
 from .filesystem import (
     create_filesystem_tools,
     create_list_dir_tool,
     create_read_file_tool,
     create_write_file_tool,
 )
+from .invalid import create_invalid_tool
 from .question import create_question_tool
 from .registry import create_core_tool_registry
 from .search import create_glob_tool, create_grep_tool
@@ -22,9 +24,11 @@ __all__ = [
     "create_apply_patch_tool",
     "create_core_tool_registry",
     "create_edit_tool",
+    "create_fetch_tool",
     "create_filesystem_tools",
     "create_glob_tool",
     "create_grep_tool",
+    "create_invalid_tool",
     "create_list_dir_tool",
     "create_question_tool",
     "create_read_file_tool",

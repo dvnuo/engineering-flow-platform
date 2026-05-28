@@ -124,7 +124,10 @@ def _validate_object_properties(
     for property_name, property_value in value.items():
         property_schema = properties.get(property_name)
         if property_schema is None:
-            continue
+            additional_properties = schema.get("additionalProperties")
+            if not isinstance(additional_properties, Mapping):
+                continue
+            property_schema = additional_properties
         _validate_value(_field_name(name, property_name), property_value, property_schema)
 
 
