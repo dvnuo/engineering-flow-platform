@@ -12,6 +12,7 @@ from efp_runtime.agents import DEFAULT_AGENT_PROFILE_NAMES
 from efp_runtime.config_loader import (
     find_runtime_config_files,
     load_runtime_config,
+    resolve_runtime_workspace_root,
 )
 from efp_runtime.permissions import normalize_agent_permission_overlay
 from efp_runtime.skills.discovery import SkillDiscovery
@@ -57,6 +58,126 @@ def test_default_file_lookup_and_merge_order(tmp_path: Path):
         (tmp_path / "override.md").resolve(),
     ]
     assert result.config.active_skills == ["base", "review"]
+
+
+def test_load_runtime_config_resolves_parent_opencode_json_from_nested_dir(
+    tmp_path: Path,
+):
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    _write_json(
+        project / "opencode.json",
+        {
+            "runtime_mode": "plan",
+            "instructions": ["README.md"],
+        },
+    )
+
+    found = find_runtime_config_files(nested)
+    result = load_runtime_config(nested)
+
+    assert found == [(project / "opencode.json").resolve()]
+    assert result.loaded_paths == found
+    assert result.config.workspace_root == project.resolve()
+    assert result.config.runtime_mode == "plan"
+    assert result.config.instruction_paths == [(project / "README.md").resolve()]
+
+
+def test_load_runtime_config_resolves_parent_dot_opencode_config_from_nested_dir(
+    tmp_path: Path,
+):
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    config_path = project / ".opencode" / "config.json"
+    _write_json(config_path, {"runtime": {"mode": "plan"}})
+
+    result = load_runtime_config(nested)
+
+    assert result.loaded_paths == [config_path.resolve()]
+    assert result.config.workspace_root == project.resolve()
+    assert result.config.runtime_mode == "plan"
+
+
+def test_parent_default_commands_marker_resolves_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    commands = project / ".opencode" / "commands"
+    commands.mkdir(parents=True)
+    (commands / "audit.md").write_text("Audit nested work.", encoding="utf-8")
+
+    result = load_runtime_config(nested)
+
+    assert result.loaded_paths == []
+    assert result.config.workspace_root == project.resolve()
+    assert result.config.command_directories == [commands.resolve()]
+    assert result.command_registry is not None
+    assert result.command_registry.get("audit").content == "Audit nested work."
+
+
+@pytest.mark.parametrize("default_name", ["skill", "skills"])
+def test_parent_default_skill_marker_resolves_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    default_name: str,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    skills = project / ".opencode" / default_name
+    _write_skill(skills, "project-skill", content="# Project skill")
+
+    result = load_runtime_config(nested)
+    skill = SkillDiscovery(result.config.skill_directories).get("project-skill")
+
+    assert result.loaded_paths == []
+    assert result.config.workspace_root == project.resolve()
+    assert result.config.skill_directories == [skills.resolve()]
+    assert skill is not None
+    assert skill.skill_file == skills / "project-skill" / "SKILL.md"
+
+
+def test_nested_project_marker_wins_over_parent_marker(tmp_path: Path):
+    outer = tmp_path / "outer"
+    inner = outer / "packages" / "app"
+    nested = inner / "src" / "pkg"
+    nested.mkdir(parents=True)
+    inner_config = inner / ".opencode" / "config.json"
+    _write_json(outer / "opencode.json", {"runtime_mode": "build"})
+    _write_json(inner_config, {"runtime_mode": "plan"})
+
+    result = load_runtime_config(nested)
+
+    assert resolve_runtime_workspace_root(nested) == inner.resolve()
+    assert result.loaded_paths == [inner_config.resolve()]
+    assert result.config.workspace_root == inner.resolve()
+    assert result.config.runtime_mode == "plan"
+
+
+def test_include_defaults_false_does_not_resolve_parent_marker(tmp_path: Path):
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    _write_json(project / "opencode.json", {"runtime_mode": "plan"})
+
+    result = load_runtime_config(nested, include_defaults=False)
+
+    assert (
+        resolve_runtime_workspace_root(nested, include_defaults=False)
+        == nested.resolve()
+    )
+    assert result.loaded_paths == []
+    assert result.config.workspace_root == nested.resolve()
+    assert result.config.runtime_mode == "build"
+    assert result.config.command_directories == []
+    assert result.config.skill_directories == []
 
 
 def test_jsonc_comments_trailing_commas_and_comment_like_strings(tmp_path: Path):

@@ -387,6 +387,40 @@ async def test_slash_command_expands_into_provider_user_message(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_default_command_file_available_when_loaded_from_nested_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    command_dir = project / ".opencode" / "commands"
+    command_dir.mkdir(parents=True)
+    command_file = command_dir / "audit.md"
+    command_file.write_text("# Audit\nInspect project context.", encoding="utf-8")
+    loaded = load_runtime_config(nested)
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=loaded.config,
+        command_registry=loaded.command_registry,
+    )
+
+    await runtime.run("/audit src/core", session_id="session-nested-command")
+
+    request = provider.requests[0]
+    text = _last_user_text(request)
+    assert loaded.config.workspace_root == project.resolve()
+    assert loaded.config.command_directories == [command_dir.resolve()]
+    assert request.metadata["command_name"] == "audit"
+    assert request.metadata["command_source"] == "file"
+    assert request.metadata["command_file"] == str(command_file.resolve())
+    assert request.metadata["command_arguments"] == "src/core"
+    assert "# Audit\nInspect project context." in text
+
+
+@pytest.mark.asyncio
 async def test_builtin_init_available_without_config_or_command_directory(
     tmp_path: Path,
 ):

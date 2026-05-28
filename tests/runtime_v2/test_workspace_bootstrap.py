@@ -157,6 +157,46 @@ def test_workspace_load_options_forward_paths_and_include_defaults(tmp_path: Pat
     assert runtime.command_registry.get("custom") is not None
 
 
+def test_load_runtime_workspace_resolves_parent_root_from_nested_dir(tmp_path: Path):
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    _write_json(
+        project / "opencode.json",
+        {"command": {"audit": "Audit $ARGUMENTS."}},
+    )
+
+    workspace = load_runtime_workspace(nested)
+
+    assert workspace.workspace_root == project.resolve()
+    assert workspace.config.workspace_root == project.resolve()
+    assert workspace.load_result.loaded_paths == [
+        (project / "opencode.json").resolve(),
+    ]
+    assert workspace.command_registry is not None
+    assert workspace.command_registry.get("audit").content == "Audit $ARGUMENTS."
+
+
+def test_create_agent_runtime_from_workspace_resolves_parent_root_from_nested_dir(
+    tmp_path: Path,
+):
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    _write_json(project / "opencode.json", {"runtime_mode": "plan"})
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+
+    runtime = create_agent_runtime_from_workspace(
+        provider=provider,
+        workspace_root=nested,
+    )
+
+    assert runtime.config.workspace_root == project.resolve()
+    assert runtime.config.runtime_mode == "plan"
+    assert runtime.workspace_snapshot_store is not None
+    assert runtime.workspace_snapshot_store.workspace_root == project.resolve()
+
+
 @pytest.mark.asyncio
 async def test_workspace_metadata_merges_through_agent_runtime_behavior(
     tmp_path: Path,

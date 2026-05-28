@@ -41,6 +41,16 @@ DEFAULT_CONFIG_FILE_NAMES = (
     ".opencode/config.jsonc",
 )
 
+_RUNTIME_PROJECT_MARKER_DIRECTORIES = (
+    ".opencode/command",
+    ".opencode/commands",
+    ".opencode/skill",
+    ".opencode/skills",
+    ".opencode/agents",
+    ".claude/skills",
+    ".agents/skills",
+)
+
 _RUNTIME_CONFIG_KEYS = {
     "permission",
     "permissions",
@@ -86,6 +96,24 @@ class RuntimeConfigLoadResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+def resolve_runtime_workspace_root(
+    start: str | Path,
+    *,
+    include_defaults: bool = True,
+) -> Path:
+    """Resolve the Runtime v2 project root for a startup path."""
+
+    resolved_start = _workspace_root_path(start)
+    if not include_defaults:
+        return resolved_start
+
+    search_start = resolved_start.parent if resolved_start.is_file() else resolved_start
+    for directory in _self_and_parents(search_start):
+        if _has_runtime_project_marker(directory):
+            return directory
+    return search_start
+
+
 def find_runtime_config_files(
     workspace_root: str | Path,
     *,
@@ -95,10 +123,17 @@ def find_runtime_config_files(
 
     if not include_defaults:
         return []
-    root = _workspace_root_path(workspace_root)
+    root = resolve_runtime_workspace_root(
+        workspace_root,
+        include_defaults=include_defaults,
+    )
+    return _default_runtime_config_files(root)
+
+
+def _default_runtime_config_files(workspace_root: Path) -> list[Path]:
     paths: list[Path] = []
     for name in DEFAULT_CONFIG_FILE_NAMES:
-        path = _resolve_workspace_path(root, name)
+        path = _resolve_workspace_path(workspace_root, name)
         if path.is_file():
             paths.append(path)
     return paths
@@ -117,7 +152,10 @@ def load_runtime_config(
     stable de-duplication.
     """
 
-    root = _workspace_root_path(workspace_root)
+    root = resolve_runtime_workspace_root(
+        workspace_root,
+        include_defaults=include_defaults,
+    )
     candidates = _candidate_config_paths(
         root,
         paths=paths,
@@ -171,7 +209,7 @@ def _candidate_config_paths(
 ) -> list[Path]:
     candidates: list[Path] = []
     if include_defaults:
-        candidates.extend(find_runtime_config_files(workspace_root, include_defaults=True))
+        candidates.extend(_default_runtime_config_files(workspace_root))
     if paths is not None:
         candidates.extend(_resolve_config_paths(workspace_root, paths))
     return _dedupe_paths(candidates)
@@ -813,6 +851,21 @@ def _path_has_value(value: Any) -> bool:
     return not (value is None or isinstance(value, str) and not value.strip())
 
 
+def _self_and_parents(path: Path) -> Iterable[Path]:
+    yield path
+    yield from path.parents
+
+
+def _has_runtime_project_marker(directory: Path) -> bool:
+    for name in DEFAULT_CONFIG_FILE_NAMES:
+        if _resolve_workspace_path(directory, name).is_file():
+            return True
+    for marker in _RUNTIME_PROJECT_MARKER_DIRECTORIES:
+        if _resolve_workspace_path(directory, marker).is_dir():
+            return True
+    return False
+
+
 def _workspace_root_path(workspace_root: str | Path) -> Path:
     return Path(workspace_root).expanduser().resolve(strict=False)
 
@@ -829,4 +882,5 @@ __all__ = [
     "default_command_directories",
     "find_runtime_config_files",
     "load_runtime_config",
+    "resolve_runtime_workspace_root",
 ]

@@ -153,6 +153,17 @@ registry, agent registry, and registry default agent. Runtime v2 still never
 constructs a provider in this path: provider and model selection remain
 caller-owned and must be injected with `provider=...`.
 
+With `include_defaults=True`, the loader treats the input path as a startup
+location and walks upward from that directory, or from the parent when the input
+is a file, to find the nearest Runtime v2 project marker. Markers are default
+config files, project `.opencode/command`, `.opencode/commands`,
+`.opencode/skill`, `.opencode/skills`, `.opencode/agents`, `.claude/skills`,
+and `.agents/skills` directories. The matched directory becomes
+`RuntimeConfig.workspace_root`, and default command, skill, and agent
+directories are loaded relative to that root. If no marker is found, the input
+path remains the workspace root. Passing `include_defaults=False` disables this
+upward lookup and keeps the previous exact-root behavior.
+
 The default lookup order is:
 
 1. `opencode.json`
