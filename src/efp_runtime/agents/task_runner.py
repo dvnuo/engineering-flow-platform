@@ -386,6 +386,15 @@ def _child_config(
         max_skill_sidecar_chars=(
             4000 if base_config is None else base_config.max_skill_sidecar_chars
         ),
+        command_directories=(
+            [] if base_config is None else list(base_config.command_directories)
+        ),
+        enable_command_expansion=(
+            True if base_config is None else base_config.enable_command_expansion
+        ),
+        max_command_chars=(
+            20000 if base_config is None else base_config.max_command_chars
+        ),
         resolve_prompt_references=(
             True if base_config is None else base_config.resolve_prompt_references
         ),

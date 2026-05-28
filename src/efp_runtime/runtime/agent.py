@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Union
 
 from ..compaction.controller import CompactionSummarizer
+from ..commands import CommandRegistry, expand_command
 from ..event_bus import RuntimeEventBus
 from ..instructions import InstructionContextBuilder, ReadInstructionResolver
 from ..llm.adapter import LLMEventAdapter
@@ -118,6 +119,7 @@ class AgentRuntime:
             skill_discovery=self.skill_discovery,
             skill_context_builder=skill_context_builder,
         )
+        self.command_registry = _resolve_command_registry(self.config)
         self.instruction_context_builder = _resolve_instruction_context_builder(
             config=self.config,
             instruction_context_builder=instruction_context_builder,
@@ -150,6 +152,10 @@ class AgentRuntime:
                 "clear": skill_command.clear,
                 "cleaned_text": skill_command.cleaned_text,
             }
+            user_text_for_request = self._expand_command_prompt(
+                skill_command.cleaned_text,
+                run_metadata,
+            )
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             instruction_context_messages = self._build_instruction_context_messages()
             skill_context_messages = self._build_skill_context_messages(active_skills)
@@ -163,7 +169,7 @@ class AgentRuntime:
             run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
             run_metadata["instruction_context_count"] = len(instruction_context_messages)
             run_metadata["skill_context_count"] = len(skill_context_messages)
-            user_parts = self._resolve_user_parts(skill_command.cleaned_text)
+            user_parts = self._resolve_user_parts(user_text_for_request)
             runner = RuntimeLoopRunner(
                 store=self.store,
                 provider=self.provider,
@@ -197,7 +203,7 @@ class AgentRuntime:
                 ),
             )
             result = await runner.run(
-                user_text=skill_command.cleaned_text,
+                user_text=user_text_for_request,
                 user_parts=user_parts,
                 session_id=resolved_session_id,
                 metadata=run_metadata,
@@ -398,6 +404,34 @@ class AgentRuntime:
         )
         return resolved_prompt.parts
 
+    def _expand_command_prompt(
+        self,
+        user_text: str,
+        run_metadata: dict[str, Any],
+    ) -> str:
+        if (
+            not self.config.enable_command_expansion
+            or self.command_registry is None
+            or not user_text
+        ):
+            return user_text
+
+        expansion = expand_command(
+            user_text,
+            self.command_registry,
+            max_command_chars=self.config.max_command_chars,
+        )
+        if expansion is None:
+            return user_text
+
+        run_metadata["command_name"] = expansion.definition.name
+        run_metadata["command_file"] = str(expansion.definition.command_file)
+        run_metadata["command_arguments"] = expansion.arguments
+        run_metadata["command_truncated"] = expansion.truncated
+        run_metadata["command_original_chars"] = expansion.original_chars
+        run_metadata["command_max_chars"] = expansion.max_chars
+        return expansion.text
+
     def _base_run_metadata(self, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         run_metadata = dict(self.config.metadata)
         run_metadata.update(metadata or {})
@@ -507,6 +541,9 @@ def _resolve_config(
         enable_skill_list_tool=config.enable_skill_list_tool,
         include_skill_sidecar_content=config.include_skill_sidecar_content,
         max_skill_sidecar_chars=config.max_skill_sidecar_chars,
+        command_directories=list(config.command_directories),
+        enable_command_expansion=config.enable_command_expansion,
+        max_command_chars=config.max_command_chars,
         resolve_prompt_references=config.resolve_prompt_references,
         max_prompt_reference_chars=config.max_prompt_reference_chars,
         max_prompt_directory_entries=config.max_prompt_directory_entries,
@@ -675,6 +712,12 @@ def _resolve_skill_context_builder(
         include_sidecar_content=config.include_skill_sidecar_content,
         max_sidecar_chars=config.max_skill_sidecar_chars,
     )
+
+
+def _resolve_command_registry(config: RuntimeConfig) -> CommandRegistry | None:
+    if not config.command_directories:
+        return None
+    return CommandRegistry(config.command_directories)
 
 
 def _resolve_instruction_context_builder(

@@ -54,6 +54,9 @@ class RuntimeConfig:
     enable_skill_list_tool: bool | None = None
     include_skill_sidecar_content: bool = False
     max_skill_sidecar_chars: int = 4000
+    command_directories: list[str | Path] = field(default_factory=list)
+    enable_command_expansion: bool = True
+    max_command_chars: int = 20000
     resolve_prompt_references: bool = True
     max_prompt_reference_chars: int = 20000
     max_prompt_directory_entries: int = 200
@@ -92,6 +95,8 @@ class RuntimeConfig:
             raise ValueError("max_system_prompt_chars must be greater than or equal to 0")
         if self.max_instruction_chars < 0:
             raise ValueError("max_instruction_chars must be greater than or equal to 0")
+        if self.max_command_chars < 0:
+            raise ValueError("max_command_chars must be greater than or equal to 0")
         if self.tool_output_max_lines is not None and self.tool_output_max_lines < 0:
             raise ValueError("tool_output_max_lines must be greater than or equal to 0 or None")
         if self.tool_output_max_bytes is not None and self.tool_output_max_bytes < 0:
@@ -142,6 +147,8 @@ class RuntimeConfig:
             if self.enable_skill_list_tool is None
             else bool(self.enable_skill_list_tool)
         )
+        self.command_directories = list(self.command_directories)
+        self.enable_command_expansion = bool(self.enable_command_expansion)
         self.archive_truncated_tool_outputs = bool(self.archive_truncated_tool_outputs)
 
 

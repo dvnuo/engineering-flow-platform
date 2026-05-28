@@ -416,6 +416,25 @@ binary but never returns sidecar bodies; `skill` lists sidecar files in
 `<skill_files>` by default, and callers may request bounded text content for
 sidecars, subject to the configured maximum character limit.
 
+## Custom Commands
+
+Runtime v2 supports configured custom slash command directories through
+`RuntimeConfig.command_directories`. Command files are markdown or text prompt
+templates discovered from those directories, including hidden configured roots
+such as `.opencode/command`; hidden subdirectories are skipped by default.
+
+When command expansion is enabled, `AgentRuntime.run(...)` checks the first
+effective non-empty user line after `/skill` lines have been parsed. A discovered
+command such as `/fix bug-123` is expanded into the current user prompt with the
+command content, command arguments, and any remaining body text. This is user
+prompt expansion only: it is not a tool call, does not create persisted system
+prompt state, does not mutate active skills, and does not call the legacy
+runtime/session stack. Unknown slash commands remain ordinary user text.
+
+`/skill` remains the independent skill activation command. It is parsed before
+custom command expansion and continues to control active skill context rendered
+as provider-only system context.
+
 ## System Prompt Stack
 
 Runtime v2 has a small configurable system prompt stack. By default,
