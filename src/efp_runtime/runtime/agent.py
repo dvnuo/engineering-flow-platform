@@ -59,6 +59,11 @@ from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
+from ..workspace_snapshots import (
+    WorkspaceSnapshot,
+    WorkspaceSnapshotDiff,
+    WorkspaceSnapshotStore,
+)
 from .config import RuntimeConfig
 from .run_state import RuntimeRunState
 
@@ -147,6 +152,11 @@ class AgentRuntime:
         self.compaction_summarizer = compaction_summarizer
         self.question_broker = question_broker or QuestionBroker()
         self.store = store or InMemorySessionStore()
+        self.workspace_snapshot_store = (
+            WorkspaceSnapshotStore(self.config.workspace_root)
+            if self.config.workspace_root is not None
+            else None
+        )
         self.skill_discovery = _resolve_skill_discovery(
             config=self.config,
             skill_discovery=skill_discovery,
@@ -656,6 +666,39 @@ class AgentRuntime:
         delete_checkpoint = self._checkpoint_store_method("delete_checkpoint")
         return delete_checkpoint(session_id, checkpoint_id)
 
+    def create_workspace_snapshot(
+        self,
+        label: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> WorkspaceSnapshot:
+        return self._workspace_snapshot_store().create_snapshot(
+            label=label,
+            metadata=metadata,
+        )
+
+    def list_workspace_snapshots(self) -> list[WorkspaceSnapshot]:
+        return self._workspace_snapshot_store().list_snapshots()
+
+    def diff_workspace_snapshot(
+        self,
+        snapshot_id: str,
+    ) -> list[WorkspaceSnapshotDiff]:
+        return self._workspace_snapshot_store().diff_snapshot(snapshot_id)
+
+    def restore_workspace_snapshot(
+        self,
+        snapshot_id: str,
+        *,
+        delete_added: bool = True,
+    ) -> WorkspaceSnapshot:
+        return self._workspace_snapshot_store().restore_snapshot(
+            snapshot_id,
+            delete_added=delete_added,
+        )
+
+    def delete_workspace_snapshot(self, snapshot_id: str) -> bool:
+        return self._workspace_snapshot_store().delete_snapshot(snapshot_id)
+
     def _build_instruction_context_messages(self):
         return self.instruction_context_builder.build_messages()
 
@@ -881,6 +924,11 @@ class AgentRuntime:
         if not callable(method):
             raise TypeError("session store does not support checkpoints")
         return method
+
+    def _workspace_snapshot_store(self) -> WorkspaceSnapshotStore:
+        if self.workspace_snapshot_store is None:
+            raise TypeError("workspace snapshots require workspace_root")
+        return self.workspace_snapshot_store
 
     def _replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
         method = getattr(self.store, "replace_history", None)

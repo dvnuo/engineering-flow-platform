@@ -289,6 +289,14 @@ the current session history while preserving the same session id and message/par
 bindings, so callers can continue with `run(...)` or `resume(session_id)` from
 the restored history.
 
+Workspace file snapshots are a separate Runtime v2 facility. They are exposed as
+opt-in `AgentRuntime` APIs that capture regular files under a configured
+`workspace_root` into an in-memory `WorkspaceSnapshotStore`, with diff, restore,
+list, and delete operations. They do not alter session-history checkpoints, and
+session-history checkpoints do not include workspace file bytes. In this phase,
+workspace snapshots are never created or restored automatically around each tool
+call; callers choose the bracket points explicitly.
+
 ## Provider Projection
 
 Runtime v2 keeps provider boundaries explicit. `efp_runtime.llm.openai`

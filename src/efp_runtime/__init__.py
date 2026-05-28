@@ -31,6 +31,11 @@ from .workspace import (
     create_agent_runtime_from_workspace,
     load_runtime_workspace,
 )
+from .workspace_snapshots import (
+    WorkspaceSnapshot,
+    WorkspaceSnapshotDiff,
+    WorkspaceSnapshotStore,
+)
 
 __all__ = [
     "Attachment",
@@ -59,6 +64,9 @@ __all__ = [
     "TaskPart",
     "ToolCall",
     "ToolResult",
+    "WorkspaceSnapshot",
+    "WorkspaceSnapshotDiff",
+    "WorkspaceSnapshotStore",
     "create_agent_runtime_from_workspace",
     "load_runtime_workspace",
 ]
