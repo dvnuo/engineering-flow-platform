@@ -1209,6 +1209,99 @@ async def test_command_subtask_false_overrides_subagent_profile_mode():
 
 
 @pytest.mark.asyncio
+async def test_command_subtask_respects_disabled_task_tool():
+    called = False
+
+    async def task_runner(request: TaskToolRequest) -> str:
+        nonlocal called
+        called = True
+        return "should not run"
+
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="review",
+                content="Review $ARGUMENTS.",
+                source="config",
+                subtask=True,
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Parent fallback."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            disabled_tools=["task"],
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+        tool_registry=ToolRegistry([create_task_tool(task_runner)]),
+    )
+
+    await runtime.run("/review branch", session_id="session-command-subtask-disabled")
+
+    request = provider.requests[0]
+    assert called is False
+    assert request.metadata["command_subtask_requested"] is True
+    assert request.metadata["command_subtask_available"] is False
+    assert request.metadata["command_subtask_executed"] is False
+    text = _last_user_text(request)
+    assert '<command name="review"' in text
+    assert "Review branch." in text
+    assert "<command_subtask_result" not in text
+
+
+@pytest.mark.asyncio
+async def test_command_subtask_respects_per_run_task_disable():
+    called = False
+
+    async def task_runner(request: TaskToolRequest) -> str:
+        nonlocal called
+        called = True
+        return "should not run"
+
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="review",
+                content="Review $ARGUMENTS.",
+                source="config",
+                subtask=True,
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Parent fallback."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+        tool_registry=ToolRegistry([create_task_tool(task_runner)]),
+    )
+
+    await runtime.run(
+        "/review branch",
+        session_id="session-command-subtask-run-disabled",
+        tools={"task": False},
+    )
+
+    request = provider.requests[0]
+    assert called is False
+    assert request.metadata["command_subtask_requested"] is True
+    assert request.metadata["command_subtask_available"] is False
+    assert request.metadata["command_subtask_executed"] is False
+    text = _last_user_text(request)
+    assert '<command name="review"' in text
+    assert "Review branch." in text
+    assert "<command_subtask_result" not in text
+
+
+@pytest.mark.asyncio
 async def test_command_subtask_error_falls_back_to_ordinary_command_prompt():
     captured: list[TaskToolRequest] = []
 

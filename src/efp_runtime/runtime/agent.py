@@ -70,7 +70,7 @@ from ..tools.definition import OutputPolicy, ToolContext
 from ..tools.external import ExternalToolProvider, register_external_tools
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
-from ..tools.selection import ToolSelection
+from ..tools.selection import ToolSelection, resolve_tool_selection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
 from ..types import SkillPackage, ToolCall, ToolResult, new_id
 from ..workspace_snapshots import (
@@ -306,6 +306,7 @@ class AgentRuntime:
                     session_id=resolved_session_id,
                     run_id=run_id,
                     run_metadata=run_metadata,
+                    run_tools=run_tools,
                 )
                 if subtask_execution.event is not None:
                     command_subtask_events.append(subtask_execution.event)
@@ -1013,6 +1014,7 @@ class AgentRuntime:
         session_id: str,
         run_id: str,
         run_metadata: dict[str, Any],
+        run_tools: Mapping[str, bool] | None,
     ) -> _CommandSubtaskExecution:
         requested = _command_subtask_requested(expansion, profile)
         run_metadata["command_subtask_requested"] = requested
@@ -1020,9 +1022,13 @@ class AgentRuntime:
             run_metadata["command_subtask_executed"] = False
             return _CommandSubtaskExecution()
 
-        run_metadata["command_subtask_available"] = (
-            tool_runtime.registry.get("task") is not None
+        task_available = _tool_enabled_for_run(
+            "task",
+            registry=tool_runtime.registry,
+            config=self.config,
+            run_tools=run_tools,
         )
+        run_metadata["command_subtask_available"] = task_available
         if not run_metadata["command_subtask_available"]:
             run_metadata["command_subtask_executed"] = False
             return _CommandSubtaskExecution()
@@ -2093,6 +2099,26 @@ def _task_truncation_hint_enabled(
     if "task" in selection.disabled:
         return False
     return selection.enabled is None or "task" in selection.enabled
+
+
+def _tool_enabled_for_run(
+    tool_id: str,
+    *,
+    registry: ToolRegistry,
+    config: RuntimeConfig,
+    run_tools: Mapping[str, bool] | None,
+) -> bool:
+    if registry.get(tool_id) is None:
+        return False
+    selection = _config_tool_selection(config)
+    enabled_tool_ids = resolve_tool_selection(
+        registry.ids(),
+        enabled=selection.enabled,
+        disabled=selection.disabled,
+        forced_disabled=selection.forced_disabled,
+        overrides=run_tools,
+    )
+    return tool_id in enabled_tool_ids
 
 
 def _resolve_skill_discovery(
