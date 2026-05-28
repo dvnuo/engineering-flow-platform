@@ -475,8 +475,9 @@ context. It is inserted after the base system prompt stack, including runtime
 reminders, and before workspace instruction context, active skill context, and
 persisted session history. The profile prompt is not appended to the session
 store. Profile `tools`, `max_iterations`, and `active_skills` are per-run
-overrides: caller-supplied `tools={...}` wins over profile tool entries,
-profile `max_iterations` changes only the current loop limit, and profile
+overrides: command `tools` metadata, when a command expands, is merged over
+profile tool entries, and caller-supplied `tools={...}` wins over both. Profile
+`max_iterations` changes only the current loop limit, and profile
 `active_skills` are the base active skills for that run without leaking into
 the runtime instance's long-lived active skill list. `/skill` commands still
 add to or clear that run's profile skill base. Profile metadata, including
@@ -583,6 +584,16 @@ prompt expansion only: it is not a tool call, does not create persisted system
 prompt state, does not mutate active skills, and does not call the legacy
 runtime/session stack. Unknown slash commands remain ordinary user text.
 
+Command expansion happens before final primary-run profile resolution. The
+expanded prompt text is the user text sent through the normal
+`AgentRuntime.run(...)` path. If the expanded command has `agent` metadata and
+the caller did not pass `agent=...`, Runtime v2 resolves that profile for this
+run. Caller-supplied `agent=...` wins over command metadata, and `default_agent`
+is used only when neither caller nor command selected a profile. Unknown command
+agents fail before any provider request, using the same unknown-agent error as
+ordinary `AgentRuntime.run(..., agent="...")` selection. `selected_agent_source`
+is recorded as `caller`, `command`, or `default` whenever a profile is selected.
+
 Before the command content is placed inside the visible `<command>` block, the
 template renderer replaces `$ARGUMENTS` with the full argument string and
 positional variables such as `$1` and `$2` with shell-like positional arguments
@@ -594,8 +605,19 @@ arguments and remaining body text.
 
 Command metadata flows into run metadata as `command_source`, optional
 `command_agent`, optional `command_model`, optional `command_subtask`, and a
-copied `command_metadata` object. `subtask` is recorded only; it does not start
-a subagent in this phase.
+copied `command_metadata` object. When command `model` is present, Runtime v2
+also records `requested_model`. That field is metadata only in this phase: it
+does not switch provider instances, provider transports, request schemas, model
+ids, mode, or sampling settings. `subtask` is recorded only; it does not start a
+subagent in this phase.
+
+Command `tools` metadata is treated as a per-run tool override base. A list such
+as `tools: [read_file, edit]` enables those tools, equivalent to
+`{"read_file": true, "edit": true}`. A mapping such as
+`tools: {"read_file": true, "write_file": false}` is used as explicit boolean
+overrides. Non-list and non-mapping `tools` metadata raises `ValueError` before
+the provider call. Per-run tool merge order is profile tools first, then command
+tools, then caller `AgentRuntime.run(..., tools={...})`; later entries win.
 
 `@file` references inside command templates are not read by the commands module.
 They remain in the expanded user prompt and are resolved later by the Runtime v2

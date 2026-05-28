@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
 from ..compaction.controller import CompactionSummarizer
-from ..commands import CommandRegistry, expand_command
+from ..commands import CommandExpansionResult, CommandRegistry, expand_command
 from ..event_bus import RuntimeEventBus
 from ..instructions import InstructionContextBuilder, ReadInstructionResolver
 from ..llm.adapter import LLMEventAdapter
@@ -154,32 +154,43 @@ class AgentRuntime:
         *,
         agent: "str | AgentProfile | None" = None,
     ) -> RuntimeLoopResult:
-        profile = self._resolve_agent_profile(agent)
-        iteration_limit = _profile_max_iterations(profile, self.config.max_iterations)
         skill_command = parse_skill_commands(user_text)
+        run_metadata = self._base_run_metadata(metadata)
+        run_metadata["skill_command"] = {
+            "add": list(skill_command.add),
+            "clear": skill_command.clear,
+            "cleaned_text": skill_command.cleaned_text,
+        }
+        command_expansion = self._expand_command_prompt(
+            skill_command.cleaned_text,
+            run_metadata,
+        )
+        user_text_for_request = (
+            command_expansion.text
+            if command_expansion is not None
+            else skill_command.cleaned_text
+        )
+        profile, selected_agent_source = self._resolve_run_agent_profile(
+            agent,
+            command_expansion,
+        )
+        iteration_limit = _profile_max_iterations(profile, self.config.max_iterations)
         base_active_skills = (
             _profile_active_skills(profile)
             if profile is not None
             else self.active_skills
         )
         active_skills = _apply_skill_command(base_active_skills, skill_command)
-        run_tools = _merge_profile_tools(profile, tools)
+        command_tools = _command_tool_overrides(command_expansion)
+        run_tools = _merge_run_tools(profile, command_tools, tools)
         resolved_session_id = session_id or self.store.create_session().session_id
         run_id = self.run_state.begin(resolved_session_id)
         try:
-            run_metadata = self._base_run_metadata(metadata)
             run_metadata["max_iterations"] = iteration_limit
             run_metadata["run_id"] = run_id
+            if selected_agent_source is not None:
+                run_metadata["selected_agent_source"] = selected_agent_source
             self._annotate_skill_metadata(run_metadata, active_skills)
-            run_metadata["skill_command"] = {
-                "add": list(skill_command.add),
-                "clear": skill_command.clear,
-                "cleaned_text": skill_command.cleaned_text,
-            }
-            user_text_for_request = self._expand_command_prompt(
-                skill_command.cleaned_text,
-                run_metadata,
-            )
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             agent_profile_messages = self._build_agent_profile_messages(profile)
             self._annotate_agent_profile_metadata(
@@ -461,13 +472,13 @@ class AgentRuntime:
         self,
         user_text: str,
         run_metadata: dict[str, Any],
-    ) -> str:
+    ) -> CommandExpansionResult | None:
         if (
             not self.config.enable_command_expansion
             or self.command_registry is None
             or not user_text
         ):
-            return user_text
+            return None
 
         expansion = expand_command(
             user_text,
@@ -475,7 +486,7 @@ class AgentRuntime:
             max_command_chars=self.config.max_command_chars,
         )
         if expansion is None:
-            return user_text
+            return None
 
         run_metadata["command_name"] = expansion.definition.name
         run_metadata["command_file"] = (
@@ -489,13 +500,16 @@ class AgentRuntime:
             run_metadata["command_agent"] = expansion.definition.agent
         if expansion.definition.model is not None:
             run_metadata["command_model"] = expansion.definition.model
-        if expansion.definition.subtask is not None:
-            run_metadata["command_subtask"] = deepcopy(expansion.definition.subtask)
+            run_metadata["requested_model"] = expansion.definition.model
+        if "subtask" in expansion.definition.metadata:
+            run_metadata["command_subtask"] = deepcopy(
+                expansion.definition.metadata["subtask"]
+            )
         run_metadata["command_metadata"] = deepcopy(expansion.definition.metadata)
         run_metadata["command_truncated"] = expansion.truncated
         run_metadata["command_original_chars"] = expansion.original_chars
         run_metadata["command_max_chars"] = expansion.max_chars
-        return expansion.text
+        return expansion
 
     def _base_run_metadata(self, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         run_metadata = dict(self.config.metadata)
@@ -541,6 +555,27 @@ class AgentRuntime:
         if _profile_name(profile) != requested:
             raise _unknown_agent_profile_error(requested, self.agent_registry)
         return profile
+
+    def _resolve_run_agent_profile(
+        self,
+        agent: Any | None,
+        command_expansion: CommandExpansionResult | None,
+    ) -> tuple[Any | None, str | None]:
+        if agent is not None and not isinstance(agent, str):
+            return self._resolve_agent_profile(agent), "caller"
+
+        caller_agent = _normalize_optional_name(agent)
+        if caller_agent is not None:
+            return self._resolve_agent_profile(caller_agent), "caller"
+
+        command_agent = _command_agent_name(command_expansion)
+        if command_agent is not None:
+            return self._resolve_agent_profile(command_agent), "command"
+
+        if self.default_agent is not None:
+            return self._resolve_agent_profile(None), "default"
+
+        return None, None
 
     def _annotate_agent_profile_metadata(
         self,
@@ -648,17 +683,47 @@ def _profile_tools(profile: Any | None) -> dict[str, bool] | None:
     return _copy_tool_overrides(tools)
 
 
-def _merge_profile_tools(
+def _command_agent_name(
+    expansion: CommandExpansionResult | None,
+) -> str | None:
+    if expansion is None:
+        return None
+    return _normalize_optional_name(expansion.definition.agent)
+
+
+def _command_tool_overrides(
+    expansion: CommandExpansionResult | None,
+) -> dict[str, bool] | None:
+    if expansion is None or "tools" not in expansion.definition.metadata:
+        return None
+
+    raw_tools = expansion.definition.metadata.get("tools")
+    if isinstance(raw_tools, Mapping):
+        return _copy_tool_overrides(raw_tools)
+    if isinstance(raw_tools, list):
+        return {str(tool_id): True for tool_id in raw_tools}
+
+    raise ValueError("command tools metadata must be a list or mapping")
+
+
+def _merge_run_tools(
     profile: Any | None,
-    tools: Mapping[str, bool] | None,
+    command_tools: Mapping[str, bool] | None,
+    caller_tools: Mapping[str, bool] | None,
 ) -> dict[str, bool] | None:
     merged = _profile_tools(profile)
-    if tools is None:
+    if command_tools is not None:
+        command_overrides = _copy_tool_overrides(command_tools)
+        if merged is None:
+            merged = command_overrides
+        else:
+            merged.update(command_overrides)
+    if caller_tools is None:
         return merged
-    caller_tools = _copy_tool_overrides(tools)
+    caller_overrides = _copy_tool_overrides(caller_tools)
     if merged is None:
-        return caller_tools
-    merged.update(caller_tools)
+        return caller_overrides
+    merged.update(caller_overrides)
     return merged
 
 

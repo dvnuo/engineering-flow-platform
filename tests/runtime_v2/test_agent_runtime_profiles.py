@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from efp_runtime.agents import AgentProfile, AgentRegistry
+from efp_runtime.commands import CommandDefinition, CommandRegistry
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.models import MessageRole
@@ -61,6 +62,7 @@ async def test_named_agent_injects_profile_prompt_into_provider_system_context()
     assert messages[1].text == "Use the review profile."
     assert messages[2].text == "Workspace instructions."
     assert messages[3].text == "Review this change."
+    assert request.metadata["selected_agent_source"] == "caller"
     assert request.metadata["agent_name"] == "review"
     assert request.metadata["agent_description"] == "Reviews code"
     assert request.metadata["agent_prompt_context_count"] == 1
@@ -110,6 +112,7 @@ async def test_default_agent_is_used_when_run_omits_agent():
     await runtime.run("Use default.", session_id="session-default")
 
     request = provider.requests[0]
+    assert request.metadata["selected_agent_source"] == "default"
     assert request.metadata["agent_name"] == "review"
     assert request.provider_request.messages[0].text == "Default review profile."
 
@@ -217,6 +220,57 @@ async def test_profile_active_skills_do_not_leak_to_next_plain_run(tmp_path: Pat
     second_text = "\n".join(message.text for message in provider.requests[1].provider_request.messages)
     assert '<skill_content name="profile-skill">' in first_text
     assert '<skill_content name="profile-skill">' not in second_text
+    assert runtime.active_skills == []
+
+
+@pytest.mark.asyncio
+async def test_profile_active_skills_apply_when_profile_selected_by_command(
+    tmp_path: Path,
+):
+    _write_skill(tmp_path, "review-skill")
+    command_registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="review",
+                content="Review $ARGUMENTS.",
+                source="config",
+                agent="review",
+            )
+        ]
+    )
+    agent_registry = AgentRegistry(
+        [
+            AgentProfile(
+                name="review",
+                prompt="Use the review profile.",
+                active_skills=["review-skill"],
+            )
+        ],
+        default_agent=None,
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            skill_directories=[tmp_path],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=command_registry,
+        agent_registry=agent_registry,
+    )
+
+    await runtime.run("/review changes", session_id="session-command-profile-skill")
+
+    request = provider.requests[0]
+    assert request.metadata["selected_agent_source"] == "command"
+    assert request.metadata["active_skills"] == ["review-skill"]
+    request_text = "\n".join(
+        message.text for message in request.provider_request.messages
+    )
+    assert "Use the review profile." in request_text
+    assert '<skill_content name="review-skill">' in request_text
     assert runtime.active_skills == []
 
 

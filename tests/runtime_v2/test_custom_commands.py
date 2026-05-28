@@ -5,10 +5,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from efp_runtime.agents.profile import AgentProfile
+from efp_runtime.agents import AgentProfile, AgentRegistry
 from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.commands import (
     CommandDefinition,
@@ -19,6 +20,8 @@ from efp_runtime.commands import (
 from efp_runtime.loop import ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import _resolve_config
+from efp_runtime.tools.definition import ToolDef
+from efp_runtime.tools.registry import ToolRegistry
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -239,6 +242,11 @@ async def test_injected_command_registry_expands_without_config_directories():
             include_runtime_reminders=False,
         ),
         command_registry=registry,
+        agent_registry=AgentRegistry(
+            [AgentProfile(name="builder")],
+            default_agent=None,
+        ),
+        tool_registry=ToolRegistry([_tool("shell_exec")]),
     )
 
     await runtime.run("/build target --fast", session_id="session-injected-command")
@@ -254,6 +262,261 @@ async def test_injected_command_registry_expands_without_config_directories():
     assert request.metadata["command_model"] == "provider/model"
     assert request.metadata["command_subtask"] is False
     assert request.metadata["command_metadata"]["tools"] == ["shell_exec"]
+
+
+@pytest.mark.asyncio
+async def test_command_agent_selects_profile_when_caller_omits_agent():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="audit",
+                content="Audit $ARGUMENTS.",
+                source="config",
+                agent="review",
+            )
+        ]
+    )
+    agent_registry = AgentRegistry(
+        [
+            AgentProfile(name="debugger", prompt="Use the debugger profile."),
+            AgentProfile(
+                name="review",
+                description="Reviews code",
+                prompt="Use the review profile.",
+            ),
+        ],
+        default_agent=None,
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+        agent_registry=agent_registry,
+    )
+
+    await runtime.run("/audit src", session_id="session-command-agent")
+
+    request = provider.requests[0]
+    assert request.metadata["command_agent"] == "review"
+    assert request.metadata["selected_agent_source"] == "command"
+    assert request.metadata["agent_name"] == "review"
+    assert request.metadata["agent_description"] == "Reviews code"
+    assert request.provider_request.messages[0].text == "Use the review profile."
+    assert "Audit src." in request.provider_request.messages[1].text
+
+
+@pytest.mark.asyncio
+async def test_caller_agent_wins_over_command_agent():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="audit",
+                content="Audit.",
+                source="config",
+                agent="review",
+            )
+        ]
+    )
+    agent_registry = AgentRegistry(
+        [
+            AgentProfile(name="debugger", prompt="Use the debugger profile."),
+            AgentProfile(name="review", prompt="Use the review profile."),
+        ],
+        default_agent=None,
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+        agent_registry=agent_registry,
+    )
+
+    await runtime.run(
+        "/audit",
+        session_id="session-caller-agent-wins",
+        agent="debugger",
+    )
+
+    request = provider.requests[0]
+    assert request.metadata["command_agent"] == "review"
+    assert request.metadata["selected_agent_source"] == "caller"
+    assert request.metadata["agent_name"] == "debugger"
+    assert request.provider_request.messages[0].text == "Use the debugger profile."
+
+
+@pytest.mark.asyncio
+async def test_unknown_command_agent_raises_before_provider_request():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="audit",
+                content="Audit.",
+                source="config",
+                agent="missing",
+            )
+        ]
+    )
+    agent_registry = AgentRegistry(
+        [AgentProfile(name="general"), AgentProfile(name="review")],
+        default_agent=None,
+    )
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        command_registry=registry,
+        agent_registry=agent_registry,
+    )
+
+    with pytest.raises(KeyError) as error:
+        await runtime.run("/audit", session_id="session-command-missing-agent")
+
+    error_text = str(error.value)
+    assert "missing" in error_text
+    assert "general" in error_text
+    assert "review" in error_text
+    assert provider.requests == []
+
+
+@pytest.mark.asyncio
+async def test_command_model_records_requested_model_without_provider_model_switch():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="build",
+                content="Build.",
+                source="config",
+                model="provider/model",
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+    )
+
+    await runtime.run("/build", session_id="session-command-model")
+
+    request = provider.requests[0]
+    assert request.metadata["command_model"] == "provider/model"
+    assert request.metadata["requested_model"] == "provider/model"
+    assert request.provider_request.metadata["requested_model"] == "provider/model"
+    assert not hasattr(request.provider_request, "model")
+
+
+@pytest.mark.asyncio
+async def test_command_tools_merge_profile_command_and_caller_overrides():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="listtools",
+                content="Use listed tools.",
+                source="config",
+                metadata={"tools": ["read_file", "edit"]},
+            ),
+            CommandDefinition(
+                name="maptools",
+                content="Use mapped tools.",
+                source="config",
+                metadata={
+                    "tools": {
+                        "read_file": True,
+                        "edit": False,
+                        "shell_exec": True,
+                    }
+                },
+            ),
+        ]
+    )
+    profile = AgentProfile(
+        name="limited",
+        tools={"read_file": False, "edit": False, "shell_exec": False},
+    )
+    provider = ScriptedLLMProvider(
+        [
+            {"content": "List tools."},
+            {"content": "Mapped tools."},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=1),
+        command_registry=registry,
+        tool_registry=ToolRegistry(
+            [_tool("read_file"), _tool("edit"), _tool("shell_exec")]
+        ),
+    )
+
+    await runtime.run(
+        "/listtools",
+        session_id="session-command-list-tools",
+        agent=profile,
+        tools={"edit": False},
+    )
+    await runtime.run(
+        "/maptools",
+        session_id="session-command-map-tools",
+        agent=profile,
+        tools={"edit": True, "shell_exec": False},
+    )
+
+    assert [tool.id for tool in provider.requests[0].tools] == ["read_file"]
+    assert provider.requests[0].metadata["enabled_tool_ids"] == ["read_file"]
+    assert provider.requests[0].metadata["disabled_tool_ids"] == [
+        "edit",
+        "shell_exec",
+    ]
+    assert [tool.id for tool in provider.requests[1].tools] == ["edit", "read_file"]
+    assert provider.requests[1].metadata["enabled_tool_ids"] == [
+        "edit",
+        "read_file",
+    ]
+    assert provider.requests[1].metadata["disabled_tool_ids"] == ["shell_exec"]
+    assert profile.tools == {
+        "read_file": False,
+        "edit": False,
+        "shell_exec": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_invalid_command_tools_raise_before_provider_request():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="badtools",
+                content="Bad tools.",
+                source="config",
+                metadata={"tools": "read_file"},
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        command_registry=registry,
+        tool_registry=ToolRegistry([_tool("read_file")]),
+    )
+
+    with pytest.raises(ValueError, match="command tools metadata"):
+        await runtime.run("/badtools", session_id="session-invalid-command-tools")
+
+    assert provider.requests == []
 
 
 @pytest.mark.asyncio
@@ -530,3 +793,19 @@ def _write_skill(
         encoding="utf-8",
     )
     return skill_dir
+
+
+def _tool(
+    tool_id: str,
+    *,
+    execute=None,
+) -> ToolDef:
+    async def default_execute(args: dict[str, Any], context):
+        return {"tool_id": tool_id, "args": args, "session_id": context.session_id}
+
+    return ToolDef(
+        id=tool_id,
+        description=f"{tool_id} tool",
+        input_schema={"type": "object", "properties": {}},
+        execute=execute or default_execute,
+    )
