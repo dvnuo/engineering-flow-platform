@@ -371,6 +371,18 @@ def test_config_variable_file_token_in_jsonc_line_comment_is_ignored(tmp_path: P
     assert result.config.system_prompt_texts == ["ok"]
 
 
+def test_config_variable_token_outside_json_string_is_not_expanded(tmp_path: Path):
+    path = tmp_path / "opencode.jsonc"
+    path.write_text('{"model": {file:missing.txt}}', encoding="utf-8")
+
+    with pytest.raises(ValueError) as error:
+        load_runtime_config(tmp_path)
+
+    message = str(error.value)
+    assert "Invalid JSON" in message
+    assert "missing.txt" not in message
+
+
 def test_runtime_config_field_mapping(tmp_path: Path):
     _write_json(
         tmp_path / "custom.json",

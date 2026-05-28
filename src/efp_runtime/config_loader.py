@@ -300,13 +300,6 @@ def _substitute_config_variables(text: str, path: Path) -> str:
                 index += 1
             continue
 
-        token_end = _config_variable_token_end(text, index)
-        if token_end is not None:
-            token = text[index:token_end]
-            output.append(_config_variable_value(token, path))
-            index = token_end
-            continue
-
         output.append(char)
         index += 1
 
