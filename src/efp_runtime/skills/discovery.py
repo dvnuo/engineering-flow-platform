@@ -13,12 +13,14 @@ SKILL_FILE_NAMES = {"skill.md", "SKILL.md"}
 DEFAULT_GLOBAL_SKILL_DIRECTORIES = (
     "~/.claude/skills",
     "~/.agents/skills",
+    "~/.config/opencode/skill",
+    "~/.config/opencode/skills",
 )
 DEFAULT_PROJECT_SKILL_DIRECTORIES = (
-    ".opencode/skill",
-    ".opencode/skills",
     ".claude/skills",
     ".agents/skills",
+    ".opencode/skill",
+    ".opencode/skills",
 )
 
 

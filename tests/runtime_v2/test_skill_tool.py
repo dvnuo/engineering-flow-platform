@@ -66,6 +66,8 @@ def test_default_skill_directories_include_global_before_project_defaults(
     workspace = tmp_path / "workspace"
     global_claude = home / ".claude" / "skills"
     global_agents = home / ".agents" / "skills"
+    global_opencode_skill = home / ".config" / "opencode" / "skill"
+    global_opencode_skills = home / ".config" / "opencode" / "skills"
     opencode_skill = workspace / ".opencode" / "skill"
     opencode_skills = workspace / ".opencode" / "skills"
     claude_skills = workspace / ".claude" / "skills"
@@ -73,6 +75,8 @@ def test_default_skill_directories_include_global_before_project_defaults(
     for directory in (
         global_claude,
         global_agents,
+        global_opencode_skill,
+        global_opencode_skills,
         opencode_skill,
         opencode_skills,
         claude_skills,
@@ -84,11 +88,47 @@ def test_default_skill_directories_include_global_before_project_defaults(
     assert default_skill_directories(workspace) == [
         global_claude.resolve(),
         global_agents.resolve(),
-        opencode_skill.resolve(),
-        opencode_skills.resolve(),
+        global_opencode_skill.resolve(),
+        global_opencode_skills.resolve(),
         claude_skills.resolve(),
         agents_skills.resolve(),
+        opencode_skill.resolve(),
+        opencode_skills.resolve(),
     ]
+
+
+def test_skill_discovery_loads_from_global_opencode_skill_directories(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    global_opencode_skill = home / ".config" / "opencode" / "skill"
+    global_opencode_skills = home / ".config" / "opencode" / "skills"
+    global_opencode_skill.mkdir(parents=True)
+    global_opencode_skills.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    singular = _write_skill(
+        global_opencode_skill,
+        "global-singular",
+        description="Global opencode singular skill",
+    )
+    plural = _write_skill(
+        global_opencode_skills,
+        "global-plural",
+        description="Global opencode plural skill",
+    )
+
+    discovery = SkillDiscovery(default_skill_directories(workspace))
+
+    singular_skill = discovery.get("global-singular")
+    plural_skill = discovery.get("global-plural")
+    assert singular_skill is not None
+    assert singular_skill.root == singular
+    assert singular_skill.description == "Global opencode singular skill"
+    assert plural_skill is not None
+    assert plural_skill.root == plural
+    assert plural_skill.description == "Global opencode plural skill"
 
 
 def test_skill_discovery_loads_from_default_opencode_skill_directory(

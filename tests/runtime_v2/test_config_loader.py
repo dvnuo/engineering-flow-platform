@@ -167,6 +167,8 @@ def test_default_skill_directories_precede_configured_directories(
     home = tmp_path / "home"
     global_claude = home / ".claude" / "skills"
     global_agents = home / ".agents" / "skills"
+    global_opencode_skill = home / ".config" / "opencode" / "skill"
+    global_opencode_skills = home / ".config" / "opencode" / "skills"
     opencode_skill = tmp_path / ".opencode" / "skill"
     opencode_skills = tmp_path / ".opencode" / "skills"
     claude_skills = tmp_path / ".claude" / "skills"
@@ -174,6 +176,8 @@ def test_default_skill_directories_precede_configured_directories(
     for directory in (
         global_claude,
         global_agents,
+        global_opencode_skill,
+        global_opencode_skills,
         opencode_skill,
         opencode_skills,
         claude_skills,
@@ -196,12 +200,66 @@ def test_default_skill_directories_precede_configured_directories(
     assert result.config.skill_directories == [
         global_claude.resolve(),
         global_agents.resolve(),
-        opencode_skill.resolve(),
-        opencode_skills.resolve(),
+        global_opencode_skill.resolve(),
+        global_opencode_skills.resolve(),
         claude_skills.resolve(),
         agents_skills.resolve(),
+        opencode_skill.resolve(),
+        opencode_skills.resolve(),
         (tmp_path / "skills").resolve(),
     ]
+
+
+def test_default_skill_directory_order_prefers_project_opencode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    global_claude = home / ".claude" / "skills"
+    global_agents = home / ".agents" / "skills"
+    global_opencode_skill = home / ".config" / "opencode" / "skill"
+    global_opencode_skills = home / ".config" / "opencode" / "skills"
+    project_claude = tmp_path / ".claude" / "skills"
+    project_agents = tmp_path / ".agents" / "skills"
+    project_opencode_skill = tmp_path / ".opencode" / "skill"
+    project_opencode_skills = tmp_path / ".opencode" / "skills"
+    for directory in (
+        global_claude,
+        global_agents,
+        global_opencode_skill,
+        global_opencode_skills,
+        project_claude,
+        project_agents,
+        project_opencode_skill,
+        project_opencode_skills,
+    ):
+        directory.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    _write_skill(global_claude, "shared-skill", content="# Global external")
+    _write_skill(global_opencode_skills, "shared-skill", content="# Global opencode")
+    _write_skill(project_agents, "shared-skill", content="# Project external")
+    winner = _write_skill(
+        project_opencode_skills,
+        "shared-skill",
+        content="# Project opencode",
+    )
+
+    result = load_runtime_config(tmp_path)
+    skill = SkillDiscovery(result.config.skill_directories).get("shared-skill")
+
+    assert result.config.skill_directories == [
+        global_claude.resolve(),
+        global_agents.resolve(),
+        global_opencode_skill.resolve(),
+        global_opencode_skills.resolve(),
+        project_claude.resolve(),
+        project_agents.resolve(),
+        project_opencode_skill.resolve(),
+        project_opencode_skills.resolve(),
+    ]
+    assert skill is not None
+    assert skill.root == winner
+    assert skill.content == "# Project opencode"
 
 
 def test_missing_default_skill_directories_are_ignored(
@@ -231,7 +289,12 @@ def test_include_defaults_false_does_not_add_default_skill_directories(
 ):
     home = tmp_path / "home"
     (home / ".claude" / "skills").mkdir(parents=True)
+    (home / ".agents" / "skills").mkdir(parents=True)
+    (home / ".config" / "opencode" / "skill").mkdir(parents=True)
+    (home / ".config" / "opencode" / "skills").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    (tmp_path / ".claude" / "skills").mkdir(parents=True)
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
     (tmp_path / ".opencode" / "skill").mkdir(parents=True)
     (tmp_path / ".opencode" / "skills").mkdir(parents=True)
     _write_json(

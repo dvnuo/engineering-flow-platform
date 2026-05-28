@@ -193,10 +193,12 @@ are ignored. Passing `include_defaults=False` disables these default command
 directories. Configured `commandDirectories` / `command_directories` entries
 are appended after defaults.
 With `include_defaults=True`, existing user-level skill directories are added
-first: `~/.claude/skills`, then `~/.agents/skills`. Existing project-local
-skill directories are added next: `.opencode/skill`, `.opencode/skills`,
-`.claude/skills`, then `.agents/skills`. Missing default skill directories are
-ignored. Passing `include_defaults=False` disables all default skill
+in discovery load order: external compatibility roots `~/.claude/skills`, then
+`~/.agents/skills`; opencode config roots `~/.config/opencode/skill`, then
+`~/.config/opencode/skills`; project external compatibility roots
+`.claude/skills`, then `.agents/skills`; and project opencode config roots
+`.opencode/skill`, then `.opencode/skills`. Missing default skill directories
+are ignored. Passing `include_defaults=False` disables all default skill
 directories. Configured `skillDirectories` / `skill_directories` are appended
 after defaults, and local `skills.paths` entries are appended after those.
 Relative paths resolve under the workspace root and are de-duplicated with
@@ -746,9 +748,12 @@ or binary files; runtime v2 never imports or executes them.
 Discovery walks configured skill roots in order. If two packages declare the
 same case-insensitive skill name, the later root wins; within one root,
 path-sorted discovery order is stable. The final model-facing skill list is
-sorted by name after duplicate winners are selected, so configured project
-skills can override same-name user-level defaults while provider prompts remain
-stable.
+sorted by name after duplicate winners are selected. In the default loader
+order, opencode config skill roots load after external compatibility roots, and
+project roots load after user-level roots, so project `.opencode/skill` and
+`.opencode/skills` packages override same-name compatibility and user-level
+defaults. Configured skill roots are appended after defaults and can override
+default roots while provider prompts remain stable.
 
 Skill markdown supports either `---` frontmatter or the existing compact leading
 `name: ...` / `description: ...` header style. Runtime v2 parses only simple
