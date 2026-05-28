@@ -94,6 +94,17 @@ def test_restore_delete_added_false_preserves_added_files(tmp_path: Path):
     assert (tmp_path / "added.txt").read_text(encoding="utf-8") == "keep\n"
 
 
+def test_delete_returns_true_and_unknown_snapshot_raises(tmp_path: Path):
+    _write_text(tmp_path / "tracked.txt", "tracked\n")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    assert store.delete_snapshot(snapshot.snapshot_id) is True
+    assert store.list_snapshots() == []
+    with pytest.raises(KeyError, match=snapshot.snapshot_id):
+        store.delete_snapshot(snapshot.snapshot_id)
+
+
 def test_restore_ignores_excluded_directories_and_does_not_delete_them(
     tmp_path: Path,
 ):
@@ -188,7 +199,8 @@ def test_agent_runtime_workspace_snapshot_methods_work_when_configured(
     assert diffs[0].status == "modified"
     assert (tmp_path / "runtime.txt").read_text(encoding="utf-8") == "before\n"
     assert runtime.delete_workspace_snapshot(snapshot.snapshot_id) is True
-    assert runtime.delete_workspace_snapshot(snapshot.snapshot_id) is False
+    with pytest.raises(KeyError, match=snapshot.snapshot_id):
+        runtime.delete_workspace_snapshot(snapshot.snapshot_id)
 
 
 def _write_text(path: Path, text: str) -> None:

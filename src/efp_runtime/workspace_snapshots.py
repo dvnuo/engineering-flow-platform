@@ -131,8 +131,7 @@ class WorkspaceSnapshotStore:
 
     def delete_snapshot(self, snapshot_id: str) -> bool:
         with self._lock:
-            if snapshot_id not in self._snapshots:
-                return False
+            self._require_snapshot(snapshot_id)
             del self._snapshots[snapshot_id]
             return True
 
