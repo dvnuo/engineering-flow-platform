@@ -1,6 +1,13 @@
 """Runtime v2 agent profiles and subagent task runners."""
 
 from .background_tasks import BackgroundTaskManager, BackgroundTaskRecord
+from .discovery import (
+    DEFAULT_AGENT_DIRECTORIES,
+    MarkdownAgentDocument,
+    discover_agent_profiles,
+    load_agent_registry,
+    load_markdown_agent_document,
+)
 from .profile import AgentProfile
 from .registry import AgentRegistry
 from .task_runner import (
@@ -15,8 +22,13 @@ __all__ = [
     "AgentRegistry",
     "BackgroundTaskManager",
     "BackgroundTaskRecord",
+    "DEFAULT_AGENT_DIRECTORIES",
+    "MarkdownAgentDocument",
     "SubagentRunResult",
     "create_agent_task_tool",
     "create_agent_task_tools",
     "create_subagent_task_runner",
+    "discover_agent_profiles",
+    "load_agent_registry",
+    "load_markdown_agent_document",
 ]

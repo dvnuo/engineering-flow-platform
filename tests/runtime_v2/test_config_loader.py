@@ -225,7 +225,7 @@ def test_agents_mapping_config_generates_agent_registry(tmp_path: Path):
     assert general.tools == {"read_file": True, "write_file": False}
     assert general.max_iterations == 3
     assert general.active_skills == ["base"]
-    assert general.metadata == {"tier": "default"}
+    assert general.metadata == {"tier": "default", "mode": "all"}
     assert registry.resolve("review").active_skills == ["review-pr"]
 
 
@@ -250,6 +250,156 @@ def test_agents_list_config_generates_agent_registry(tmp_path: Path):
     assert registry.resolve("missing").name == "review"
     assert registry.resolve("debug").max_iterations == 2
     assert registry.resolve("debug").active_skills == ["logs"]
+
+
+def test_agent_singular_alias_is_compatible_with_agents(tmp_path: Path):
+    _write_json(
+        tmp_path / "agents.json",
+        {
+            "agent": {
+                "review": {
+                    "prompt": "Review changes.",
+                    "tools": ["read_file", "grep"],
+                    "mode": "subagent",
+                }
+            },
+            "agents": [
+                {"name": "debug", "prompt": "Debug failures.", "steps": 5},
+            ],
+        },
+    )
+
+    result = load_runtime_config(tmp_path, paths=["agents.json"], include_defaults=False)
+    registry = result.agent_registry
+
+    assert registry is not None
+    assert registry.names() == ["debug", "review"]
+    assert registry.resolve("review").tools == {"read_file": True, "grep": True}
+    assert registry.resolve("review").metadata["mode"] == "subagent"
+    assert registry.resolve("debug").max_iterations == 5
+
+
+def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Path):
+    _write_text(
+        tmp_path / ".opencode" / "agents" / "review.md",
+        """
+        ---
+        description: Markdown review
+        tools:
+          write_file: false
+        model: markdown-model
+        ---
+        Markdown prompt.
+        """,
+    )
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "agents": {
+                "review": {
+                    "description": "Config review",
+                    "prompt": "Config prompt.",
+                    "tools": {"read_file": True},
+                    "model": "config-model",
+                },
+            },
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert registry is not None
+    assert registry.names() == ["review"]
+    profile = registry.resolve("review")
+    assert profile.description == "Config review"
+    assert profile.prompt == "Config prompt."
+    assert profile.tools == {"read_file": True}
+    assert profile.metadata["model"] == "config-model"
+
+
+def test_agent_directories_are_resolved_and_used(tmp_path: Path):
+    _write_text(
+        tmp_path / "profiles" / "debug.md",
+        """
+        ---
+        maxIterations: 7
+        ---
+        Debug from configured directory.
+        """,
+    )
+    _write_json(
+        tmp_path / "opencode.json",
+        {"agentDirectories": ["profiles"]},
+    )
+
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert registry is not None
+    assert registry.names() == ["debug"]
+    assert registry.resolve("debug").prompt == "Debug from configured directory."
+    assert registry.resolve("debug").max_iterations == 7
+
+
+def test_max_step_aliases_map_to_agent_max_iterations(tmp_path: Path):
+    _write_json(
+        tmp_path / "agents.json",
+        {
+            "agents": [
+                {"name": "steps-agent", "steps": 2},
+                {"name": "max-steps-agent", "maxSteps": 3},
+                {"name": "max-iterations-agent", "maxIterations": 4},
+            ],
+        },
+    )
+
+    result = load_runtime_config(tmp_path, paths=["agents.json"], include_defaults=False)
+    registry = result.agent_registry
+
+    assert registry is not None
+    assert registry.resolve("steps-agent").max_iterations == 2
+    assert registry.resolve("max-steps-agent").max_iterations == 3
+    assert registry.resolve("max-iterations-agent").max_iterations == 4
+
+
+def test_agent_unknown_fields_are_preserved_in_profile_raw_config(tmp_path: Path):
+    _write_json(
+        tmp_path / "agents.json",
+        {
+            "agents": {
+                "review": {
+                    "prompt": "Review.",
+                    "customFlag": "enabled",
+                    "future": {"nested": True},
+                }
+            }
+        },
+    )
+
+    result = load_runtime_config(tmp_path, paths=["agents.json"], include_defaults=False)
+    registry = result.agent_registry
+
+    assert registry is not None
+    assert registry.resolve("review").metadata["raw_config"] == {
+        "customFlag": "enabled",
+        "future": {"nested": True},
+    }
+
+
+def test_agent_loader_keys_are_not_unconsumed_config(tmp_path: Path):
+    raw = {
+        "agentDirectories": ["missing-agents"],
+        "agent": {},
+        "agents": [],
+        "model": "example-model",
+    }
+    _write_json(tmp_path / "opencode.json", raw)
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.agent_registry is None
+    assert result.metadata["unconsumed_config"] == {"model": "example-model"}
 
 
 def test_unconsumed_config_is_preserved_in_metadata(tmp_path: Path):
@@ -317,3 +467,10 @@ print(json.dumps([name for name in blocked if name in sys.modules]))
 def _write_json(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_text(path: Path, content: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = content.strip("\n").splitlines()
+    text = "\n".join(line[8:] if line.startswith("        ") else line for line in lines)
+    path.write_text(text, encoding="utf-8")

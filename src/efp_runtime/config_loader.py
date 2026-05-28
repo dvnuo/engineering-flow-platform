@@ -1,8 +1,8 @@
 """Workspace configuration loading for Runtime v2.
 
 The loader is intentionally side-effect free: it reads local JSON/JSONC files
-and returns Runtime v2 config objects without starting tools, MCP servers, or
-provider integrations.
+and returns Runtime v2 config objects without starting tool providers or LLM
+integrations.
 """
 
 from __future__ import annotations
@@ -14,6 +14,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .agents.discovery import (
+    DEFAULT_AGENT_DIRECTORIES,
+    agent_name_from_mapping,
+    agent_profile_from_mapping,
+    discover_agent_profiles,
+)
 from .agents.profile import AgentProfile
 from .agents.registry import AgentRegistry
 from .commands import (
@@ -52,21 +58,12 @@ _RUNTIME_CONFIG_KEYS = {
     "command_directories",
     "runtime",
     "runtime_mode",
+    "agent",
     "agents",
+    "agentDirectories",
+    "agent_directories",
     "defaultAgent",
     "default_agent",
-}
-
-_AGENT_KEYS = {
-    "name",
-    "description",
-    "prompt",
-    "tools",
-    "maxIterations",
-    "max_iterations",
-    "skills",
-    "active_skills",
-    "metadata",
 }
 
 
@@ -132,7 +129,11 @@ def load_runtime_config(
 
     metadata = _loader_metadata(raw, loaded_paths)
     config = _runtime_config_from_raw(raw, root, metadata)
-    agent_registry = _agent_registry_from_raw(raw)
+    agent_registry = _agent_registry_from_raw(
+        raw,
+        workspace_root=root,
+        include_defaults=include_defaults,
+    )
     command_definitions = command_definitions_from_config(raw)
     command_registry = _command_registry_from_sources(
         definitions=command_definitions,
@@ -341,28 +342,79 @@ def _runtime_config_from_raw(
     return RuntimeConfig(**kwargs)
 
 
-def _agent_registry_from_raw(raw: Mapping[str, Any]) -> AgentRegistry | None:
-    if "agents" not in raw:
-        return None
-
-    agents = raw["agents"]
+def _agent_registry_from_raw(
+    raw: Mapping[str, Any],
+    *,
+    workspace_root: Path,
+    include_defaults: bool,
+) -> AgentRegistry | None:
     default_agent = _first_alias_value(raw, ("defaultAgent", "default_agent"))
     default_agent_name = "general" if default_agent is None else str(default_agent)
 
+    profiles_by_name: dict[str, AgentProfile] = {}
+    for profile in discover_agent_profiles(
+        _agent_directories_from_raw(
+            raw,
+            workspace_root=workspace_root,
+            include_defaults=include_defaults,
+        )
+    ):
+        _replace_agent_profile(profiles_by_name, profile)
+
+    for alias, agents in raw.items():
+        if alias not in {"agent", "agents"}:
+            continue
+        for fallback_name, payload in _agent_config_entries(agents, alias=str(alias)):
+            profile_name = agent_name_from_mapping(payload, fallback_name=fallback_name)
+            profile = agent_profile_from_mapping(payload, fallback_name=fallback_name)
+            if profile is None:
+                profiles_by_name.pop(profile_name, None)
+                continue
+            _replace_agent_profile(profiles_by_name, profile)
+
+    if not profiles_by_name:
+        return None
+    return AgentRegistry(profiles_by_name.values(), default_agent=default_agent_name)
+
+
+def _agent_directories_from_raw(
+    raw: Mapping[str, Any],
+    *,
+    workspace_root: Path,
+    include_defaults: bool,
+) -> list[Path]:
+    directories: list[Path] = []
+    if include_defaults:
+        for directory in DEFAULT_AGENT_DIRECTORIES:
+            path = _resolve_workspace_path(workspace_root, directory)
+            if path.is_dir():
+                directories.append(path)
+
+    configured = _merged_alias_paths(
+        raw,
+        ("agentDirectories", "agent_directories"),
+        workspace_root=workspace_root,
+    )
+    if configured is not None:
+        directories.extend(configured)
+    return _dedupe_paths(directories)
+
+
+def _agent_config_entries(
+    agents: Any,
+    *,
+    alias: str,
+) -> list[tuple[str | None, Mapping[str, Any]]]:
     if isinstance(agents, Mapping):
-        profiles = [
-            _agent_profile_from_mapping(payload, fallback_name=str(name))
+        if alias == "agent" and _looks_like_single_agent_entry(agents):
+            return [(None, agents)]
+        return [
+            (str(name), _require_agent_mapping(payload))
             for name, payload in agents.items()
         ]
-    elif isinstance(agents, list):
-        profiles = [
-            _agent_profile_from_mapping(payload, fallback_name=None)
-            for payload in agents
-        ]
-    else:
-        raise ValueError("agents must be a mapping or list")
-
-    return AgentRegistry(profiles, default_agent=default_agent_name)
+    if isinstance(agents, list):
+        return [(None, _require_agent_mapping(payload)) for payload in agents]
+    raise ValueError(f"{alias} must be a mapping or list")
 
 
 def _command_registry_from_sources(
@@ -378,48 +430,23 @@ def _command_registry_from_sources(
     )
 
 
-def _agent_profile_from_mapping(
-    payload: Any,
-    *,
-    fallback_name: str | None,
-) -> AgentProfile:
+def _require_agent_mapping(payload: Any) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("agent entries must be JSON objects")
+    return payload
 
-    metadata = _mapping_copy(payload.get("metadata"))
-    extra = {
-        str(key): deepcopy(value)
-        for key, value in payload.items()
-        if str(key) not in _AGENT_KEYS
-    }
-    if extra:
-        metadata.setdefault("raw_config", extra)
 
-    data: dict[str, Any] = {"metadata": metadata}
-    if fallback_name is not None:
-        data["name"] = fallback_name
-    if payload.get("name") is not None:
-        data["name"] = str(payload["name"])
-    if "name" not in data:
-        raise ValueError("agent entries in a list require a name")
-    if payload.get("description") is not None:
-        data["description"] = str(payload["description"])
-    if payload.get("prompt") is not None:
-        data["prompt"] = str(payload["prompt"])
-    if payload.get("tools") is not None:
-        if not isinstance(payload["tools"], Mapping):
-            raise ValueError("agent tools must be a mapping")
-        data["tools"] = dict(payload["tools"])
+def _looks_like_single_agent_entry(value: Mapping[str, Any]) -> bool:
+    return "name" in value
 
-    max_iterations = _first_alias_value(payload, ("maxIterations", "max_iterations"))
-    if max_iterations is not None:
-        data["max_iterations"] = _positive_int(max_iterations, field_name="maxIterations")
 
-    active_skills = _merged_alias_strings(payload, ("skills", "active_skills"))
-    if active_skills is not None:
-        data["active_skills"] = active_skills
-
-    return AgentProfile(**data)
+def _replace_agent_profile(
+    profiles: dict[str, AgentProfile],
+    profile: AgentProfile,
+) -> None:
+    if profile.name in profiles:
+        del profiles[profile.name]
+    profiles[profile.name] = profile
 
 
 def _runtime_mode(raw: Mapping[str, Any]) -> Any:
@@ -647,23 +674,6 @@ def _json_marker(value: Any) -> str:
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
     except TypeError:
         return repr(value)
-
-
-def _mapping_copy(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if not isinstance(value, Mapping):
-        raise ValueError("metadata must be a mapping")
-    return dict(deepcopy(value))
-
-
-def _positive_int(value: Any, *, field_name: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be an integer")
-    resolved = int(value)
-    if resolved < 1:
-        raise ValueError(f"{field_name} must be at least 1")
-    return resolved
 
 
 def _coerce_sequence(value: Any) -> list[Any]:

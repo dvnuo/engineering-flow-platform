@@ -170,23 +170,60 @@ The loader maps the following opencode-style and snake_case keys into
 Configured path fields are resolved as workspace-local `Path` objects without
 requiring those files or directories to already exist. If
 `.opencode/commands` exists under the workspace root, the loader also adds it
-as a project command directory. `agents` may be a mapping or a list. Mapping
-entries use the mapping key as the profile name unless a `name` field is
-supplied; list entries require `name`. Agent fields map to `AgentProfile` as
-`name`, `prompt`, `tools`, `maxIterations` / `max_iterations`, `skills` /
-`active_skills`, and `metadata`. `defaultAgent` / `default_agent` selects the
-registry fallback, otherwise `general` is used.
+as a project command directory.
 
 The loader consumes `command` and `commands` to build config-defined
 `CommandDefinition` records and a `CommandRegistry` that callers can pass to
-`AgentRuntime(command_registry=loaded.command_registry)`. Keys that Runtime v2
-does not consume in this phase, including `model`, `mcp`, and `plugins`, are
-preserved in
+`AgentRuntime(command_registry=loaded.command_registry)`.
+
+Agent profiles can come from markdown files and config entries. With
+`include_defaults=True`, the loader discovers project-local
+`.opencode/agents/*.md` and `*.markdown` files when that directory exists.
+Config can add more workspace-relative roots with `agentDirectories` /
+`agent_directories`; Runtime v2 does not scan global home directories in this
+phase.
+
+Markdown agent files use optional `---` frontmatter plus a markdown body. The
+frontmatter parser is deliberately small and standard-library only: it supports
+scalar strings, numbers, booleans, shorthand lists such as `skills: [review,
+docs]`, and one-level nested mappings such as:
+
+```yaml
+tools:
+  write: false
+permission:
+  edit: ask
+```
+
+The body becomes `AgentProfile.prompt`. The filename is the default agent name,
+for example `review.md` becomes `review`; frontmatter `name` can override it.
+Hidden subdirectories under an agent directory are skipped, but configured hidden
+roots such as `.opencode/agents` are valid.
+
+`agent` is accepted as a singular alias for `agents`. `agent` / `agents` may be
+a mapping or a list. Mapping entries use the mapping key as the profile name
+unless a `name` field is supplied; list entries require `name`. Agent fields map
+to `AgentProfile` as `name`, `description`, `prompt`, `tools`, `maxIterations` /
+`max_iterations` / `steps` / `maxSteps`, and `skills` / `active_skills`.
+`tools` can be a bool mapping or a list, with list entries treated as enabled.
+The metadata fields `mode` (default `all`), `model`, `temperature`, `top_p` /
+`topP`, `permission`, `task`, `hidden`, `color`, and `disable` / `disabled` are
+kept in `AgentProfile.metadata`; other unknown agent fields are preserved under
+`metadata["raw_config"]`. Disabled agents are not added to the registry.
+Discovered markdown agents are loaded first in stable directory/file order, and
+config `agent` / `agents` entries override same-name markdown entries.
+`defaultAgent` / `default_agent` selects the registry fallback, otherwise
+`general` is used.
+
+Keys that Runtime v2 does not consume in this phase, including root-level
+`model` and `plugins`, are preserved in
 `RuntimeConfigLoadResult.metadata["unconsumed_config"]`; the full merged object
 is preserved in `metadata["raw_config"]` and `RuntimeConfigLoadResult.raw`.
 Loading config is side-effect free: it only reads local files, does not start
-MCP servers or subprocess tool providers, does not load Portal, and does not
-instantiate LLM or tool providers.
+subprocess tool providers, does not load Portal, and does not instantiate LLM or
+tool providers. Agent metadata such as `mode`, `model`, `permission`, and
+`hidden` is informational here; it does not switch providers, change
+`RuntimeConfig`, or start subagents.
 
 ## Session Checkpoints
 
@@ -251,10 +288,9 @@ rendered in the same provider request schema and use the same argument
 validation, permission broker, enabled/disabled selection, output policy, and
 `ToolResult` normalization path as built-ins.
 
-This bridge is the Runtime v2 entry point for later MCP servers, project custom
-tools, and enterprise internal tools. It intentionally does not implement real
-MCP stdio or HTTP transports, load JavaScript or TypeScript plugins, start
-subprocess tool hosts, or bind Runtime v2 to an MCP SDK in this phase.
+This bridge is the Runtime v2 entry point for project custom tools and
+enterprise internal tools. It intentionally does not load JavaScript or
+TypeScript plugins or start subprocess tool hosts in this phase.
 `ExternalToolContext` carries the session id, message/tool call ids, workspace
 root, copied runtime metadata, provider name, and provider-local tool name so
 providers can receive session and worktree context without mutating the original
@@ -308,8 +344,8 @@ layer on top of the static permission metadata carried by each tool definition.
 Keys can be exact tool ids such as `shell_exec`, `read_file`, `write_file`,
 `apply_patch`, `skill`, or `task_status`; category aliases such as `bash`,
 `edit`, `read`, `list`, `grep`, `glob`, `task`, `todowrite`, `webfetch`, `lsp`,
-`skill`, `question`, and `doom_loop`; wildcard patterns such as `mcp_*` or
-`external_*`; or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
+`skill`, `question`, and `doom_loop`; wildcard patterns such as `external_*`;
+or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
 `"deny"`, or a mapping like
 `{"action": "ask", "reason": "...", "risk": "medium", "patterns": ["..."]}`.
 Runtime config matching is ordered by exact tool id, wildcard specificity,
@@ -423,6 +459,9 @@ Runtime v2 has a small standalone agent profile layer under
 agent instructions, per-run tool overrides, active skills, a child iteration
 limit, and metadata. `AgentRegistry` resolves `task.subagent_type` to a profile
 and can fall back to a configured default profile, usually `general`.
+`efp_runtime.agents.discovery` loads opencode-style markdown agent files into
+the same `AgentProfile` shape used by config and subagent task runners, so
+primary-agent, subagent, and future `@mention` selection can share one registry.
 
 `create_subagent_task_runner(...)` builds the task runner used by the injectable
 `task` tool. The runner does not start a legacy agent or separate process. It
