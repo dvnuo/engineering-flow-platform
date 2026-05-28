@@ -241,6 +241,35 @@ class PermissionConfig:
         )
 
 
+def is_permission_subject_hidden(
+    tool_permissions: Mapping[str, Any] | PermissionConfig | None,
+    *,
+    tool_id: str,
+    category: str,
+    subject: str,
+    resource: str = "context",
+) -> bool:
+    """Return true only when runtime config selects a deny rule for a subject."""
+
+    if tool_permissions is None:
+        return False
+    config = (
+        tool_permissions
+        if isinstance(tool_permissions, PermissionConfig)
+        else PermissionConfig(tool_permissions)
+    )
+    match = config.match(
+        tool_id=tool_id,
+        metadata=PermissionMetadata(
+            category=category,
+            resource=resource,
+            data={"subject": subject},
+        ),
+        args={},
+    )
+    return match is not None and match.rule.action == DENY
+
+
 @dataclass(init=False, frozen=True)
 class PermissionRequest:
     """Structured request emitted when a tool requires user approval."""

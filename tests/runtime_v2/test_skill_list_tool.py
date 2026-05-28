@@ -66,6 +66,23 @@ async def test_skill_list_returns_multiple_skills_in_stable_order(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_skill_list_returns_only_visible_skills(tmp_path: Path):
+    _write_skill(tmp_path, "internal-docs", description="Internal docs")
+    _write_skill(tmp_path, "public-docs", description="Public docs")
+
+    result = await _run_skill_list(
+        tmp_path,
+        tool_permissions={"skill": {"*": "allow", "internal-*": "deny"}},
+    )
+
+    assert result.output["count"] == 1
+    assert [skill["name"] for skill in result.output["skills"]] == ["public-docs"]
+    assert result.metadata["count"] == 1
+    assert "- public-docs: Public docs" in result.content
+    assert "internal-docs" not in result.content
+
+
+@pytest.mark.asyncio
 async def test_skill_list_preserves_frontmatter_metadata(tmp_path: Path):
     skill_dir = tmp_path / "metadata-skill"
     skill_dir.mkdir()
@@ -327,9 +344,17 @@ async def _run_skill_list(
     root: Path,
     *,
     args: dict | None = None,
+    tool_permissions: dict | None = None,
 ):
     runtime = ToolRuntime(
-        ToolRegistry([build_skill_list_tool(SkillDiscovery([root]))])
+        ToolRegistry(
+            [
+                build_skill_list_tool(
+                    SkillDiscovery([root]),
+                    tool_permissions=tool_permissions,
+                )
+            ]
+        )
     )
     return await runtime.execute(
         ToolCall(id="call-skill-list", tool_id="skill_list", args=args or {})

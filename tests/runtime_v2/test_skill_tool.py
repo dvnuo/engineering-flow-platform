@@ -101,6 +101,33 @@ def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp
     )
 
 
+def test_skill_tool_description_hides_denied_skills_by_subject_permission(tmp_path):
+    _write_skill(tmp_path, "internal-docs", description="Internal docs")
+    _write_skill(tmp_path, "public-docs", description="Public docs")
+
+    tool = build_skill_tool(
+        SkillDiscovery([tmp_path]),
+        tool_permissions={"skill": {"*": "allow", "internal-*": "deny"}},
+    )
+
+    assert "<name>public-docs</name>" in tool.description
+    assert "<description>Public docs</description>" in tool.description
+    assert "internal-docs" not in tool.description
+    assert "Internal docs" not in tool.description
+
+
+def test_skill_tool_description_keeps_ask_skills_visible(tmp_path):
+    _write_skill(tmp_path, "experimental-docs", description="Experimental docs")
+
+    tool = build_skill_tool(
+        SkillDiscovery([tmp_path]),
+        tool_permissions={"skill": {"*": "allow", "experimental-*": "ask"}},
+    )
+
+    assert "<name>experimental-docs</name>" in tool.description
+    assert "<description>Experimental docs</description>" in tool.description
+
+
 def test_skill_tool_permission_subject_metadata(tmp_path):
     _write_skill(tmp_path, "safe-skill")
     discovery = SkillDiscovery([tmp_path])
@@ -224,6 +251,31 @@ async def test_skill_tool_reports_unknown_skill_as_tool_error(tmp_path):
     assert "Available skills: known-skill" in result.error
 
 
+@pytest.mark.asyncio
+async def test_skill_tool_unknown_skill_error_lists_only_visible_skills(tmp_path):
+    _write_skill(tmp_path, "internal-docs")
+    _write_skill(tmp_path, "public-docs")
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                build_skill_tool(
+                    SkillDiscovery([tmp_path]),
+                    tool_permissions={"skill": {"*": "allow", "internal-*": "deny"}},
+                )
+            ]
+        )
+    )
+
+    result = await runtime.execute(
+        ToolCall(id="call-1", tool_id="skill", args={"name": "missing"})
+    )
+
+    assert result.status == "error"
+    assert "Unknown skill: missing" in result.error
+    assert "Available skills: public-docs" in result.error
+    assert "internal-docs" not in result.error
+
+
 def test_core_registry_does_not_include_skill_tool_by_default(tmp_path):
     registry = create_core_tool_registry(tmp_path)
 
@@ -325,6 +377,68 @@ async def test_active_skill_and_skill_tool_coexist_without_active_skill_pollutio
     assert len(tool_results) == 1
     assert tool_results[0].tool_name == "skill"
     assert '<skill_content name="safe-skill">' in tool_results[0].content
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_skill_metadata_counts_only_visible_skills(tmp_path):
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    _write_skill(skills_dir, "internal-docs", description="Internal docs")
+    _write_skill(skills_dir, "public-docs", description="Public docs")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            skill_directories=[skills_dir],
+            tool_permissions={"skill": {"*": "allow", "internal-*": "deny"}},
+            max_iterations=1,
+        ),
+    )
+
+    result = await runtime.run("Use tools if needed.", session_id="session-visible-count")
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    assert request.metadata["available_skill_count"] == 1
+    assert request.provider_request.metadata["available_skill_count"] == 1
+    skill_schema = next(
+        schema for schema in request.provider_request.tools if schema.id == "skill"
+    )
+    assert "<name>public-docs</name>" in skill_schema.description
+    assert "internal-docs" not in skill_schema.description
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_filters_denied_active_skill_context(tmp_path):
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    _write_skill(skills_dir, "internal-docs", description="Internal docs")
+    _write_skill(skills_dir, "public-docs", description="Public docs")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            skill_directories=[skills_dir],
+            active_skills=["internal-docs", "public-docs"],
+            tool_permissions={"skill": {"*": "allow", "internal-*": "deny"}},
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    result = await runtime.run("Use configured skills.", session_id="session-active-visible")
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    texts = [message.text for message in request.provider_request.messages]
+    assert any('<skill_content name="public-docs">' in text for text in texts)
+    assert all("internal-docs" not in text for text in texts)
+    assert request.metadata["active_skills"] == ["public-docs"]
+    assert request.metadata["active_skill_count"] == 1
+    assert request.provider_request.metadata["active_skills"] == ["public-docs"]
 
 
 def _write_skill(

@@ -410,10 +410,14 @@ run metadata as `agent_permission_overlay` and is evaluated after
 exact, category, wildcard, or fallback rule in that run; runs without a selected
 profile overlay keep the runtime-level behavior unchanged.
 
-This config controls execution permission only. It does not remove tools from
-provider schemas. `enabled_tools`, `disabled_tools`, per-run `tools={...}`, and
-plan-mode read-only selection still control what tools are visible to the
-provider. Profile `tools` metadata participates only in schema selection, while
+This config controls execution permission for tools. It does not remove tools
+from provider schemas. `enabled_tools`, `disabled_tools`, per-run `tools={...}`,
+and plan-mode read-only selection still control what tools are visible to the
+provider. The skill surface is subject-filtered by the same
+`tool_permissions["skill"]` rules used for execution: only a selected `"deny"`
+action hides a skill from the `skill` description, `skill_list`, and active
+skill context injection. `"allow"`, `"ask"`, and no match keep the skill
+visible. Profile `tools` metadata participates only in schema selection, while
 profile `permission` metadata participates only in execution permission
 decisions. For example, `tool_permissions={"edit": "deny"}` keeps edit tools in
 the schema but denies execution; `disabled_tools=["edit"]` or profile

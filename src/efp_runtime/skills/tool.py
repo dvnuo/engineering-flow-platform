@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 import codecs
 from html import escape
 from pathlib import Path
 from typing import Any
 
-from ..permissions import ALLOW, PermissionMetadata
+from ..permissions import (
+    ALLOW,
+    PermissionConfig,
+    PermissionMetadata,
+    is_permission_subject_hidden,
+)
 from ..tools.definition import OutputPolicy, ToolContext, ToolDef
 from ..types import SkillPackage, ToolResult
 from .context import skill_package_to_system_message
@@ -42,17 +47,23 @@ class SkillTool:
         include_sidecar_content: bool = False,
         max_sidecar_chars: int = 4000,
         permission: PermissionMetadata | None = None,
+        tool_permissions: Mapping[str, Any] | PermissionConfig | None = None,
     ):
         self.discovery = discovery
         self.tool_id = tool_id
         self.include_sidecar_content = include_sidecar_content
         self.max_sidecar_chars = max_sidecar_chars
         self.permission = _skill_permission(permission or DEFAULT_SKILL_PERMISSION)
+        self.tool_permissions = _permission_config(tool_permissions)
 
     def definition(self) -> ToolDef:
         return ToolDef(
             id=self.tool_id,
-            description=_skill_tool_description(self.discovery),
+            description=_skill_tool_description(
+                self.discovery,
+                tool_permissions=self.tool_permissions,
+                tool_id=self.tool_id,
+            ),
             input_schema={
                 "type": "object",
                 "required": ["name"],
@@ -86,8 +97,16 @@ class SkillTool:
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         skill_name = str(args["name"])
         skill = self.discovery.get(skill_name)
-        if skill is None:
-            available = [item.name for item in self.discovery.discover()]
+        if skill is None or _skill_hidden(
+            skill_name,
+            tool_permissions=self.tool_permissions,
+            tool_id=self.tool_id,
+        ):
+            available = _visible_skill_names(
+                [item.name for item in self.discovery.discover()],
+                tool_permissions=self.tool_permissions,
+                tool_id=self.tool_id,
+            )
             raise ValueError(
                 f"Unknown skill: {skill_name}. "
                 f"Available skills: {_available_skill_names_text(available)}"
@@ -125,10 +144,12 @@ class SkillListTool:
         *,
         tool_id: str = "skill_list",
         permission: PermissionMetadata | None = None,
+        tool_permissions: Mapping[str, Any] | PermissionConfig | None = None,
     ):
         self.discovery = discovery
         self.tool_id = tool_id
         self.permission = permission or DEFAULT_SKILL_LIST_PERMISSION
+        self.tool_permissions = _permission_config(tool_permissions)
 
     def definition(self) -> ToolDef:
         return ToolDef(
@@ -165,8 +186,16 @@ class SkillListTool:
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         include_sidecars = bool(args.get("include_sidecars", True))
         refresh = bool(args.get("refresh", False))
-        skills = self.discovery.discover(refresh=refresh)
-        active_skills = _metadata_string_list(context.metadata.get("active_skills"))
+        skills = _visible_skills(
+            self.discovery.discover(refresh=refresh),
+            tool_permissions=self.tool_permissions,
+            tool_id=self.tool_id,
+        )
+        active_skills = _visible_skill_names(
+            _metadata_string_list(context.metadata.get("active_skills")),
+            tool_permissions=self.tool_permissions,
+            tool_id=self.tool_id,
+        )
         skill_entries = [
             skill_package_to_list_entry(skill, include_sidecars=include_sidecars)
             for skill in skills
@@ -203,6 +232,7 @@ def build_skill_tool(
     include_sidecar_content: bool = False,
     max_sidecar_chars: int = 4000,
     permission: PermissionMetadata | None = None,
+    tool_permissions: Mapping[str, Any] | PermissionConfig | None = None,
 ) -> ToolDef:
     discovery = (
         directories
@@ -215,6 +245,7 @@ def build_skill_tool(
         include_sidecar_content=include_sidecar_content,
         max_sidecar_chars=max_sidecar_chars,
         permission=permission,
+        tool_permissions=tool_permissions,
     ).definition()
 
 
@@ -223,6 +254,7 @@ def build_skill_list_tool(
     *,
     tool_id: str = "skill_list",
     permission: PermissionMetadata | None = None,
+    tool_permissions: Mapping[str, Any] | PermissionConfig | None = None,
 ) -> ToolDef:
     discovery = (
         directories
@@ -233,6 +265,7 @@ def build_skill_list_tool(
         discovery,
         tool_id=tool_id,
         permission=permission,
+        tool_permissions=tool_permissions,
     ).definition()
 
 
@@ -246,6 +279,64 @@ def _skill_permission(permission: PermissionMetadata) -> PermissionMetadata:
         resource=permission.resource,
         risk=permission.risk,
         data=data,
+    )
+
+
+def _permission_config(
+    tool_permissions: Mapping[str, Any] | PermissionConfig | None,
+) -> PermissionConfig | None:
+    if tool_permissions is None:
+        return None
+    if isinstance(tool_permissions, PermissionConfig):
+        return tool_permissions
+    return PermissionConfig(tool_permissions)
+
+
+def _visible_skills(
+    skills: Iterable[SkillPackage],
+    *,
+    tool_permissions: PermissionConfig | None,
+    tool_id: str,
+) -> list[SkillPackage]:
+    return [
+        skill
+        for skill in skills
+        if not _skill_hidden(
+            skill.name,
+            tool_permissions=tool_permissions,
+            tool_id=tool_id,
+        )
+    ]
+
+
+def _visible_skill_names(
+    names: Iterable[str],
+    *,
+    tool_permissions: PermissionConfig | None,
+    tool_id: str,
+) -> list[str]:
+    return [
+        name
+        for name in names
+        if not _skill_hidden(
+            name,
+            tool_permissions=tool_permissions,
+            tool_id=tool_id,
+        )
+    ]
+
+
+def _skill_hidden(
+    skill_name: str,
+    *,
+    tool_permissions: PermissionConfig | None,
+    tool_id: str,
+) -> bool:
+    return is_permission_subject_hidden(
+        tool_permissions,
+        tool_id=tool_id,
+        category="skill",
+        subject=skill_name,
     )
 
 
@@ -299,14 +390,23 @@ def skill_package_to_list_entry(
     }
 
 
-def _skill_tool_description(discovery: SkillDiscovery) -> str:
+def _skill_tool_description(
+    discovery: SkillDiscovery,
+    *,
+    tool_permissions: PermissionConfig | None,
+    tool_id: str,
+) -> str:
     lines = [
         "Load a specialized skill by name: skill({name}) returns its full "
         "model-readable <skill_content> context.",
         "",
         "<available_skills>",
     ]
-    skills = discovery.discover()
+    skills = _visible_skills(
+        discovery.discover(),
+        tool_permissions=tool_permissions,
+        tool_id=tool_id,
+    )
     if not skills:
         lines.append("  <no_skills>No skills available.</no_skills>")
         lines.append("</available_skills>")

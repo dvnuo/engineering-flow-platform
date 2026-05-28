@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...instructions import ReadInstructionResolver
 from ...lsp import LSPClient
@@ -62,6 +62,7 @@ def create_core_tool_registry(
     include_skill_list_tool: bool | None = None,
     skill_permission: PermissionMetadata | None = None,
     skill_list_permission: PermissionMetadata | None = None,
+    tool_permissions: Mapping[str, Any] | None = None,
     max_skill_sidecar_chars: int = 4000,
     instruction_resolver: ReadInstructionResolver | None = None,
     lsp_client: LSPClient | None = None,
@@ -162,6 +163,7 @@ def create_core_tool_registry(
                 permission=skill_permission or _default_skill_permission(
                     subject_arg="name"
                 ),
+                tool_permissions=tool_permissions,
             )
         )
     if skill_list_discovery is not None:
@@ -169,6 +171,7 @@ def create_core_tool_registry(
             build_skill_list_tool(
                 skill_list_discovery,
                 permission=skill_list_permission or _default_skill_permission(),
+                tool_permissions=tool_permissions,
             )
         )
     return registry

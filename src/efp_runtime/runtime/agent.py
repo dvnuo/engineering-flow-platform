@@ -23,7 +23,9 @@ from ..permissions import (
     AGENT_PERMISSION_OVERLAY_SOURCE,
     AGENT_PERMISSION_OVERLAY_SOURCE_KEY,
     ConfiguredPermissionBroker,
+    PermissionConfig,
     PermissionEvaluator,
+    is_permission_subject_hidden,
     normalize_agent_permission_overlay,
 )
 from ..prompt import resolve_prompt_references
@@ -210,6 +212,10 @@ class AgentRuntime:
             else self.active_skills
         )
         active_skills = _apply_skill_command(base_active_skills, skill_command)
+        active_skills = _visible_skill_names_for_permissions(
+            active_skills,
+            tool_permissions=self.config.tool_permissions,
+        )
         command_tools = _command_tool_overrides(command_expansion)
         run_tools = _merge_run_tools(profile, command_tools, tools)
         resolved_session_id = session_id or self.store.create_session().session_id
@@ -304,11 +310,15 @@ class AgentRuntime:
         try:
             run_metadata = self._base_run_metadata(metadata)
             run_metadata["run_id"] = run_id
-            self._annotate_skill_metadata(run_metadata, self.active_skills)
+            active_skills = _visible_skill_names_for_permissions(
+                self.active_skills,
+                tool_permissions=self.config.tool_permissions,
+            )
+            self._annotate_skill_metadata(run_metadata, active_skills)
             run_metadata["resume"] = True
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             instruction_context_messages = self._build_instruction_context_messages()
-            skill_context_messages = self._build_skill_context_messages(self.active_skills)
+            skill_context_messages = self._build_skill_context_messages(active_skills)
             context_messages = [
                 *system_prompt_messages,
                 *instruction_context_messages,
@@ -657,7 +667,11 @@ class AgentRuntime:
         run_metadata["active_skills"] = active
         run_metadata["active_skill_count"] = len(active)
         if self.skill_discovery is not None:
-            run_metadata["available_skill_count"] = len(self.skill_discovery.discover())
+            visible_skills = _visible_skill_names_for_permissions(
+                [skill.name for skill in self.skill_discovery.discover()],
+                tool_permissions=self.config.tool_permissions,
+            )
+            run_metadata["available_skill_count"] = len(visible_skills)
 
     def _checkpoint_store_method(self, name: str):
         method = getattr(self.store, name, None)
@@ -1007,6 +1021,7 @@ def _resolve_tool_runtime(
                 workspace_root,
                 skill_discovery=skill_discovery,
                 include_skill_list_tool=config.enable_skill_list_tool,
+                tool_permissions=config.tool_permissions,
                 max_skill_sidecar_chars=config.max_skill_sidecar_chars,
                 question_broker=question_broker,
                 include_question_tool=config.enable_question_tool,
@@ -1032,11 +1047,15 @@ def _resolve_tool_runtime(
                     build_skill_tool(
                         skill_discovery,
                         max_sidecar_chars=config.max_skill_sidecar_chars,
+                        tool_permissions=config.tool_permissions,
                     )
                 )
             if _skill_list_tool_enabled(config, skill_discovery=skill_discovery):
                 registry.register(
-                    build_skill_list_tool(skill_discovery or SkillDiscovery([]))
+                    build_skill_list_tool(
+                        skill_discovery or SkillDiscovery([]),
+                        tool_permissions=config.tool_permissions,
+                    )
                 )
     if external_tool_providers is not None:
         register_external_tools(
@@ -1197,6 +1216,24 @@ def _unique_skill_names(names: Iterable[str]) -> list[str]:
         if normalized and normalized not in unique:
             unique.append(normalized)
     return unique
+
+
+def _visible_skill_names_for_permissions(
+    names: Iterable[str],
+    *,
+    tool_permissions: Mapping[str, Any] | None,
+) -> list[str]:
+    permission_config = PermissionConfig(tool_permissions)
+    return [
+        name
+        for name in _unique_skill_names(names)
+        if not is_permission_subject_hidden(
+            permission_config,
+            tool_id="skill",
+            category="skill",
+            subject=name,
+        )
+    ]
 
 
 def _config_tool_selection(config: RuntimeConfig) -> ToolSelection:
