@@ -3,8 +3,11 @@
 from .background_tasks import BackgroundTaskManager, BackgroundTaskRecord
 from .discovery import (
     DEFAULT_AGENT_DIRECTORIES,
+    DEFAULT_MODE_DIRECTORIES,
+    AgentProfileDiscoverySource,
     MarkdownAgentDocument,
     discover_agent_profiles,
+    discover_agent_profiles_from_sources,
     load_agent_registry,
     load_markdown_agent_document,
 )
@@ -25,6 +28,8 @@ __all__ = [
     "BackgroundTaskRecord",
     "DEFAULT_AGENT_DIRECTORIES",
     "DEFAULT_AGENT_PROFILE_NAMES",
+    "DEFAULT_MODE_DIRECTORIES",
+    "AgentProfileDiscoverySource",
     "MarkdownAgentDocument",
     "SubagentRunResult",
     "create_agent_task_tool",
@@ -32,6 +37,7 @@ __all__ = [
     "create_subagent_task_runner",
     "default_agent_profiles",
     "discover_agent_profiles",
+    "discover_agent_profiles_from_sources",
     "load_agent_registry",
     "load_markdown_agent_document",
 ]

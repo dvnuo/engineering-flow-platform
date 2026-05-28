@@ -13,7 +13,8 @@ from .profile import AgentProfile
 from .registry import AgentRegistry
 
 
-DEFAULT_AGENT_DIRECTORIES = (".opencode/agents",)
+DEFAULT_AGENT_DIRECTORIES = (".opencode/agent", ".opencode/agents")
+DEFAULT_MODE_DIRECTORIES = (".opencode/mode", ".opencode/modes")
 AGENT_MARKDOWN_EXTENSIONS = {".md", ".markdown"}
 
 _MAX_ITERATION_ALIASES = ("maxIterations", "max_iterations", "steps", "maxSteps")
@@ -61,6 +62,15 @@ class MarkdownAgentDocument:
     body: str = ""
 
 
+@dataclass(frozen=True)
+class AgentProfileDiscoverySource:
+    """Markdown profile discovery source and scan behavior."""
+
+    directory: str | Path
+    recursive: bool = True
+    forced_mode: str | None = None
+
+
 def discover_agent_profiles(agent_directories: Iterable[str | Path]) -> list[AgentProfile]:
     """Discover markdown agent profiles from configured directories.
 
@@ -69,10 +79,20 @@ def discover_agent_profiles(agent_directories: Iterable[str | Path]) -> list[Age
     with the same agent name.
     """
 
+    return discover_agent_profiles_from_sources(
+        AgentProfileDiscoverySource(directory) for directory in agent_directories
+    )
+
+
+def discover_agent_profiles_from_sources(
+    sources: Iterable[AgentProfileDiscoverySource],
+) -> list[AgentProfile]:
+    """Discover markdown agent profiles from ordered profile sources."""
+
     profiles: dict[str, AgentProfile] = {}
-    for configured_dir in agent_directories:
-        directory = Path(configured_dir).expanduser()
-        for agent_file in _iter_agent_files(directory):
+    for source in sources:
+        directory = Path(source.directory).expanduser()
+        for agent_file in _iter_agent_files(directory, recursive=source.recursive):
             fallback_name = _agent_name_from_path(agent_file)
             document = load_markdown_agent_document(agent_file)
             profile_name = agent_name_from_mapping(
@@ -87,6 +107,8 @@ def discover_agent_profiles(agent_directories: Iterable[str | Path]) -> list[Age
             if profile is None:
                 profiles.pop(profile_name, None)
                 continue
+            if source.forced_mode is not None:
+                profile.metadata["mode"] = source.forced_mode
             _replace_profile(profiles, profile)
     return list(profiles.values())
 
@@ -210,7 +232,7 @@ def is_agent_disabled(payload: Mapping[str, Any]) -> bool:
     return _bool_from_value(value) is True
 
 
-def _iter_agent_files(directory: Path) -> list[Path]:
+def _iter_agent_files(directory: Path, *, recursive: bool) -> list[Path]:
     if directory.is_file():
         if directory.suffix.lower() in AGENT_MARKDOWN_EXTENSIONS:
             return [directory]
@@ -218,9 +240,10 @@ def _iter_agent_files(directory: Path) -> list[Path]:
     if not directory.is_dir():
         return []
 
+    paths = directory.rglob("*") if recursive else directory.iterdir()
     candidates = [
         path
-        for path in directory.rglob("*")
+        for path in paths
         if path.is_file()
         and path.suffix.lower() in AGENT_MARKDOWN_EXTENSIONS
         and not _has_hidden_relative_directory(path, directory)
@@ -502,10 +525,13 @@ def _replace_profile(profiles: dict[str, AgentProfile], profile: AgentProfile) -
 
 __all__ = [
     "DEFAULT_AGENT_DIRECTORIES",
+    "DEFAULT_MODE_DIRECTORIES",
+    "AgentProfileDiscoverySource",
     "MarkdownAgentDocument",
     "agent_name_from_mapping",
     "agent_profile_from_mapping",
     "discover_agent_profiles",
+    "discover_agent_profiles_from_sources",
     "is_agent_disabled",
     "load_agent_registry",
     "load_markdown_agent_document",

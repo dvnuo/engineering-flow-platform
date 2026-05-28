@@ -17,9 +17,11 @@ from typing import Any
 
 from .agents.discovery import (
     DEFAULT_AGENT_DIRECTORIES,
+    DEFAULT_MODE_DIRECTORIES,
+    AgentProfileDiscoverySource,
     agent_name_from_mapping,
     agent_profile_from_mapping,
-    discover_agent_profiles,
+    discover_agent_profiles_from_sources,
 )
 from .agents.defaults import default_agent_profiles
 from .agents.profile import AgentProfile
@@ -47,7 +49,10 @@ _RUNTIME_PROJECT_MARKER_DIRECTORIES = (
     ".opencode/commands",
     ".opencode/skill",
     ".opencode/skills",
+    ".opencode/agent",
     ".opencode/agents",
+    ".opencode/mode",
+    ".opencode/modes",
 )
 
 _RUNTIME_COMPATIBILITY_SKILL_MARKER_DIRECTORIES = (
@@ -540,8 +545,8 @@ def _agent_registry_from_raw(
         for profile in default_agent_profiles():
             _replace_agent_profile(profiles_by_name, profile)
 
-    for profile in discover_agent_profiles(
-        _agent_directories_from_raw(
+    for profile in discover_agent_profiles_from_sources(
+        _agent_discovery_sources_from_raw(
             raw,
             workspace_root=workspace_root,
             include_defaults=include_defaults,
@@ -565,18 +570,28 @@ def _agent_registry_from_raw(
     return AgentRegistry(profiles_by_name.values(), default_agent=default_agent_name)
 
 
-def _agent_directories_from_raw(
+def _agent_discovery_sources_from_raw(
     raw: Mapping[str, Any],
     *,
     workspace_root: Path,
     include_defaults: bool,
-) -> list[Path]:
-    directories: list[Path] = []
+) -> list[AgentProfileDiscoverySource]:
+    sources: list[AgentProfileDiscoverySource] = []
     if include_defaults:
         for directory in DEFAULT_AGENT_DIRECTORIES:
             path = _resolve_workspace_path(workspace_root, directory)
             if path.is_dir():
-                directories.append(path)
+                sources.append(AgentProfileDiscoverySource(path, recursive=True))
+        for directory in DEFAULT_MODE_DIRECTORIES:
+            path = _resolve_workspace_path(workspace_root, directory)
+            if path.is_dir():
+                sources.append(
+                    AgentProfileDiscoverySource(
+                        path,
+                        recursive=False,
+                        forced_mode="primary",
+                    )
+                )
 
     configured = _merged_alias_paths(
         raw,
@@ -584,8 +599,10 @@ def _agent_directories_from_raw(
         workspace_root=workspace_root,
     )
     if configured is not None:
-        directories.extend(configured)
-    return _dedupe_paths(directories)
+        sources.extend(
+            AgentProfileDiscoverySource(path, recursive=True) for path in configured
+        )
+    return _dedupe_agent_discovery_sources(sources)
 
 
 def _agent_config_entries(
@@ -937,6 +954,20 @@ def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
             continue
         seen.add(marker)
         deduped.append(path)
+    return deduped
+
+
+def _dedupe_agent_discovery_sources(
+    sources: Iterable[AgentProfileDiscoverySource],
+) -> list[AgentProfileDiscoverySource]:
+    deduped: list[AgentProfileDiscoverySource] = []
+    seen: set[tuple[str, bool, str | None]] = set()
+    for source in sources:
+        marker = (str(source.directory), source.recursive, source.forced_mode)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(source)
     return deduped
 
 

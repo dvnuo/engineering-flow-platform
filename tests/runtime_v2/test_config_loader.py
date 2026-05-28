@@ -762,6 +762,74 @@ def test_include_defaults_false_does_not_add_builtin_agents(tmp_path: Path):
     assert result.agent_registry is None
 
 
+def test_default_agent_and_mode_directories_are_loaded(tmp_path: Path):
+    _write_text(
+        tmp_path / ".opencode" / "agent" / "review.md",
+        "Review from singular agent directory.",
+    )
+    _write_text(
+        tmp_path / ".opencode" / "agents" / "debug.md",
+        "Debug from plural agent directory.",
+    )
+    _write_text(
+        tmp_path / ".opencode" / "agent" / "nested" / "trace.md",
+        "Nested agent files are loaded recursively.",
+    )
+    _write_text(
+        tmp_path / ".opencode" / "mode" / "plan.md",
+        "Plan from singular mode directory.",
+    )
+    _write_text(
+        tmp_path / ".opencode" / "modes" / "build.md",
+        """
+        ---
+        mode: subagent
+        ---
+        Build from plural mode directory.
+        """,
+    )
+    _write_text(
+        tmp_path / ".opencode" / "modes" / "nested" / "skip.md",
+        "Nested mode files are not loaded by default.",
+    )
+
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert registry is not None
+    assert "skip" not in registry.names()
+    assert registry.resolve("review").prompt == "Review from singular agent directory."
+    assert registry.resolve("debug").prompt == "Debug from plural agent directory."
+    assert (
+        registry.resolve("trace").prompt
+        == "Nested agent files are loaded recursively."
+    )
+
+    plan = registry.resolve("plan")
+    assert plan.prompt == "Plan from singular mode directory."
+    assert plan.metadata["mode"] == "primary"
+
+    build = registry.resolve("build")
+    assert build.prompt == "Build from plural mode directory."
+    assert build.metadata["mode"] == "primary"
+
+
+def test_include_defaults_false_skips_default_agent_and_mode_directories(
+    tmp_path: Path,
+):
+    for relative_path in (
+        ".opencode/agent/review.md",
+        ".opencode/agents/debug.md",
+        ".opencode/mode/plan.md",
+        ".opencode/modes/build.md",
+    ):
+        _write_text(tmp_path / relative_path, "Default markdown profile.")
+
+    result = load_runtime_config(tmp_path, include_defaults=False)
+
+    assert result.agent_registry is None
+
+
 def test_markdown_plan_agent_overrides_builtin_plan(tmp_path: Path):
     _write_text(
         tmp_path / ".opencode" / "agents" / "plan.md",
@@ -1176,6 +1244,32 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
     assert profile.prompt == "Config prompt."
     assert profile.tools == {"read_file": True}
     assert profile.metadata["model"] == "config-model"
+
+
+def test_config_agent_overrides_default_markdown_agent(tmp_path: Path):
+    _write_text(
+        tmp_path / ".opencode" / "agent" / "review.md",
+        "Markdown prompt.",
+    )
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "agents": {
+                "review": {
+                    "description": "Config review",
+                    "prompt": "Config prompt.",
+                },
+            },
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert registry is not None
+    profile = registry.resolve("review")
+    assert profile.description == "Config review"
+    assert profile.prompt == "Config prompt."
 
 
 def test_agent_directories_are_resolved_and_used(tmp_path: Path):

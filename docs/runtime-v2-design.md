@@ -157,8 +157,9 @@ With `include_defaults=True`, the loader treats the input path as a startup
 location and walks upward from that directory, or from the parent when the input
 is a file, to find the nearest Runtime v2 project marker. Markers are default
 config files, project `.opencode/command`, `.opencode/commands`,
-`.opencode/skill`, `.opencode/skills`, `.opencode/agents`, `.claude/skills`,
-and `.agents/skills` directories. The matched directory becomes
+`.opencode/skill`, `.opencode/skills`, `.opencode/agent`, `.opencode/agents`,
+`.opencode/mode`, `.opencode/modes`, `.claude/skills`, and `.agents/skills`
+directories. The matched directory becomes
 `RuntimeConfig.workspace_root`, and default command, skill, and agent
 directories are loaded relative to that root. If no marker is found, the input
 path remains the workspace root. Passing `include_defaults=False` disables this
@@ -238,11 +239,17 @@ skill packages as lower-precedence command entries when their names are not
 already used by a built-in, config, or file command.
 
 Agent profiles can come from markdown files and config entries. With
-`include_defaults=True`, the loader discovers project-local
-`.opencode/agents/*.md` and `*.markdown` files when that directory exists.
-Config can add more workspace-relative roots with `agentDirectories` /
-`agent_directories`; Runtime v2 does not scan global home directories in this
-phase.
+`include_defaults=True`, the loader discovers project-local markdown profiles
+from `.opencode/agent`, `.opencode/agents`, `.opencode/mode`, and
+`.opencode/modes` when those directories exist. The `agent` and `agents`
+directories are scanned recursively for `*.md` and `*.markdown` files. The
+`mode` and `modes` directories scan only direct child markdown files, matching
+opencode mode-file discovery; nested files such as
+`.opencode/modes/nested/plan.md` are ignored by default. Config can add more
+workspace-relative roots with `agentDirectories` / `agent_directories`; those
+configured roots keep the existing agent-directory behavior and are scanned
+recursively after the default local profile directories. Runtime v2 does not
+scan global home directories in this phase.
 
 Markdown agent files use optional `---` frontmatter plus a markdown body. The
 frontmatter parser is deliberately small and standard-library only: it supports
@@ -260,6 +267,11 @@ The body becomes `AgentProfile.prompt`. The filename is the default agent name,
 for example `review.md` becomes `review`; frontmatter `name` can override it.
 Hidden subdirectories under an agent directory are skipped, but configured hidden
 roots such as `.opencode/agents` are valid.
+
+Markdown files loaded from `.opencode/mode` or `.opencode/modes` become primary
+mode profiles. Runtime v2 sets `AgentProfile.metadata["mode"]` to `primary` for
+these files even when the markdown frontmatter omits `mode` or explicitly
+declares a different mode.
 
 `agent` is accepted as a singular alias for `agents`. `agent` / `agents` may be
 a mapping or a list. Mapping entries use the mapping key as the profile name
@@ -285,13 +297,13 @@ as `write_file` / `write` or `shell_exec` / `bash` does not bypass the profile
 policy.
 
 The registry merge order is predictable: built-in profiles are loaded first,
-discovered markdown agents are loaded next in stable directory/file order and
+discovered markdown profiles are loaded next in stable directory/file order and
 override same-name built-ins, and config `agent` / `agents` entries override
 both markdown and built-ins. A disabled config entry removes an earlier profile
 with the same name, including a built-in. `include_defaults=False` skips
-built-ins and default agent directories. `defaultAgent` / `default_agent`
-selects the registry fallback when configured; otherwise the fallback is
-`general` only when built-ins are included.
+built-ins and default local profile directories. `defaultAgent` /
+`default_agent` selects the registry fallback when configured; otherwise the
+fallback is `general` only when built-ins are included.
 
 Keys that Runtime v2 does not consume in this phase, including root-level
 `model` and `plugins`, are preserved in
