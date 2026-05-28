@@ -19,7 +19,8 @@ from ..session.protocol import SessionStore
 from ..session.status import RuntimeStatus
 from ..tools.definition import ToolContext
 from ..tools.runtime import ToolRuntime
-from ..types import ToolCall, new_id
+from ..tools.selection import ToolSelection, resolve_tool_selection
+from ..types import ToolCall, ToolResult, new_id
 from .provider import LLMProvider, ProviderOutput, ProviderResult, RuntimeRequest
 
 
@@ -82,6 +83,7 @@ class RuntimeLoopRunner:
         context_reserve_chars: int = 0,
         event_bus: Optional[RuntimeEventBus] = None,
         is_cancelled: Optional[CancelCallback] = None,
+        tool_selection: Optional[ToolSelection] = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -101,6 +103,7 @@ class RuntimeLoopRunner:
         self.context_reserve_chars = context_reserve_chars
         self.event_bus = event_bus
         self.is_cancelled = is_cancelled
+        self.tool_selection = _copy_tool_selection(tool_selection)
 
     async def run(
         self,
@@ -113,10 +116,27 @@ class RuntimeLoopRunner:
         context_messages: Optional[list[Message]] = None,
         append_user_message: bool = True,
         user_parts: Optional[List[MessagePart]] = None,
+        tools: Optional[Mapping[str, bool]] = None,
     ) -> RuntimeLoopResult:
         iteration_limit = max_iterations if max_iterations is not None else self.max_iterations
         if iteration_limit < 1:
             raise ValueError("max_iterations must be at least 1")
+
+        all_tool_ids = self.tool_runtime.registry.ids()
+        enabled_tool_ids = resolve_tool_selection(
+            all_tool_ids,
+            enabled=self.tool_selection.enabled,
+            disabled=self.tool_selection.disabled,
+            overrides=tools,
+        )
+        disabled_tool_ids = _disabled_tool_ids(
+            all_tool_ids,
+            enabled_tool_ids=enabled_tool_ids,
+        )
+        enabled_tool_id_set = set(enabled_tool_ids)
+        enabled_tools = [
+            self.tool_runtime.registry.require(tool_id) for tool_id in enabled_tool_ids
+        ]
 
         resolved_session_id = self._ensure_session(
             session_id=session_id,
@@ -146,6 +166,11 @@ class RuntimeLoopRunner:
         run_metadata = dict(metadata or {})
         run_id = str(run_metadata.get("run_id") or new_id("run"))
         run_metadata["run_id"] = run_id
+        _record_tool_selection_metadata(
+            run_metadata,
+            enabled_tool_ids=enabled_tool_ids,
+            disabled_tool_ids=disabled_tool_ids,
+        )
         cancel_event_published = False
 
         def publish_cancelled(phase: str) -> None:
@@ -173,6 +198,8 @@ class RuntimeLoopRunner:
                 payload={
                     "run_id": run_id,
                     "max_iterations": iteration_limit,
+                    "enabled_tool_ids": list(enabled_tool_ids),
+                    "disabled_tool_ids": list(disabled_tool_ids),
                 },
             )
         )
@@ -193,6 +220,7 @@ class RuntimeLoopRunner:
                     tool_calls=pending_tool_calls,
                     runtime_events=runtime_events,
                     run_id=run_id,
+                    enabled_tool_ids=enabled_tool_id_set,
                 )
                 if pending_outcome.cancelled or await self._cancel_requested(
                     resolved_session_id
@@ -208,7 +236,6 @@ class RuntimeLoopRunner:
             iteration = iterations + 1
             history = self.store.read_history(resolved_session_id)
             request_history = [*(context_messages or []), *history]
-            tools = self.tool_runtime.registry.list()
             request_metadata = _request_metadata(
                 run_metadata,
                 session_id=resolved_session_id,
@@ -217,7 +244,7 @@ class RuntimeLoopRunner:
             )
             prepared_request = prepare_history_for_request(
                 request_history,
-                tools=tools,
+                tools=enabled_tools,
                 metadata=request_metadata,
                 max_parts=self.max_context_parts,
                 max_chars=self.max_context_chars,
@@ -231,7 +258,7 @@ class RuntimeLoopRunner:
                 metadata=request_metadata,
                 provider_request=prepared_request.request,
                 prepared_request=prepared_request,
-                tools=tools,
+                tools=enabled_tools,
             )
             runtime_events.append(
                 RuntimeEvent(
@@ -322,6 +349,7 @@ class RuntimeLoopRunner:
                 tool_calls=tool_calls,
                 runtime_events=runtime_events,
                 run_id=run_id,
+                enabled_tool_ids=enabled_tool_id_set,
             )
             if tool_execution_outcome.cancelled or await self._cancel_requested(
                 resolved_session_id
@@ -503,6 +531,7 @@ class RuntimeLoopRunner:
         tool_calls: List[ToolCall],
         runtime_events: List[RuntimeEvent],
         run_id: str,
+        enabled_tool_ids: set[str],
     ) -> _ToolExecutionOutcome:
         for tool_call in tool_calls:
             if await self._cancel_requested(session_id):
@@ -518,6 +547,28 @@ class RuntimeLoopRunner:
                     },
                 )
             )
+            if tool_call.tool_name not in enabled_tool_ids:
+                result = _disabled_tool_result(tool_call)
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="tool.disabled",
+                        message=result.error,
+                        session_id=session_id,
+                        payload={
+                            "run_id": run_id,
+                            "tool_call_id": tool_call.call_id,
+                            "tool_name": tool_call.tool_name,
+                        },
+                    )
+                )
+                self._append_tool_result(
+                    session_id=session_id,
+                    result=result,
+                    runtime_events=runtime_events,
+                    run_id=run_id,
+                )
+                continue
+
             result = await self.tool_runtime.execute(
                 tool_call,
                 context=ToolContext(session_id=session_id),
@@ -565,27 +616,42 @@ class RuntimeLoopRunner:
                     pending_permission_request=permission_request,
                 )
 
-            self.store.append_message(
-                session_id,
-                role=MessageRole.TOOL,
-                parts=[MessagePart.tool_result_part(result)],
-                metadata={"tool_call_id": result.call_id},
-                status="complete",
-                completed_at=result.created_at,
-            )
-            runtime_events.append(
-                RuntimeEvent(
-                    type="tool_result_appended",
-                    session_id=session_id,
-                    payload={
-                        "run_id": run_id,
-                        "tool_call_id": result.call_id,
-                        "tool_name": result.tool_name,
-                        "status": result.status,
-                    },
-                )
+            self._append_tool_result(
+                session_id=session_id,
+                result=result,
+                runtime_events=runtime_events,
+                run_id=run_id,
             )
         return _ToolExecutionOutcome()
+
+    def _append_tool_result(
+        self,
+        *,
+        session_id: str,
+        result: ToolResult,
+        runtime_events: List[RuntimeEvent],
+        run_id: str,
+    ) -> None:
+        self.store.append_message(
+            session_id,
+            role=MessageRole.TOOL,
+            parts=[MessagePart.tool_result_part(result)],
+            metadata={"tool_call_id": result.call_id},
+            status="complete",
+            completed_at=result.created_at,
+        )
+        runtime_events.append(
+            RuntimeEvent(
+                type="tool_result_appended",
+                session_id=session_id,
+                payload={
+                    "run_id": run_id,
+                    "tool_call_id": result.call_id,
+                    "tool_name": result.tool_name,
+                    "status": result.status,
+                },
+            )
+        )
 
 
 async def run_runtime_loop(
@@ -607,6 +673,8 @@ async def run_runtime_loop(
     user_parts: Optional[List[MessagePart]] = None,
     event_bus: Optional[RuntimeEventBus] = None,
     is_cancelled: Optional[CancelCallback] = None,
+    tool_selection: Optional[ToolSelection] = None,
+    tools: Optional[Mapping[str, bool]] = None,
 ) -> RuntimeLoopResult:
     runner = RuntimeLoopRunner(
         store=store,
@@ -619,6 +687,7 @@ async def run_runtime_loop(
         context_reserve_chars=context_reserve_chars,
         event_bus=event_bus,
         is_cancelled=is_cancelled,
+        tool_selection=tool_selection,
     )
     return await runner.run(
         user_text=user_text,
@@ -628,6 +697,7 @@ async def run_runtime_loop(
         context_messages=context_messages,
         append_user_message=append_user_message,
         user_parts=user_parts,
+        tools=tools,
     )
 
 
@@ -646,6 +716,59 @@ def _assistant_tool_calls(message: Message) -> List[ToolCall]:
         if part.type is MessagePartType.TOOL_CALL and part.tool_call is not None:
             calls.append(part.tool_call)
     return calls
+
+
+def _copy_tool_selection(selection: Optional[ToolSelection]) -> ToolSelection:
+    if selection is None:
+        return ToolSelection()
+    return ToolSelection(
+        enabled=None if selection.enabled is None else set(selection.enabled),
+        disabled=set(selection.disabled),
+    )
+
+
+def _disabled_tool_ids(
+    all_tool_ids: Iterable[str],
+    *,
+    enabled_tool_ids: Iterable[str],
+) -> list[str]:
+    enabled = {str(tool_id) for tool_id in enabled_tool_ids}
+    return sorted({str(tool_id) for tool_id in all_tool_ids}.difference(enabled))
+
+
+def _record_tool_selection_metadata(
+    metadata: dict[str, Any],
+    *,
+    enabled_tool_ids: list[str],
+    disabled_tool_ids: list[str],
+) -> None:
+    enabled = list(enabled_tool_ids)
+    disabled = list(disabled_tool_ids)
+    metadata["enabled_tool_ids"] = enabled
+    metadata["disabled_tool_ids"] = disabled
+
+    tools_metadata = metadata.get("tools")
+    if isinstance(tools_metadata, Mapping):
+        merged_tools_metadata = dict(tools_metadata)
+    else:
+        merged_tools_metadata = {}
+        if tools_metadata is not None:
+            merged_tools_metadata["caller_value"] = tools_metadata
+    merged_tools_metadata.update({"enabled": enabled, "disabled": disabled})
+    metadata["tools"] = merged_tools_metadata
+
+
+def _disabled_tool_result(tool_call: ToolCall) -> ToolResult:
+    message = f"Tool is disabled: {tool_call.tool_name}"
+    return ToolResult(
+        call_id=tool_call.call_id,
+        tool_name=tool_call.tool_name,
+        status="disabled",
+        success=False,
+        error=message,
+        content=message,
+        metadata={"disabled": True},
+    )
 
 
 def _permission_request_payload(metadata: Mapping[str, Any]) -> dict[str, Any]:

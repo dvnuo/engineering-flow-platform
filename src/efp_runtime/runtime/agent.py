@@ -22,6 +22,7 @@ from ..skills.discovery import SkillDiscovery
 from ..tools.builtin import create_core_tool_registry
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
+from ..tools.selection import ToolSelection
 from .config import RuntimeConfig
 from .run_state import RuntimeRunState
 
@@ -82,6 +83,7 @@ class AgentRuntime:
         user_text: str,
         session_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        tools: Mapping[str, bool] | None = None,
     ) -> RuntimeLoopResult:
         skill_command = parse_skill_commands(user_text)
         active_skills = _apply_skill_command(self.active_skills, skill_command)
@@ -112,6 +114,7 @@ class AgentRuntime:
                 context_reserve_chars=self.config.context_reserve_chars,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(resolved_session_id),
+                tool_selection=_config_tool_selection(self.config),
             )
             result = await runner.run(
                 user_text=skill_command.cleaned_text,
@@ -119,6 +122,7 @@ class AgentRuntime:
                 session_id=resolved_session_id,
                 metadata=run_metadata,
                 context_messages=context_messages,
+                tools=tools,
             )
         except asyncio.CancelledError:
             self.run_state.finish(resolved_session_id, LoopStatus.CANCELLED)
@@ -134,6 +138,7 @@ class AgentRuntime:
         self,
         session_id: str,
         metadata: dict[str, Any] | None = None,
+        tools: Mapping[str, bool] | None = None,
     ) -> RuntimeLoopResult:
         self.store.get_session(session_id)
         run_id = self.run_state.begin(session_id)
@@ -155,6 +160,7 @@ class AgentRuntime:
                 context_reserve_chars=self.config.context_reserve_chars,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(session_id),
+                tool_selection=_config_tool_selection(self.config),
             )
             result = await runner.run(
                 user_text="",
@@ -162,6 +168,7 @@ class AgentRuntime:
                 metadata=run_metadata,
                 context_messages=context_messages,
                 append_user_message=False,
+                tools=tools,
             )
         except asyncio.CancelledError:
             self.run_state.finish(session_id, LoopStatus.CANCELLED)
@@ -267,6 +274,10 @@ def _resolve_config(
             if context_reserve_chars is not None
             else config.context_reserve_chars
         ),
+        enabled_tools=(
+            None if config.enabled_tools is None else list(config.enabled_tools)
+        ),
+        disabled_tools=list(config.disabled_tools),
         metadata=resolved_metadata,
         skill_directories=list(config.skill_directories),
         active_skills=list(config.active_skills),
@@ -343,6 +354,13 @@ def _unique_skill_names(names: Iterable[str]) -> list[str]:
         if normalized and normalized not in unique:
             unique.append(normalized)
     return unique
+
+
+def _config_tool_selection(config: RuntimeConfig) -> ToolSelection:
+    return ToolSelection(
+        enabled=None if config.enabled_tools is None else set(config.enabled_tools),
+        disabled=set(config.disabled_tools),
+    )
 
 
 def _permission_request_to_dict(request: Any) -> dict[str, Any]:

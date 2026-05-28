@@ -16,6 +16,8 @@ class RuntimeConfig:
     max_context_parts: int | None = None
     max_context_chars: int | None = None
     context_reserve_chars: int = 0
+    enabled_tools: list[str] | None = None
+    disabled_tools: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     skill_directories: list[str | Path] = field(default_factory=list)
     active_skills: list[str] = field(default_factory=list)
@@ -38,6 +40,10 @@ class RuntimeConfig:
             raise ValueError("max_prompt_reference_chars must be greater than or equal to 0")
         if self.max_prompt_directory_entries < 0:
             raise ValueError("max_prompt_directory_entries must be greater than or equal to 0")
+        self.enabled_tools = (
+            None if self.enabled_tools is None else list(self.enabled_tools)
+        )
+        self.disabled_tools = list(self.disabled_tools)
         self.metadata = dict(self.metadata)
         self.skill_directories = list(self.skill_directories)
         self.active_skills = list(self.active_skills)
