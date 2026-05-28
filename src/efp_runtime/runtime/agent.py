@@ -48,6 +48,11 @@ from ..questions import QuestionBroker
 from ..session.protocol import SessionStore
 from ..session.checkpoint import SessionCheckpoint
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
+from ..session.query import (
+    query_messages as _query_messages,
+    query_sessions as _query_sessions,
+    session_context_messages as _session_context_messages,
+)
 from ..session.store import InMemorySessionStore
 from ..skills.commands import (
     SkillCommandResult,
@@ -236,6 +241,32 @@ class AgentRuntime:
     def list_sessions(self) -> list[Session]:
         return self.store.list_sessions()
 
+    def query_sessions(
+        self,
+        *,
+        limit: int | None = None,
+        order: str = "desc",
+        cursor: Mapping[str, Any] | None = None,
+        search: str | None = None,
+        roots: bool = False,
+        path: str | None = None,
+        workspace_id: str | None = None,
+        parent_session_id: str | None = None,
+        start: str | None = None,
+    ) -> list[Session]:
+        return _query_sessions(
+            self.list_sessions(),
+            limit=limit,
+            order=order,
+            cursor=cursor,
+            search=search,
+            roots=roots,
+            path=path,
+            workspace_id=workspace_id,
+            parent_session_id=parent_session_id,
+            start=start,
+        )
+
     def delete_session(self, session_id: str) -> bool:
         return self.store.delete_session(session_id)
 
@@ -259,8 +290,23 @@ class AgentRuntime:
             if session.metadata.get("parent_session_id") == parent_session_id
         ]
 
-    def session_messages(self, session_id: str) -> list[Message]:
-        return self.store.read_history(session_id)
+    def session_messages(
+        self,
+        session_id: str,
+        *,
+        limit: int | None = None,
+        order: str = "asc",
+        cursor: Mapping[str, Any] | None = None,
+    ) -> list[Message]:
+        return _query_messages(
+            self.store.read_history(session_id),
+            limit=limit,
+            order=order,
+            cursor=cursor,
+        )
+
+    def session_context(self, session_id: str) -> list[Message]:
+        return _session_context_messages(self.session_messages(session_id))
 
     async def run(
         self,

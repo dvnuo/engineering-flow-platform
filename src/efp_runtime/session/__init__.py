@@ -13,6 +13,7 @@ from .checkpoint import SessionCheckpoint
 from .processor import RuntimeSession, SessionProcessor
 from .file_store import FileSessionStore
 from .protocol import SessionStore
+from .query import query_messages, query_sessions, session_context_messages
 from .status import RuntimeStatus
 from .store import InMemorySessionStore
 
@@ -31,4 +32,7 @@ __all__ = [
     "SessionProcessor",
     "SessionStore",
     "TaskPart",
+    "query_messages",
+    "query_sessions",
+    "session_context_messages",
 ]

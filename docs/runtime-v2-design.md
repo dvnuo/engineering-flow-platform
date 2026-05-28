@@ -126,6 +126,23 @@ not alter `run(...)`, `resume(...)`, compaction, checkpoint, or tool execution
 behavior. `session_children(parent_session_id)` filters listed sessions whose
 metadata records that parent, preserving the store list order.
 
+`list_sessions()` remains the no-argument store listing API. UI and CLI callers
+that need a read-only view can use `query_sessions(...)`, which filters and pages
+the current store list without changing persisted session records. The query
+layer is store-agnostic: it operates on full `Session` objects returned by the
+configured store and returns copies. Session queries support title substring
+search, `roots=True`, exact `parent_session_id`, `path` exact-or-nested-prefix,
+`workspace_id`, string `updated_at >= start`, `order`, `cursor`, and `limit`.
+The metadata keys used by filters are `parent_session_id`, `path`, and
+`workspace_id`.
+
+`session_messages(session_id)` still returns the full ascending history by
+default. It also accepts `order`, `cursor`, and `limit` for read-only message
+pagination over the stored history. `session_context(session_id)` returns the
+effective stored context view: when no compaction message exists it returns the
+full ascending history; after compaction it starts at the latest message that
+contains a compaction part and includes all later messages.
+
 ## Workspace Config Loader
 
 Runtime v2 exposes an explicit local config-loading entry point:
