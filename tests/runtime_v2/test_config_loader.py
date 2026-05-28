@@ -8,10 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from efp_runtime.agents import DEFAULT_AGENT_PROFILE_NAMES
 from efp_runtime.config_loader import (
     find_runtime_config_files,
     load_runtime_config,
 )
+from efp_runtime.permissions import normalize_agent_permission_overlay
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -189,6 +191,121 @@ def test_include_defaults_false_does_not_add_default_project_skill_directories(
     ]
 
 
+def test_load_runtime_config_includes_builtin_agents_by_default(tmp_path: Path):
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert result.loaded_paths == []
+    assert registry is not None
+    assert set(registry.names()) == set(DEFAULT_AGENT_PROFILE_NAMES)
+    assert registry.default_agent == "general"
+    assert registry.resolve(None).name == "general"
+    assert registry.resolve("general").metadata == {
+        "mode": "general",
+        "built_in": True,
+    }
+
+
+def test_include_defaults_false_does_not_add_builtin_agents(tmp_path: Path):
+    result = load_runtime_config(tmp_path, include_defaults=False)
+
+    assert result.agent_registry is None
+
+
+def test_markdown_plan_agent_overrides_builtin_plan(tmp_path: Path):
+    _write_text(
+        tmp_path / ".opencode" / "agents" / "plan.md",
+        """
+        ---
+        description: Workspace plan
+        ---
+        Workspace plan prompt.
+        """,
+    )
+
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert registry is not None
+    assert set(DEFAULT_AGENT_PROFILE_NAMES).issubset(registry.names())
+    profile = registry.resolve("plan")
+    assert profile.description == "Workspace plan"
+    assert profile.prompt == "Workspace plan prompt."
+    assert profile.metadata == {"mode": "all"}
+
+
+def test_config_plan_agent_overrides_markdown_and_builtin_plan(tmp_path: Path):
+    _write_text(
+        tmp_path / ".opencode" / "agents" / "plan.md",
+        """
+        ---
+        description: Markdown plan
+        permission:
+          edit: deny
+        ---
+        Markdown plan prompt.
+        """,
+    )
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "agents": {
+                "plan": {
+                    "description": "Config plan",
+                    "prompt": "Config plan prompt.",
+                    "permission": {"edit": "allow"},
+                },
+            },
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert registry is not None
+    profile = registry.resolve("plan")
+    assert profile.description == "Config plan"
+    assert profile.prompt == "Config plan prompt."
+    assert profile.metadata == {"permission": {"edit": "allow"}, "mode": "all"}
+
+
+def test_config_disabled_agent_removes_builtin_by_name(tmp_path: Path):
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "agents": {
+                "plan": {"disabled": True},
+            },
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert registry is not None
+    assert "plan" not in registry.names()
+    assert registry.resolve(None).name == "general"
+
+
+def test_builtin_read_focused_agents_carry_permission_metadata(tmp_path: Path):
+    result = load_runtime_config(tmp_path)
+    registry = result.agent_registry
+
+    assert registry is not None
+    plan = registry.resolve("plan")
+    explore = registry.resolve("explore")
+    assert normalize_agent_permission_overlay(plan.metadata) == {
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+    }
+    assert normalize_agent_permission_overlay(explore.metadata) == {
+        "edit": "ask",
+        "bash": "ask",
+        "task": "ask",
+    }
+
+
 def test_loader_returns_command_definitions_registry_and_default_directory(
     tmp_path: Path,
 ):
@@ -276,7 +393,11 @@ def test_agents_mapping_config_generates_agent_registry(tmp_path: Path):
         },
     )
 
-    result = load_runtime_config(tmp_path)
+    result = load_runtime_config(
+        tmp_path,
+        paths=["opencode.json"],
+        include_defaults=False,
+    )
     registry = result.agent_registry
 
     assert registry is not None
@@ -304,7 +425,11 @@ def test_agents_list_config_generates_agent_registry(tmp_path: Path):
         },
     )
 
-    result = load_runtime_config(tmp_path, paths=[tmp_path / "agents.json"], include_defaults=False)
+    result = load_runtime_config(
+        tmp_path,
+        paths=[tmp_path / "agents.json"],
+        include_defaults=False,
+    )
     registry = result.agent_registry
 
     assert registry is not None
@@ -332,7 +457,11 @@ def test_agent_singular_alias_is_compatible_with_agents(tmp_path: Path):
         },
     )
 
-    result = load_runtime_config(tmp_path, paths=["agents.json"], include_defaults=False)
+    result = load_runtime_config(
+        tmp_path,
+        paths=["agents.json"],
+        include_defaults=False,
+    )
     registry = result.agent_registry
 
     assert registry is not None
@@ -358,6 +487,7 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
     _write_json(
         tmp_path / "opencode.json",
         {
+            "agentDirectories": [".opencode/agents"],
             "agents": {
                 "review": {
                     "description": "Config review",
@@ -369,7 +499,11 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
         },
     )
 
-    result = load_runtime_config(tmp_path)
+    result = load_runtime_config(
+        tmp_path,
+        paths=["opencode.json"],
+        include_defaults=False,
+    )
     registry = result.agent_registry
 
     assert registry is not None
@@ -396,7 +530,11 @@ def test_agent_directories_are_resolved_and_used(tmp_path: Path):
         {"agentDirectories": ["profiles"]},
     )
 
-    result = load_runtime_config(tmp_path)
+    result = load_runtime_config(
+        tmp_path,
+        paths=["opencode.json"],
+        include_defaults=False,
+    )
     registry = result.agent_registry
 
     assert registry is not None
@@ -417,7 +555,11 @@ def test_max_step_aliases_map_to_agent_max_iterations(tmp_path: Path):
         },
     )
 
-    result = load_runtime_config(tmp_path, paths=["agents.json"], include_defaults=False)
+    result = load_runtime_config(
+        tmp_path,
+        paths=["agents.json"],
+        include_defaults=False,
+    )
     registry = result.agent_registry
 
     assert registry is not None
@@ -440,7 +582,11 @@ def test_agent_unknown_fields_are_preserved_in_profile_raw_config(tmp_path: Path
         },
     )
 
-    result = load_runtime_config(tmp_path, paths=["agents.json"], include_defaults=False)
+    result = load_runtime_config(
+        tmp_path,
+        paths=["agents.json"],
+        include_defaults=False,
+    )
     registry = result.agent_registry
 
     assert registry is not None
@@ -459,7 +605,11 @@ def test_agent_loader_keys_are_not_unconsumed_config(tmp_path: Path):
     }
     _write_json(tmp_path / "opencode.json", raw)
 
-    result = load_runtime_config(tmp_path)
+    result = load_runtime_config(
+        tmp_path,
+        paths=["opencode.json"],
+        include_defaults=False,
+    )
 
     assert result.agent_registry is None
     assert result.metadata["unconsumed_config"] == {"model": "example-model"}

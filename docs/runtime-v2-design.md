@@ -233,10 +233,24 @@ The metadata fields `mode` (default `all`), `model`, `temperature`, `top_p` /
 `topP`, `permission`, `task`, `hidden`, `color`, and `disable` / `disabled` are
 kept in `AgentProfile.metadata`; other unknown agent fields are preserved under
 `metadata["raw_config"]`. Disabled agents are not added to the registry.
-Discovered markdown agents are loaded first in stable directory/file order, and
-config `agent` / `agents` entries override same-name markdown entries.
-`defaultAgent` / `default_agent` selects the registry fallback, otherwise
-`general` is used.
+When `include_defaults=True`, config loading seeds the registry with built-in
+profiles before reading workspace profiles: `general`, `build`, `plan`,
+`explore`, and `scout`. These profiles use normal `AgentProfile` fields:
+instructions live in `prompt`, `metadata["mode"]` identifies the profile mode,
+and `metadata["built_in"] = True` marks their source. `plan` and `scout` carry
+read-only `metadata["permission"]` overlays, while `explore` asks before
+mutating tool categories. Those permissions use the Phase18 profile overlay
+mechanism described below; they do not add provider/model routing or protocol
+integration.
+
+The registry merge order is predictable: built-in profiles are loaded first,
+discovered markdown agents are loaded next in stable directory/file order and
+override same-name built-ins, and config `agent` / `agents` entries override
+both markdown and built-ins. A disabled config entry removes an earlier profile
+with the same name, including a built-in. `include_defaults=False` skips
+built-ins and default agent directories. `defaultAgent` / `default_agent`
+selects the registry fallback when configured; otherwise the fallback is
+`general` only when built-ins are included.
 
 Keys that Runtime v2 does not consume in this phase, including root-level
 `model` and `plugins`, are preserved in

@@ -20,6 +20,7 @@ from .agents.discovery import (
     agent_profile_from_mapping,
     discover_agent_profiles,
 )
+from .agents.defaults import default_agent_profiles
 from .agents.profile import AgentProfile
 from .agents.registry import AgentRegistry
 from .commands import (
@@ -363,9 +364,18 @@ def _agent_registry_from_raw(
     include_defaults: bool,
 ) -> AgentRegistry | None:
     default_agent = _first_alias_value(raw, ("defaultAgent", "default_agent"))
-    default_agent_name = "general" if default_agent is None else str(default_agent)
+    if default_agent is not None:
+        default_agent_name = str(default_agent)
+    elif include_defaults:
+        default_agent_name = "general"
+    else:
+        default_agent_name = None
 
     profiles_by_name: dict[str, AgentProfile] = {}
+    if include_defaults:
+        for profile in default_agent_profiles():
+            _replace_agent_profile(profiles_by_name, profile)
+
     for profile in discover_agent_profiles(
         _agent_directories_from_raw(
             raw,

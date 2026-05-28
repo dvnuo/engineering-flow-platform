@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from efp_runtime.agents import AgentProfile, AgentRegistry
+from efp_runtime.agents import AgentProfile, AgentRegistry, default_agent_profiles
 from efp_runtime.commands import CommandDefinition, CommandRegistry
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
@@ -66,6 +66,41 @@ async def test_named_agent_injects_profile_prompt_into_provider_system_context()
     assert request.metadata["agent_name"] == "review"
     assert request.metadata["agent_description"] == "Reviews code"
     assert request.metadata["agent_prompt_context_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_builtin_read_only_agent_records_metadata_and_applies_prompt():
+    provider = ScriptedLLMProvider([{"content": "Planned."}])
+    profiles = default_agent_profiles()
+    registry = AgentRegistry(profiles, default_agent="general")
+    plan = registry.resolve("plan")
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        agent_registry=registry,
+    )
+
+    result = await runtime.run(
+        "Plan this change.",
+        session_id="session-built-in-plan",
+        agent="plan",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    assert request.metadata["selected_agent_source"] == "caller"
+    assert request.metadata["agent_name"] == "plan"
+    assert request.metadata["agent_metadata"] == plan.metadata
+    assert request.metadata["agent_permission_overlay"] == {
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+    }
+    assert request.provider_request.messages[0].text == plan.prompt
 
 
 @pytest.mark.asyncio
