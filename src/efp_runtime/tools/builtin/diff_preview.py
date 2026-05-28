@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+from typing import Any
 
 
 DEFAULT_MAX_PREVIEW_LINES = 200
@@ -52,6 +53,40 @@ def unified_diff_preview(
     if diff_text:
         diff_text = f"{diff_text}\n"
     return bounded_text_preview(diff_text, max_lines, max_chars)
+
+
+def text_diff_stats(old: str, new: str) -> tuple[int, int]:
+    """Return added and removed line counts for two text values."""
+
+    matcher = difflib.SequenceMatcher(a=old.splitlines(), b=new.splitlines())
+    additions = 0
+    deletions = 0
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag in {"replace", "delete"}:
+            deletions += old_end - old_start
+        if tag in {"replace", "insert"}:
+            additions += new_end - new_start
+    return additions, deletions
+
+
+def file_diff_record(
+    *,
+    path: str,
+    old_text: str,
+    new_text: str,
+    patch: str,
+    old_path: str | None = None,
+) -> dict[str, Any]:
+    """Return structured file-level diff metadata."""
+
+    additions, deletions = text_diff_stats(old_text, new_text)
+    return {
+        "path": path,
+        "old_path": old_path or path,
+        "additions": additions,
+        "deletions": deletions,
+        "patch": patch,
+    }
 
 
 def text_preview(value: str, max_chars: int = DEFAULT_TEXT_PREVIEW_CHARS) -> str:

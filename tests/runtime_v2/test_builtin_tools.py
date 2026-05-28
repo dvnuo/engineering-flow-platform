@@ -163,6 +163,13 @@ async def test_write_succeeds_with_allow_evaluator(tmp_path: Path):
     assert result.status == "success"
     assert result.output["path"] == "notes/result.txt"
     assert result.output["bytes"] == 9
+    filediff = result.output["filediff"]
+    assert result.metadata["filediff"] == filediff
+    assert filediff["path"] == "notes/result.txt"
+    assert filediff["old_path"] == "notes/result.txt"
+    assert filediff["additions"] == 1
+    assert filediff["deletions"] == 0
+    assert "+approved" in filediff["patch"]
     assert (tmp_path / "notes/result.txt").read_text(encoding="utf-8") == "approved\n"
 
 

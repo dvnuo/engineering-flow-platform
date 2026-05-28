@@ -413,10 +413,65 @@ async def test_write_alias_creates_parents_and_returns_diff_metadata(tmp_path: P
     assert "--- a/notes/result.txt" in result.output["diff"]
     assert "+++ b/notes/result.txt" in result.output["diff"]
     assert "+approved" in result.output["diff"]
+    filediff = result.output["filediff"]
+    assert result.metadata["filediff"] == filediff
+    assert filediff["path"] == "notes/result.txt"
+    assert filediff["old_path"] == "notes/result.txt"
+    assert filediff["additions"] == 1
+    assert filediff["deletions"] == 0
+    assert "+approved" in filediff["patch"]
     assert result.content.startswith(
         "Wrote notes/result.txt: created, bytes=9, old_bytes=0, new_bytes=9."
     )
     assert "```diff" in result.content
+
+
+@pytest.mark.asyncio
+async def test_write_alias_overwrite_and_no_op_return_file_diff_records(
+    tmp_path: Path,
+):
+    target = tmp_path / "notes.txt"
+    target.write_text("one\ntwo\n", encoding="utf-8")
+    runtime = ToolRuntime(
+        create_core_tool_registry(tmp_path),
+        permission_evaluator=AllowEvaluator(),
+    )
+
+    overwritten = await runtime.execute(
+        ToolCall(
+            id="call-write-overwrite",
+            tool_id="write",
+            args={"filePath": "notes.txt", "content": "one\nthree\nfour\n"},
+        )
+    )
+
+    assert overwritten.status == "success"
+    filediff = overwritten.output["filediff"]
+    assert overwritten.metadata["filediff"] == filediff
+    assert filediff["path"] == "notes.txt"
+    assert filediff["old_path"] == "notes.txt"
+    assert filediff["additions"] == 2
+    assert filediff["deletions"] == 1
+    assert "-two" in filediff["patch"]
+    assert "+three" in filediff["patch"]
+    assert "+four" in filediff["patch"]
+
+    no_op = await runtime.execute(
+        ToolCall(
+            id="call-write-no-op",
+            tool_id="write",
+            args={"filePath": "notes.txt", "content": "one\nthree\nfour\n"},
+        )
+    )
+
+    assert no_op.status == "success"
+    assert no_op.output["changed"] is False
+    assert no_op.output["diff"] == ""
+    no_op_diff = no_op.output["filediff"]
+    assert no_op.metadata["filediff"] == no_op_diff
+    assert no_op_diff["additions"] == 0
+    assert no_op_diff["deletions"] == 0
+    assert no_op_diff["patch"] == ""
 
 
 @pytest.mark.asyncio

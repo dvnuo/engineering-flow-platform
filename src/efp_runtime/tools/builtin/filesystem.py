@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import stat
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from ..definition import ToolContext, ToolDef
 from .diff_preview import (
     DEFAULT_MAX_PREVIEW_CHARS,
     DEFAULT_MAX_PREVIEW_LINES,
+    file_diff_record,
     unified_diff_preview,
 )
 
@@ -610,6 +612,16 @@ def create_write_tool(
                 max_diff_lines,
                 max_diff_chars,
             )
+        filediff = (
+            file_diff_record(
+                path=relative_path,
+                old_text=old_text,
+                new_text=content,
+                patch=diff,
+            )
+            if old_text is not None
+            else None
+        )
 
         parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(encoded)
@@ -626,6 +638,10 @@ def create_write_tool(
             "diff": diff,
             "diff_truncated": diff_truncated,
         }
+        metadata = {}
+        if filediff is not None:
+            output["filediff"] = filediff
+            metadata["filediff"] = filediff
         return ToolResult(
             call_id=context.tool_call_id or "write",
             tool_name="write",
@@ -641,6 +657,7 @@ def create_write_tool(
                 diff_unavailable=old_text is None,
             ),
             output=output,
+            metadata=metadata,
         )
 
     return ToolDef(
@@ -670,7 +687,7 @@ def create_write_file_tool(
 ) -> ToolDef:
     root = normalize_workspace_root(workspace_root)
 
-    async def execute(args: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         path = resolve_workspace_path(root, args["path"])
         parent = path.parent
         if args.get("create_dirs"):
@@ -686,15 +703,54 @@ def create_write_file_tool(
 
         content = args["content"]
         encoding = args.get("encoding") or "utf-8"
+        relative_path = workspace_relative_path(root, path)
+        existed = path.exists()
+        old_data = path.read_bytes() if existed else b""
+        old_text = (
+            _decode_existing_text_for_diff(old_data, encoding) if existed else ""
+        )
         mode = "a" if args.get("append") else "w"
         with path.open(mode, encoding=encoding) as handle:
             handle.write(content)
-        return {
-            "path": workspace_relative_path(root, path),
+        new_data = path.read_bytes()
+        new_text = _decode_existing_text_for_diff(new_data, encoding)
+        diff = ""
+        if old_text is not None and new_text is not None:
+            diff, _ = unified_diff_preview(
+                old_text,
+                new_text,
+                f"a/{relative_path}",
+                f"b/{relative_path}",
+                DEFAULT_MAX_PREVIEW_LINES,
+                DEFAULT_MAX_PREVIEW_CHARS,
+            )
+        filediff = (
+            file_diff_record(
+                path=relative_path,
+                old_text=old_text,
+                new_text=new_text,
+                patch=diff,
+            )
+            if old_text is not None and new_text is not None
+            else None
+        )
+        output = {
+            "path": relative_path,
             "encoding": encoding,
             "bytes": len(content.encode(encoding)),
             "append": bool(args.get("append")),
         }
+        metadata = {}
+        if filediff is not None:
+            output["filediff"] = filediff
+            metadata["filediff"] = filediff
+        return ToolResult(
+            call_id=context.tool_call_id or "write_file",
+            tool_name="write_file",
+            content=json.dumps(output, indent=2, sort_keys=True),
+            output=output,
+            metadata=metadata,
+        )
 
     return ToolDef(
         id="write_file",

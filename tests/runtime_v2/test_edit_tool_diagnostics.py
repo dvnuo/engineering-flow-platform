@@ -55,6 +55,13 @@ async def test_edit_success_returns_tool_result_with_diff_diagnostics(tmp_path: 
     assert "+++ b/notes.txt" in result.output["diff"]
     assert "-beta" in result.output["diff"]
     assert "+gamma" in result.output["diff"]
+    filediff = result.output["filediff"]
+    assert result.metadata["filediff"] == filediff
+    assert filediff["path"] == "notes.txt"
+    assert filediff["old_path"] == "notes.txt"
+    assert filediff["additions"] == 1
+    assert filediff["deletions"] == 1
+    assert filediff["patch"] == result.output["diff"]
     assert "Edited notes.txt" in result.content
     assert "replacement_count=1" in result.content
     assert "bytes=" in result.content
@@ -85,6 +92,13 @@ async def test_edit_no_op_returns_changed_false_without_writing(tmp_path: Path):
     assert result.output["replacement_count"] == 1
     assert result.output["old_bytes"] == result.output["new_bytes"]
     assert result.output["diff"] == ""
+    filediff = result.output["filediff"]
+    assert result.metadata["filediff"] == filediff
+    assert filediff["path"] == "notes.txt"
+    assert filediff["old_path"] == "notes.txt"
+    assert filediff["additions"] == 0
+    assert filediff["deletions"] == 0
+    assert filediff["patch"] == ""
     assert "No changes made to notes.txt" in result.content
     assert target.read_bytes() == before
 
@@ -230,9 +244,70 @@ async def test_apply_patch_success_returns_paths_and_bounded_patch_preview(
     assert result.output["patch_preview"].startswith("diff --git")
     assert len(result.output["patch_preview"].splitlines()) <= 4
     assert result.output["patch_preview_truncated"] is True
+    assert result.output["filediffs"] == [result.output["filediff"]]
+    assert result.metadata["filediffs"] == result.output["filediffs"]
+    assert result.metadata["filediff"] == result.output["filediff"]
+    assert result.output["filediff"]["path"] == "hello.txt"
+    assert result.output["filediff"]["old_path"] == "hello.txt"
+    assert result.output["filediff"]["additions"] == 1
+    assert result.output["filediff"]["deletions"] == 1
+    assert len(result.output["filediff"]["patch"].splitlines()) <= 4
     assert "Changed paths: hello.txt" in result.content
     assert "Patch preview:" in result.content
     assert target.read_text(encoding="utf-8") == "patched\n"
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_multi_file_returns_file_diff_records(tmp_path: Path):
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("one\n", encoding="utf-8")
+    second.write_text("two\n", encoding="utf-8")
+    runtime = ToolRuntime(
+        create_core_tool_registry(tmp_path),
+        permission_evaluator=AllowEvaluator(),
+    )
+    patch = textwrap.dedent(
+        """\
+        diff --git a/first.txt b/first.txt
+        --- a/first.txt
+        +++ b/first.txt
+        @@ -1 +1 @@
+        -one
+        +uno
+        diff --git a/second.txt b/second.txt
+        --- a/second.txt
+        +++ b/second.txt
+        @@ -1 +1,2 @@
+        -two
+        +dos
+        +extra
+        """
+    )
+
+    result = await runtime.execute(
+        ToolCall(id="call-patch-multi", tool_id="apply_patch", args={"patch": patch})
+    )
+
+    assert result.status == "success"
+    assert result.output["paths"] == ["first.txt", "second.txt"]
+    assert "filediff" not in result.output
+    assert "filediff" not in result.metadata
+    assert result.metadata["filediffs"] == result.output["filediffs"]
+    assert len(result.output["filediffs"]) == 2
+    first_diff, second_diff = result.output["filediffs"]
+    assert first_diff["path"] == "first.txt"
+    assert first_diff["old_path"] == "first.txt"
+    assert first_diff["additions"] == 1
+    assert first_diff["deletions"] == 1
+    assert "+uno" in first_diff["patch"]
+    assert second_diff["path"] == "second.txt"
+    assert second_diff["old_path"] == "second.txt"
+    assert second_diff["additions"] == 2
+    assert second_diff["deletions"] == 1
+    assert "+extra" in second_diff["patch"]
+    assert first.read_text(encoding="utf-8") == "uno\n"
+    assert second.read_text(encoding="utf-8") == "dos\nextra\n"
 
 
 @pytest.mark.asyncio

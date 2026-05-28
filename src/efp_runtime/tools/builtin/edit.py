@@ -11,6 +11,7 @@ from ..definition import ToolContext, ToolDef
 from .diff_preview import (
     DEFAULT_MAX_PREVIEW_CHARS,
     DEFAULT_MAX_PREVIEW_LINES,
+    file_diff_record,
     text_preview,
     unified_diff_preview,
 )
@@ -75,6 +76,12 @@ def create_edit_tool(
             max_diff_lines,
             max_diff_chars,
         )
+        filediff = file_diff_record(
+            path=relative_path,
+            old_text=content,
+            new_text=new_content,
+            patch=diff,
+        )
         output = {
             "path": relative_path,
             "replacement_count": applied_replacement_count,
@@ -84,6 +91,7 @@ def create_edit_tool(
             "diff": diff,
             "diff_truncated": diff_truncated,
             "changed": changed,
+            "filediff": filediff,
         }
         return ToolResult(
             call_id=context.tool_call_id or "",
@@ -101,6 +109,7 @@ def create_edit_tool(
                 diff_truncated=diff_truncated,
             ),
             output=output,
+            metadata={"filediff": filediff},
         )
 
     return ToolDef(

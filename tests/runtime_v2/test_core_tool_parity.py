@@ -131,6 +131,12 @@ async def test_edit_protects_multiple_matches_unless_replace_all(tmp_path: Path)
 
     assert replaced.status == "success"
     assert replaced.output["replacement_count"] == 2
+    filediff = replaced.output["filediff"]
+    assert replaced.metadata["filediff"] == filediff
+    assert filediff["path"] == "dup.txt"
+    assert filediff["old_path"] == "dup.txt"
+    assert filediff["additions"] == 2
+    assert filediff["deletions"] == 2
     assert target.read_text(encoding="utf-8") == "diff\ndiff\n"
 
 
@@ -192,6 +198,16 @@ async def test_apply_patch_applies_unified_diff_with_allow_permission(tmp_path: 
     assert result.status == "success"
     assert result.output["ok"] is True
     assert result.output["paths"] == ["hello.txt"]
+    assert result.output["filediffs"] == [result.output["filediff"]]
+    assert result.metadata["filediffs"] == result.output["filediffs"]
+    assert result.metadata["filediff"] == result.output["filediff"]
+    assert result.output["filediff"] == {
+        "path": "hello.txt",
+        "old_path": "hello.txt",
+        "additions": 1,
+        "deletions": 1,
+        "patch": patch,
+    }
     assert target.read_text(encoding="utf-8") == "patched\n"
 
 

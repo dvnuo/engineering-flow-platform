@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from .diff_preview import (
     DEFAULT_MAX_PREVIEW_CHARS,
     DEFAULT_MAX_PREVIEW_LINES,
     bounded_text_preview,
+    file_diff_record,
 )
 from .filesystem import normalize_workspace_root, resolve_workspace_path, workspace_relative_path
 
@@ -65,6 +67,7 @@ def create_apply_patch_tool(
                 max_preview_lines=max_preview_lines,
                 max_preview_chars=max_preview_chars,
             )
+        patch_files = _extract_patch_files(root, patch)
 
         check = await _run_git_apply(root, patch, check=True)
         if check["missing_git"]:
@@ -94,6 +97,7 @@ def create_apply_patch_tool(
                 max_preview_chars=max_preview_chars,
             )
 
+        before_texts = _read_patch_text_snapshots(root, patch_files)
         applied = await _run_git_apply(root, patch, check=False)
         if applied["exit_code"] != 0:
             return _patch_error(
@@ -108,6 +112,14 @@ def create_apply_patch_tool(
                 max_preview_lines=max_preview_lines,
                 max_preview_chars=max_preview_chars,
             )
+        after_texts = _read_patch_text_snapshots(root, patch_files)
+        filediffs = _build_file_diff_records(
+            patch_files,
+            before_texts=before_texts,
+            after_texts=after_texts,
+            max_preview_lines=max_preview_lines,
+            max_preview_chars=max_preview_chars,
+        )
 
         output = {
             "ok": True,
@@ -118,7 +130,12 @@ def create_apply_patch_tool(
             "changed_file_count": len(paths),
             "patch_preview": patch_preview,
             "patch_preview_truncated": patch_preview_truncated,
+            "filediffs": filediffs,
         }
+        metadata = {"filediffs": filediffs}
+        if len(filediffs) == 1:
+            output["filediff"] = filediffs[0]
+            metadata["filediff"] = filediffs[0]
         return ToolResult(
             call_id=call_id,
             tool_name="apply_patch",
@@ -131,6 +148,7 @@ def create_apply_patch_tool(
                 patch_preview_truncated=patch_preview_truncated,
             ),
             output=output,
+            metadata=metadata,
         )
 
     return ToolDef(
@@ -158,6 +176,13 @@ def create_apply_patch_tool(
     )
 
 
+@dataclass(frozen=True)
+class _PatchFile:
+    old_path: str | None
+    path: str | None
+    patch: str
+
+
 def _validate_patch_paths(workspace_root: Path, patch: str) -> list[str]:
     paths = sorted(
         {
@@ -168,6 +193,146 @@ def _validate_patch_paths(workspace_root: Path, patch: str) -> list[str]:
         key=lambda value: (value.casefold(), value),
     )
     return paths
+
+
+def _extract_patch_files(workspace_root: Path, patch: str) -> list[_PatchFile]:
+    files: list[_PatchFile] = []
+    for section in _split_patch_file_sections(patch):
+        old_path, path = _parse_patch_file_paths(section)
+        if old_path is None and path is None:
+            continue
+        old_relative = _workspace_relative_patch_path(workspace_root, old_path)
+        relative = _workspace_relative_patch_path(workspace_root, path)
+        files.append(_PatchFile(old_path=old_relative, path=relative, patch=section))
+    return files
+
+
+def _split_patch_file_sections(patch: str) -> list[str]:
+    sections: list[str] = []
+    current: list[str] = []
+    for line in patch.splitlines(keepends=True):
+        if line.startswith("diff --git ") and current:
+            sections.append("".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        sections.append("".join(current))
+    return [section for section in sections if section.strip()]
+
+
+def _parse_patch_file_paths(section: str) -> tuple[str | None, str | None]:
+    old_path: str | None = None
+    path: str | None = None
+    for line in section.splitlines():
+        if line.startswith("diff --git "):
+            paths = _extract_diff_git_paths(line)
+            if len(paths) >= 2:
+                old_path, path = paths[0], paths[1]
+        elif line.startswith("--- "):
+            header_path = _parse_patch_header_path(line[4:])
+            old_path = _header_workspace_path(header_path)
+        elif line.startswith("+++ "):
+            header_path = _parse_patch_header_path(line[4:])
+            path = _header_workspace_path(header_path)
+        elif line.startswith("rename from "):
+            old_path = line[len("rename from ") :]
+        elif line.startswith("rename to "):
+            path = line[len("rename to ") :]
+        elif line.startswith("copy from "):
+            old_path = line[len("copy from ") :]
+        elif line.startswith("copy to "):
+            path = line[len("copy to ") :]
+    return old_path, path
+
+
+def _header_workspace_path(path: str | None) -> str | None:
+    if path is None or path == "/dev/null":
+        return None
+    return _strip_diff_prefix(path)
+
+
+def _workspace_relative_patch_path(
+    workspace_root: Path,
+    path: str | None,
+) -> str | None:
+    if path is None or path == "/dev/null":
+        return None
+    return workspace_relative_path(
+        workspace_root,
+        resolve_workspace_path(workspace_root, path),
+    )
+
+
+def _read_patch_text_snapshots(
+    workspace_root: Path,
+    patch_files: list[_PatchFile],
+) -> dict[str, str | None]:
+    snapshots: dict[str, str | None] = {}
+    for path in _patch_snapshot_paths(patch_files):
+        snapshots[path] = _read_workspace_text_snapshot(workspace_root, path)
+    return snapshots
+
+
+def _patch_snapshot_paths(patch_files: list[_PatchFile]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for patch_file in patch_files:
+        for path in (patch_file.old_path, patch_file.path):
+            if path is not None and path not in seen:
+                paths.append(path)
+                seen.add(path)
+    return paths
+
+
+def _read_workspace_text_snapshot(workspace_root: Path, relative_path: str) -> str | None:
+    path = resolve_workspace_path(workspace_root, relative_path)
+    if not path.exists():
+        return ""
+    if not path.is_file():
+        return None
+    data = path.read_bytes()
+    if b"\x00" in data:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _build_file_diff_records(
+    patch_files: list[_PatchFile],
+    *,
+    before_texts: dict[str, str | None],
+    after_texts: dict[str, str | None],
+    max_preview_lines: int,
+    max_preview_chars: int,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for patch_file in patch_files:
+        path = patch_file.path or patch_file.old_path
+        if path is None:
+            continue
+        old_path = patch_file.old_path or path
+        old_text = before_texts.get(old_path, "")
+        new_text = after_texts.get(path, "")
+        if old_text is None or new_text is None:
+            continue
+        patch, _ = bounded_text_preview(
+            patch_file.patch,
+            max_preview_lines,
+            max_preview_chars,
+        )
+        records.append(
+            file_diff_record(
+                path=path,
+                old_path=old_path,
+                old_text=old_text,
+                new_text=new_text,
+                patch=patch,
+            )
+        )
+    return records
 
 
 def _extract_patch_display_paths(patch: str) -> list[str]:

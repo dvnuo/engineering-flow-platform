@@ -372,6 +372,15 @@ stderr preview in model-visible content. These previews default to 200 lines and
 12000 characters and remain subject to the Runtime v2 tool output truncation
 policy for very large final tool results.
 
+Successful text-file mutations also attach structured file diff records for
+downstream review workflows. `write`, `write_file`, and `edit` place a
+`filediff` record in both `ToolResult.output` and `ToolResult.metadata`;
+`apply_patch` places a `filediffs` list in both locations and adds `filediff`
+only when exactly one file changed. Each record carries the workspace-relative
+path, previous path for moves, added and removed line counts from the actual
+before/after text, and the bounded unified diff text already exposed by the
+tool.
+
 Validation errors and permission denies return structured tool results and do
 not execute the tool callable. A low-level ASK decision is represented as a
 `permission_requested` `ToolResult`, but the Runtime v2 loop treats that result
