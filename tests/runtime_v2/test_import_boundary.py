@@ -61,6 +61,8 @@ def test_runtime_v2_source_does_not_import_legacy_runtime_modules():
         "src.github",
         "src.jira",
         "src.confluence",
+        "src.git",
+        "src.context_tools",
     ]
     for token in forbidden_imports:
         assert token not in combined

@@ -38,10 +38,14 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert result.final_assistant_message is not None
     assert result.final_assistant_message.parts[0].text == "Facade done."
     assert runtime.tool_runtime.registry.ids() == [
+        "apply_patch",
+        "edit",
+        "glob",
         "grep",
         "list_dir",
         "read_file",
         "shell_exec",
+        "todo_write",
         "write_file",
     ]
 
@@ -49,10 +53,14 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert request.provider_request.messages[0].role == "user"
     assert request.provider_request.messages[0].text == "Use the facade."
     assert [schema.id for schema in request.provider_request.tools] == [
+        "apply_patch",
+        "edit",
+        "glob",
         "grep",
         "list_dir",
         "read_file",
         "shell_exec",
+        "todo_write",
         "write_file",
     ]
     assert request.metadata["suite"] == "facade"

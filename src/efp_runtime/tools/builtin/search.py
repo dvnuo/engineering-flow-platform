@@ -86,6 +86,67 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
     )
 
 
+def create_glob_tool(workspace_root: str | Path) -> ToolDef:
+    root = normalize_workspace_root(workspace_root)
+
+    async def execute(args: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        pattern = args["pattern"]
+        if not pattern:
+            raise ValueError("pattern must not be empty.")
+        if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+            raise ValueError("Glob pattern must stay inside the workspace root.")
+
+        base_path = resolve_workspace_path(root, args.get("path") or ".")
+        if not base_path.exists():
+            raise FileNotFoundError(f"Glob path does not exist: {workspace_relative_path(root, base_path)}")
+        if not base_path.is_dir():
+            raise NotADirectoryError(f"Glob path is not a directory: {workspace_relative_path(root, base_path)}")
+
+        max_matches = args.get("max_matches")
+        if max_matches is not None and max_matches < 1:
+            raise ValueError("max_matches must be at least 1.")
+
+        all_matches = sorted(
+            {
+                workspace_relative_path(root, match)
+                for match in base_path.glob(pattern)
+                if _is_contained(root, match) and match.exists()
+            },
+            key=lambda value: (value.casefold(), value),
+        )
+        truncated = max_matches is not None and len(all_matches) > max_matches
+        matches = all_matches[:max_matches] if max_matches is not None else all_matches
+        return {
+            "pattern": pattern,
+            "path": workspace_relative_path(root, base_path),
+            "matches": matches,
+            "paths": matches,
+            "truncated": truncated,
+        }
+
+    return ToolDef(
+        id="glob",
+        description="Find workspace paths matching a glob pattern.",
+        input_schema={
+            "type": "object",
+            "required": ["pattern"],
+            "properties": {
+                "pattern": {"type": "string"},
+                "path": {"type": "string"},
+                "max_matches": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+        execute=execute,
+        permission=PermissionMetadata(
+            action=ALLOW,
+            category="filesystem",
+            resource="workspace",
+            risk="low",
+        ),
+    )
+
+
 def _iter_search_files(workspace_root: Path, base_path: Path) -> Iterator[Path]:
     if not base_path.exists():
         raise FileNotFoundError(f"Search path does not exist: {workspace_relative_path(workspace_root, base_path)}")

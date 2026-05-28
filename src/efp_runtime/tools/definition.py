@@ -60,6 +60,16 @@ def validate_args(schema: Mapping[str, Any], args: Mapping[str, Any]) -> dict[st
     if schema_type not in (None, "object"):
         raise ValidationError("Tool input schema must be an object schema.")
 
+    normalized = dict(args)
+    _validate_object_properties(None, normalized, schema)
+    return normalized
+
+
+def _validate_object_properties(
+    name: str | None,
+    value: Mapping[str, Any],
+    schema: Mapping[str, Any],
+) -> None:
     properties = schema.get("properties", {})
     if properties is None:
         properties = {}
@@ -72,23 +82,28 @@ def validate_args(schema: Mapping[str, Any], args: Mapping[str, Any]) -> dict[st
     if not isinstance(required, list):
         raise ValidationError("Tool input schema required field must be a list.")
 
-    normalized = dict(args)
-    missing = [name for name in required if name not in normalized]
+    missing = [property_name for property_name in required if property_name not in value]
     if missing:
-        raise ValidationError(f"Missing required argument(s): {', '.join(missing)}")
+        if name is None:
+            raise ValidationError(f"Missing required argument(s): {', '.join(missing)}")
+        raise ValidationError(
+            f"Argument '{name}' missing required property/properties: {', '.join(missing)}"
+        )
 
     if schema.get("additionalProperties") is False:
-        extra = sorted(set(normalized) - set(properties))
+        extra = sorted(set(value) - set(properties))
         if extra:
-            raise ValidationError(f"Unexpected argument(s): {', '.join(extra)}")
+            if name is None:
+                raise ValidationError(f"Unexpected argument(s): {', '.join(extra)}")
+            raise ValidationError(
+                f"Argument '{name}' has unexpected property/properties: {', '.join(extra)}"
+            )
 
-    for name, value in normalized.items():
-        property_schema = properties.get(name)
+    for property_name, property_value in value.items():
+        property_schema = properties.get(property_name)
         if property_schema is None:
             continue
-        _validate_value(name, value, property_schema)
-
-    return normalized
+        _validate_value(_field_name(name, property_name), property_value, property_schema)
 
 
 def _validate_value(name: str, value: Any, schema: Mapping[str, Any]) -> None:
@@ -102,11 +117,34 @@ def _validate_value(name: str, value: Any, schema: Mapping[str, Any]) -> None:
         return
     if isinstance(expected, list):
         if any(_matches_type(value, item) for item in expected):
+            _validate_nested_value(name, value, schema)
             return
         expected_text = " or ".join(str(item) for item in expected)
         raise ValidationError(f"Argument '{name}' must be {expected_text}.")
     if not _matches_type(value, expected):
         raise ValidationError(f"Argument '{name}' must be {expected}.")
+    _validate_nested_value(name, value, schema)
+
+
+def _validate_nested_value(name: str, value: Any, schema: Mapping[str, Any]) -> None:
+    if isinstance(value, Mapping):
+        _validate_object_properties(name, value, schema)
+        return
+
+    if isinstance(value, list):
+        item_schema = schema.get("items")
+        if item_schema is None:
+            return
+        if not isinstance(item_schema, Mapping):
+            raise ValidationError(f"Argument '{name}' item schema must be an object.")
+        for index, item in enumerate(value):
+            _validate_value(f"{name}[{index}]", item, item_schema)
+
+
+def _field_name(parent: str | None, child: str) -> str:
+    if parent is None:
+        return child
+    return f"{parent}.{child}"
 
 
 def _matches_type(value: Any, expected: str) -> bool:

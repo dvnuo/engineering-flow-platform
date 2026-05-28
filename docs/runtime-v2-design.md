@@ -104,6 +104,12 @@ one-use allow rule for the matching retry, while `always=True` creates a
 persistent allow rule for the same tool/category. Deny follows the same rule
 scope model.
 
+The core built-in registry is workspace-contained and intentionally independent
+from the legacy runtime. It includes read/list/write, grep/glob, shell execution,
+single-file edit, unified-diff apply_patch, and a session-local todo_write
+planning tool. Mutating filesystem tools default to ask permission; read/search
+and todo planning tools default to allow.
+
 ## Skills
 
 Skills are discovered from `SKILL.md` or `skill.md` files. Loading a skill reads

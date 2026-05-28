@@ -228,7 +228,17 @@ print(json.dumps({
 
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload == {
-        "ids": ["grep", "list_dir", "read_file", "shell_exec", "write_file"],
+        "ids": [
+            "apply_patch",
+            "edit",
+            "glob",
+            "grep",
+            "list_dir",
+            "read_file",
+            "shell_exec",
+            "todo_write",
+            "write_file",
+        ],
         "legacy_loaded": [],
     }
 
