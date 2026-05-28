@@ -23,7 +23,7 @@ from .plan import create_plan_exit_tool
 from .question import create_question_tool
 from .registry import create_core_tool_registry
 from .search import create_glob_tool, create_grep_tool
-from .shell import create_shell_exec_tool
+from .shell import create_bash_tool, create_shell_exec_tool
 from .task import (
     TaskToolRequest,
     TaskToolResult,
@@ -41,6 +41,7 @@ __all__ = [
     "ShellJob",
     "ShellJobManager",
     "create_apply_patch_tool",
+    "create_bash_tool",
     "create_core_tool_registry",
     "create_edit_tool",
     "create_fetch_tool",

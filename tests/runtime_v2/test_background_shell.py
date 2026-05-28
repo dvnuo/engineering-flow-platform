@@ -242,12 +242,13 @@ def test_agent_runtime_config_can_disable_background_shell(tmp_path: Path):
     assert runtime.config.enable_background_shell is False
     assert runtime.config.background_shell_max_buffer_bytes == 4096
     assert "shell_exec" in runtime.tool_runtime.registry.ids()
+    assert "bash" in runtime.tool_runtime.registry.ids()
     assert "shell_status" not in runtime.tool_runtime.registry.ids()
     assert "shell_kill" not in runtime.tool_runtime.registry.ids()
 
 
 @pytest.mark.asyncio
-async def test_plan_mode_hides_shell_exec_but_build_mode_exposes_it(tmp_path: Path):
+async def test_plan_mode_hides_shell_entrypoints_but_build_mode_exposes_them(tmp_path: Path):
     plan_provider = ScriptedLLMProvider([{"content": "planned"}])
     plan_runtime = AgentRuntime(
         provider=plan_provider,
@@ -262,6 +263,7 @@ async def test_plan_mode_hides_shell_exec_but_build_mode_exposes_it(tmp_path: Pa
 
     assert plan_result.status == LoopStatus.COMPLETED
     plan_tool_ids = [tool.id for tool in plan_provider.requests[0].tools]
+    assert "bash" not in plan_tool_ids
     assert "shell_exec" not in plan_tool_ids
     assert "shell_status" in plan_tool_ids
 
@@ -275,6 +277,7 @@ async def test_plan_mode_hides_shell_exec_but_build_mode_exposes_it(tmp_path: Pa
 
     assert build_result.status == LoopStatus.COMPLETED
     build_tool_ids = [tool.id for tool in build_provider.requests[0].tools]
+    assert "bash" in build_tool_ids
     assert "shell_exec" in build_tool_ids
     assert "shell_status" in build_tool_ids
     assert "shell_kill" in build_tool_ids

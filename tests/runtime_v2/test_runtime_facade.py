@@ -39,6 +39,7 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert result.final_assistant_message.parts[0].text == "Facade done."
     assert runtime.tool_runtime.registry.ids() == [
         "apply_patch",
+        "bash",
         "edit",
         "fetch",
         "glob",
@@ -62,6 +63,7 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert request.provider_request.messages[-1].text == "Use the facade."
     assert [schema.id for schema in request.provider_request.tools] == [
         "apply_patch",
+        "bash",
         "edit",
         "fetch",
         "glob",

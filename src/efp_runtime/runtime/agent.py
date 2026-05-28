@@ -58,6 +58,7 @@ if TYPE_CHECKING:
 
 PLAN_MODE_MUTATING_TOOLS = {
     "apply_patch",
+    "bash",
     "edit",
     "write",
     "write_file",

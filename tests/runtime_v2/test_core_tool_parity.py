@@ -282,6 +282,7 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path)
     assert registry.ids() == [
         "apply_patch",
+        "bash",
         "edit",
         "fetch",
         "glob",
@@ -308,6 +309,10 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
     assert registry.require("shell_status").permission.risk == "low"
     assert registry.require("edit").permission.action == ASK
     assert registry.require("apply_patch").permission.action == ASK
+    assert registry.require("bash").permission.action == ASK
+    assert registry.require("bash").permission.category == "shell"
+    assert registry.require("bash").permission.resource == "workspace"
+    assert registry.require("bash").permission.risk == "high"
     assert registry.require("shell_exec").permission.action == ASK
     assert registry.require("shell_kill").permission.action == ASK
     assert registry.require("shell_kill").permission.risk == "medium"

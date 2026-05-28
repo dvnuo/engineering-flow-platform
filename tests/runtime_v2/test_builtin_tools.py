@@ -382,6 +382,7 @@ print(json.dumps({
     assert payload == {
         "ids": [
             "apply_patch",
+            "bash",
             "edit",
             "fetch",
             "glob",

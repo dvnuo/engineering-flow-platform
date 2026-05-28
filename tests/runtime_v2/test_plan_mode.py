@@ -20,6 +20,7 @@ from efp_runtime.tools.builtin import create_core_tool_registry
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TOOL_IDS = [
     "apply_patch",
+    "bash",
     "edit",
     "fetch",
     "glob",
@@ -37,6 +38,7 @@ DEFAULT_TOOL_IDS = [
 ]
 MUTATING_TOOL_IDS = {
     "apply_patch",
+    "bash",
     "edit",
     "write",
     "write_file",
@@ -215,6 +217,7 @@ async def test_plan_mode_enabled_tools_cannot_bypass_read_only_policy(
     assert request_tool_ids == ["plan_exit"]
     assert provider.requests[0].metadata["disabled_tool_ids"] == [
         "apply_patch",
+        "bash",
         "edit",
         "fetch",
         "glob",

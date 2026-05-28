@@ -379,11 +379,11 @@ and is appended as a final tool result on resume.
 
 `RuntimeConfig.tool_permissions` adds an opencode-style execution permission
 layer on top of the static permission metadata carried by each tool definition.
-Keys can be exact tool ids such as `shell_exec`, `read`, `read_file`, `write`,
-`write_file`, `apply_patch`, `skill`, or `task_status`; category aliases such
-as `bash`, `edit`, `read`, `list`, `grep`, `glob`, `task`, `todowrite`,
-`webfetch`, `lsp`, `skill`, `question`, and `doom_loop`; wildcard patterns
-such as `external_*`; or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
+Keys can be exact tool ids such as `bash`, `shell_exec`, `read`, `read_file`,
+`write`, `write_file`, `apply_patch`, `skill`, or `task_status`; category
+aliases such as `bash`, `edit`, `read`, `list`, `grep`, `glob`, `task`,
+`todowrite`, `webfetch`, `lsp`, `skill`, `question`, and `doom_loop`; wildcard
+patterns such as `external_*`; or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
 `"deny"`, or a mapping like
 `{"action": "ask", "reason": "...", "risk": "medium", "patterns": ["..."]}`.
 Runtime config matching is ordered by exact tool id, wildcard specificity,
@@ -421,10 +421,11 @@ Runtime v2 supports a minimal `plan` runtime mode alongside the default `build`
 mode. In plan mode, `AgentRuntime` registers the `plan_exit` built-in tool by
 default and, while `RuntimeConfig.plan_mode_read_only=True`, hides mutating
 tools from the provider request schema: `apply_patch`, `edit`, `write`,
-`write_file`, `shell_exec`, and `shell_kill`. These tools remain registered in
-the underlying registry so the policy is enforced through tool selection rather
-than by changing registry shape. Caller-supplied `disabled_tools` still apply,
-and caller-supplied `enabled_tools` cannot expose those mutating tools unless
+`write_file`, `bash`, `shell_exec`, and `shell_kill`. These tools remain
+registered in the underlying registry so the policy is enforced through tool
+selection rather than by changing registry shape. Caller-supplied
+`disabled_tools` still apply, and caller-supplied `enabled_tools` cannot expose
+those mutating tools unless
 `plan_mode_read_only=False`.
 
 `plan_exit` lets the model submit a final structured plan. Its `ToolResult`
@@ -449,11 +450,14 @@ network access so callers can override it to ask permission when needed.
 
 Foreground `shell_exec` keeps the existing timeout behavior: the runtime waits
 for `communicate()`, kills the process on timeout, and returns the collected
-stdout, stderr, exit code, timeout flag, and saved full output path. Long-running
-shell commands can instead be started with `shell_exec(background=true)`. That
-call still uses the normal shell permission boundary, starts the process, and
-immediately returns a `job_id`. Callers read retained stdout/stderr and exit
-state with `shell_status(job_id, offset?, limit?)`, and stop a running job with
+stdout, stderr, exit code, timeout flag, and saved full output path. Runtime v2
+also exposes the opencode-style `bash` tool id as an alias over the same shell
+execution path; `shell_exec` remains registered and unchanged. Long-running
+shell commands can be started with either `shell_exec(background=true)` or
+`bash(background=true)`. That call still uses the normal shell permission
+boundary, starts the process, and immediately returns a `job_id`. Callers read
+retained stdout/stderr and exit state with
+`shell_status(job_id, offset?, limit?)`, and stop a running job with
 `shell_kill(job_id)`. Background shell jobs are intentionally process-local to
 one `AgentRuntime` / `ToolRuntime` lifecycle; Runtime v2 does not run a
 cross-process daemon and does not restore jobs after VM or process restart.

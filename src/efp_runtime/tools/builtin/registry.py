@@ -28,7 +28,7 @@ from .lsp import create_lsp_tool
 from .plan import create_plan_exit_tool
 from .question import create_question_tool
 from .search import create_glob_tool, create_grep_tool
-from .shell import create_shell_exec_tool
+from .shell import create_bash_tool, create_shell_exec_tool
 from .task import (
     TaskToolRunner,
     create_task_cancel_tool,
@@ -111,6 +111,14 @@ def create_core_tool_registry(
         )
     registry.register(
         create_shell_exec_tool(
+            root,
+            permission=shell_permission,
+            shell_job_manager=shell_background_manager,
+            enable_background=enable_background_shell,
+        )
+    )
+    registry.register(
+        create_bash_tool(
             root,
             permission=shell_permission,
             shell_job_manager=shell_background_manager,

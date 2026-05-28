@@ -32,6 +32,42 @@ def create_shell_exec_tool(
     shell_job_manager: ShellJobManager | None = None,
     enable_background: bool = False,
 ) -> ToolDef:
+    return _create_shell_tool(
+        "shell_exec",
+        workspace_root,
+        description="Run a shell command from a workspace-contained working directory.",
+        permission=permission,
+        shell_job_manager=shell_job_manager,
+        enable_background=enable_background,
+    )
+
+
+def create_bash_tool(
+    workspace_root: str | Path,
+    *,
+    permission: PermissionMetadata | None = None,
+    shell_job_manager: ShellJobManager | None = None,
+    enable_background: bool = False,
+) -> ToolDef:
+    return _create_shell_tool(
+        "bash",
+        workspace_root,
+        description="Run a bash command from a workspace-contained working directory.",
+        permission=permission,
+        shell_job_manager=shell_job_manager,
+        enable_background=enable_background,
+    )
+
+
+def _create_shell_tool(
+    tool_id: str,
+    workspace_root: str | Path,
+    *,
+    description: str,
+    permission: PermissionMetadata | None = None,
+    shell_job_manager: ShellJobManager | None = None,
+    enable_background: bool = False,
+) -> ToolDef:
     root = normalize_workspace_root(workspace_root)
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -53,7 +89,7 @@ def create_shell_exec_tool(
                 cwd,
                 description=description,
             )
-            tool_call_id = _result_call_id(context)
+            tool_call_id = _result_call_id(context, tool_id)
             output = {
                 "job_id": job.job_id,
                 "status": job.status,
@@ -75,7 +111,7 @@ def create_shell_exec_tool(
                 metadata["run_id"] = run_id
             return ToolResult(
                 call_id=tool_call_id,
-                tool_name="shell_exec",
+                tool_name=tool_id,
                 content=_format_background_content(output),
                 output=output,
                 metadata=metadata,
@@ -137,7 +173,7 @@ def create_shell_exec_tool(
             full_content,
             name_hint=_output_name_hint(context, command, cwd_relative, description),
         )
-        tool_call_id = _result_call_id(context)
+        tool_call_id = _result_call_id(context, tool_id)
         run_id = _context_value(context, "run_id")
         metadata: dict[str, Any] = {
             "description": description,
@@ -161,7 +197,7 @@ def create_shell_exec_tool(
 
         return ToolResult(
             call_id=tool_call_id,
-            tool_name="shell_exec",
+            tool_name=tool_id,
             content=content,
             output=output,
             metadata=metadata,
@@ -169,24 +205,9 @@ def create_shell_exec_tool(
         )
 
     return ToolDef(
-        id="shell_exec",
-        description="Run a shell command from a workspace-contained working directory.",
-        input_schema={
-            "type": "object",
-            "required": ["command"],
-            "properties": {
-                "command": {"type": "string"},
-                "description": {"type": "string"},
-                "cwd": {"type": "string"},
-                "workdir": {"type": "string"},
-                "timeout": {"type": "number"},
-                "timeout_ms": {"type": "number"},
-                "max_output_chars": {"type": "integer"},
-                "max_output_lines": {"type": "integer"},
-                "background": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-        },
+        id=tool_id,
+        description=description,
+        input_schema=_shell_input_schema(),
         execute=execute,
         permission=permission
         or PermissionMetadata(
@@ -202,6 +223,25 @@ def create_shell_exec_tool(
             },
         ),
     )
+
+
+def _shell_input_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+            "command": {"type": "string"},
+            "description": {"type": "string"},
+            "cwd": {"type": "string"},
+            "workdir": {"type": "string"},
+            "timeout": {"type": "number"},
+            "timeout_ms": {"type": "number"},
+            "max_output_chars": {"type": "integer"},
+            "max_output_lines": {"type": "integer"},
+            "background": {"type": "boolean"},
+        },
+        "additionalProperties": False,
+    }
 
 
 def _resolve_workdir(root: Path, args: dict[str, Any]) -> Path:
@@ -292,13 +332,13 @@ def _tagged_output(tag: str, content: str) -> str:
     return f"<{tag}>\n{content}\n</{tag}>"
 
 
-def _result_call_id(context: ToolContext) -> str:
+def _result_call_id(context: ToolContext, fallback: str) -> str:
     call_id = _context_value(context, "tool_call_id")
     if call_id:
         return call_id
     if context.request_id:
         return str(context.request_id)
-    return "shell_exec"
+    return fallback
 
 
 def _output_name_hint(
