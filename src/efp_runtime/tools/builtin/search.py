@@ -46,6 +46,7 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
             base_path,
             pattern=pattern,
             include_patterns=include_patterns,
+            include_root=include_root,
             case_sensitive=case_sensitive,
         )
         if search_result is None:
@@ -321,6 +322,7 @@ async def _grep_with_rg(
     *,
     pattern: str,
     include_patterns: list[str],
+    include_root: Path,
     case_sensitive: bool,
 ) -> dict[str, Any] | None:
     cwd = base_path if base_path.is_dir() else base_path.parent
@@ -351,8 +353,6 @@ async def _grep_with_rg(
 
     matches: list[dict[str, Any]] = []
     mtimes: dict[str, int] = {}
-    end_searches = 0
-    summary_searches: int | None = None
     for line in stdout.splitlines():
         try:
             row = json.loads(line)
@@ -383,19 +383,39 @@ async def _grep_with_rg(
                         "line": _truncate_display_line(line_text),
                     }
                 )
-        elif row_type == "end":
-            stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
-            end_searches += int(stats.get("searches") or 0)
-        elif row_type == "summary":
-            stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
-            summary_searches = int(stats.get("searches") or 0)
 
-    files_searched = summary_searches if summary_searches is not None else end_searches
+    files_searched = _count_search_files(
+        workspace_root,
+        base_path,
+        include_patterns=include_patterns,
+        include_root=include_root,
+    )
     return {
         "matches": matches,
         "mtimes": mtimes,
         "files_searched": files_searched,
     }
+
+
+def _count_search_files(
+    workspace_root: Path,
+    base_path: Path,
+    *,
+    include_patterns: list[str],
+    include_root: Path,
+) -> int:
+    count = 0
+    for file_path in _iter_search_files(workspace_root, base_path):
+        if include_patterns and not _matches_include(
+            file_path,
+            include_root=include_root,
+            patterns=include_patterns,
+        ):
+            continue
+        if _read_search_text(file_path) is None:
+            continue
+        count += 1
+    return count
 
 
 def _grep_with_python(
