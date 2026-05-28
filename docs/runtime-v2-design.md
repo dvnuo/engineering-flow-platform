@@ -119,12 +119,20 @@ registry for that workspace. The facade does not call Portal or the legacy agent
 runtime.
 
 The facade also exposes direct session management helpers:
-`create_session(...)`, `get_session(...)`, `list_sessions()`,
-`delete_session(...)`, `fork_session(...)`, `session_children(...)`, and
-`session_messages(...)`. These methods proxy the configured session store and do
-not alter `run(...)`, `resume(...)`, compaction, checkpoint, or tool execution
-behavior. `session_children(parent_session_id)` filters listed sessions whose
-metadata records that parent, preserving the store list order.
+`create_session(...)`, `get_session(...)`, `update_session(...)`,
+`list_sessions()`, `delete_session(...)`, `fork_session(...)`,
+`session_children(...)`, and `session_messages(...)`. These methods proxy the
+configured session store. `session_children(parent_session_id)` filters listed
+sessions whose metadata records that parent, preserving the store list order.
+
+`switch_agent(session_id, agent)` and `switch_model(session_id, model)` persist
+future defaults in `Session.metadata`. The selected agent is stored as
+`metadata["agent"]`; string models are stored as both `metadata["model"]` and
+`metadata["requested_model"]`, while structured model mappings are stored as
+`metadata["model"]`. The helpers publish `session.agent_switched` and
+`session.model_switched` runtime events so callers can observe the change.
+Switching only affects later provider requests for that session. It does not
+rewrite existing messages, history metadata, checkpoints, or prior run records.
 
 `list_sessions()` remains the no-argument store listing API. UI and CLI callers
 that need a read-only view can use `query_sessions(...)`, which filters and pages
@@ -764,11 +772,15 @@ primary-agent, subagent, and `@agent` mention selection can share one registry.
 profile selection. Callers choose a profile with
 `AgentRuntime.run(..., agent="review")`, command metadata can request a profile,
 the first effective user prompt line can start with `@review`, callers can pass
-an `AgentProfile` directly with `agent=profile`, or `default_agent` can resolve
-through the supplied registry when nothing else selects a profile. Selection
+an `AgentProfile` directly with `agent=profile`, a session can store a future
+default in `Session.metadata["agent"]`, or `default_agent` can resolve through
+the supplied registry when nothing else selects a profile. `run(...)`
 precedence is caller `agent=...`, command `agent` metadata, resolved `@agent`
-mention, then `default_agent`. Runtime v2 does not load profile files from disk
-inside the facade; config and agent discovery are separate caller concerns.
+mention, session metadata, then `default_agent`. `resume(session_id)` checks
+session metadata first, then `default_agent`. When session metadata selects a
+profile, request metadata records `selected_agent_source="session"`. Runtime v2
+does not load profile files from disk inside the facade; config and agent
+discovery are separate caller concerns.
 
 Primary-run `@agent` mention parsing happens after `/skill` command lines are
 removed and after slash command expansion. The parser inspects only the first
@@ -798,6 +810,13 @@ metadata and overlays `RuntimeConfig.tool_permissions` for tool execution in
 that run. Profile metadata also records future routing hints such as `model`,
 `mode`, or `temperature`, but those hints do not switch provider, model, mode,
 or sampling settings.
+
+Session model metadata is also a future-run default. After command expansion,
+`run(...)` and `resume(...)` copy a string `metadata["requested_model"]` or
+string `metadata["model"]` to request metadata `requested_model` only when the
+caller and command did not already set one. If `metadata["model"]` is a mapping,
+Runtime v2 copies it to request metadata `session_model` instead of inventing a
+provider-specific model string.
 
 `create_subagent_task_runner(...)` builds the task runner used by the injectable
 `task` tool. The runner does not start a legacy agent or separate process. It

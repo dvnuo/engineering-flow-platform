@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from threading import RLock
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..types import new_id
 from .checkpoint import SessionCheckpoint
@@ -43,6 +43,27 @@ class InMemorySessionStore:
     def get_session(self, session_id: str) -> Session:
         with self._lock:
             return deepcopy(self._require_session(session_id))
+
+    def update_session(
+        self,
+        session_id: str,
+        *,
+        title: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        replace_metadata: bool = False,
+    ) -> Session:
+        with self._lock:
+            session = self._require_session(session_id)
+            if title is not None:
+                session.title = title
+            if replace_metadata:
+                session.metadata = deepcopy(dict(metadata or {}))
+            elif metadata is not None:
+                updated_metadata = deepcopy(session.metadata)
+                updated_metadata.update(deepcopy(dict(metadata)))
+                session.metadata = updated_metadata
+            session.touch()
+            return deepcopy(session)
 
     def list_sessions(self) -> List[Session]:
         with self._lock:

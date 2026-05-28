@@ -58,6 +58,33 @@ def test_file_store_persists_sessions_across_instances(tmp_path: Path):
     assert history[1].parts[0].text == "Persisted."
 
 
+def test_file_store_persists_update_session_across_instances(tmp_path: Path):
+    store = FileSessionStore(tmp_path)
+    created = store.create_session(
+        session_id="session-update",
+        title="Original",
+        metadata={"keep": True, "nested": {"value": 1}},
+    )
+
+    updated = store.update_session(
+        created.session_id,
+        title="Updated",
+        metadata={"nested": {"value": 2}, "added": True},
+    )
+    assert updated.updated_at != created.updated_at
+    replaced = store.update_session(
+        created.session_id,
+        metadata={"replacement": {"value": 3}},
+        replace_metadata=True,
+    )
+    replaced.metadata["replacement"]["value"] = 99
+
+    restored = FileSessionStore(tmp_path).get_session(created.session_id)
+
+    assert restored.title == "Updated"
+    assert restored.metadata == {"replacement": {"value": 3}}
+
+
 def test_file_store_round_trips_all_current_part_types(tmp_path: Path):
     skill_file = tmp_path / "skills" / "requirements" / "SKILL.md"
     skill = SkillPackage(

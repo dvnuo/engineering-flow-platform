@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Protocol, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple, Union
 
 from .checkpoint import SessionCheckpoint
 from .models import Message, MessagePart, MessageRole, Session
@@ -22,6 +22,16 @@ class SessionStore(Protocol):
         ...
 
     def get_session(self, session_id: str) -> Session:
+        ...
+
+    def update_session(
+        self,
+        session_id: str,
+        *,
+        title: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        replace_metadata: bool = False,
+    ) -> Session:
         ...
 
     def list_sessions(self) -> list[Session]:

@@ -71,6 +71,52 @@ def test_store_lists_deletes_and_removes_checkpoints():
     assert "session-a" not in store._checkpoints
 
 
+def test_store_updates_session_metadata_title_and_updated_at_with_deepcopy():
+    store = InMemorySessionStore()
+    created = store.create_session(
+        session_id="session-update",
+        title="Original",
+        metadata={"keep": True, "nested": {"value": 1}},
+    )
+
+    merged = store.update_session(
+        "session-update",
+        title="Updated",
+        metadata={"added": {"value": 2}},
+    )
+
+    assert merged.title == "Updated"
+    assert merged.metadata == {
+        "keep": True,
+        "nested": {"value": 1},
+        "added": {"value": 2},
+    }
+    assert merged.updated_at != created.updated_at
+    merged.metadata["added"]["value"] = 99
+    assert store.get_session("session-update").metadata["added"] == {"value": 2}
+
+    title_only = store.update_session("session-update", title="Title only")
+    assert title_only.title == "Title only"
+    assert title_only.metadata == {
+        "keep": True,
+        "nested": {"value": 1},
+        "added": {"value": 2},
+    }
+
+    replaced = store.update_session(
+        "session-update",
+        metadata={"replacement": {"value": 3}},
+        replace_metadata=True,
+    )
+
+    assert replaced.title == "Title only"
+    assert replaced.metadata == {"replacement": {"value": 3}}
+    replaced.metadata["replacement"]["value"] = 100
+    assert store.get_session("session-update").metadata == {
+        "replacement": {"value": 3}
+    }
+
+
 def test_store_forks_session_through_message_and_rebinds_history():
     store = InMemorySessionStore()
     session = store.create_session(

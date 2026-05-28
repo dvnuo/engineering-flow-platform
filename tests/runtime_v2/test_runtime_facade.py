@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from efp_runtime import MessageRole
+from efp_runtime.commands import CommandDefinition, CommandRegistry
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 
@@ -164,6 +165,107 @@ async def test_agent_runtime_session_management_facade_with_default_store(tmp_pa
     assert runtime.delete_session(fork.session_id) is False
     assert runtime.session_children("session-b") == []
     assert [session.session_id for session in runtime.list_sessions()] == ["session-b"]
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_switch_model_sets_session_default_for_run_and_resume():
+    command_registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="build",
+                content="Build.",
+                source="config",
+                model="command/model",
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider(
+        [
+            {"content": "Session model."},
+            {"content": "Caller model."},
+            {"content": "Command model."},
+            {"content": "Resume model."},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=command_registry,
+    )
+    runtime.create_session(session_id="session-model")
+
+    switched = runtime.switch_model("session-model", " session/model ")
+
+    assert switched.metadata["model"] == "session/model"
+    assert switched.metadata["requested_model"] == "session/model"
+    event = runtime.event_bus.history("session-model")[0]
+    assert event.type == "session.model_switched"
+    assert event.message == "Session model switched."
+    assert event.payload == {"model": "session/model"}
+
+    await runtime.run("Use session model.", session_id="session-model")
+    await runtime.run(
+        "Use caller model.",
+        session_id="session-model",
+        metadata={"requested_model": "caller/model"},
+    )
+    await runtime.run("/build", session_id="session-model")
+    await runtime.resume("session-model")
+
+    assert provider.requests[0].metadata["requested_model"] == "session/model"
+    assert provider.requests[0].provider_request.metadata["requested_model"] == (
+        "session/model"
+    )
+    assert provider.requests[1].metadata["requested_model"] == "caller/model"
+    assert provider.requests[2].metadata["requested_model"] == "command/model"
+    assert provider.requests[2].metadata["command_model"] == "command/model"
+    assert provider.requests[3].metadata["requested_model"] == "session/model"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_switch_model_mapping_sets_session_model_without_string():
+    provider = ScriptedLLMProvider([{"content": "Mapped model."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+    runtime.create_session(session_id="session-model-mapping")
+    runtime.switch_model("session-model-mapping", "old/model")
+    model = {"provider": "custom", "model": "mapped/model", "options": {"temp": 0.2}}
+
+    switched = runtime.switch_model("session-model-mapping", model)
+    model["options"]["temp"] = 1.0
+
+    assert switched.metadata["model"] == {
+        "provider": "custom",
+        "model": "mapped/model",
+        "options": {"temp": 0.2},
+    }
+    assert "requested_model" not in switched.metadata
+    assert runtime.event_bus.history("session-model-mapping")[-1].payload == {
+        "model": {
+            "provider": "custom",
+            "model": "mapped/model",
+            "options": {"temp": 0.2},
+        }
+    }
+
+    await runtime.run("Use mapping.", session_id="session-model-mapping")
+
+    assert provider.requests[0].metadata["session_model"] == {
+        "provider": "custom",
+        "model": "mapped/model",
+        "options": {"temp": 0.2},
+    }
+    assert "requested_model" not in provider.requests[0].metadata
 
 
 def test_runtime_facade_imports_standalone_with_pythonpath_src():

@@ -238,6 +238,76 @@ class AgentRuntime:
     def get_session(self, session_id: str) -> Session:
         return self.store.get_session(session_id)
 
+    def update_session(
+        self,
+        session_id: str,
+        *,
+        title: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        replace_metadata: bool = False,
+    ) -> Session:
+        return self.store.update_session(
+            session_id,
+            title=title,
+            metadata=metadata,
+            replace_metadata=replace_metadata,
+        )
+
+    def switch_agent(self, session_id: str, agent: str) -> Session:
+        if not isinstance(agent, str):
+            raise TypeError("agent must be a non-empty string")
+        agent_name = agent.strip()
+        if not agent_name:
+            raise ValueError("agent must be a non-empty string")
+        if self.agent_registry is not None:
+            self._resolve_agent_profile(agent_name)
+
+        session = self.update_session(session_id, metadata={"agent": agent_name})
+        self.event_bus.publish(
+            RuntimeEvent(
+                type="session.agent_switched",
+                message="Session agent switched.",
+                session_id=session_id,
+                payload={"agent": agent_name},
+            )
+        )
+        return session
+
+    def switch_model(self, session_id: str, model: str | Mapping[str, Any]) -> Session:
+        if isinstance(model, str):
+            model_value: str | dict[str, Any] = model.strip()
+            if not model_value:
+                raise ValueError("model must be a non-empty string or mapping")
+            session = self.update_session(
+                session_id,
+                metadata={
+                    "model": model_value,
+                    "requested_model": model_value,
+                },
+            )
+        elif isinstance(model, Mapping):
+            model_value = deepcopy(dict(model))
+            metadata = deepcopy(self.store.get_session(session_id).metadata)
+            metadata["model"] = model_value
+            metadata.pop("requested_model", None)
+            session = self.update_session(
+                session_id,
+                metadata=metadata,
+                replace_metadata=True,
+            )
+        else:
+            raise TypeError("model must be a non-empty string or mapping")
+
+        self.event_bus.publish(
+            RuntimeEvent(
+                type="session.model_switched",
+                message="Session model switched.",
+                session_id=session_id,
+                payload={"model": deepcopy(model_value)},
+            )
+        )
+        return session
+
     def list_sessions(self) -> list[Session]:
         return self.store.list_sessions()
 
@@ -341,11 +411,14 @@ class AgentRuntime:
             if command_expansion is not None
             else skill_command.cleaned_text
         )
+        existing_session = self._existing_session(session_id)
+        self._apply_session_model_default(run_metadata, existing_session)
         agent_mention = self._resolve_agent_mention(user_text_for_request)
         profile, selected_agent_source = self._resolve_run_agent_profile(
             agent,
             command_expansion,
             agent_mention,
+            existing_session,
         )
         if selected_agent_source == "mention" and agent_mention is not None:
             user_text_for_request = agent_mention.stripped_text
@@ -561,7 +634,15 @@ class AgentRuntime:
         metadata: dict[str, Any] | None = None,
         tools: Mapping[str, bool] | None = None,
     ) -> RuntimeLoopResult:
-        self.store.get_session(session_id)
+        session = self.store.get_session(session_id)
+        profile, selected_agent_source = self._resolve_resume_agent_profile(session)
+        iteration_limit = _profile_max_iterations(profile, self.config.max_iterations)
+        base_active_skills = (
+            _profile_active_skills(profile)
+            if profile is not None
+            else self.active_skills
+        )
+        run_tools = _merge_run_tools(profile, None, tools)
         structured_output_schema = self.config.structured_output_schema
         structured_output_active = structured_output_schema is not None
         structured_output_tool_id = DEFAULT_STRUCTURED_OUTPUT_TOOL_ID
@@ -578,17 +659,27 @@ class AgentRuntime:
         try:
             self._inject_pending_background_task_results(session_id)
             run_metadata = self._base_run_metadata(metadata)
+            self._apply_session_model_default(run_metadata, session)
             run_metadata["run_id"] = run_id
+            run_metadata["max_iterations"] = iteration_limit
+            if selected_agent_source is not None:
+                run_metadata["selected_agent_source"] = selected_agent_source
             if structured_output_active:
                 run_metadata["structured_output"] = True
                 run_metadata["structured_output_tool_id"] = structured_output_tool_id
             active_skills = _visible_skill_names_for_permissions(
-                self.active_skills,
+                base_active_skills,
                 tool_permissions=self.config.tool_permissions,
             )
             self._annotate_skill_metadata(run_metadata, active_skills)
             run_metadata["resume"] = True
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
+            agent_profile_messages = self._build_agent_profile_messages(profile)
+            self._annotate_agent_profile_metadata(
+                run_metadata,
+                profile,
+                prompt_context_count=len(agent_profile_messages),
+            )
             structured_output_messages = (
                 _structured_output_context_messages(structured_output_tool_id)
                 if structured_output_active
@@ -602,11 +693,13 @@ class AgentRuntime:
             context_messages = [
                 *system_prompt_messages,
                 *structured_output_messages,
+                *agent_profile_messages,
                 *instruction_context_messages,
                 *available_skill_context_messages,
                 *skill_context_messages,
             ]
             run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
+            run_metadata["agent_prompt_context_count"] = len(agent_profile_messages)
             run_metadata["structured_output_context_count"] = len(
                 structured_output_messages
             )
@@ -620,7 +713,7 @@ class AgentRuntime:
                 provider=self.provider,
                 adapter=self.adapter,
                 tool_runtime=run_tool_runtime,
-                max_iterations=self.config.max_iterations,
+                max_iterations=iteration_limit,
                 doom_loop_threshold=self.config.doom_loop_threshold,
                 max_context_parts=self.config.max_context_parts,
                 max_context_chars=self.config.max_context_chars,
@@ -660,7 +753,7 @@ class AgentRuntime:
                 metadata=run_metadata,
                 context_messages=context_messages,
                 append_user_message=False,
-                tools=tools,
+                tools=run_tools,
                 structured_output_required=structured_output_active,
                 structured_output_tool_id=structured_output_tool_id,
             )
@@ -1239,6 +1332,38 @@ class AgentRuntime:
         )
         return run_metadata
 
+    def _existing_session(self, session_id: str | None) -> Session | None:
+        if session_id is None:
+            return None
+        try:
+            return self.store.get_session(session_id)
+        except KeyError:
+            return None
+
+    def _apply_session_model_default(
+        self,
+        run_metadata: dict[str, Any],
+        session: Session | None,
+    ) -> None:
+        if session is None or "requested_model" in run_metadata:
+            return
+
+        session_requested_model = session.metadata.get("requested_model")
+        if isinstance(session_requested_model, str):
+            requested_model = session_requested_model.strip()
+            if requested_model:
+                run_metadata["requested_model"] = requested_model
+                return
+
+        session_model = session.metadata.get("model")
+        if isinstance(session_model, str):
+            requested_model = session_model.strip()
+            if requested_model:
+                run_metadata["requested_model"] = requested_model
+                return
+        if isinstance(session_model, Mapping) and "session_model" not in run_metadata:
+            run_metadata["session_model"] = deepcopy(dict(session_model))
+
     def _resolve_agent_profile(self, agent: Any | None) -> Any | None:
         if agent is not None and not isinstance(agent, str):
             if not _is_agent_profile(agent):
@@ -1274,6 +1399,7 @@ class AgentRuntime:
         agent: Any | None,
         command_expansion: CommandExpansionResult | None,
         agent_mention: _AgentMention | None,
+        session: Session | None,
     ) -> tuple[Any | None, str | None]:
         if agent is not None and not isinstance(agent, str):
             return self._resolve_agent_profile(agent), "caller"
@@ -1288,6 +1414,23 @@ class AgentRuntime:
 
         if agent_mention is not None:
             return agent_mention.profile, "mention"
+
+        session_agent = _session_agent_name(session)
+        if session_agent is not None:
+            return self._resolve_agent_profile(session_agent), "session"
+
+        if self.default_agent is not None:
+            return self._resolve_agent_profile(None), "default"
+
+        return None, None
+
+    def _resolve_resume_agent_profile(
+        self,
+        session: Session,
+    ) -> tuple[Any | None, str | None]:
+        session_agent = _session_agent_name(session)
+        if session_agent is not None:
+            return self._resolve_agent_profile(session_agent), "session"
 
         if self.default_agent is not None:
             return self._resolve_agent_profile(None), "default"
@@ -1471,6 +1614,12 @@ def _normalize_optional_name(name: Any | None) -> str | None:
         return None
     normalized = str(name).strip()
     return normalized or None
+
+
+def _session_agent_name(session: Session | None) -> str | None:
+    if session is None:
+        return None
+    return _normalize_optional_name(session.metadata.get("agent"))
 
 
 def _command_shell_tool_call_id(command_name: str, index: int) -> str:

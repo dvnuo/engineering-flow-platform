@@ -178,6 +178,123 @@ async def test_default_agent_is_used_when_run_omits_agent():
 
 
 @pytest.mark.asyncio
+async def test_switch_agent_persists_event_and_run_resume_use_session_profile():
+    provider = ScriptedLLMProvider(
+        [
+            {"content": "Switched."},
+            {"content": "Resumed."},
+        ]
+    )
+    registry = AgentRegistry(
+        [AgentProfile(name="review", prompt="Use the review profile.")],
+        default_agent=None,
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        agent_registry=registry,
+    )
+    runtime.create_session(session_id="session-switch-agent")
+
+    switched = runtime.switch_agent("session-switch-agent", " review ")
+
+    assert switched.metadata["agent"] == "review"
+    event = runtime.event_bus.history("session-switch-agent")[0]
+    assert event.type == "session.agent_switched"
+    assert event.message == "Session agent switched."
+    assert event.payload == {"agent": "review"}
+    with pytest.raises(KeyError):
+        runtime.switch_agent("session-switch-agent", "missing")
+
+    await runtime.run("Use session profile.", session_id="session-switch-agent")
+    await runtime.resume("session-switch-agent")
+
+    run_request = provider.requests[0]
+    assert run_request.metadata["selected_agent_source"] == "session"
+    assert run_request.metadata["agent_name"] == "review"
+    assert run_request.provider_request.messages[0].text == "Use the review profile."
+
+    resume_request = provider.requests[1]
+    assert resume_request.metadata["selected_agent_source"] == "session"
+    assert resume_request.metadata["agent_name"] == "review"
+    assert resume_request.provider_request.messages[0].text == (
+        "Use the review profile."
+    )
+
+
+@pytest.mark.asyncio
+async def test_caller_command_and_mention_agents_override_session_agent():
+    provider = ScriptedLLMProvider(
+        [
+            {"content": "Caller."},
+            {"content": "Command."},
+            {"content": "Mention."},
+        ]
+    )
+    command_registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="audit",
+                content="Audit.",
+                source="config",
+                agent="command",
+            )
+        ]
+    )
+    registry = AgentRegistry(
+        [
+            AgentProfile(name="session", prompt="Use the session profile."),
+            AgentProfile(name="caller", prompt="Use the caller profile."),
+            AgentProfile(name="command", prompt="Use the command profile."),
+            AgentProfile(name="mention", prompt="Use the mention profile."),
+        ],
+        default_agent=None,
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=command_registry,
+        agent_registry=registry,
+    )
+    runtime.create_session(session_id="session-agent-precedence")
+    runtime.switch_agent("session-agent-precedence", "session")
+
+    await runtime.run(
+        "Caller wins.",
+        session_id="session-agent-precedence",
+        agent="caller",
+    )
+    await runtime.run("/audit", session_id="session-agent-precedence")
+    await runtime.run("@mention Mention wins.", session_id="session-agent-precedence")
+
+    assert provider.requests[0].metadata["selected_agent_source"] == "caller"
+    assert provider.requests[0].metadata["agent_name"] == "caller"
+    assert provider.requests[0].provider_request.messages[0].text == (
+        "Use the caller profile."
+    )
+    assert provider.requests[1].metadata["selected_agent_source"] == "command"
+    assert provider.requests[1].metadata["agent_name"] == "command"
+    assert provider.requests[1].metadata["command_agent"] == "command"
+    assert provider.requests[1].provider_request.messages[0].text == (
+        "Use the command profile."
+    )
+    assert provider.requests[2].metadata["selected_agent_source"] == "mention"
+    assert provider.requests[2].metadata["agent_name"] == "mention"
+    assert provider.requests[2].metadata["agent_mention"] == "mention"
+    assert provider.requests[2].provider_request.messages[0].text == (
+        "Use the mention profile."
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_mention_selects_profile_and_strips_token():
     provider = ScriptedLLMProvider([{"content": "Mentioned."}])
     registry = AgentRegistry(
