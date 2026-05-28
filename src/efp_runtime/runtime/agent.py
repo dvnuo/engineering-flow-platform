@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
@@ -63,6 +64,19 @@ PLAN_MODE_MUTATING_TOOLS = {
     "shell_kill",
     "task_cancel",
 }
+
+
+@dataclass(frozen=True)
+class _AgentMentionCandidate:
+    name: str
+    stripped_text: str
+
+
+@dataclass(frozen=True)
+class _AgentMention:
+    name: str
+    profile: Any
+    stripped_text: str
 
 
 class AgentRuntime:
@@ -177,10 +191,15 @@ class AgentRuntime:
             if command_expansion is not None
             else skill_command.cleaned_text
         )
+        agent_mention = self._resolve_agent_mention(user_text_for_request)
         profile, selected_agent_source = self._resolve_run_agent_profile(
             agent,
             command_expansion,
+            agent_mention,
         )
+        if selected_agent_source == "mention" and agent_mention is not None:
+            user_text_for_request = agent_mention.stripped_text
+            run_metadata["agent_mention"] = agent_mention.name
         iteration_limit = _profile_max_iterations(profile, self.config.max_iterations)
         base_active_skills = (
             _profile_active_skills(profile)
@@ -567,6 +586,7 @@ class AgentRuntime:
         self,
         agent: Any | None,
         command_expansion: CommandExpansionResult | None,
+        agent_mention: _AgentMention | None,
     ) -> tuple[Any | None, str | None]:
         if agent is not None and not isinstance(agent, str):
             return self._resolve_agent_profile(agent), "caller"
@@ -579,10 +599,27 @@ class AgentRuntime:
         if command_agent is not None:
             return self._resolve_agent_profile(command_agent), "command"
 
+        if agent_mention is not None:
+            return agent_mention.profile, "mention"
+
         if self.default_agent is not None:
             return self._resolve_agent_profile(None), "default"
 
         return None, None
+
+    def _resolve_agent_mention(self, user_text: str) -> _AgentMention | None:
+        candidate = _parse_agent_mention(user_text)
+        if candidate is None or self.agent_registry is None:
+            return None
+
+        profile = _resolve_mentioned_agent_profile(self.agent_registry, candidate.name)
+        if profile is None:
+            return None
+        return _AgentMention(
+            name=candidate.name,
+            profile=profile,
+            stripped_text=candidate.stripped_text,
+        )
 
     def _annotate_agent_profile_metadata(
         self,
@@ -631,6 +668,78 @@ def _normalize_optional_name(name: Any | None) -> str | None:
         return None
     normalized = str(name).strip()
     return normalized or None
+
+
+def _parse_agent_mention(text: str) -> _AgentMentionCandidate | None:
+    if not text:
+        return None
+
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+
+        token_start = 0
+        while (
+            token_start < len(line)
+            and line[token_start].isspace()
+            and line[token_start] not in "\r\n"
+        ):
+            token_start += 1
+
+        if token_start >= len(line) or line[token_start] != "@":
+            return None
+
+        token_end = token_start + 1
+        while token_end < len(line) and not line[token_end].isspace():
+            token_end += 1
+
+        name = _normalize_optional_name(line[token_start + 1 : token_end])
+        if name is None:
+            return None
+
+        rest = line[token_end:]
+        rest_start = 0
+        while (
+            rest_start < len(rest)
+            and rest[rest_start].isspace()
+            and rest[rest_start] not in "\r\n"
+        ):
+            rest_start += 1
+
+        stripped_lines = list(lines)
+        stripped_lines[index] = rest[rest_start:]
+        return _AgentMentionCandidate(
+            name=name,
+            stripped_text="".join(stripped_lines),
+        )
+
+    return None
+
+
+def _resolve_mentioned_agent_profile(registry: Any, name: str) -> Any | None:
+    get = getattr(registry, "get", None)
+    if callable(get):
+        try:
+            profile = get(name)
+        except KeyError:
+            return None
+        if profile is None:
+            return None
+    else:
+        resolve = getattr(registry, "resolve", None)
+        if not callable(resolve):
+            return None
+        try:
+            profile = resolve(name)
+        except KeyError:
+            return None
+
+    if not _is_agent_profile(profile):
+        raise TypeError("agent_registry.resolve(name) must return an AgentProfile")
+    if _profile_name(profile) != name:
+        return None
+    return profile
 
 
 def _is_agent_profile(value: Any) -> bool:

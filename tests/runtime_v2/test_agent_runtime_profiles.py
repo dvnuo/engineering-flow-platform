@@ -118,6 +118,200 @@ async def test_default_agent_is_used_when_run_omits_agent():
 
 
 @pytest.mark.asyncio
+async def test_agent_mention_selects_profile_and_strips_token():
+    provider = ScriptedLLMProvider([{"content": "Mentioned."}])
+    registry = AgentRegistry(
+        [
+            AgentProfile(name="general", prompt="Use the general profile."),
+            AgentProfile(name="review", prompt="Use the review profile."),
+        ],
+        default_agent=None,
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        agent_registry=registry,
+        default_agent="general",
+    )
+
+    await runtime.run("@review fix this", session_id="session-mention-review")
+
+    request = provider.requests[0]
+    messages = request.provider_request.messages
+    assert request.metadata["selected_agent_source"] == "mention"
+    assert request.metadata["agent_mention"] == "review"
+    assert request.metadata["agent_name"] == "review"
+    assert messages[0].text == "Use the review profile."
+    assert messages[-1].text == "fix this"
+
+
+@pytest.mark.asyncio
+async def test_agent_mention_alone_selects_profile_and_sends_clean_prompt():
+    provider = ScriptedLLMProvider([{"content": "Mentioned."}])
+    registry = AgentRegistry(
+        [AgentProfile(name="review", prompt="Use the review profile.")],
+        default_agent=None,
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        agent_registry=registry,
+    )
+
+    await runtime.run("@review", session_id="session-mention-alone")
+
+    request = provider.requests[0]
+    assert request.metadata["selected_agent_source"] == "mention"
+    assert request.metadata["agent_mention"] == "review"
+    assert request.metadata["agent_name"] == "review"
+    assert all("@review" not in message.text for message in request.provider_request.messages)
+    history = runtime.store.read_history("session-mention-alone")
+    assert history[0].parts == []
+
+
+@pytest.mark.asyncio
+async def test_caller_agent_wins_over_agent_mention_without_stripping():
+    provider = ScriptedLLMProvider([{"content": "Caller."}])
+    registry = AgentRegistry(
+        [
+            AgentProfile(name="debugger", prompt="Use the debugger profile."),
+            AgentProfile(name="review", prompt="Use the review profile."),
+        ],
+        default_agent=None,
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        agent_registry=registry,
+    )
+
+    await runtime.run(
+        "@review fix this",
+        session_id="session-caller-over-mention",
+        agent="debugger",
+    )
+
+    request = provider.requests[0]
+    assert request.metadata["selected_agent_source"] == "caller"
+    assert request.metadata["agent_name"] == "debugger"
+    assert "agent_mention" not in request.metadata
+    assert request.provider_request.messages[-1].text == "@review fix this"
+
+
+@pytest.mark.asyncio
+async def test_command_agent_wins_over_agent_mention_without_stripping():
+    provider = ScriptedLLMProvider([{"content": "Command."}])
+    command_registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="audit",
+                content="Audit $ARGUMENTS.",
+                source="config",
+                agent="debugger",
+            )
+        ]
+    )
+    agent_registry = AgentRegistry(
+        [
+            AgentProfile(name="debugger", prompt="Use the debugger profile."),
+            AgentProfile(name="review", prompt="Use the review profile."),
+        ],
+        default_agent=None,
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=command_registry,
+        agent_registry=agent_registry,
+    )
+
+    await runtime.run(
+        "/audit src\n@review fix this",
+        session_id="session-command-over-mention",
+    )
+
+    request = provider.requests[0]
+    assert request.metadata["selected_agent_source"] == "command"
+    assert request.metadata["agent_name"] == "debugger"
+    assert request.metadata["command_agent"] == "debugger"
+    assert "agent_mention" not in request.metadata
+    assert "@review fix this" in request.provider_request.messages[-1].text
+
+
+@pytest.mark.asyncio
+async def test_unknown_agent_mention_is_left_as_prompt_text():
+    provider = ScriptedLLMProvider([{"content": "Plain."}])
+    registry = AgentRegistry(
+        [AgentProfile(name="review", prompt="Use the review profile.")],
+        default_agent=None,
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        agent_registry=registry,
+    )
+
+    await runtime.run("@missing keep this", session_id="session-missing-mention")
+
+    request = provider.requests[0]
+    assert "selected_agent_source" not in request.metadata
+    assert "agent_mention" not in request.metadata
+    assert request.provider_request.messages[-1].text == "@missing keep this"
+
+
+@pytest.mark.asyncio
+async def test_file_reference_at_first_token_is_not_consumed_as_agent_mention(
+    tmp_path: Path,
+):
+    (tmp_path / "README.md").write_text("read me\n", encoding="utf-8")
+    provider = ScriptedLLMProvider([{"content": "Referenced."}])
+    registry = AgentRegistry(
+        [AgentProfile(name="review", prompt="Use the review profile.")],
+        default_agent=None,
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        agent_registry=registry,
+    )
+
+    await runtime.run("@README.md", session_id="session-file-mention")
+
+    request = provider.requests[0]
+    message = request.provider_request.messages[-1]
+    assert "selected_agent_source" not in request.metadata
+    assert "agent_mention" not in request.metadata
+    assert message.parts[0].text == "@README.md"
+    assert message.attachments[0].text_ref == "README.md"
+    assert message.attachments[0].metadata["content"] == "read me\n"
+
+
+@pytest.mark.asyncio
 async def test_direct_agent_profile_does_not_require_registry():
     provider = ScriptedLLMProvider([{"content": "Direct."}])
     runtime = AgentRuntime(

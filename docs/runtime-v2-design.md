@@ -476,14 +476,29 @@ limit, and metadata. `AgentRegistry` resolves `task.subagent_type` to a profile
 and can fall back to a configured default profile, usually `general`.
 `efp_runtime.agents.discovery` loads opencode-style markdown agent files into
 the same `AgentProfile` shape used by config and subagent task runners, so
-primary-agent, subagent, and future `@mention` selection can share one registry.
+primary-agent, subagent, and `@agent` mention selection can share one registry.
 
 `AgentRuntime(agent_registry=..., default_agent=...)` also supports primary run
 profile selection. Callers choose a profile with
-`AgentRuntime.run(..., agent="review")`, pass an `AgentProfile` directly with
-`agent=profile`, or let `default_agent` resolve through the supplied registry
-when `run(...)` omits `agent`. Runtime v2 does not load profile files from disk
+`AgentRuntime.run(..., agent="review")`, command metadata can request a profile,
+the first effective user prompt line can start with `@review`, callers can pass
+an `AgentProfile` directly with `agent=profile`, or `default_agent` can resolve
+through the supplied registry when nothing else selects a profile. Selection
+precedence is caller `agent=...`, command `agent` metadata, resolved `@agent`
+mention, then `default_agent`. Runtime v2 does not load profile files from disk
 inside the facade; config and agent discovery are separate caller concerns.
+
+Primary-run `@agent` mention parsing happens after `/skill` command lines are
+removed and after slash command expansion. The parser inspects only the first
+effective non-empty line and treats a leading token shaped like `@name` as a
+candidate only when it is followed by whitespace or the end of that line. If the
+candidate resolves to a profile in the supplied `agent_registry`, and no caller
+or command already selected a profile, Runtime v2 strips that mention token
+from the prompt before provider rendering and before prompt reference
+resolution. The remaining text on the line and following prompt text are
+preserved. Metadata records `agent_mention` and
+`selected_agent_source="mention"` only when a mention selects a profile.
+Unknown `@name` tokens remain ordinary prompt text.
 
 For primary runs, a selected profile prompt is transient provider-only system
 context. It is inserted after the base system prompt stack, including runtime
@@ -617,11 +632,13 @@ Command expansion happens before final primary-run profile resolution. The
 expanded prompt text is the user text sent through the normal
 `AgentRuntime.run(...)` path. If the expanded command has `agent` metadata and
 the caller did not pass `agent=...`, Runtime v2 resolves that profile for this
-run. Caller-supplied `agent=...` wins over command metadata, and `default_agent`
-is used only when neither caller nor command selected a profile. Unknown command
-agents fail before any provider request, using the same unknown-agent error as
-ordinary `AgentRuntime.run(..., agent="...")` selection. `selected_agent_source`
-is recorded as `caller`, `command`, or `default` whenever a profile is selected.
+run. Caller-supplied `agent=...` wins over command metadata, command metadata
+wins over resolved `@agent` mentions, and `default_agent` is used only when no
+caller, command, or mention selected a profile. Unknown command agents fail
+before any provider request, using the same unknown-agent error as ordinary
+`AgentRuntime.run(..., agent="...")` selection. `selected_agent_source` is
+recorded as `caller`, `command`, `mention`, or `default` whenever a profile is
+selected.
 
 Before the command content is placed inside the visible `<command>` block, the
 template renderer replaces `$ARGUMENTS` with the full argument string and
@@ -651,6 +668,10 @@ tools, then caller `AgentRuntime.run(..., tools={...})`; later entries win.
 `@file` references inside command templates are not read by the commands module.
 They remain in the expanded user prompt and are resolved later by the Runtime v2
 prompt reference resolver when `RuntimeConfig.resolve_prompt_references=True`.
+The `@agent` mention parser is not a file-reference resolver: unresolved
+mentions such as `@README.md` or unknown `@name` tokens are left in the prompt
+so the prompt reference resolver and ordinary text handling keep their existing
+behavior.
 opencode-style shell interpolation such as `!cmd` or ``!`cmd` `` is also kept as
 plain text. Executing command-triggered shell snippets must go through the
 Runtime v2 tool runtime and permission path in a later design phase.
