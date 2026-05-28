@@ -103,7 +103,10 @@ async def test_permission_ask_returns_request_without_execution():
     result = await runtime.execute(ToolCall(id="call-1", tool_id="write_file", args={}))
 
     assert result.status == "permission_requested"
+    assert result.metadata["permission_request"]["request_id"].startswith("perm_")
     assert result.metadata["permission_request"]["tool_id"] == "write_file"
+    assert result.metadata["permission_request"]["action"] == "ask"
+    assert result.metadata["permission_request"]["category"] == "filesystem"
     assert result.metadata["permission_request"]["reason"] == "Writes require approval."
     assert called is False
 

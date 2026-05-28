@@ -4,7 +4,13 @@ This package is intentionally independent from the legacy agent runtime.
 """
 
 from .events import LLMEvent, LLMEventType, RuntimeEvent
-from .permissions import PermissionDecision, PermissionMetadata, PermissionRequest
+from .permissions import (
+    PermissionBroker,
+    PermissionDecision,
+    PermissionMetadata,
+    PermissionRequest,
+    PermissionRule,
+)
 from .session.models import (
     CompactionPart,
     Message,
@@ -29,8 +35,10 @@ __all__ = [
     "MessagePartType",
     "MessageRole",
     "PermissionDecision",
+    "PermissionBroker",
     "PermissionMetadata",
     "PermissionRequest",
+    "PermissionRule",
     "RuntimeEvent",
     "RuntimeSession",
     "Session",

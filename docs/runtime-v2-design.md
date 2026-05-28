@@ -95,6 +95,15 @@ payload and metadata.
 Validation errors, permission asks, and permission denies return structured
 tool results and do not execute the tool callable.
 
+The default permission evaluator is a `PermissionBroker`. ASK decisions create a
+deterministic `PermissionRequest`, store it in the broker's pending set, and
+return `permission_requested` with the full request payload in
+`ToolResult.metadata["permission_request"]`. The runtime does not block inside
+the same tool execution call; approving a request with `always=False` creates a
+one-use allow rule for the matching retry, while `always=True` creates a
+persistent allow rule for the same tool/category. Deny follows the same rule
+scope model.
+
 ## Skills
 
 Skills are discovered from `SKILL.md` or `skill.md` files. Loading a skill reads

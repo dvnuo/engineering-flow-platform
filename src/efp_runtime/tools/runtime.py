@@ -8,7 +8,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from ..events import RuntimeEvent
-from ..permissions import ALLOW, ASK, DENY, PermissionEvaluator, StaticPermissionEvaluator
+from ..permissions import ALLOW, ASK, DENY, PermissionBroker, PermissionEvaluator
 from ..types import ToolCall, ToolResult
 from .definition import OutputPolicy, ToolContext, ValidationError
 from .registry import ToolRegistry
@@ -25,7 +25,7 @@ class ToolRuntime:
         default_output_policy: OutputPolicy | None = None,
     ):
         self.registry = registry
-        self.permission_evaluator = permission_evaluator or StaticPermissionEvaluator()
+        self.permission_evaluator = permission_evaluator or PermissionBroker()
         self.default_output_policy = default_output_policy or OutputPolicy()
 
     async def execute(

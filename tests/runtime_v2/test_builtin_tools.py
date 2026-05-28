@@ -95,6 +95,8 @@ async def test_write_requires_permission_by_default_and_does_not_write(tmp_path:
 
     assert result.status == "permission_requested"
     assert result.success is False
+    assert result.metadata["permission_request"]["request_id"].startswith("perm_")
+    assert result.metadata["permission_request"]["tool_id"] == "write_file"
     assert target.exists() is False
 
 
@@ -160,6 +162,8 @@ async def test_shell_requires_permission_by_default(tmp_path: Path):
 
     assert result.status == "permission_requested"
     assert result.success is False
+    assert result.metadata["permission_request"]["request_id"].startswith("perm_")
+    assert result.metadata["permission_request"]["tool_id"] == "shell_exec"
 
 
 @pytest.mark.asyncio
