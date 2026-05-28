@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape
 import json
 from pathlib import Path
@@ -121,7 +121,7 @@ class _AgentMention:
 @dataclass(frozen=True)
 class _CommandSubtaskExecution:
     user_text: str | None = None
-    event: RuntimeEvent | None = None
+    events: list[RuntimeEvent] = field(default_factory=list)
 
 
 class AgentRuntime:
@@ -308,8 +308,7 @@ class AgentRuntime:
                     run_metadata=run_metadata,
                     run_tools=run_tools,
                 )
-                if subtask_execution.event is not None:
-                    command_subtask_events.append(subtask_execution.event)
+                command_subtask_events.extend(subtask_execution.events)
                 if subtask_execution.user_text is not None:
                     user_text_for_request = subtask_execution.user_text
             self._annotate_skill_metadata(run_metadata, active_skills)
@@ -1070,6 +1069,20 @@ class AgentRuntime:
                 cancel_requested=lambda: self.run_state.is_cancelled(session_id),
             ),
         )
+        task_events = _normalize_direct_tool_events(
+            result.events,
+            session_id=session_id,
+            run_id=run_id,
+            tool_call=tool_call,
+            payload_context={
+                "source": "command.subtask",
+                "command_name": expansion.definition.name,
+                "task_id": task_id,
+                "subagent_type": subagent_type,
+            },
+            force_tool_call_id=True,
+            fill_empty_values=True,
+        )
 
         _record_command_subtask_result_metadata(
             run_metadata,
@@ -1079,7 +1092,7 @@ class AgentRuntime:
         )
         if result.status != "success":
             run_metadata["command_subtask_executed"] = False
-            return _CommandSubtaskExecution()
+            return _CommandSubtaskExecution(events=task_events)
 
         run_metadata["command_subtask_executed"] = True
         task_content = _command_subtask_content(result)
@@ -1098,7 +1111,7 @@ class AgentRuntime:
                 task_id=task_id,
                 subagent_type=subagent_type,
             ),
-            event=event,
+            events=[*task_events, event],
         )
 
     def _publish_command_shell_tool_events(
@@ -1109,30 +1122,13 @@ class AgentRuntime:
         run_id: str,
         tool_call: ToolCall,
     ) -> None:
-        for event in events:
-            if isinstance(event, RuntimeEvent):
-                if event.session_id is None:
-                    event.session_id = session_id
-                event.payload.setdefault("run_id", run_id)
-                event.payload.setdefault("tool_id", tool_call.tool_name)
-                event.payload.setdefault("tool_name", tool_call.tool_name)
-                event.payload.setdefault("tool_call_id", tool_call.call_id)
-                self.event_bus.publish(event)
-                continue
-
-            self.event_bus.publish(
-                RuntimeEvent(
-                    type="tool.event",
-                    session_id=session_id,
-                    payload={
-                        "event": event,
-                        "run_id": run_id,
-                        "tool_id": tool_call.tool_name,
-                        "tool_name": tool_call.tool_name,
-                        "tool_call_id": tool_call.call_id,
-                    },
-                )
-            )
+        for event in _normalize_direct_tool_events(
+            events,
+            session_id=session_id,
+            run_id=run_id,
+            tool_call=tool_call,
+        ):
+            self.event_bus.publish(event)
 
     def _base_run_metadata(self, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         run_metadata = dict(self.config.metadata)
@@ -1410,6 +1406,100 @@ def _command_shell_context_metadata(
     if command_file:
         metadata["command_file"] = command_file
     return metadata
+
+
+def _normalize_direct_tool_events(
+    events: Iterable[Any],
+    *,
+    session_id: str,
+    run_id: str,
+    tool_call: ToolCall,
+    payload_context: Mapping[str, Any] | None = None,
+    force_tool_call_id: bool = False,
+    fill_empty_values: bool = False,
+) -> list[RuntimeEvent]:
+    context_payload = _direct_tool_event_context_payload(
+        run_id=run_id,
+        tool_call=tool_call,
+        payload_context=payload_context,
+    )
+    normalized: list[RuntimeEvent] = []
+    for event in events:
+        if isinstance(event, RuntimeEvent):
+            if event.session_id is None or (
+                fill_empty_values and event.session_id == ""
+            ):
+                event.session_id = session_id
+            _fill_missing_payload_values(
+                event.payload,
+                context_payload,
+                force_keys={"tool_call_id"} if force_tool_call_id else None,
+                fill_empty_values=fill_empty_values,
+            )
+            normalized.append(event)
+            continue
+
+        normalized.append(
+            RuntimeEvent(
+                type="tool.event",
+                session_id=session_id,
+                payload={"event": event, **context_payload},
+            )
+        )
+    return normalized
+
+
+def _direct_tool_event_context_payload(
+    *,
+    run_id: str,
+    tool_call: ToolCall,
+    payload_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "run_id": run_id,
+        "tool_id": tool_call.tool_name,
+        "tool_name": tool_call.tool_name,
+        "tool_call_id": tool_call.call_id,
+    }
+    if payload_context:
+        payload.update(
+            {
+                str(key): value
+                for key, value in payload_context.items()
+                if value is not None and value != ""
+            }
+        )
+    return payload
+
+
+def _fill_missing_payload_values(
+    payload: dict[str, Any],
+    values: Mapping[str, Any],
+    *,
+    force_keys: set[str] | None = None,
+    fill_empty_values: bool = False,
+) -> None:
+    force_keys = force_keys or set()
+    for key, value in values.items():
+        if key in force_keys or _payload_value_missing(
+            payload,
+            key,
+            fill_empty_values=fill_empty_values,
+        ):
+            payload[key] = value
+
+
+def _payload_value_missing(
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    fill_empty_values: bool,
+) -> bool:
+    if key not in payload:
+        return True
+    if not fill_empty_values:
+        return False
+    return payload.get(key) is None or payload.get(key) == ""
 
 
 def _command_subtask_requested(

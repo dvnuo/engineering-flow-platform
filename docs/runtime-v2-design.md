@@ -999,12 +999,20 @@ context metadata. On success, the parent provider receives a concise
 slash command, rather than the ordinary `<command ...>` wrapper. Run metadata
 records the requested, available, executed, subagent type, task id, result
 status, and copied task result metadata. Runtime v2 also emits one
-`command.subtask.completed` event for the successful task execution.
+`command.subtask.completed` event for the successful task execution. The direct
+task execution surfaces the same normalized tool lifecycle events as ordinary
+loop tool calls in `RuntimeLoopResult.runtime_events` and
+`RuntimeEventBus.history(session_id)`. These events are annotated with
+command-subtask context including the command name, task id, subagent type,
+source, run id, and task tool identifiers. Successful subtasks surface their
+tool lifecycle events first and then emit `command.subtask.completed`.
 
 If the `task` tool is unavailable, asks for permission, is denied, fails
 validation, errors, or is cancelled, Runtime v2 does not send a partial subtask
 result to the parent provider. It falls back to the ordinary command prompt
 expansion and records the failed or unavailable subtask status in run metadata.
+Any lifecycle events produced by the failed task tool execution are still
+surfaced.
 
 After a command-backed `AgentRuntime.run(...)` returns or pauses, Runtime v2
 emits one `command.executed` runtime event. The event uses the resolved

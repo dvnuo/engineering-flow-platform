@@ -1046,6 +1046,7 @@ async def test_command_subtask_true_executes_task_tool_before_parent_provider():
             )
         ]
     )
+    bus = RuntimeEventBus()
     provider = ScriptedLLMProvider([{"content": "Parent final."}])
     runtime = AgentRuntime(
         provider=provider,
@@ -1056,6 +1057,7 @@ async def test_command_subtask_true_executes_task_tool_before_parent_provider():
         ),
         command_registry=registry,
         tool_registry=ToolRegistry([create_task_tool(task_runner)]),
+        event_bus=bus,
     )
 
     result = await runtime.run(
@@ -1095,6 +1097,39 @@ async def test_command_subtask_true_executes_task_tool_before_parent_provider():
     assert metadata["command_arguments"] == "src/runtime"
     assert metadata["command_metadata"]["subtask"] is True
 
+    task_tool_events = [
+        event
+        for event in result.runtime_events
+        if event.payload.get("source") == "command.subtask"
+        and event.payload.get("tool_call_id") == task_request.task_id
+    ]
+    assert [event.type for event in task_tool_events] == [
+        "tool.started",
+        "tool.completed",
+    ]
+    for event in task_tool_events:
+        assert event.session_id == "session-command-subtask"
+        assert event.payload["source"] == "command.subtask"
+        assert event.payload["command_name"] == "review"
+        assert event.payload["task_id"] == task_request.task_id
+        assert event.payload["subagent_type"] == "general"
+        assert event.payload["tool_id"] == "task"
+        assert event.payload["tool_name"] == "task"
+        assert event.payload["tool_call_id"] == task_request.task_id
+        assert event.payload["run_id"] == metadata["run_id"]
+
+    bus_task_tool_events = [
+        event
+        for event in bus.history("session-command-subtask")
+        if event.payload.get("source") == "command.subtask"
+        and event.payload.get("tool_call_id") == task_request.task_id
+    ]
+    assert bus_task_tool_events == task_tool_events
+    assert all(
+        bus_event is result_event
+        for bus_event, result_event in zip(bus_task_tool_events, task_tool_events)
+    )
+
     subtask_events = [
         event for event in result.runtime_events if event.type == "command.subtask.completed"
     ]
@@ -1103,6 +1138,9 @@ async def test_command_subtask_true_executes_task_tool_before_parent_provider():
     ]
     assert len(subtask_events) == 1
     assert len(command_events) == 1
+    assert result.runtime_events.index(task_tool_events[-1]) < result.runtime_events.index(
+        subtask_events[0]
+    )
     assert subtask_events[0].payload == {
         "run_id": metadata["run_id"],
         "command": "review",
@@ -1324,6 +1362,7 @@ async def test_command_subtask_error_falls_back_to_ordinary_command_prompt():
             )
         ]
     )
+    bus = RuntimeEventBus()
     provider = ScriptedLLMProvider([{"content": "Parent fallback."}])
     runtime = AgentRuntime(
         provider=provider,
@@ -1334,6 +1373,7 @@ async def test_command_subtask_error_falls_back_to_ordinary_command_prompt():
         ),
         command_registry=registry,
         tool_registry=ToolRegistry([create_task_tool(task_runner)]),
+        event_bus=bus,
     )
 
     result = await runtime.run(
@@ -1353,6 +1393,40 @@ async def test_command_subtask_error_falls_back_to_ordinary_command_prompt():
     assert request.metadata["command_subtask_result_status"] == "error"
     assert request.metadata["command_subtask_result_error"] == "child failed"
     assert request.metadata["command_subtask_output_metadata"] == {"phase": "child"}
+    task_id = request.metadata["command_subtask_task_id"]
+    task_tool_events = [
+        event
+        for event in result.runtime_events
+        if event.payload.get("source") == "command.subtask"
+        and event.payload.get("tool_call_id") == task_id
+    ]
+    assert [event.type for event in task_tool_events] == [
+        "tool.started",
+        "tool.completed",
+    ]
+    for event in task_tool_events:
+        assert event.session_id == "session-command-subtask-error"
+        assert event.payload["source"] == "command.subtask"
+        assert event.payload["command_name"] == "review"
+        assert event.payload["task_id"] == task_id
+        assert event.payload["subagent_type"] == "general"
+        assert event.payload["tool_id"] == "task"
+        assert event.payload["tool_name"] == "task"
+        assert event.payload["tool_call_id"] == task_id
+        assert event.payload["run_id"] == request.metadata["run_id"]
+    assert task_tool_events[-1].payload["status"] == "error"
+    assert task_tool_events[-1].payload["success"] is False
+    bus_task_tool_events = [
+        event
+        for event in bus.history("session-command-subtask-error")
+        if event.payload.get("source") == "command.subtask"
+        and event.payload.get("tool_call_id") == task_id
+    ]
+    assert bus_task_tool_events == task_tool_events
+    assert all(
+        bus_event is result_event
+        for bus_event, result_event in zip(bus_task_tool_events, task_tool_events)
+    )
     assert not [
         event for event in result.runtime_events if event.type == "command.subtask.completed"
     ]
