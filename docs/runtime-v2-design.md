@@ -354,9 +354,12 @@ replaced with a preview plus a note that points at the saved output. If
 specific sections later with `read_file` line ranges or `grep` instead of
 reading the full large file back into context. Large files and files referenced
 by `output_path` should be read incrementally with `read_file` `offset` and
-`limit` unless the full content is intentionally needed. Tools that explicitly
-set their own truncation
-metadata are treated as already normalized and are not truncated a second time.
+`limit` unless the full content is intentionally needed. If the resolved tool
+registry includes an enabled `task` tool in the base config, the archived-output
+hint instead recommends using that tool to have an explore or research subagent
+inspect the saved file with `grep` and ranged `read` calls. Tools that
+explicitly set their own truncation metadata are treated as already normalized
+and are not truncated a second time.
 
 Mutating file tools return model-readable diagnostics in addition to structured
 metadata. `edit` returns a successful `ToolResult` with the path, replacement
@@ -473,7 +476,13 @@ transient system reminder instructing the model to call `StructuredOutput`
 instead of replying with plain text; that reminder is never written to session
 history. If the run completes with assistant text and no structured-output tool
 call, the loop preserves the normal assistant history but returns
-`status="error"` and emits `structured_output.missing`.
+`status="error"` and emits `structured_output.missing`. The same strict
+conversion applies when a required structured-output run reaches
+`max_iterations` without a valid terminal `StructuredOutput` result, including
+after a validation error from that tool. Runs that stop for permission,
+question, or cancellation keep their waiting or cancelled status. The missing
+event records the run id, structured-output tool id, iteration count, and prior
+loop status before conversion.
 
 The core built-in registry is workspace-contained and intentionally independent
 from the legacy runtime. It preserves EFP ids while exposing opencode-style

@@ -40,10 +40,12 @@ class ToolOutputTruncator:
         output_dir: Union[str, Path],
         limits: Optional[TruncationLimits] = None,
         archive_full_output: bool = True,
+        task_hint_enabled: bool = False,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.limits = limits or TruncationLimits()
         self.archive_full_output = bool(archive_full_output)
+        self.task_hint_enabled = bool(task_hint_enabled)
 
     def truncate(
         self,
@@ -100,6 +102,7 @@ class ToolOutputTruncator:
             removed=removed,
             output_path=output_path,
             direction=_normalize_direction(active_limits.direction),
+            task_hint_enabled=self.task_hint_enabled,
         )
         return TruncationResult(content=content, truncated=True, metadata=metadata)
 
@@ -233,6 +236,7 @@ def _format_truncated_content(
     removed: dict[str, int],
     output_path: Optional[str],
     direction: str,
+    task_hint_enabled: bool,
 ) -> str:
     notice = (
         f"...{removed['lines']} lines/{removed['bytes']} bytes truncated..."
@@ -241,6 +245,13 @@ def _format_truncated_content(
         hint = (
             "Full tool output was not archived. Re-run with narrower tool "
             "arguments to inspect specific sections."
+        )
+    elif task_hint_enabled:
+        hint = (
+            f"Full tool output was saved to {output_path}. Use the Task tool "
+            "to have an explore or research subagent inspect the saved file "
+            "with grep and read using offset/limit. Do not read the entire "
+            "file at once."
         )
     else:
         hint = (

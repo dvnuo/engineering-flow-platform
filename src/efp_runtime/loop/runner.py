@@ -543,29 +543,28 @@ class RuntimeLoopRunner:
 
         if status == LoopStatus.CANCELLED:
             publish_cancelled("finish")
-        if (
-            structured_output_required
-            and status == LoopStatus.COMPLETED
-            and structured_output is None
-        ):
-            status = LoopStatus.ERROR
-            runtime_events.append(
-                RuntimeEvent(
-                    type="structured_output.missing",
-                    message="Structured output was requested but not provided.",
-                    session_id=resolved_session_id,
-                    message_id=(
-                        final_assistant_message.message_id
-                        if final_assistant_message is not None
-                        else None
-                    ),
-                    payload={
-                        "run_id": run_id,
-                        "tool_id": structured_output_tool_id,
-                        "iterations": iterations,
-                    },
+        if structured_output_required and structured_output is None:
+            prior_status = status
+            if prior_status in (LoopStatus.COMPLETED, LoopStatus.MAX_ITERATIONS):
+                status = LoopStatus.ERROR
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="structured_output.missing",
+                        message="Structured output was requested but not provided.",
+                        session_id=resolved_session_id,
+                        message_id=(
+                            final_assistant_message.message_id
+                            if final_assistant_message is not None
+                            else None
+                        ),
+                        payload={
+                            "run_id": run_id,
+                            "tool_id": structured_output_tool_id,
+                            "iterations": iterations,
+                            "prior_status": prior_status,
+                        },
+                    )
                 )
-            )
         finish_payload = {
             "run_id": run_id,
             "status": status,

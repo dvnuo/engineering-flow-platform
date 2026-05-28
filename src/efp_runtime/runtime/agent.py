@@ -1203,6 +1203,10 @@ def _resolve_tool_runtime(
         output_truncator=_resolve_tool_output_truncator(
             workspace_root=workspace_root,
             config=config,
+            task_hint_enabled=_task_truncation_hint_enabled(
+                registry=registry,
+                config=config,
+            ),
         ),
     )
 
@@ -1220,6 +1224,7 @@ def _resolve_tool_output_truncator(
     *,
     workspace_root: str | Path | None,
     config: RuntimeConfig,
+    task_hint_enabled: bool = False,
 ) -> ToolOutputTruncator | None:
     if workspace_root is None:
         return None
@@ -1240,7 +1245,23 @@ def _resolve_tool_output_truncator(
             direction=config.tool_output_truncation_direction,
         ),
         archive_full_output=config.archive_truncated_tool_outputs,
+        task_hint_enabled=task_hint_enabled,
     )
+
+
+def _task_truncation_hint_enabled(
+    *,
+    registry: ToolRegistry,
+    config: RuntimeConfig,
+) -> bool:
+    if "task" not in registry.ids():
+        return False
+    selection = _config_tool_selection(config)
+    if "task" in selection.forced_disabled:
+        return False
+    if "task" in selection.disabled:
+        return False
+    return selection.enabled is None or "task" in selection.enabled
 
 
 def _resolve_skill_discovery(

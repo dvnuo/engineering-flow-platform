@@ -52,6 +52,7 @@ def test_max_lines_truncates_and_archives_full_output(tmp_path: Path):
     assert "lines/" in result.content
     assert "read_file" in result.content
     assert "grep" in result.content
+    assert "Task tool" not in result.content
 
     output_path = Path(result.metadata["output_path"])
     assert output_path.exists()
@@ -107,7 +108,10 @@ async def test_tool_result_declared_truncated_is_not_truncated_again(tmp_path: P
     runtime = ToolRuntime(
         ToolRegistry([_tool("long", execute=execute)]),
         default_output_policy=OutputPolicy(max_lines=2, max_bytes=1024),
-        output_truncator=ToolOutputTruncator(tmp_path / "tool-output"),
+        output_truncator=ToolOutputTruncator(
+            tmp_path / "tool-output",
+            task_hint_enabled=True,
+        ),
     )
 
     result = await runtime.execute(ToolCall(id="call-long", tool_id="long", args={}))
@@ -115,6 +119,7 @@ async def test_tool_result_declared_truncated_is_not_truncated_again(tmp_path: P
     assert result.content == content
     assert result.truncated is True
     assert result.metadata["truncated"] is True
+    assert "Task tool" not in result.content
     assert "output_path" not in result.metadata
     assert not (tmp_path / "tool-output").exists()
 
@@ -145,6 +150,8 @@ async def test_agent_runtime_archives_under_workspace_and_preserves_explicit_run
     assert result.status == LoopStatus.COMPLETED
     tool_result = _first_tool_result(runtime.store.read_history("session-tool-output"))
     assert tool_result.truncated is True
+    assert "read_file or grep" in tool_result.content
+    assert "Task tool" not in tool_result.content
     output_path = Path(tool_result.metadata["output_path"])
     output_path.relative_to(tmp_path.resolve())
     assert output_path.parent == tmp_path / ".efp_runtime" / "tool-output"
@@ -159,6 +166,42 @@ async def test_agent_runtime_archives_under_workspace_and_preserves_explicit_run
 
     assert explicit.tool_runtime is explicit_runtime
     assert explicit.tool_runtime.output_truncator is None
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_uses_task_hint_when_task_tool_is_enabled(tmp_path: Path):
+    provider = ScriptedLLMProvider(
+        [
+            {"tool_calls": [_tool_call("call-long", "long")]},
+            {"content": "done"},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=3,
+            tool_output_max_lines=2,
+            tool_output_max_bytes=1024,
+        ),
+        tool_registry=ToolRegistry(
+            [
+                _tool("long", output=_long_output()),
+                _tool("task"),
+            ]
+        ),
+    )
+
+    result = await runtime.run("run long", session_id="session-task-hint")
+
+    assert result.status == LoopStatus.COMPLETED
+    tool_result = _first_tool_result(runtime.store.read_history("session-task-hint"))
+    assert tool_result.truncated is True
+    assert "Task tool" in tool_result.content
+    assert "explore or research subagent" in tool_result.content
+    assert "grep and read using offset/limit" in tool_result.content
+    assert "Do not read the entire file at once." in tool_result.content
+    assert "read_file or grep" not in tool_result.content
 
 
 def test_tool_output_truncation_sources_stay_inside_runtime_v2_boundary():

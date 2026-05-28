@@ -7,9 +7,11 @@ from typing import Any
 import pytest
 
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
+from efp_runtime.permissions import ASK, PermissionMetadata
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.models import MessagePart, MessageRole
 from efp_runtime.tools.builtin import create_structured_output_tool
+from efp_runtime.tools.definition import ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
 from efp_runtime.types import ToolCall
@@ -203,7 +205,15 @@ async def test_plain_text_with_output_schema_returns_missing_structured_output_e
 
     assert result.status == LoopStatus.ERROR
     assert result.structured_output is None
-    assert any(event.type == "structured_output.missing" for event in result.runtime_events)
+    missing_event = next(
+        event
+        for event in result.runtime_events
+        if event.type == "structured_output.missing"
+    )
+    assert missing_event.payload["run_id"]
+    assert missing_event.payload["tool_id"] == "StructuredOutput"
+    assert missing_event.payload["iterations"] == 1
+    assert missing_event.payload["prior_status"] == LoopStatus.COMPLETED
 
     history = runtime.store.read_history("session-structured-missing")
     assert [message.role for message in history] == [
@@ -211,6 +221,79 @@ async def test_plain_text_with_output_schema_returns_missing_structured_output_e
         MessageRole.ASSISTANT,
     ]
     assert history[1].parts[0].text == "plain text"
+
+
+@pytest.mark.asyncio
+async def test_invalid_structured_output_at_max_iterations_becomes_error(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    _tool_call(
+                        "call-invalid",
+                        "StructuredOutput",
+                        {"title": "missing count"},
+                    )
+                ]
+            }
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+    )
+
+    result = await runtime.run(
+        "Return structured output.",
+        session_id="session-structured-invalid",
+        output_schema=STRUCTURED_OUTPUT_SCHEMA,
+    )
+
+    assert result.status == LoopStatus.ERROR
+    assert result.iterations == 1
+    assert result.structured_output is None
+    assert any(event.type == "loop.max_iterations" for event in result.runtime_events)
+    missing_event = next(
+        event
+        for event in result.runtime_events
+        if event.type == "structured_output.missing"
+    )
+    assert missing_event.payload["run_id"]
+    assert missing_event.payload["tool_id"] == "StructuredOutput"
+    assert missing_event.payload["iterations"] == 1
+    assert missing_event.payload["prior_status"] == LoopStatus.MAX_ITERATIONS
+
+    history = runtime.store.read_history("session-structured-invalid")
+    tool_result = history[2].parts[0].tool_result
+    assert tool_result is not None
+    assert tool_result.status == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_permission_is_not_structured_output_error(tmp_path: Path):
+    provider = ScriptedLLMProvider(
+        [{"tool_calls": [_tool_call("call-approval", "approval_required", {})]}]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        tool_registry=ToolRegistry([_permission_tool("approval_required")]),
+    )
+
+    result = await runtime.run(
+        "Return structured output after approval.",
+        session_id="session-structured-permission",
+        output_schema=STRUCTURED_OUTPUT_SCHEMA,
+    )
+
+    assert result.status == LoopStatus.WAITING_FOR_PERMISSION
+    assert result.pending_permission_request is not None
+    assert result.structured_output is None
+    assert not any(
+        event.type == "structured_output.missing" for event in result.runtime_events
+    )
 
 
 @pytest.mark.asyncio
@@ -317,3 +400,19 @@ def _tool_call(call_id: str, tool_name: str, arguments: dict[str, Any]) -> dict[
             "arguments": json.dumps(arguments, sort_keys=True),
         },
     }
+
+
+def _permission_tool(tool_id: str) -> ToolDef:
+    async def execute(args: dict[str, Any], context: ToolContext):
+        return "unused"
+
+    return ToolDef(
+        id=tool_id,
+        description="Requires approval",
+        input_schema={"type": "object", "properties": {}},
+        permission=PermissionMetadata(
+            action=ASK,
+            reason="Approval required.",
+        ),
+        execute=execute,
+    )
