@@ -99,13 +99,26 @@ def _create_fetch_tool(
             "additionalProperties": False,
         },
         execute=execute,
-        permission=permission
-        or PermissionMetadata(
-            action=ALLOW,
-            category="network",
-            resource="url",
-            risk="medium",
-        ),
+        permission=_fetch_permission(permission),
+    )
+
+
+def _fetch_permission(permission: PermissionMetadata | None) -> PermissionMetadata:
+    resolved = permission or PermissionMetadata(
+        action=ALLOW,
+        category="network",
+        resource="url",
+        risk="medium",
+    )
+    data = dict(resolved.data)
+    data.setdefault("subject_arg", "url")
+    return PermissionMetadata(
+        action=resolved.action,
+        reason=resolved.reason,
+        category=resolved.category,
+        resource=resolved.resource,
+        risk=resolved.risk,
+        data=data,
     )
 
 

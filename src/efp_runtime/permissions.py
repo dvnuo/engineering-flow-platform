@@ -45,6 +45,7 @@ class PermissionConfigRule:
     reason: str = ""
     risk: str | None = None
     patterns: tuple[str, ...] = ()
+    subject_pattern: str | None = None
     order: int = 0
 
 
@@ -54,6 +55,7 @@ class PermissionConfigMatch:
 
     rule: PermissionConfigRule
     match_type: str
+    subject: str | None = None
 
 
 class PermissionConfig:
@@ -71,44 +73,112 @@ class PermissionConfig:
         *,
         tool_id: str,
         metadata: PermissionMetadata,
+        args: Mapping[str, Any] | None = None,
     ) -> PermissionConfigMatch | None:
         tool_id = str(tool_id)
+        subject = _permission_subject(args or {}, metadata)
 
         exact = self._match_exact(tool_id)
         if exact is not None:
             return PermissionConfigMatch(rule=exact, match_type="exact")
 
+        exact_subject = self._match_exact_subject(tool_id, subject)
+        if exact_subject is not None:
+            return PermissionConfigMatch(
+                rule=exact_subject,
+                match_type="exact_subject",
+                subject=subject,
+            )
+
         wildcard = self._match_wildcard(tool_id)
         if wildcard is not None:
             return PermissionConfigMatch(rule=wildcard, match_type="wildcard")
+
+        wildcard_subject = self._match_wildcard_subject(tool_id, subject)
+        if wildcard_subject is not None:
+            return PermissionConfigMatch(
+                rule=wildcard_subject,
+                match_type="wildcard_subject",
+                subject=subject,
+            )
 
         category = self._match_category(tool_id=tool_id, metadata=metadata)
         if category is not None:
             return PermissionConfigMatch(rule=category, match_type="category")
 
+        category_subject = self._match_category_subject(
+            tool_id=tool_id,
+            metadata=metadata,
+            subject=subject,
+        )
+        if category_subject is not None:
+            return PermissionConfigMatch(
+                rule=category_subject,
+                match_type="category_subject",
+                subject=subject,
+            )
+
         fallback = self._match_fallback()
         if fallback is not None:
             return PermissionConfigMatch(rule=fallback, match_type="fallback")
+
+        fallback_subject = self._match_fallback_subject(subject)
+        if fallback_subject is not None:
+            return PermissionConfigMatch(
+                rule=fallback_subject,
+                match_type="fallback_subject",
+                subject=subject,
+            )
 
         return None
 
     def _match_exact(self, tool_id: str) -> PermissionConfigRule | None:
         for rule in self._rules:
-            if rule.key == tool_id:
+            if rule.subject_pattern is None and rule.key == tool_id:
                 return rule
         return None
+
+    def _match_exact_subject(
+        self,
+        tool_id: str,
+        subject: str | None,
+    ) -> PermissionConfigRule | None:
+        if subject is None:
+            return None
+        return _most_specific_subject_rule(
+            rule
+            for rule in self._rules
+            if rule.key == tool_id and _subject_rule_matches(rule, subject)
+        )
 
     def _match_wildcard(self, tool_id: str) -> PermissionConfigRule | None:
         matches = [
             rule
             for rule in self._rules
-            if _is_permission_wildcard(rule.key)
+            if rule.subject_pattern is None
+            and _is_permission_wildcard(rule.key)
             and rule.key != "*"
             and fnmatch.fnmatchcase(tool_id, rule.key)
         ]
         if not matches:
             return None
         return sorted(matches, key=lambda rule: (-len(rule.key), rule.order))[0]
+
+    def _match_wildcard_subject(
+        self,
+        tool_id: str,
+        subject: str | None,
+    ) -> PermissionConfigRule | None:
+        if subject is None:
+            return None
+        return _most_specific_subject_rule(
+            rule
+            for rule in self._rules
+            if _is_permission_wildcard(rule.key)
+            and rule.key != "*"
+            and fnmatch.fnmatchcase(tool_id, rule.key)
+            and _subject_rule_matches(rule, subject)
+        )
 
     def _match_category(
         self,
@@ -118,6 +188,8 @@ class PermissionConfig:
     ) -> PermissionConfigRule | None:
         category = metadata.category or ""
         for rule in self._rules:
+            if rule.subject_pattern is not None:
+                continue
             if _is_permission_wildcard(rule.key):
                 continue
             if _permission_category_matches(
@@ -128,11 +200,45 @@ class PermissionConfig:
                 return rule
         return None
 
+    def _match_category_subject(
+        self,
+        *,
+        tool_id: str,
+        metadata: PermissionMetadata,
+        subject: str | None,
+    ) -> PermissionConfigRule | None:
+        if subject is None:
+            return None
+        category = metadata.category or ""
+        return _most_specific_subject_rule(
+            rule
+            for rule in self._rules
+            if not _is_permission_wildcard(rule.key)
+            and _permission_category_matches(
+                rule.key,
+                tool_id=tool_id,
+                category=category,
+            )
+            and _subject_rule_matches(rule, subject)
+        )
+
     def _match_fallback(self) -> PermissionConfigRule | None:
         for rule in self._rules:
-            if rule.key == "*":
+            if rule.subject_pattern is None and rule.key == "*":
                 return rule
         return None
+
+    def _match_fallback_subject(
+        self,
+        subject: str | None,
+    ) -> PermissionConfigRule | None:
+        if subject is None:
+            return None
+        return _most_specific_subject_rule(
+            rule
+            for rule in self._rules
+            if rule.key == "*" and _subject_rule_matches(rule, subject)
+        )
 
 
 @dataclass(init=False, frozen=True)
@@ -567,10 +673,15 @@ class ConfiguredPermissionBroker(PermissionBroker):
         metadata: PermissionMetadata,
         context: Any = None,
     ) -> PermissionDecision:
-        match = self.permission_config.match(tool_id=tool_id, metadata=metadata)
+        match = self.permission_config.match(
+            tool_id=tool_id,
+            args=args,
+            metadata=metadata,
+        )
         overlay_match = _context_permission_overlay_match(
             context,
             tool_id=tool_id,
+            args=args,
             metadata=metadata,
         )
         if overlay_match is not None:
@@ -641,6 +752,40 @@ def _rule_matches(
     return any(pattern == "*" or pattern in args_text for pattern in patterns)
 
 
+def _permission_subject(
+    args: Mapping[str, Any],
+    metadata: PermissionMetadata,
+) -> str | None:
+    subject = metadata.data.get("subject")
+    if isinstance(subject, str) and subject:
+        return subject
+
+    subject_arg = metadata.data.get("subject_arg")
+    if not isinstance(subject_arg, str) or not subject_arg:
+        return None
+    value = args.get(subject_arg)
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _subject_rule_matches(rule: PermissionConfigRule, subject: str) -> bool:
+    pattern = rule.subject_pattern
+    return pattern is not None and fnmatch.fnmatchcase(subject, pattern)
+
+
+def _most_specific_subject_rule(
+    rules: Iterable[PermissionConfigRule],
+) -> PermissionConfigRule | None:
+    matches = list(rules)
+    if not matches:
+        return None
+    return sorted(
+        matches,
+        key=lambda rule: (-(len(rule.subject_pattern or "")), rule.order),
+    )[0]
+
+
 def normalize_tool_permissions(
     permissions: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -669,21 +814,83 @@ def normalize_tool_permissions(
             )
 
         value = dict(raw_value)
-        action = value.get("action")
+        if "action" in value:
+            normalized[key] = _normalize_direct_permission_mapping(key, value)
+            continue
+
+        normalized[key] = _normalize_subject_permission_mapping(key, value)
+    return normalized
+
+
+def _normalize_direct_permission_mapping(
+    key: str,
+    value: dict[Any, Any],
+) -> dict[str, Any]:
+    action = value.get("action")
+    if action is None:
+        raise ValueError(f"tool_permissions[{key!r}] mapping requires an action")
+    normalized = dict(value)
+    normalized["action"] = _validate_permission_action(action, key=key)
+    if "reason" in normalized and normalized["reason"] is not None:
+        normalized["reason"] = str(normalized["reason"])
+    if "risk" in normalized and normalized["risk"] is not None:
+        normalized["risk"] = str(normalized["risk"])
+    if "patterns" in normalized:
+        normalized["patterns"] = _normalize_patterns(normalized["patterns"])
+    elif "pattern" in normalized:
+        normalized["patterns"] = _normalize_patterns(normalized["pattern"])
+    return normalized
+
+
+def _normalize_subject_permission_mapping(
+    key: str,
+    value: dict[Any, Any],
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for raw_pattern, raw_rule in value.items():
+        if not isinstance(raw_pattern, str):
+            raise TypeError(
+                f"tool_permissions[{key!r}] subject patterns must be strings"
+            )
+        subject_pattern = raw_pattern.strip()
+        if not subject_pattern:
+            raise ValueError(
+                f"tool_permissions[{key!r}] subject patterns must not be empty"
+            )
+
+        nested_key = f"{key!r}][{subject_pattern!r}"
+        if isinstance(raw_rule, str):
+            normalized[subject_pattern] = _validate_permission_action(
+                raw_rule,
+                key=nested_key,
+            )
+            continue
+
+        if not isinstance(raw_rule, Mapping):
+            raise TypeError(
+                f"tool_permissions[{key!r}][{subject_pattern!r}] "
+                "nested permission values must be strings or mappings"
+            )
+
+        nested_rule = dict(raw_rule)
+        unsupported = sorted(set(nested_rule) - {"action", "reason", "risk"})
+        if unsupported:
+            raise ValueError(
+                f"tool_permissions[{key!r}][{subject_pattern!r}] "
+                f"has unsupported key(s): {', '.join(unsupported)}"
+            )
+        action = nested_rule.get("action")
         if action is None:
             raise ValueError(
-                f"tool_permissions[{key!r}] mapping requires an action"
+                f"tool_permissions[{key!r}][{subject_pattern!r}] "
+                "mapping requires an action"
             )
-        value["action"] = _validate_permission_action(action, key=key)
-        if "reason" in value and value["reason"] is not None:
-            value["reason"] = str(value["reason"])
-        if "risk" in value and value["risk"] is not None:
-            value["risk"] = str(value["risk"])
-        if "patterns" in value:
-            value["patterns"] = _normalize_patterns(value["patterns"])
-        elif "pattern" in value:
-            value["patterns"] = _normalize_patterns(value["pattern"])
-        normalized[key] = value
+        nested_rule["action"] = _validate_permission_action(action, key=nested_key)
+        if "reason" in nested_rule and nested_rule["reason"] is not None:
+            nested_rule["reason"] = str(nested_rule["reason"])
+        if "risk" in nested_rule and nested_rule["risk"] is not None:
+            nested_rule["risk"] = str(nested_rule["risk"])
+        normalized[subject_pattern] = nested_rule
     return normalized
 
 
@@ -726,7 +933,8 @@ def _permission_config_rules(
 ) -> list[PermissionConfigRule]:
     normalized = normalize_tool_permissions(permissions)
     rules: list[PermissionConfigRule] = []
-    for order, (key, value) in enumerate(normalized.items()):
+    order = 0
+    for key, value in normalized.items():
         if isinstance(value, str):
             rules.append(
                 PermissionConfigRule(
@@ -735,22 +943,55 @@ def _permission_config_rules(
                     order=order,
                 )
             )
+            order += 1
             continue
 
-        rules.append(
-            PermissionConfigRule(
-                key=key,
-                action=value["action"],
-                reason=str(value.get("reason") or ""),
-                risk=(
-                    None
-                    if value.get("risk") is None
-                    else str(value.get("risk"))
-                ),
-                patterns=tuple(_normalize_patterns(value.get("patterns"))),
-                order=order,
+        if "action" in value:
+            rules.append(
+                PermissionConfigRule(
+                    key=key,
+                    action=value["action"],
+                    reason=str(value.get("reason") or ""),
+                    risk=(
+                        None
+                        if value.get("risk") is None
+                        else str(value.get("risk"))
+                    ),
+                    patterns=tuple(_normalize_patterns(value.get("patterns"))),
+                    order=order,
+                )
             )
-        )
+            order += 1
+            continue
+
+        for subject_pattern, subject_value in value.items():
+            if isinstance(subject_value, str):
+                rules.append(
+                    PermissionConfigRule(
+                        key=key,
+                        action=subject_value,
+                        subject_pattern=subject_pattern,
+                        order=order,
+                    )
+                )
+                order += 1
+                continue
+
+            rules.append(
+                PermissionConfigRule(
+                    key=key,
+                    action=subject_value["action"],
+                    reason=str(subject_value.get("reason") or ""),
+                    risk=(
+                        None
+                        if subject_value.get("risk") is None
+                        else str(subject_value.get("risk"))
+                    ),
+                    subject_pattern=subject_pattern,
+                    order=order,
+                )
+            )
+            order += 1
     return rules
 
 
@@ -828,6 +1069,10 @@ def _metadata_from_permission_config(
         data["permission_config_source"] = source
     if rule.patterns:
         data["patterns"] = list(rule.patterns)
+    if rule.subject_pattern is not None:
+        data["permission_config_subject_pattern"] = rule.subject_pattern
+        if match.subject is not None:
+            data["permission_subject"] = match.subject
 
     if rule.action == DENY:
         reason = rule.reason or f"Permission denied by {deny_reason_label}: {rule.key}"
@@ -893,6 +1138,13 @@ def _request_patterns(
             patterns = _normalize_patterns(permission_hints.get("pattern"))
     if not patterns and context_metadata:
         patterns = _normalize_patterns(context_metadata.get("permission_patterns"))
+    if (
+        not patterns
+        and metadata.data.get("permission_config_subject_pattern") is not None
+    ):
+        subject = _permission_subject(args, metadata)
+        if subject:
+            patterns = [subject]
     if not patterns and metadata.category == "shell":
         command = _string_arg(args, "command")
         if command:
@@ -959,6 +1211,7 @@ def _context_permission_overlay_match(
     context: Any,
     *,
     tool_id: str,
+    args: Mapping[str, Any],
     metadata: PermissionMetadata,
 ) -> PermissionConfigMatch | None:
     context_metadata = _context_metadata(context)
@@ -970,7 +1223,11 @@ def _context_permission_overlay_match(
     overlay = context_metadata.get(AGENT_PERMISSION_OVERLAY_METADATA_KEY)
     if overlay is None:
         return None
-    return PermissionConfig(overlay).match(tool_id=tool_id, metadata=metadata)
+    return PermissionConfig(overlay).match(
+        tool_id=tool_id,
+        args=args,
+        metadata=metadata,
+    )
 
 
 def _context_metadata(context: Any) -> Mapping[str, Any]:

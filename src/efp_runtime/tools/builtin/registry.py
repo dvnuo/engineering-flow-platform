@@ -159,7 +159,9 @@ def create_core_tool_registry(
             build_skill_tool(
                 resolved_skill_discovery,
                 max_sidecar_chars=max_skill_sidecar_chars,
-                permission=skill_permission or _default_skill_permission(),
+                permission=skill_permission or _default_skill_permission(
+                    subject_arg="name"
+                ),
             )
         )
     if skill_list_discovery is not None:
@@ -211,10 +213,14 @@ def _resolve_skill_list_discovery(
     return None
 
 
-def _default_skill_permission() -> PermissionMetadata:
+def _default_skill_permission(*, subject_arg: str | None = None) -> PermissionMetadata:
+    data = {}
+    if subject_arg is not None:
+        data["subject_arg"] = subject_arg
     return PermissionMetadata(
         action=ALLOW,
         category="skill",
         resource="context",
         risk="low",
+        data=data,
     )

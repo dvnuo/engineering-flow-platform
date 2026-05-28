@@ -186,6 +186,7 @@ def create_task_tool(
             category="task",
             resource="subagent",
             risk="medium",
+            data={"subject_arg": "subagent_type"},
         ),
         metadata={"task_tool": True, "allow_background": allow_background},
         runtime_metadata=(

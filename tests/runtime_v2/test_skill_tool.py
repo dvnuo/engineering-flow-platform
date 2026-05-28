@@ -9,7 +9,7 @@ from efp_runtime.skills.discovery import (
     default_skill_directories,
     discover_skills,
 )
-from efp_runtime.skills.tool import build_skill_tool
+from efp_runtime.skills.tool import build_skill_list_tool, build_skill_tool
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
@@ -84,6 +84,19 @@ def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp
     empty_tool = build_skill_tool(SkillDiscovery([]))
 
     assert "No skills available." in empty_tool.description
+
+
+def test_skill_tool_permission_subject_metadata(tmp_path):
+    _write_skill(tmp_path, "safe-skill")
+    discovery = SkillDiscovery([tmp_path])
+
+    skill_tool = build_skill_tool(discovery)
+    skill_list_tool = build_skill_list_tool(discovery)
+
+    assert skill_tool.permission.category == "skill"
+    assert skill_tool.permission.data["subject_arg"] == "name"
+    assert skill_list_tool.permission.category == "skill"
+    assert "subject_arg" not in skill_list_tool.permission.data
 
 
 @pytest.mark.asyncio

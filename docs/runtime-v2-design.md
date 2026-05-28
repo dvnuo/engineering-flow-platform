@@ -395,9 +395,15 @@ aliases such as `bash`, `edit`, `read`, `list`, `grep`, `glob`, `task`,
 patterns such as `external_*`; or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
 `"deny"`, or a mapping like
 `{"action": "ask", "reason": "...", "risk": "medium", "patterns": ["..."]}`.
+For tools whose permission applies to an argument value, config also accepts
+nested subject-pattern maps. For example, `{"skill": {"*": "allow",
+"internal-*": "deny"}}` matches the requested skill name; `task` matches
+`subagent_type`; and `webfetch` matches the requested URL for both `fetch` and
+`webfetch`.
 Runtime config matching is ordered by exact tool id, wildcard specificity,
 category/metadata category, `*`, then the tool definition's original
-`PermissionMetadata`. When an agent profile selected for a run has
+`PermissionMetadata`; each stage checks direct rules before subject-pattern
+rules. When an agent profile selected for a run has
 `metadata["permission"]`, that normalized profile permission map is carried in
 run metadata as `agent_permission_overlay` and is evaluated after
 `RuntimeConfig.tool_permissions`. The profile overlay wins for any matching

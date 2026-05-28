@@ -58,6 +58,8 @@ async def test_core_registry_includes_remaining_opencode_aliases(tmp_path: Path)
     assert registry.require("webfetch").input_schema == registry.require(
         "fetch"
     ).input_schema
+    assert registry.require("fetch").permission.data["subject_arg"] == "url"
+    assert registry.require("webfetch").permission.data["subject_arg"] == "url"
     assert registry.require("todowrite").input_schema == registry.require(
         "todo_write"
     ).input_schema
@@ -214,6 +216,43 @@ async def test_webfetch_category_permission_denies_fetch_ids(tmp_path: Path):
     assert {result.error for result in results} == {
         "Permission denied by runtime config: webfetch"
     }
+
+
+@pytest.mark.asyncio
+async def test_webfetch_nested_permission_matches_url_for_fetch_ids(
+    tmp_path: Path,
+    local_http_server: str,
+):
+    blocked_url = f"{local_http_server}/blocked"
+    allowed_url = f"{local_http_server}/ok"
+    runtime = ToolRuntime(
+        create_core_tool_registry(tmp_path),
+        permission_evaluator=ConfiguredPermissionBroker(
+            {
+                "webfetch": {
+                    "*": "allow",
+                    blocked_url: "deny",
+                }
+            }
+        ),
+    )
+
+    fetch_denied = await runtime.execute(
+        ToolCall(id="call-fetch", tool_id="fetch", args={"url": blocked_url})
+    )
+    webfetch_denied = await runtime.execute(
+        ToolCall(id="call-webfetch", tool_id="webfetch", args={"url": blocked_url})
+    )
+    allowed = await runtime.execute(
+        ToolCall(id="call-webfetch-ok", tool_id="webfetch", args={"url": allowed_url})
+    )
+
+    assert [fetch_denied.status, webfetch_denied.status] == [
+        "permission_denied",
+        "permission_denied",
+    ]
+    assert allowed.status == "success"
+    assert allowed.content == LocalFetchHandler.body
 
 
 @pytest.mark.asyncio

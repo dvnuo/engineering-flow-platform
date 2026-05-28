@@ -13,14 +13,80 @@ from efp_runtime.agents.profile import AgentProfile
 from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import ToolCall
-from efp_runtime.permissions import ALLOW, ConfiguredPermissionBroker, PermissionMetadata
+from efp_runtime.permissions import (
+    ALLOW,
+    ConfiguredPermissionBroker,
+    PermissionConfig,
+    PermissionMetadata,
+    normalize_agent_permission_overlay,
+    normalize_tool_permissions,
+)
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import _resolve_config
+from efp_runtime.tools.builtin.task import TaskToolRequest, create_task_tool
 from efp_runtime.tools.definition import ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
+from efp_runtime.tools.runtime import ToolRuntime
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_normalize_tool_permissions_accepts_nested_subject_maps():
+    normalized = normalize_tool_permissions(
+        {
+            "skill": {
+                "*": "allow",
+                "internal-*": "deny",
+                "experimental-*": {
+                    "action": "ask",
+                    "reason": "Review experimental skill.",
+                    "risk": "medium",
+                },
+            }
+        }
+    )
+
+    assert normalized == {
+        "skill": {
+            "*": "allow",
+            "internal-*": "deny",
+            "experimental-*": {
+                "action": "ask",
+                "reason": "Review experimental skill.",
+                "risk": "medium",
+            },
+        }
+    }
+    assert [
+        (rule.key, rule.subject_pattern, rule.action)
+        for rule in PermissionConfig(normalized).rules
+    ] == [
+        ("skill", "*", "allow"),
+        ("skill", "internal-*", "deny"),
+        ("skill", "experimental-*", "ask"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("permissions", "error"),
+    [
+        ({"skill": {1: "deny"}}, "subject patterns must be strings"),
+        ({"skill": {"": "deny"}}, "subject patterns must not be empty"),
+        ({"skill": {"internal-*": 7}}, "nested permission values"),
+        ({"skill": {"internal-*": {"reason": "missing action"}}}, "requires an action"),
+        (
+            {"skill": {"internal-*": {"action": "ask", "patterns": ["x"]}}},
+            "unsupported key",
+        ),
+    ],
+)
+def test_normalize_tool_permissions_rejects_malformed_nested_entries(
+    permissions: dict[str, Any],
+    error: str,
+):
+    with pytest.raises((TypeError, ValueError), match=error):
+        normalize_tool_permissions(permissions)
 
 
 @pytest.mark.asyncio
@@ -155,6 +221,114 @@ async def test_wildcard_permission_config_can_ask_for_custom_tools():
 
 
 @pytest.mark.asyncio
+async def test_skill_nested_permission_config_matches_skill_name(tmp_path: Path):
+    _write_skill(tmp_path, "internal-docs")
+    _write_skill(tmp_path, "public-docs")
+    runtime = AgentRuntime(
+        provider=ScriptedLLMProvider([]),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            skill_directories=[tmp_path],
+            tool_permissions={
+                "skill": {
+                    "*": "allow",
+                    "internal-*": "deny",
+                }
+            },
+        ),
+    )
+
+    denied = await _execute_tool(runtime, "skill", {"name": "internal-docs"})
+    allowed = await _execute_tool(runtime, "skill", {"name": "public-docs"})
+
+    assert denied.status == "permission_denied"
+    assert denied.error == "Permission denied by runtime config: skill"
+    assert allowed.status == "success"
+    assert allowed.output["name"] == "public-docs"
+
+
+@pytest.mark.asyncio
+async def test_skill_nested_ask_request_patterns_use_actual_skill_name(
+    tmp_path: Path,
+):
+    _write_skill(tmp_path, "experimental-docs")
+    runtime = AgentRuntime(
+        provider=ScriptedLLMProvider([]),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            skill_directories=[tmp_path],
+            tool_permissions={
+                "skill": {
+                    "*": "allow",
+                    "experimental-*": {
+                        "action": "ask",
+                        "reason": "Review experimental skill.",
+                    },
+                }
+            },
+        ),
+    )
+
+    result = await _execute_tool(runtime, "skill", {"name": "experimental-docs"})
+    request = result.metadata["permission_request"]
+
+    assert result.status == "permission_requested"
+    assert request["patterns"] == ["experimental-docs"]
+    assert request["metadata"]["permission_config_key"] == "skill"
+    assert request["metadata"]["permission_config_match"] == "exact_subject"
+    assert request["metadata"]["permission_config_subject_pattern"] == "experimental-*"
+    assert runtime.pending_permissions()[0]["request_id"] == request["request_id"]
+
+
+@pytest.mark.asyncio
+async def test_task_nested_permission_config_matches_subagent_type():
+    called: list[str] = []
+
+    async def runner(request: TaskToolRequest) -> str:
+        called.append(request.subagent_type)
+        return "ok"
+
+    runtime = ToolRuntime(
+        ToolRegistry([create_task_tool(runner)]),
+        permission_evaluator=ConfiguredPermissionBroker(
+            {
+                "task": {
+                    "*": "allow",
+                    "dangerous-reviewer": "deny",
+                }
+            }
+        ),
+    )
+
+    denied = await runtime.execute(
+        ToolCall(
+            id="call-task-denied",
+            tool_id="task",
+            args={
+                "description": "Review danger",
+                "prompt": "Inspect.",
+                "subagent_type": "dangerous-reviewer",
+            },
+        )
+    )
+    allowed = await runtime.execute(
+        ToolCall(
+            id="call-task-allowed",
+            tool_id="task",
+            args={
+                "description": "Review safely",
+                "prompt": "Inspect.",
+                "subagent_type": "scout",
+            },
+        )
+    )
+
+    assert denied.status == "permission_denied"
+    assert allowed.status == "success"
+    assert called == ["scout"]
+
+
+@pytest.mark.asyncio
 async def test_more_specific_wildcard_permission_wins_over_earlier_match():
     called: list[dict[str, Any]] = []
     runtime = AgentRuntime(
@@ -225,6 +399,49 @@ async def test_agent_permission_overlay_precedes_base_exact_category_and_wildcar
     assert wildcard.reason == (
         "Permission denied by agent permission overlay: external_*"
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_permission_overlay_accepts_nested_subject_maps():
+    overlay = {
+        "permission": {
+            "skill": {
+                "*": "allow",
+                "internal-*": "deny",
+            }
+        }
+    }
+    assert normalize_agent_permission_overlay(overlay) == overlay["permission"]
+    broker = ConfiguredPermissionBroker({"skill": {"*": "allow"}})
+    context = ToolContext(
+        session_id="session-overlay-subject",
+        metadata={
+            "agent_permission_overlay": overlay["permission"],
+            "agent_permission_overlay_source": "agent_profile",
+        },
+    )
+    metadata = PermissionMetadata(
+        action=ALLOW,
+        category="skill",
+        data={"subject_arg": "name"},
+    )
+
+    denied = await broker.evaluate(
+        tool_id="skill",
+        args={"name": "internal-docs"},
+        metadata=metadata,
+        context=context,
+    )
+    allowed = await broker.evaluate(
+        tool_id="skill",
+        args={"name": "public-docs"},
+        metadata=metadata,
+        context=context,
+    )
+
+    assert denied.action == "deny"
+    assert denied.reason == "Permission denied by agent permission overlay: skill"
+    assert allowed.action == "allow"
 
 
 @pytest.mark.asyncio
@@ -452,3 +669,13 @@ def _custom_tool(tool_id: str, called: list[dict[str, Any]]) -> ToolDef:
             risk="low",
         ),
     )
+
+
+def _write_skill(tmp_path: Path, name: str) -> Path:
+    skill_dir = tmp_path / name
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {name}\n---\n# {name}\n",
+        encoding="utf-8",
+    )
+    return skill_dir

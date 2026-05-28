@@ -19,6 +19,14 @@ DEFAULT_SKILL_PERMISSION = PermissionMetadata(
     category="skill",
     resource="context",
     risk="low",
+    data={"subject_arg": "name"},
+)
+
+DEFAULT_SKILL_LIST_PERMISSION = PermissionMetadata(
+    action=ALLOW,
+    category="skill",
+    resource="context",
+    risk="low",
 )
 
 
@@ -38,7 +46,7 @@ class SkillTool:
         self.tool_id = tool_id
         self.include_sidecar_content = include_sidecar_content
         self.max_sidecar_chars = max_sidecar_chars
-        self.permission = permission or DEFAULT_SKILL_PERMISSION
+        self.permission = _skill_permission(permission or DEFAULT_SKILL_PERMISSION)
 
     def definition(self) -> ToolDef:
         return ToolDef(
@@ -119,7 +127,7 @@ class SkillListTool:
     ):
         self.discovery = discovery
         self.tool_id = tool_id
-        self.permission = permission or DEFAULT_SKILL_PERMISSION
+        self.permission = permission or DEFAULT_SKILL_LIST_PERMISSION
 
     def definition(self) -> ToolDef:
         return ToolDef(
@@ -225,6 +233,19 @@ def build_skill_list_tool(
         tool_id=tool_id,
         permission=permission,
     ).definition()
+
+
+def _skill_permission(permission: PermissionMetadata) -> PermissionMetadata:
+    data = dict(permission.data)
+    data.setdefault("subject_arg", "name")
+    return PermissionMetadata(
+        action=permission.action,
+        reason=permission.reason,
+        category=permission.category,
+        resource=permission.resource,
+        risk=permission.risk,
+        data=data,
+    )
 
 
 def skill_package_to_context(

@@ -52,6 +52,8 @@ def test_create_task_tool_schema_and_id():
         },
         "additionalProperties": False,
     }
+    assert tool.permission.category == "task"
+    assert tool.permission.data["subject_arg"] == "subagent_type"
 
 
 @pytest.mark.asyncio
