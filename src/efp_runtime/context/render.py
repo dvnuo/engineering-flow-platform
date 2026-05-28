@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Union
 
 from ..compaction.strategy import PartAwareCompactionStrategy
 from ..llm.request import (
@@ -26,7 +26,7 @@ from ..tools.definition import ToolDef
 from ..types import Attachment, ToolCall, ToolResult
 
 
-HistoryInput = Session | Iterable[Message]
+HistoryInput = Union[Session, Iterable[Message]]
 
 
 def render_history(
