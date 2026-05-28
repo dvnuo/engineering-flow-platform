@@ -7,6 +7,7 @@ from threading import RLock
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..types import new_id
+from .checkpoint import SessionCheckpoint
 from .models import Message, MessagePart, MessagePartType, MessageRole, Session
 
 
@@ -18,6 +19,7 @@ class InMemorySessionStore:
 
     def __init__(self) -> None:
         self._sessions: Dict[str, Session] = {}
+        self._checkpoints: Dict[str, Dict[str, Tuple[SessionCheckpoint, Session]]] = {}
         self._lock = RLock()
 
     def create_session(
@@ -101,6 +103,73 @@ class InMemorySessionStore:
                             pairs[part.tool_result.call_id] = (call_part, part)
             return deepcopy(pairs)
 
+    def create_checkpoint(
+        self,
+        session_id: str,
+        *,
+        label: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        checkpoint_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> SessionCheckpoint:
+        with self._lock:
+            session = self._require_session(session_id)
+            snapshot = self._snapshot_session(session, message_id=message_id)
+            resolved_checkpoint_id = checkpoint_id or new_id("checkpoint")
+            checkpoints = self._checkpoints.setdefault(session.session_id, {})
+            if resolved_checkpoint_id in checkpoints:
+                raise ValueError(f"checkpoint already exists: {resolved_checkpoint_id}")
+
+            checkpoint = SessionCheckpoint(
+                checkpoint_id=resolved_checkpoint_id,
+                session_id=session.session_id,
+                message_id=message_id,
+                message_count=len(snapshot.messages),
+                label=label,
+                metadata=dict(metadata or {}),
+            )
+            checkpoints[checkpoint.checkpoint_id] = (
+                deepcopy(checkpoint),
+                deepcopy(snapshot),
+            )
+            return deepcopy(checkpoint)
+
+    def list_checkpoints(self, session_id: str) -> List[SessionCheckpoint]:
+        with self._lock:
+            self._require_session(session_id)
+            checkpoints = self._checkpoints.get(session_id, {})
+            ordered = sorted(
+                (checkpoint for checkpoint, _snapshot in checkpoints.values()),
+                key=lambda checkpoint: (checkpoint.created_at, checkpoint.checkpoint_id),
+            )
+            return deepcopy(ordered)
+
+    def restore_checkpoint(self, session_id: str, checkpoint_id: str) -> Session:
+        with self._lock:
+            self._require_session(session_id)
+            checkpoints = self._checkpoints.get(session_id, {})
+            try:
+                _checkpoint, snapshot = checkpoints[checkpoint_id]
+            except KeyError as exc:
+                raise KeyError(f"unknown checkpoint: {checkpoint_id}") from exc
+
+            restored = deepcopy(snapshot)
+            restored.session_id = session_id
+            self._rebind_session(restored)
+            self._sessions[session_id] = restored
+            return deepcopy(restored)
+
+    def delete_checkpoint(self, session_id: str, checkpoint_id: str) -> bool:
+        with self._lock:
+            self._require_session(session_id)
+            checkpoints = self._checkpoints.get(session_id, {})
+            if checkpoint_id not in checkpoints:
+                return False
+            del checkpoints[checkpoint_id]
+            if not checkpoints:
+                self._checkpoints.pop(session_id, None)
+            return True
+
     def _append_part_locked(
         self,
         session: Session,
@@ -154,6 +223,20 @@ class InMemorySessionStore:
                 return message
         raise KeyError(f"unknown message: {message_id}")
 
+    def _snapshot_session(self, session: Session, *, message_id: Optional[str]) -> Session:
+        snapshot = deepcopy(session)
+        if message_id is not None:
+            message_index = self._message_index(snapshot, message_id)
+            snapshot.messages = snapshot.messages[: message_index + 1]
+        self._rebind_session(snapshot)
+        return snapshot
+
+    def _message_index(self, session: Session, message_id: str) -> int:
+        for index, message in enumerate(session.messages):
+            if message.message_id == message_id:
+                return index
+        raise KeyError(f"unknown message: {message_id}")
+
     def _find_part(self, session: Session, part_id: str) -> Optional[MessagePart]:
         for message in session.messages:
             for part in message.parts:
@@ -182,3 +265,10 @@ class InMemorySessionStore:
                 ):
                     return part
         return None
+
+    def _rebind_session(self, session: Session) -> None:
+        for message in session.messages:
+            message.session_id = session.session_id
+            for part in message.parts:
+                part.session_id = session.session_id
+                part.message_id = message.message_id

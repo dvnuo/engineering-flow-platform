@@ -9,6 +9,7 @@ from .models import (
     Session,
     TaskPart,
 )
+from .checkpoint import SessionCheckpoint
 from .processor import RuntimeSession, SessionProcessor
 from .file_store import FileSessionStore
 from .protocol import SessionStore
@@ -26,6 +27,7 @@ __all__ = [
     "RuntimeSession",
     "RuntimeStatus",
     "Session",
+    "SessionCheckpoint",
     "SessionProcessor",
     "SessionStore",
     "TaskPart",

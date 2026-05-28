@@ -94,6 +94,22 @@ and no explicit tool registry/runtime, it creates the Runtime v2 built-in tool
 registry for that workspace. The facade does not call Portal or the legacy agent
 runtime.
 
+## Session Checkpoints
+
+Runtime v2 session stores support explicit checkpoint and restore operations for
+callers that need to bracket a group of tool executions or review steps. A
+checkpoint records checkpoint metadata plus a snapshot of the structured session
+history. It is a Runtime v2 session-history snapshot only: it does not capture
+git state, workspace files, tool output archives, or any other filesystem state.
+
+Checkpoint metadata is stored with the checkpoint record, not in provider
+requests. It does not change compaction behavior or alter the serialized
+message/part shape. A checkpoint can snapshot the current full session or the
+history truncated through a specific message id. Restoring a checkpoint replaces
+the current session history while preserving the same session id and message/part
+bindings, so callers can continue with `run(...)` or `resume(session_id)` from
+the restored history.
+
 ## Provider Projection
 
 Runtime v2 keeps provider boundaries explicit. `efp_runtime.llm.openai`

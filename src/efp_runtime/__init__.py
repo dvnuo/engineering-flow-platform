@@ -21,6 +21,7 @@ from .session.models import (
     Session,
     TaskPart,
 )
+from .session.checkpoint import SessionCheckpoint
 from .session.processor import RuntimeSession, SessionProcessor
 from .session.file_store import FileSessionStore
 from .session.store import InMemorySessionStore
@@ -46,6 +47,7 @@ __all__ = [
     "RuntimeEvent",
     "RuntimeSession",
     "Session",
+    "SessionCheckpoint",
     "SessionProcessor",
     "SkillPackage",
     "TaskPart",

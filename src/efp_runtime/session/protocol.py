@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Protocol, Tuple, Union
 
+from .checkpoint import SessionCheckpoint
 from .models import Message, MessagePart, MessageRole, Session
 
 
@@ -45,6 +46,26 @@ class SessionStore(Protocol):
         ...
 
     def tool_pairs(self, session_id: str) -> Dict[str, ToolPair]:
+        ...
+
+    def create_checkpoint(
+        self,
+        session_id: str,
+        *,
+        label: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        checkpoint_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> SessionCheckpoint:
+        ...
+
+    def list_checkpoints(self, session_id: str) -> List[SessionCheckpoint]:
+        ...
+
+    def restore_checkpoint(self, session_id: str, checkpoint_id: str) -> Session:
+        ...
+
+    def delete_checkpoint(self, session_id: str, checkpoint_id: str) -> bool:
         ...
 
 

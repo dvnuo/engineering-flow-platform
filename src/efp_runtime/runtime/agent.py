@@ -19,6 +19,8 @@ from ..permissions import PermissionEvaluator
 from ..prompt import resolve_prompt_references
 from ..questions import QuestionBroker
 from ..session.protocol import SessionStore
+from ..session.checkpoint import SessionCheckpoint
+from ..session.models import Session
 from ..session.store import InMemorySessionStore
 from ..skills.commands import SkillCommandResult, parse_skill_commands
 from ..skills.context import SkillContextBuilder
@@ -309,6 +311,34 @@ class AgentRuntime:
     def cancel(self, session_id: str) -> bool:
         return self.run_state.cancel(session_id)
 
+    def create_checkpoint(
+        self,
+        session_id: str,
+        *,
+        label: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        message_id: str | None = None,
+    ) -> SessionCheckpoint:
+        create_checkpoint = self._checkpoint_store_method("create_checkpoint")
+        return create_checkpoint(
+            session_id,
+            label=label,
+            metadata=metadata,
+            message_id=message_id,
+        )
+
+    def list_checkpoints(self, session_id: str) -> list[SessionCheckpoint]:
+        list_checkpoints = self._checkpoint_store_method("list_checkpoints")
+        return list_checkpoints(session_id)
+
+    def restore_checkpoint(self, session_id: str, checkpoint_id: str) -> Session:
+        restore_checkpoint = self._checkpoint_store_method("restore_checkpoint")
+        return restore_checkpoint(session_id, checkpoint_id)
+
+    def delete_checkpoint(self, session_id: str, checkpoint_id: str) -> bool:
+        delete_checkpoint = self._checkpoint_store_method("delete_checkpoint")
+        return delete_checkpoint(session_id, checkpoint_id)
+
     def _build_instruction_context_messages(self):
         return self.instruction_context_builder.build_messages()
 
@@ -363,6 +393,12 @@ class AgentRuntime:
         run_metadata["active_skill_count"] = len(active)
         if self.skill_discovery is not None:
             run_metadata["available_skill_count"] = len(self.skill_discovery.discover())
+
+    def _checkpoint_store_method(self, name: str):
+        method = getattr(self.store, name, None)
+        if not callable(method):
+            raise TypeError("session store does not support checkpoints")
+        return method
 
 
 def _resolve_config(

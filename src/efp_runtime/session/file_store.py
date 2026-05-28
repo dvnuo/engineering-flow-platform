@@ -11,9 +11,15 @@ from threading import RLock
 from typing import Dict, Iterable, List, Optional, Union
 
 from ..types import new_id
+from .checkpoint import SessionCheckpoint
 from .models import Message, MessagePart, MessagePartType, MessageRole, Session
 from .protocol import ToolPair
-from .serialization import session_from_dict, session_to_dict
+from .serialization import (
+    checkpoint_from_dict,
+    checkpoint_to_dict,
+    session_from_dict,
+    session_to_dict,
+)
 
 
 class FileSessionStore:
@@ -24,6 +30,9 @@ class FileSessionStore:
         sessions_dir = self.root / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir = sessions_dir.resolve()
+        checkpoints_dir = self.root / "checkpoints"
+        checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        self.checkpoints_dir = checkpoints_dir.resolve()
         self._lock = RLock()
 
     def create_session(
@@ -156,6 +165,81 @@ class FileSessionStore:
             self._write_session_locked(forked)
             return deepcopy(forked)
 
+    def create_checkpoint(
+        self,
+        session_id: str,
+        *,
+        label: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        checkpoint_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> SessionCheckpoint:
+        with self._lock:
+            source = self._read_session_locked(session_id)
+            snapshot = self._snapshot_session(source, message_id=message_id)
+            resolved_checkpoint_id = checkpoint_id or new_id("checkpoint")
+            path = self._checkpoint_path(source.session_id, resolved_checkpoint_id)
+            if path.exists():
+                raise ValueError(f"checkpoint already exists: {resolved_checkpoint_id}")
+
+            checkpoint = SessionCheckpoint(
+                checkpoint_id=resolved_checkpoint_id,
+                session_id=source.session_id,
+                message_id=message_id,
+                message_count=len(snapshot.messages),
+                label=label,
+                metadata=dict(metadata or {}),
+            )
+            self._write_checkpoint_locked(checkpoint, snapshot)
+            return deepcopy(checkpoint)
+
+    def list_checkpoints(self, session_id: str) -> List[SessionCheckpoint]:
+        with self._lock:
+            self._read_session_locked(session_id)
+            directory = self._checkpoint_dir(session_id)
+            if not directory.exists():
+                return []
+            checkpoints = [
+                self._read_checkpoint_file_locked(path)[0]
+                for path in sorted(directory.glob("*.json"))
+            ]
+            checkpoints.sort(
+                key=lambda checkpoint: (checkpoint.created_at, checkpoint.checkpoint_id)
+            )
+            return deepcopy(checkpoints)
+
+    def restore_checkpoint(self, session_id: str, checkpoint_id: str) -> Session:
+        with self._lock:
+            path = self._checkpoint_path(session_id, checkpoint_id)
+            if not path.exists():
+                raise KeyError(f"unknown checkpoint: {checkpoint_id}")
+            checkpoint, snapshot = self._read_checkpoint_file_locked(path)
+            if checkpoint.session_id != session_id:
+                raise ValueError(
+                    "checkpoint session mismatch: "
+                    f"expected {session_id}, got {checkpoint.session_id}"
+                )
+
+            restored = deepcopy(snapshot)
+            restored.session_id = session_id
+            self._rebind_session(restored)
+            self._write_session_locked(restored)
+            return deepcopy(restored)
+
+    def delete_checkpoint(self, session_id: str, checkpoint_id: str) -> bool:
+        with self._lock:
+            self._read_session_locked(session_id)
+            path = self._checkpoint_path(session_id, checkpoint_id)
+            if not path.exists():
+                return False
+            path.unlink()
+            directory = path.parent
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+            return True
+
     def _read_session_locked(self, session_id: str) -> Session:
         path = self._session_path(session_id)
         if not path.exists():
@@ -199,6 +283,57 @@ class FileSessionStore:
                 if tmp_path.exists():
                     tmp_path.unlink()
 
+    def _write_checkpoint_locked(
+        self,
+        checkpoint: SessionCheckpoint,
+        snapshot: Session,
+    ) -> None:
+        path = self._checkpoint_path(checkpoint.session_id, checkpoint.checkpoint_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "checkpoint": checkpoint_to_dict(checkpoint),
+            "session": session_to_dict(snapshot),
+        }
+        text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
+        tmp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=str(path.parent),
+                prefix=f".{checkpoint.checkpoint_id}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                tmp_name = handle.name
+                handle.write(text)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, path)
+        finally:
+            if tmp_name is not None:
+                tmp_path = Path(tmp_name)
+                if tmp_path.exists():
+                    tmp_path.unlink()
+
+    def _read_checkpoint_file_locked(self, path: Path) -> tuple[SessionCheckpoint, Session]:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        checkpoint = checkpoint_from_dict(payload["checkpoint"])
+        snapshot = session_from_dict(payload["session"])
+        expected_path = self._checkpoint_path(
+            checkpoint.session_id,
+            checkpoint.checkpoint_id,
+        )
+        if expected_path != path:
+            raise ValueError(
+                "checkpoint file/name mismatch: "
+                f"expected {expected_path.name}, got {path.name}"
+            )
+        return checkpoint, snapshot
+
     def _session_path(self, session_id: str) -> Path:
         self._validate_session_id(session_id)
         path = (self.sessions_dir / f"{session_id}.json").resolve()
@@ -208,6 +343,25 @@ class FileSessionStore:
             raise ValueError(f"invalid session_id: {session_id}") from exc
         return path
 
+    def _checkpoint_dir(self, session_id: str) -> Path:
+        self._validate_session_id(session_id)
+        path = (self.checkpoints_dir / session_id).resolve()
+        try:
+            path.relative_to(self.checkpoints_dir)
+        except ValueError as exc:
+            raise ValueError(f"invalid session_id: {session_id}") from exc
+        return path
+
+    def _checkpoint_path(self, session_id: str, checkpoint_id: str) -> Path:
+        self._validate_checkpoint_id(checkpoint_id)
+        directory = self._checkpoint_dir(session_id)
+        path = (directory / f"{checkpoint_id}.json").resolve()
+        try:
+            path.relative_to(directory)
+        except ValueError as exc:
+            raise ValueError(f"invalid checkpoint_id: {checkpoint_id}") from exc
+        return path
+
     def _validate_session_id(self, session_id: str) -> None:
         if not isinstance(session_id, str):
             raise TypeError("session_id must be a string")
@@ -215,6 +369,18 @@ class FileSessionStore:
             raise ValueError(f"invalid session_id: {session_id}")
         if "\x00" in session_id or "/" in session_id or "\\" in session_id:
             raise ValueError(f"invalid session_id: {session_id}")
+
+    def _validate_checkpoint_id(self, checkpoint_id: str) -> None:
+        if not isinstance(checkpoint_id, str):
+            raise TypeError("checkpoint_id must be a string")
+        if (
+            not checkpoint_id
+            or checkpoint_id in {".", ".."}
+            or checkpoint_id.startswith(".")
+        ):
+            raise ValueError(f"invalid checkpoint_id: {checkpoint_id}")
+        if "\x00" in checkpoint_id or "/" in checkpoint_id or "\\" in checkpoint_id:
+            raise ValueError(f"invalid checkpoint_id: {checkpoint_id}")
 
     def _append_part_locked(
         self,
@@ -268,6 +434,14 @@ class FileSessionStore:
             if message.message_id == message_id:
                 return index
         raise KeyError(f"unknown message: {message_id}")
+
+    def _snapshot_session(self, session: Session, *, message_id: Optional[str]) -> Session:
+        snapshot = deepcopy(session)
+        if message_id is not None:
+            message_index = self._message_index(snapshot, message_id)
+            snapshot.messages = snapshot.messages[: message_index + 1]
+        self._rebind_session(snapshot)
+        return snapshot
 
     def _find_part(self, session: Session, part_id: str) -> Optional[MessagePart]:
         for message in session.messages:

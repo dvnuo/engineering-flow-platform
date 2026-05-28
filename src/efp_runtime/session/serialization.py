@@ -10,6 +10,7 @@ from typing import Any, Dict, Mapping
 
 from ..events import RuntimeEvent
 from ..types import Attachment, SkillPackage, ToolCall, ToolResult
+from .checkpoint import SessionCheckpoint
 from .models import CompactionPart, Message, MessagePart, MessagePartType, Session, TaskPart
 
 
@@ -40,6 +41,31 @@ def session_from_dict(data: Mapping[str, Any]) -> Session:
     )
     _validate_session_bindings(session)
     return session
+
+
+def checkpoint_to_dict(checkpoint: SessionCheckpoint) -> Dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "checkpoint_id": checkpoint.checkpoint_id,
+        "session_id": checkpoint.session_id,
+        "message_id": checkpoint.message_id,
+        "message_count": checkpoint.message_count,
+        "label": checkpoint.label,
+        "metadata": _encode_value(checkpoint.metadata),
+        "created_at": checkpoint.created_at,
+    }
+
+
+def checkpoint_from_dict(data: Mapping[str, Any]) -> SessionCheckpoint:
+    return SessionCheckpoint(
+        checkpoint_id=str(data["checkpoint_id"]),
+        session_id=str(data["session_id"]),
+        message_id=data.get("message_id"),
+        message_count=int(data["message_count"]),
+        label=data.get("label"),
+        metadata=_decoded_mapping(data.get("metadata", {})),
+        created_at=str(data["created_at"]),
+    )
 
 
 def message_to_dict(message: Message) -> Dict[str, Any]:
@@ -419,6 +445,8 @@ def _validate_session_bindings(session: Session) -> None:
 
 
 __all__ = [
+    "checkpoint_from_dict",
+    "checkpoint_to_dict",
     "message_from_dict",
     "message_to_dict",
     "part_from_dict",
