@@ -273,6 +273,7 @@ def skill_package_to_list_entry(
         "root": str(skill.root),
         "sidecar_count": len(skill.sidecar_files),
         "sidecars": sidecars,
+        "metadata": dict(skill.metadata),
     }
 
 

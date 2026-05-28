@@ -46,6 +46,41 @@ async def test_skill_list_returns_multiple_skills_in_stable_order(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_skill_list_preserves_frontmatter_metadata(tmp_path: Path):
+    skill_dir = tmp_path / "metadata-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: metadata-skill\n"
+        "license: MIT\n"
+        "compatibility: runtime-v2\n"
+        "category: review\n"
+        "version: 1.2.3\n"
+        "author: Runtime Team\n"
+        "customScalar: preserved\n"
+        "---\n"
+        "# Metadata Skill\n",
+        encoding="utf-8",
+    )
+
+    result = await _run_skill_list(tmp_path)
+
+    [skill] = result.output["skills"]
+    assert skill["name"] == "metadata-skill"
+    assert skill["description"] == ""
+    assert skill["metadata"] == {
+        "name": "metadata-skill",
+        "license": "MIT",
+        "compatibility": "runtime-v2",
+        "category": "review",
+        "version": "1.2.3",
+        "author": "Runtime Team",
+        "customScalar": "preserved",
+    }
+    assert "- metadata-skill:" in result.content
+
+
+@pytest.mark.asyncio
 async def test_skill_list_can_omit_sidecar_details(tmp_path: Path):
     skill_dir = _write_skill(tmp_path, "review")
     (skill_dir / "guide.md").write_text("Guide", encoding="utf-8")

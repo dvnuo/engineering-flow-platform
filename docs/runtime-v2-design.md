@@ -171,6 +171,12 @@ Configured path fields are resolved as workspace-local `Path` objects without
 requiring those files or directories to already exist. If
 `.opencode/commands` exists under the workspace root, the loader also adds it
 as a project command directory.
+With `include_defaults=True`, existing project-local skill directories are also
+added before configured `skillDirectories`: `.opencode/skills`,
+`.claude/skills`, then `.agents/skills`. Missing default skill directories are
+ignored, and Runtime v2 does not scan user home or global skill directories in
+this phase. Passing `include_defaults=False` disables these default skill
+directories.
 
 The loader consumes `command` and `commands` to build config-defined
 `CommandDefinition` records and a `CommandRegistry` that callers can pass to
@@ -519,6 +525,13 @@ Skills are discovered from `SKILL.md` or `skill.md` files. Loading a skill reads
 markdown plus optional sidecar context. Python sidecar files are treated as text
 or binary files; runtime v2 never imports or executes them.
 
+Skill markdown supports either `---` frontmatter or the existing compact leading
+`name: ...` / `description: ...` header style. Runtime v2 parses only simple
+scalar metadata fields from that header, including fields such as `license`,
+`compatibility`, `category`, `version`, and `author`; unknown simple scalar
+fields are preserved in `SkillPackage.metadata`. It does not parse nested YAML,
+lists, block scalars, or sidecar manifests into executable behavior.
+
 `AgentRuntime` can keep an instance-level active skill list from
 `RuntimeConfig.active_skills` and `/skill` command lines. Active skill context is
 rendered as transient system context in the provider request before session
@@ -529,6 +542,7 @@ Runtime v2 exposes `skill_list` and `skill` tools when skill discovery is
 configured for the default core tool registry. `skill_list` is the lightweight
 registry view: it lists available skill names, descriptions, active skills, and
 sidecar path/size/content-type inventory without loading full skill context.
+Structured `skill_list` entries include the parsed skill metadata dictionary.
 The `skill` tool is the full context loader. It returns a model-visible
 `<skill_content name="...">` block, and the structured output keeps the skill
 name, description, skill file, raw skill markdown, sidecar inventory, and

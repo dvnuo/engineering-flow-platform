@@ -126,6 +126,69 @@ def test_runtime_config_field_mapping(tmp_path: Path):
     assert config.runtime_mode == "plan"
 
 
+def test_default_project_skill_directories_precede_configured_directories(
+    tmp_path: Path,
+):
+    opencode_skills = tmp_path / ".opencode" / "skills"
+    claude_skills = tmp_path / ".claude" / "skills"
+    opencode_skills.mkdir(parents=True)
+    claude_skills.mkdir(parents=True)
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "skillDirectories": [
+                "skills",
+                ".opencode/skills",
+            ],
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.config.skill_directories == [
+        opencode_skills.resolve(),
+        claude_skills.resolve(),
+        (tmp_path / "skills").resolve(),
+    ]
+
+
+def test_missing_default_project_skill_directories_are_ignored(tmp_path: Path):
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "skillDirectories": ["skills"],
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.config.skill_directories == [
+        (tmp_path / "skills").resolve(),
+    ]
+
+
+def test_include_defaults_false_does_not_add_default_project_skill_directories(
+    tmp_path: Path,
+):
+    (tmp_path / ".opencode" / "skills").mkdir(parents=True)
+    _write_json(
+        tmp_path / "custom.json",
+        {
+            "skillDirectories": ["skills"],
+        },
+    )
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=["custom.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.skill_directories == [
+        (tmp_path / "skills").resolve(),
+    ]
+
+
 def test_loader_returns_command_definitions_registry_and_default_directory(
     tmp_path: Path,
 ):

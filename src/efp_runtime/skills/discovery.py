@@ -10,6 +10,11 @@ from ..types import SkillPackage
 
 
 SKILL_FILE_NAMES = {"skill.md", "SKILL.md"}
+DEFAULT_PROJECT_SKILL_DIRECTORIES = (
+    ".opencode/skills",
+    ".claude/skills",
+    ".agents/skills",
+)
 
 
 class SkillDiscovery:
@@ -57,6 +62,24 @@ def discover_skills(directories: Iterable[str | Path]) -> list[SkillPackage]:
             packages.append(_load_skill_package(skill_file))
     packages.sort(key=lambda skill: (skill.name.lower(), str(skill.skill_file)))
     return packages
+
+
+def default_skill_directories(
+    workspace_root: str | Path,
+    *,
+    include_defaults: bool = True,
+) -> list[Path]:
+    """Return existing project-local default skill directories in load order."""
+
+    if not include_defaults:
+        return []
+    root = Path(workspace_root).expanduser().resolve(strict=False)
+    directories: list[Path] = []
+    for directory in DEFAULT_PROJECT_SKILL_DIRECTORIES:
+        path = (root / directory).resolve(strict=False)
+        if path.is_dir():
+            directories.append(path)
+    return directories
 
 
 def _iter_skill_files(directory: Path) -> list[Path]:
@@ -115,12 +138,15 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
             metadata_lines = []
             break
         key = stripped.split(":", 1)[0].strip()
-        if key not in {"name", "description"}:
+        if not _is_simple_metadata_key(key):
             body_start = 0
             metadata_lines = []
             break
         metadata_lines.append(line)
-    if metadata_lines:
+    if metadata_lines and any(
+        line.strip().split(":", 1)[0].strip() in {"name", "description"}
+        for line in metadata_lines
+    ):
         return _parse_simple_yaml_lines(metadata_lines), "\n".join(lines[body_start:])
     return {}, content
 
@@ -128,16 +154,36 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
 def _parse_simple_yaml_lines(lines: list[str]) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     for line in lines:
+        if line[:1].isspace():
+            continue
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or ":" not in stripped:
             continue
         key, value = stripped.split(":", 1)
         key = key.strip()
         value = value.strip()
-        if key not in {"name", "description"}:
+        if not _is_simple_metadata_key(key):
+            continue
+        if not value and key not in {"name", "description"}:
+            continue
+        if not _is_simple_scalar_value(value):
             continue
         metadata[key] = _strip_yaml_string(value)
     return metadata
+
+
+def _is_simple_metadata_key(key: str) -> bool:
+    return bool(key) and all(
+        char.isalnum() or char in {"_", "-"} for char in key
+    )
+
+
+def _is_simple_scalar_value(value: str) -> bool:
+    if not value:
+        return True
+    if value in {"|", "|-", "|+", ">", ">-", ">+"}:
+        return False
+    return value[0] not in {"[", "{"}
 
 
 def _strip_yaml_string(value: str) -> str:

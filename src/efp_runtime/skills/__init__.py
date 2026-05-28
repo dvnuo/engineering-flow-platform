@@ -2,7 +2,7 @@
 
 from .commands import SkillCommandResult, parse_skill_commands
 from .context import SkillContextBuilder, skill_package_to_system_message
-from .discovery import SkillDiscovery, discover_skills
+from .discovery import SkillDiscovery, default_skill_directories, discover_skills
 from .tool import SkillListTool, SkillTool, build_skill_list_tool, build_skill_tool
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "SkillTool",
     "build_skill_list_tool",
     "build_skill_tool",
+    "default_skill_directories",
     "discover_skills",
     "parse_skill_commands",
     "skill_package_to_system_message",

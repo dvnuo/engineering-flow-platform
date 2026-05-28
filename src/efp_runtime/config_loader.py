@@ -28,6 +28,7 @@ from .commands import (
     command_definitions_from_config,
 )
 from .runtime.config import RuntimeConfig
+from .skills.discovery import default_skill_directories
 
 
 DEFAULT_CONFIG_FILE_NAMES = (
@@ -128,7 +129,12 @@ def load_runtime_config(
         loaded_paths.append(path)
 
     metadata = _loader_metadata(raw, loaded_paths)
-    config = _runtime_config_from_raw(raw, root, metadata)
+    config = _runtime_config_from_raw(
+        raw,
+        root,
+        metadata,
+        include_defaults=include_defaults,
+    )
     agent_registry = _agent_registry_from_raw(
         raw,
         workspace_root=root,
@@ -288,6 +294,8 @@ def _runtime_config_from_raw(
     raw: Mapping[str, Any],
     workspace_root: Path,
     metadata: Mapping[str, Any],
+    *,
+    include_defaults: bool,
 ) -> RuntimeConfig:
     kwargs: dict[str, Any] = {
         "workspace_root": workspace_root,
@@ -319,13 +327,19 @@ def _runtime_config_from_raw(
     if system_prompt_texts is not None:
         kwargs["system_prompt_texts"] = system_prompt_texts
 
-    skill_directories = _merged_alias_paths(
+    default_skill_dirs = default_skill_directories(
+        workspace_root,
+        include_defaults=include_defaults,
+    )
+    configured_skill_directories = _merged_alias_paths(
         raw,
         ("skillDirectories", "skill_directories"),
         workspace_root=workspace_root,
     )
-    if skill_directories is not None:
-        kwargs["skill_directories"] = skill_directories
+    if configured_skill_directories is not None:
+        default_skill_dirs.extend(configured_skill_directories)
+    if default_skill_dirs or configured_skill_directories is not None:
+        kwargs["skill_directories"] = _dedupe_paths(default_skill_dirs)
 
     active_skills = _merged_alias_strings(raw, ("activeSkills", "active_skills"))
     if active_skills is not None:

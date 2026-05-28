@@ -22,7 +22,7 @@ def test_discovers_uppercase_and_lowercase_skill_files(tmp_path):
     second = tmp_path / "triage"
     second.mkdir()
     (second / "skill.md").write_text(
-        "name: triage\ndescription: Triage issues\n\n# Triage\n",
+        "name: triage\ndescription: Triage issues\nlicense: Apache-2.0\n\n# Triage\n",
         encoding="utf-8",
     )
 
@@ -31,6 +31,7 @@ def test_discovers_uppercase_and_lowercase_skill_files(tmp_path):
     assert [skill.name for skill in skills] == ["review-pr", "triage"]
     assert skills[0].description == "Review pull requests"
     assert skills[1].content == "# Triage"
+    assert skills[1].metadata["license"] == "Apache-2.0"
 
 
 def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp_path):
