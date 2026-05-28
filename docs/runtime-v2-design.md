@@ -462,7 +462,12 @@ edit, unified-diff apply_patch, session-local todo planning, invalid-argument
 feedback, and HTTP(S) fetch tools. Mutating filesystem tools default to ask
 permission; read/search, todo planning, invalid feedback, and fetch tools
 default to allow. Fetch tools are categorized as medium-risk network access so
-callers can override them to ask permission when needed.
+callers can override them to ask permission when needed. `fetch` and `webfetch`
+support opencode-style `format` values of `markdown` (default), `text`, and
+`html`: HTML responses are rendered to readable text or lightweight Markdown
+unless raw HTML is requested, while non-HTML text is returned as decoded text.
+Responses are rejected when the declared or actual body exceeds 5 MiB, and
+`max_chars` still controls model-visible truncation.
 
 Foreground `shell_exec` keeps the existing timeout behavior: the runtime waits
 for `communicate()`, kills the process on timeout, and returns the collected

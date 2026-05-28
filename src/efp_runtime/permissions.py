@@ -1157,6 +1157,9 @@ def _args_request_metadata(
     args: Mapping[str, Any],
     metadata: PermissionMetadata,
 ) -> dict[str, Any]:
+    if _is_fetch_permission(tool_id, metadata):
+        return _fetch_request_metadata(args)
+
     if tool_id != "shell_exec" and metadata.category != "shell":
         return {}
 
@@ -1171,6 +1174,30 @@ def _args_request_metadata(
 
     workdir = _string_arg(args, "workdir") or _string_arg(args, "cwd") or "."
     request_metadata["workdir"] = workdir
+    return request_metadata
+
+
+def _is_fetch_permission(tool_id: str, metadata: PermissionMetadata) -> bool:
+    return tool_id in {"fetch", "webfetch"} or (
+        metadata.category == "network" and metadata.resource == "url"
+    )
+
+
+def _fetch_request_metadata(args: Mapping[str, Any]) -> dict[str, Any]:
+    request_metadata: dict[str, Any] = {}
+
+    url = _string_arg(args, "url")
+    if url:
+        request_metadata["url"] = url
+
+    request_metadata["format"] = _string_arg(args, "format") or "markdown"
+
+    timeout = args.get("timeout")
+    if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+        request_metadata["timeout"] = min(float(timeout), 120.0)
+    elif timeout is not None:
+        request_metadata["timeout"] = str(timeout)
+
     return request_metadata
 
 
