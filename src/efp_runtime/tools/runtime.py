@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import time
 from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping
 
@@ -187,6 +188,18 @@ class ToolRuntime:
                 ],
             )
 
+        started_event = RuntimeEvent(
+            type="tool.started",
+            message="Tool execution started.",
+            payload=_tool_event_payload(
+                tool_id=tool.id,
+                tool_call_id=tool_call.call_id,
+                context=context,
+                include_session_id=True,
+                extra={"arg_keys": _argument_keys(args)},
+            ),
+        )
+        started_at = time.monotonic()
         try:
             raw_output = tool.execute(args, context)
             if inspect.isawaitable(raw_output):
@@ -194,6 +207,7 @@ class ToolRuntime:
             else:
                 raise TypeError("Tool execute callable must return an awaitable.")
         except Exception as exc:  # noqa: BLE001 - runtime boundary normalizes tool failures.
+            duration_ms = _duration_ms(started_at)
             message = str(exc) or exc.__class__.__name__
             return ToolResult(
                 call_id=tool_call.call_id,
@@ -202,7 +216,9 @@ class ToolRuntime:
                 success=False,
                 error=message,
                 content=message,
+                metadata={"duration_ms": duration_ms},
                 events=[
+                    started_event,
                     RuntimeEvent(
                         type="tool.error",
                         message="Tool execution failed.",
@@ -210,12 +226,20 @@ class ToolRuntime:
                             tool_id=tool.id,
                             tool_call_id=tool_call.call_id,
                             context=context,
-                            extra={"error": message},
+                            include_session_id=True,
+                            extra={
+                                "error": message,
+                                "error_type": exc.__class__.__name__,
+                                "status": "error",
+                                "success": False,
+                                "duration_ms": duration_ms,
+                            },
                         ),
                     )
                 ],
             )
 
+        duration_ms = _duration_ms(started_at)
         policy = _merge_output_policy(self.default_output_policy, tool.output_policy)
         return self._normalize_result(
             call_id=tool_call.call_id,
@@ -223,6 +247,8 @@ class ToolRuntime:
             raw_output=raw_output,
             policy=policy,
             context=context,
+            started_event=started_event,
+            duration_ms=duration_ms,
         )
 
     def _normalize_result(
@@ -233,6 +259,8 @@ class ToolRuntime:
         raw_output: Any,
         policy: OutputPolicy,
         context: ToolContext,
+        started_event: RuntimeEvent,
+        duration_ms: int,
     ) -> ToolResult:
         if isinstance(raw_output, ToolResult):
             if _has_tool_truncation_metadata(raw_output):
@@ -257,9 +285,10 @@ class ToolRuntime:
                 content=content,
                 output=raw_output.output if policy.include_raw_output else None,
                 error=raw_output.error,
-                metadata={**metadata, **raw_output.metadata},
+                metadata={**metadata, **raw_output.metadata, "duration_ms": duration_ms},
                 truncated=raw_output.truncated or truncated,
                 events=[
+                    started_event,
                     *raw_output.events,
                     RuntimeEvent(
                         type="tool.completed",
@@ -268,6 +297,12 @@ class ToolRuntime:
                             tool_id=tool_name,
                             tool_call_id=call_id,
                             context=context,
+                            include_session_id=True,
+                            extra={
+                                "status": raw_output.status,
+                                "success": raw_output.success,
+                                "duration_ms": duration_ms,
+                            },
                         ),
                     ),
                 ],
@@ -286,9 +321,10 @@ class ToolRuntime:
             success=True,
             content=content,
             output=raw_output if policy.include_raw_output else None,
-            metadata=metadata,
+            metadata={**metadata, "duration_ms": duration_ms},
             truncated=truncated,
             events=[
+                started_event,
                 RuntimeEvent(
                     type="tool.completed",
                     message="Tool execution completed.",
@@ -296,6 +332,12 @@ class ToolRuntime:
                         tool_id=tool_name,
                         tool_call_id=call_id,
                         context=context,
+                        include_session_id=True,
+                        extra={
+                            "status": "success",
+                            "success": True,
+                            "duration_ms": duration_ms,
+                        },
                     ),
                 )
             ],
@@ -515,12 +557,17 @@ def _tool_event_payload(
     tool_call_id: str,
     context: ToolContext,
     extra: Mapping[str, Any] | None = None,
+    include_session_id: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "tool_id": tool_id,
         "tool_call_id": tool_call_id,
         "tool_name": tool_id,
     }
+    if include_session_id:
+        session_id = _first_value(context.session_id, context.metadata.get("session_id"))
+        if session_id is not None:
+            payload["session_id"] = session_id
     run_id = _first_value(context.run_id, context.metadata.get("run_id"))
     if run_id is not None:
         payload["run_id"] = run_id
@@ -529,6 +576,14 @@ def _tool_event_payload(
     if extra:
         payload.update(dict(extra))
     return payload
+
+
+def _argument_keys(args: Mapping[str, Any]) -> list[str]:
+    return sorted(str(key) for key in args)
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, int(round((time.monotonic() - started_at) * 1000)))
 
 
 def _first_value(*values: Any) -> Any:

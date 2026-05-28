@@ -335,6 +335,20 @@ go directly through the normal provider error path.
 4. Execute only on allow.
 5. Normalize output into `ToolResult`.
 
+Actual execution attempts emit deterministic lifecycle events through
+`ToolResult.events`. After lookup, validation, permission allow, and the
+pre-execution cancellation check pass, the runtime emits `tool.started`. The
+runtime measures the attempt with `time.monotonic()` and adds `duration_ms` to
+the normalized `ToolResult.metadata` and terminal lifecycle event. Returned
+results end with the existing `tool.completed` event, whose payload includes
+`tool_id`, `tool_call_id`, available `session_id`, `run_id`, and `iteration`,
+plus `status`, `success`, and `duration_ms`. If the tool callable raises, the
+runtime returns the existing error result shape with `tool.started` followed by
+`tool.error`; that error payload includes `error`, `error_type`, and
+`duration_ms`. Tool-supplied events are preserved in their original order
+between `tool.started` and `tool.completed`. Lifecycle payloads avoid raw
+argument values; `tool.started` may include only sorted `arg_keys`.
+
 Runtime v2 also supports a transport-independent external tool provider bridge
 under `efp_runtime.tools.external`. A provider declares `ExternalToolSpec`
 records and implements `execute(tool_name, args, context)`. The bridge converts

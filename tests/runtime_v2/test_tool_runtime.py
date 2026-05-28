@@ -1,6 +1,7 @@
 import pytest
 
-from efp_runtime.models import ToolCall
+from efp_runtime.events import RuntimeEvent
+from efp_runtime.models import ToolCall, ToolResult
 from efp_runtime.permissions import ASK, DENY, PermissionMetadata
 from efp_runtime.tools.definition import OutputPolicy, ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
@@ -29,14 +30,29 @@ async def test_tool_runtime_validates_executes_normalizes_and_truncates():
 
     result = await runtime.execute(
         ToolCall(id="call-1", tool_id="echo", args={"text": "hello world"}),
-        context=ToolContext(session_id="session-1"),
+        context=ToolContext(session_id="session-1", run_id="run-1", iteration=2),
     )
 
     assert result.status == "success"
     assert result.truncated is True
     assert result.output == {"echo": "hello world", "session": "session-1"}
     assert result.metadata["original_chars"] > len(result.content)
+    assert isinstance(result.metadata["duration_ms"], int)
+    assert result.metadata["duration_ms"] >= 0
+    assert [event.type for event in result.events] == ["tool.started", "tool.completed"]
+    assert result.events[0].payload["arg_keys"] == ["text"]
+    assert "args" not in result.events[0].payload
+    assert "arguments" not in result.events[0].payload
     assert result.events[-1].type == "tool.completed"
+    assert result.events[-1].payload["tool_id"] == "echo"
+    assert result.events[-1].payload["tool_call_id"] == "call-1"
+    assert result.events[-1].payload["session_id"] == "session-1"
+    assert result.events[-1].payload["run_id"] == "run-1"
+    assert result.events[-1].payload["iteration"] == 2
+    assert result.events[-1].payload["status"] == "success"
+    assert result.events[-1].payload["success"] is True
+    assert isinstance(result.events[-1].payload["duration_ms"], int)
+    assert result.events[-1].payload["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -71,6 +87,7 @@ async def test_validation_error_happens_before_execute():
     assert result.status == "validation_error"
     assert "count" in result.error
     assert called is False
+    assert "tool.started" not in [event.type for event in result.events]
 
 
 @pytest.mark.asyncio
@@ -109,6 +126,7 @@ async def test_permission_ask_returns_request_without_execution():
     assert result.metadata["permission_request"]["category"] == "filesystem"
     assert result.metadata["permission_request"]["reason"] == "Writes require approval."
     assert called is False
+    assert "tool.started" not in [event.type for event in result.events]
 
 
 @pytest.mark.asyncio
@@ -139,6 +157,85 @@ async def test_permission_deny_returns_denied_without_execution():
     assert result.status == "permission_denied"
     assert result.error == "Blocked by policy."
     assert called is False
+    assert "tool.started" not in [event.type for event in result.events]
+
+
+@pytest.mark.asyncio
+async def test_execute_exception_emits_started_then_tool_error_with_duration():
+    async def execute(args, context):
+        raise RuntimeError("boom")
+
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                ToolDef(
+                    id="explode",
+                    description="Explode",
+                    input_schema={"type": "object", "properties": {}},
+                    execute=execute,
+                )
+            ]
+        )
+    )
+
+    result = await runtime.execute(
+        ToolCall(id="call-error", tool_id="explode", args={}),
+        context=ToolContext(session_id="session-error", run_id="run-error"),
+    )
+
+    assert result.status == "error"
+    assert result.success is False
+    assert result.error == "boom"
+    assert isinstance(result.metadata["duration_ms"], int)
+    assert [event.type for event in result.events] == ["tool.started", "tool.error"]
+    error_payload = result.events[-1].payload
+    assert error_payload["error"] == "boom"
+    assert error_payload["error_type"] == "RuntimeError"
+    assert error_payload["status"] == "error"
+    assert error_payload["success"] is False
+    assert isinstance(error_payload["duration_ms"], int)
+    assert error_payload["duration_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_tool_supplied_events_are_preserved_between_started_and_completed():
+    supplied_event = RuntimeEvent(
+        type="tool.progress",
+        message="Halfway.",
+        payload={"step": 1},
+    )
+
+    async def execute(args, context):
+        return ToolResult(
+            call_id=context.tool_call_id or "call-events",
+            tool_name=context.tool_name or "events",
+            content="ok",
+            events=[supplied_event],
+        )
+
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                ToolDef(
+                    id="events",
+                    description="Return events",
+                    input_schema={"type": "object", "properties": {}},
+                    execute=execute,
+                )
+            ]
+        )
+    )
+
+    result = await runtime.execute(ToolCall(id="call-events", tool_id="events", args={}))
+
+    assert [event.type for event in result.events] == [
+        "tool.started",
+        "tool.progress",
+        "tool.completed",
+    ]
+    assert result.events[1] is supplied_event
+    assert result.events[-1].payload["status"] == "success"
+    assert result.events[-1].payload["success"] is True
 
 
 @pytest.mark.asyncio
