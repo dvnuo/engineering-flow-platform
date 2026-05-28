@@ -2,5 +2,6 @@
 
 from .agent import AgentRuntime
 from .config import RuntimeConfig
+from .run_state import RuntimeRunState, SessionBusyError
 
-__all__ = ["AgentRuntime", "RuntimeConfig"]
+__all__ = ["AgentRuntime", "RuntimeConfig", "RuntimeRunState", "SessionBusyError"]

@@ -3,6 +3,7 @@
 This package is intentionally independent from the legacy agent runtime.
 """
 
+from .event_bus import RuntimeEventBus
 from .events import LLMEvent, LLMEventType, RuntimeEvent
 from .permissions import (
     PermissionBroker,
@@ -41,6 +42,7 @@ __all__ = [
     "PermissionMetadata",
     "PermissionRequest",
     "PermissionRule",
+    "RuntimeEventBus",
     "RuntimeEvent",
     "RuntimeSession",
     "Session",

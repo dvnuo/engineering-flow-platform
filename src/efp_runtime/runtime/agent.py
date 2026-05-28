@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Union
 
+from ..event_bus import RuntimeEventBus
 from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
-from ..loop.runner import ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
+from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
 from ..permissions import PermissionEvaluator
 from ..session.protocol import SessionStore
 from ..session.store import InMemorySessionStore
@@ -19,6 +21,7 @@ from ..tools.builtin import create_core_tool_registry
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from .config import RuntimeConfig
+from .run_state import RuntimeRunState
 
 
 class AgentRuntime:
@@ -40,6 +43,8 @@ class AgentRuntime:
         adapter: LLMEventAdapter | None = None,
         skill_discovery: SkillDiscovery | None = None,
         skill_context_builder: SkillContextBuilder | None = None,
+        event_bus: RuntimeEventBus | None = None,
+        run_state: RuntimeRunState | None = None,
     ) -> None:
         self.config = _resolve_config(
             config,
@@ -63,6 +68,8 @@ class AgentRuntime:
             skill_context_builder=skill_context_builder,
         )
         self.active_skills = _unique_skill_names(self.config.active_skills)
+        self.event_bus = event_bus or RuntimeEventBus()
+        self.run_state = run_state or RuntimeRunState()
 
     async def run(
         self,
@@ -72,31 +79,49 @@ class AgentRuntime:
     ) -> RuntimeLoopResult:
         skill_command = parse_skill_commands(user_text)
         active_skills = _apply_skill_command(self.active_skills, skill_command)
-        context_messages = self._build_skill_context_messages(active_skills)
-        self.active_skills = active_skills
+        resolved_session_id = session_id or self.store.create_session().session_id
+        run_id = self.run_state.begin(resolved_session_id)
+        try:
+            context_messages = self._build_skill_context_messages(active_skills)
+            self.active_skills = active_skills
 
-        run_metadata = dict(self.config.metadata)
-        run_metadata.update(metadata or {})
-        run_metadata["active_skills"] = list(active_skills)
-        run_metadata["skill_command"] = {
-            "add": list(skill_command.add),
-            "clear": skill_command.clear,
-            "cleaned_text": skill_command.cleaned_text,
-        }
-        runner = RuntimeLoopRunner(
-            store=self.store,
-            provider=self.provider,
-            adapter=self.adapter,
-            tool_runtime=self.tool_runtime,
-            max_iterations=self.config.max_iterations,
-            max_context_parts=self.config.max_context_parts,
-        )
-        return await runner.run(
-            user_text=skill_command.cleaned_text,
-            session_id=session_id,
-            metadata=run_metadata,
-            context_messages=context_messages,
-        )
+            run_metadata = dict(self.config.metadata)
+            run_metadata.update(metadata or {})
+            run_metadata["run_id"] = run_id
+            run_metadata["active_skills"] = list(active_skills)
+            run_metadata["skill_command"] = {
+                "add": list(skill_command.add),
+                "clear": skill_command.clear,
+                "cleaned_text": skill_command.cleaned_text,
+            }
+            runner = RuntimeLoopRunner(
+                store=self.store,
+                provider=self.provider,
+                adapter=self.adapter,
+                tool_runtime=self.tool_runtime,
+                max_iterations=self.config.max_iterations,
+                max_context_parts=self.config.max_context_parts,
+                event_bus=self.event_bus,
+                is_cancelled=lambda: self.run_state.is_cancelled(resolved_session_id),
+            )
+            result = await runner.run(
+                user_text=skill_command.cleaned_text,
+                session_id=resolved_session_id,
+                metadata=run_metadata,
+                context_messages=context_messages,
+            )
+        except asyncio.CancelledError:
+            self.run_state.finish(resolved_session_id, LoopStatus.CANCELLED)
+            raise
+        except Exception:
+            self.run_state.finish(resolved_session_id, LoopStatus.ERROR)
+            raise
+
+        self.run_state.finish(resolved_session_id, result.status)
+        return result
+
+    def cancel(self, session_id: str) -> bool:
+        return self.run_state.cancel(session_id)
 
     def _build_skill_context_messages(self, active_skills: list[str]):
         if not active_skills:

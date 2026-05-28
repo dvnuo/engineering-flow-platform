@@ -9,6 +9,7 @@ import inspect
 from typing import Any, Callable, List, Optional, Union
 
 from ..context.render import prepare_history_for_request
+from ..event_bus import RuntimeEventBus
 from ..events import RuntimeEvent
 from ..llm.adapter import DefaultLLMEventAdapter, LLMEventAdapter
 from ..llm.events import LLMEvent
@@ -26,6 +27,7 @@ class LoopStatus:
     COMPLETED = "completed"
     ERROR = "error"
     MAX_ITERATIONS = "max_iterations"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -38,6 +40,22 @@ class RuntimeLoopResult:
 
 
 ProviderCallable = Callable[[RuntimeRequest], ProviderResult]
+CancelCallback = Callable[..., Any]
+
+
+class _RuntimeEventLog(list):
+    def __init__(self, event_bus: Optional[RuntimeEventBus] = None):
+        super().__init__()
+        self._event_bus = event_bus
+
+    def append(self, event: RuntimeEvent) -> None:
+        super().append(event)
+        if self._event_bus is not None:
+            self._event_bus.publish(event)
+
+    def extend(self, events: Iterable[RuntimeEvent]) -> None:
+        for event in events:
+            self.append(event)
 
 
 class RuntimeLoopRunner:
@@ -52,6 +70,8 @@ class RuntimeLoopRunner:
         tool_runtime: ToolRuntime,
         max_iterations: int = 4,
         max_context_parts: Optional[int] = None,
+        event_bus: Optional[RuntimeEventBus] = None,
+        is_cancelled: Optional[CancelCallback] = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -63,6 +83,8 @@ class RuntimeLoopRunner:
         self.tool_runtime = tool_runtime
         self.max_iterations = max_iterations
         self.max_context_parts = max_context_parts
+        self.event_bus = event_bus
+        self.is_cancelled = is_cancelled
 
     async def run(
         self,
@@ -88,18 +110,56 @@ class RuntimeLoopRunner:
             status="complete",
         )
 
-        runtime_events: List[RuntimeEvent] = []
+        runtime_events: List[RuntimeEvent] = _RuntimeEventLog(self.event_bus)
         final_assistant_message: Optional[Message] = None
         status = LoopStatus.COMPLETED
         iterations = 0
+        run_metadata = dict(metadata or {})
+        run_id = str(run_metadata.get("run_id") or new_id("run"))
+        run_metadata["run_id"] = run_id
+        cancel_event_published = False
+
+        def publish_cancelled(phase: str) -> None:
+            nonlocal cancel_event_published
+            if cancel_event_published:
+                return
+            cancel_event_published = True
+            runtime_events.append(
+                RuntimeEvent(
+                    type="run_cancelled",
+                    message="Runtime run was cancelled.",
+                    session_id=resolved_session_id,
+                    payload={
+                        "run_id": run_id,
+                        "phase": phase,
+                        "iterations": iterations,
+                    },
+                )
+            )
+
+        runtime_events.append(
+            RuntimeEvent(
+                type="run_start",
+                session_id=resolved_session_id,
+                payload={
+                    "run_id": run_id,
+                    "max_iterations": iteration_limit,
+                },
+            )
+        )
 
         while iterations < iteration_limit:
+            if await self._cancel_requested(resolved_session_id):
+                status = LoopStatus.CANCELLED
+                publish_cancelled("before_iteration")
+                break
+
             iteration = iterations + 1
             history = self.store.read_history(resolved_session_id)
             request_history = [*(context_messages or []), *history]
             tools = self.tool_runtime.registry.list()
             request_metadata = _request_metadata(
-                metadata,
+                run_metadata,
                 session_id=resolved_session_id,
                 iteration=iteration,
                 max_iterations=iteration_limit,
@@ -122,22 +182,39 @@ class RuntimeLoopRunner:
             )
             runtime_events.append(
                 RuntimeEvent(
-                    type="loop.iteration_start",
+                    type="iteration_start",
                     session_id=resolved_session_id,
-                    payload={"iteration": iteration},
+                    payload={"run_id": run_id, "iteration": iteration},
                 )
             )
 
-            provider_output = await self._invoke_provider(request)
-            events = self._normalize_provider_output(provider_output)
-            processor_session = RuntimeSession(
-                session_id=resolved_session_id,
-                messages=self.store.read_history(resolved_session_id),
-                runtime_events=runtime_events,
-            )
-            processor = SessionProcessor(processor_session)
-            assistant_message = await processor.consume(events)
             iterations = iteration
+            try:
+                provider_output = await self._invoke_provider(request)
+                events = self._normalize_provider_output(provider_output)
+                processor_session = RuntimeSession(
+                    session_id=resolved_session_id,
+                    messages=self.store.read_history(resolved_session_id),
+                    runtime_events=runtime_events,
+                )
+                processor = SessionProcessor(processor_session)
+                assistant_message = await processor.consume(events)
+            except Exception as exc:  # noqa: BLE001 - runtime boundary reports provider failures.
+                status = LoopStatus.ERROR
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="error",
+                        message=str(exc) or exc.__class__.__name__,
+                        session_id=resolved_session_id,
+                        payload={
+                            "run_id": run_id,
+                            "iteration": iteration,
+                            "phase": "provider",
+                            "error_type": exc.__class__.__name__,
+                        },
+                    )
+                )
+                break
 
             if assistant_message is None:
                 runtime_events.append(
@@ -156,10 +233,11 @@ class RuntimeLoopRunner:
             tool_calls = _assistant_tool_calls(final_assistant_message)
             runtime_events.append(
                 RuntimeEvent(
-                    type="loop.iteration_finish",
+                    type="iteration_finish",
                     session_id=resolved_session_id,
                     message_id=final_assistant_message.message_id,
                     payload={
+                        "run_id": run_id,
                         "iteration": iteration,
                         "tool_call_count": len(tool_calls),
                     },
@@ -168,16 +246,34 @@ class RuntimeLoopRunner:
 
             if processor.session.status is RuntimeStatus.ERROR:
                 status = LoopStatus.ERROR
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="error",
+                        message="Provider emitted an error.",
+                        session_id=resolved_session_id,
+                        message_id=final_assistant_message.message_id,
+                        payload={"run_id": run_id, "iteration": iteration},
+                    )
+                )
+                break
+            if await self._cancel_requested(resolved_session_id):
+                status = LoopStatus.CANCELLED
+                publish_cancelled("after_iteration")
                 break
             if not tool_calls:
                 status = LoopStatus.COMPLETED
                 break
 
-            await self._execute_tool_calls(
+            tool_execution_cancelled = await self._execute_tool_calls(
                 session_id=resolved_session_id,
                 tool_calls=tool_calls,
                 runtime_events=runtime_events,
+                run_id=run_id,
             )
+            if tool_execution_cancelled or await self._cancel_requested(resolved_session_id):
+                status = LoopStatus.CANCELLED
+                publish_cancelled("tool_execution")
+                break
 
             if iterations >= iteration_limit:
                 status = LoopStatus.MAX_ITERATIONS
@@ -188,6 +284,7 @@ class RuntimeLoopRunner:
                         session_id=resolved_session_id,
                         message_id=final_assistant_message.message_id,
                         payload={
+                            "run_id": run_id,
                             "max_iterations": iteration_limit,
                             "pending_tool_call_count": len(tool_calls),
                         },
@@ -195,6 +292,24 @@ class RuntimeLoopRunner:
                 )
                 break
 
+        if status == LoopStatus.CANCELLED:
+            publish_cancelled("finish")
+        runtime_events.append(
+            RuntimeEvent(
+                type="run_finish",
+                session_id=resolved_session_id,
+                message_id=(
+                    final_assistant_message.message_id
+                    if final_assistant_message is not None
+                    else None
+                ),
+                payload={
+                    "run_id": run_id,
+                    "status": status,
+                    "iterations": iterations,
+                },
+            )
+        )
         return RuntimeLoopResult(
             session_id=resolved_session_id,
             final_assistant_message=final_assistant_message,
@@ -258,6 +373,29 @@ class RuntimeLoopRunner:
             return output
         raise TypeError("provider output must be a mapping or LLMEvent iterable")
 
+    async def _cancel_requested(self, session_id: str) -> bool:
+        if self.is_cancelled is None:
+            return False
+        callback = self.is_cancelled
+        try:
+            signature = inspect.signature(callback)
+            accepts_session = any(
+                parameter.kind
+                in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.VAR_POSITIONAL,
+                )
+                for parameter in signature.parameters.values()
+            )
+        except (TypeError, ValueError):
+            accepts_session = True
+
+        result = callback(session_id) if accepts_session else callback()
+        if inspect.isawaitable(result):
+            result = await result
+        return bool(result)
+
     def _append_processed_message(self, session_id: str, message: Message) -> Message:
         stored_message = _message_with_unique_part_ids(
             message,
@@ -282,13 +420,17 @@ class RuntimeLoopRunner:
         session_id: str,
         tool_calls: List[ToolCall],
         runtime_events: List[RuntimeEvent],
-    ) -> None:
+        run_id: str,
+    ) -> bool:
         for tool_call in tool_calls:
+            if await self._cancel_requested(session_id):
+                return True
             runtime_events.append(
                 RuntimeEvent(
-                    type="loop.tool_call_start",
+                    type="tool_call_start",
                     session_id=session_id,
                     payload={
+                        "run_id": run_id,
                         "tool_call_id": tool_call.call_id,
                         "tool_name": tool_call.tool_name,
                     },
@@ -322,15 +464,17 @@ class RuntimeLoopRunner:
             )
             runtime_events.append(
                 RuntimeEvent(
-                    type="loop.tool_result_appended",
+                    type="tool_result_appended",
                     session_id=session_id,
                     payload={
+                        "run_id": run_id,
                         "tool_call_id": result.call_id,
                         "tool_name": result.tool_name,
                         "status": result.status,
                     },
                 )
             )
+        return False
 
 
 async def run_runtime_loop(
@@ -346,6 +490,8 @@ async def run_runtime_loop(
     max_context_parts: Optional[int] = None,
     metadata: Optional[dict[str, Any]] = None,
     context_messages: Optional[list[Message]] = None,
+    event_bus: Optional[RuntimeEventBus] = None,
+    is_cancelled: Optional[CancelCallback] = None,
 ) -> RuntimeLoopResult:
     runner = RuntimeLoopRunner(
         store=store,
@@ -354,6 +500,8 @@ async def run_runtime_loop(
         tool_runtime=tool_runtime,
         max_iterations=max_iterations,
         max_context_parts=max_context_parts,
+        event_bus=event_bus,
+        is_cancelled=is_cancelled,
     )
     return await runner.run(
         user_text=user_text,
