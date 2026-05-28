@@ -58,7 +58,7 @@ def resolve_model_aware_tool_selection(
     if model_hint is None:
         return ModelAwareToolSelection(
             enabled=True,
-            ran=True,
+            ran=False,
             model_hint=None,
             mode="none",
         )

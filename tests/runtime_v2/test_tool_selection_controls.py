@@ -16,7 +16,11 @@ from efp_runtime.session.store import InMemorySessionStore
 from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
-from efp_runtime.tools.selection import ToolSelection, resolve_tool_selection
+from efp_runtime.tools.selection import (
+    ToolSelection,
+    resolve_model_aware_tool_selection,
+    resolve_tool_selection,
+)
 from efp_runtime.types import ToolCall
 
 
@@ -33,6 +37,19 @@ def test_resolve_tool_selection_applies_sorted_overrides_and_rejects_unknown():
 
     with pytest.raises(KeyError, match="missing"):
         resolve_tool_selection(["alpha"], overrides={"missing": False})
+
+
+def test_resolve_model_aware_tool_selection_does_not_run_without_model_hint():
+    selection = resolve_model_aware_tool_selection(
+        ["apply_patch", "edit", "write", "write_file"],
+        metadata={"model": "  "},
+    )
+
+    assert selection.enabled is True
+    assert selection.ran is False
+    assert selection.model_hint is None
+    assert selection.mode == "none"
+    assert selection.forced_disabled == ()
 
 
 @pytest.mark.asyncio
@@ -137,7 +154,7 @@ async def test_without_model_hint_keeps_default_file_tool_selection():
     ]
     assert provider.requests[0].metadata["model_aware_tool_selection"] == {
         "enabled": True,
-        "ran": True,
+        "ran": False,
         "model_hint": None,
         "mode": "none",
         "forced_disabled": [],
