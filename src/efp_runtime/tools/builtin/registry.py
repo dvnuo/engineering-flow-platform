@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ...instructions import ReadInstructionResolver
 from ...lsp import LSPClient
@@ -28,8 +29,16 @@ from .plan import create_plan_exit_tool
 from .question import create_question_tool
 from .search import create_glob_tool, create_grep_tool
 from .shell import create_shell_exec_tool
-from .task import TaskToolRunner, create_task_tool
+from .task import (
+    TaskToolRunner,
+    create_task_cancel_tool,
+    create_task_status_tool,
+    create_task_tool,
+)
 from .todo import create_todo_write_tool
+
+if TYPE_CHECKING:
+    from ...agents.background_tasks import BackgroundTaskManager
 
 
 def create_core_tool_registry(
@@ -44,6 +53,7 @@ def create_core_tool_registry(
     task_runner: TaskToolRunner | None = None,
     include_task_tool: bool = False,
     allow_background_task: bool = False,
+    background_task_manager: "BackgroundTaskManager | None" = None,
     question_broker: QuestionBroker | None = None,
     include_question_tool: bool = False,
     skill_discovery: SkillDiscovery | None = None,
@@ -62,13 +72,13 @@ def create_core_tool_registry(
     """Create a registry containing Runtime v2 core built-in tools."""
 
     root = normalize_workspace_root(workspace_root)
-    background_manager = (
+    shell_background_manager = (
         shell_job_manager
         if enable_background_shell
         else None
     )
-    if enable_background_shell and background_manager is None:
-        background_manager = ShellJobManager(
+    if enable_background_shell and shell_background_manager is None:
+        shell_background_manager = ShellJobManager(
             max_buffer_bytes=background_shell_max_buffer_bytes
         )
     resolved_skill_discovery = _resolve_skill_discovery(
@@ -103,19 +113,31 @@ def create_core_tool_registry(
         create_shell_exec_tool(
             root,
             permission=shell_permission,
-            shell_job_manager=background_manager,
+            shell_job_manager=shell_background_manager,
             enable_background=enable_background_shell,
         )
     )
-    if background_manager is not None:
-        registry.register(create_shell_status_tool(background_manager, root))
-        registry.register(create_shell_kill_tool(background_manager, root))
+    if shell_background_manager is not None:
+        registry.register(create_shell_status_tool(shell_background_manager, root))
+        registry.register(create_shell_kill_tool(shell_background_manager, root))
     if task_runner is not None or include_task_tool:
         if task_runner is None:
             raise ValueError("task_runner is required when include_task_tool is true.")
+        task_manager = background_task_manager
+        if allow_background_task and task_manager is None:
+            from ...agents.background_tasks import BackgroundTaskManager
+
+            task_manager = BackgroundTaskManager()
         registry.register(
-            create_task_tool(task_runner, allow_background=allow_background_task)
+            create_task_tool(
+                task_runner,
+                allow_background=allow_background_task,
+                background_manager=task_manager,
+            )
         )
+        if allow_background_task and task_manager is not None:
+            registry.register(create_task_status_tool(task_manager))
+            registry.register(create_task_cancel_tool(task_manager))
     if include_question_tool:
         registry.register(create_question_tool(question_broker))
     registry.register(create_todo_write_tool())

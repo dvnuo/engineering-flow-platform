@@ -47,6 +47,7 @@ PLAN_MODE_MUTATING_TOOLS = {
     "write_file",
     "shell_exec",
     "shell_kill",
+    "task_cancel",
 }
 
 
@@ -316,6 +317,18 @@ class AgentRuntime:
         return [
             _question_request_to_dict(request)
             for request in self.question_broker.pending()
+        ]
+
+    def drain_background_tasks(
+        self,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        manager = _background_task_manager(self.tool_runtime)
+        if manager is None:
+            return []
+        return [
+            _background_task_record_payload(manager, record)
+            for record in manager.drain_completed(session_id=session_id)
         ]
 
     def cancel(self, session_id: str) -> bool:
@@ -725,6 +738,50 @@ def _skill_list_tool_enabled(
     if config.enable_skill_list_tool is not None:
         return bool(config.enable_skill_list_tool)
     return skill_discovery is not None or bool(config.skill_directories)
+
+
+def _background_task_manager(tool_runtime: ToolRuntime) -> Any:
+    for tool in tool_runtime.registry.list():
+        runtime_metadata = getattr(tool, "runtime_metadata", {}) or {}
+        if not isinstance(runtime_metadata, Mapping):
+            continue
+        manager = runtime_metadata.get("background_task_manager")
+        if manager is not None and callable(getattr(manager, "drain_completed", None)):
+            return manager
+    return None
+
+
+def _background_task_record_payload(manager: Any, record: Any) -> dict[str, Any]:
+    converter = getattr(manager, "record_to_dict", None)
+    if callable(converter):
+        return converter(record)
+    result = getattr(record, "result", None)
+    result_payload = None
+    if result is not None:
+        result_payload = {
+            "task_id": getattr(result, "task_id", None),
+            "text": getattr(result, "text", ""),
+            "state": getattr(result, "state", ""),
+            "metadata": dict(getattr(result, "metadata", {}) or {}),
+        }
+    payload = {
+        "task_id": getattr(record, "task_id", None),
+        "description": getattr(record, "description", ""),
+        "prompt": getattr(record, "prompt", ""),
+        "subagent_type": getattr(record, "subagent_type", ""),
+        "session_id": getattr(record, "session_id", None),
+        "started_at": getattr(record, "started_at", None),
+        "finished_at": getattr(record, "finished_at", None),
+        "state": getattr(record, "state", ""),
+        "background": True,
+        "result": result_payload,
+        "error": getattr(record, "error", None),
+        "metadata": dict(getattr(record, "metadata", {}) or {}),
+    }
+    if result_payload is not None:
+        payload["text"] = result_payload["text"]
+        payload["result_metadata"] = dict(result_payload["metadata"])
+    return payload
 
 
 def _permission_request_to_dict(request: Any) -> dict[str, Any]:

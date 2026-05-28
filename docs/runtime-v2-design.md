@@ -272,12 +272,24 @@ available client, tool calls return `No LSP client available for this file type.
 The tool remains workspace-contained and validates file paths before calling the
 injected client.
 
-The `task` tool is an injectable foreground subagent boundary. It is not enabled
-by the core registry unless a caller provides a task runner; when enabled, the
-loop treats it like any other tool and appends its structured task output as a
-tool result for the next provider iteration. Runtime v2 does not implement
-background task synthetic-message injection yet; `background=true` is rejected
-with an explicit unsupported error by default.
+The `task` tool is an injectable subagent boundary. It is not enabled by the
+core registry unless a caller provides a task runner; when enabled, foreground
+`task(background=false)` calls are treated like any other tool and the loop
+appends their structured task output as a tool result for the next provider
+iteration. If the caller opts in to background tasks and supplies, or lets the
+tool create, a `BackgroundTaskManager`, `task(background=true)` starts the same
+injected runner with `asyncio.create_task`, immediately returns a process-local
+`task_id`, and lets the primary agent continue its loop.
+
+Background task state is observed explicitly with `task_status(task_id?)`.
+Without a `task_id`, `task_status` lists known tasks for a session or for the
+current runtime process; with `drain=true`, it returns completed/error/cancelled
+records that have not already been drained and marks them drained. Running
+tasks can be cancelled with `task_cancel(task_id)`, which defaults to ask
+permission because it mutates a running background operation. `AgentRuntime`
+does not automatically inject completed background task messages into session
+history; callers that want to surface completions around `run()` or `resume()`
+must call `drain_background_tasks(session_id?)` explicitly.
 
 The `question` tool is an optional first-class interactive pause. It is disabled
 by default and can be enabled with
@@ -301,15 +313,14 @@ agent instructions, per-run tool overrides, active skills, a child iteration
 limit, and metadata. `AgentRegistry` resolves `task.subagent_type` to a profile
 and can fall back to a configured default profile, usually `general`.
 
-`create_subagent_task_runner(...)` builds the foreground task runner used by the
-injectable `task` tool. The runner does not start a legacy agent, background
-worker, or separate process. It creates a child `AgentRuntime`, constructs a
-traceable child session id from the parent session id and task id, prepends the
-selected profile prompt to the task prompt, and runs the child loop. Completed
-child runs return the final assistant text as the task result. Non-completed
-child runs and provider/runtime failures are normalized into `TaskToolResult`
-with `state="error"` so the parent loop receives an ordinary tool result rather
-than an exception.
+`create_subagent_task_runner(...)` builds the task runner used by the injectable
+`task` tool. The runner does not start a legacy agent or separate process. It
+creates a child `AgentRuntime`, constructs a traceable child session id from the
+parent session id and task id, prepends the selected profile prompt to the task
+prompt, and runs the child loop. Completed child runs return the final assistant
+text as the task result. Non-completed child runs and provider/runtime failures
+are normalized into `TaskToolResult` with `state="error"` so the parent loop
+receives an ordinary tool result rather than an exception.
 
 Child config is derived from the supplied `base_config` without mutating it.
 `workspace_root` passed to the runner wins over `base_config.workspace_root`;
@@ -321,9 +332,14 @@ registry still does not register `task` by default; callers must explicitly wire
 the runner, for example by passing
 `task_runner=create_subagent_task_runner(...)` to `create_core_tool_registry`.
 
-Only foreground subagent tasks are supported in this phase. Background tasks,
-real multiprocess workers, and legacy runtime/session integration remain
-unsupported.
+`create_agent_task_tool(...)` preserves the historical single-tool helper.
+`create_agent_task_tools(..., allow_background=True)` returns `task`,
+`task_status`, and `task_cancel` wired to the same `BackgroundTaskManager`, so
+callers can register all three definitions together. Background subagent tasks
+are intentionally limited to the current process lifecycle. Runtime v2 does not
+provide UI child-session navigation, does not persist background task records to
+disk, does not run multiprocess workers, and does not integrate with the legacy
+runtime/session stack.
 
 ## Skills
 

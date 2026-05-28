@@ -19,10 +19,13 @@ from ..tools.builtin.task import (
     TaskToolRequest,
     TaskToolResult,
     TaskToolRunner,
+    create_task_cancel_tool,
+    create_task_status_tool,
     create_task_tool,
 )
 from ..tools.definition import ToolDef
 from ..tools.runtime import ToolRuntime
+from .background_tasks import BackgroundTaskManager
 from .profile import AgentProfile
 from .registry import AgentRegistry
 
@@ -155,6 +158,7 @@ def create_agent_task_tool(
     session_id_prefix: str = "subagent",
     tool_id: str = "task",
     allow_background: bool = False,
+    background_manager: BackgroundTaskManager | None = None,
 ) -> ToolDef:
     """Create a Runtime v2 task tool backed by the subagent task runner."""
 
@@ -170,7 +174,56 @@ def create_agent_task_tool(
         ),
         tool_id=tool_id,
         allow_background=allow_background,
+        background_manager=background_manager,
     )
+
+
+def create_agent_task_tools(
+    *,
+    provider,
+    workspace_root: str | Path | None = None,
+    profiles: AgentRegistry | Iterable[AgentProfile] | None = None,
+    base_config: RuntimeConfig | None = None,
+    store_factory: Callable[[], SessionStore] | None = None,
+    tool_runtime_factory: Callable[[AgentProfile], ToolRuntime] | None = None,
+    session_id_prefix: str = "subagent",
+    tool_id: str = "task",
+    status_tool_id: str = "task_status",
+    cancel_tool_id: str = "task_cancel",
+    allow_background: bool = False,
+    background_manager: BackgroundTaskManager | None = None,
+) -> list[ToolDef]:
+    """Create task-related tools sharing one background manager when enabled."""
+
+    runner = create_subagent_task_runner(
+        provider=provider,
+        workspace_root=workspace_root,
+        profiles=profiles,
+        base_config=base_config,
+        store_factory=store_factory,
+        tool_runtime_factory=tool_runtime_factory,
+        session_id_prefix=session_id_prefix,
+    )
+    if not allow_background:
+        return [
+            create_task_tool(
+                runner,
+                tool_id=tool_id,
+                allow_background=False,
+            )
+        ]
+
+    manager = background_manager or BackgroundTaskManager()
+    return [
+        create_task_tool(
+            runner,
+            tool_id=tool_id,
+            allow_background=True,
+            background_manager=manager,
+        ),
+        create_task_status_tool(manager, tool_id=status_tool_id),
+        create_task_cancel_tool(manager, tool_id=cancel_tool_id),
+    ]
 
 
 def _resolve_registry(
@@ -485,8 +538,10 @@ def _exception_text(exc: Exception) -> str:
 
 
 __all__ = [
+    "BackgroundTaskManager",
     "EMPTY_SUBAGENT_RESULT_MESSAGE",
     "SubagentRunResult",
     "create_agent_task_tool",
+    "create_agent_task_tools",
     "create_subagent_task_runner",
 ]

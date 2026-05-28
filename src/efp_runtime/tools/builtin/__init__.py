@@ -22,7 +22,14 @@ from .question import create_question_tool
 from .registry import create_core_tool_registry
 from .search import create_glob_tool, create_grep_tool
 from .shell import create_shell_exec_tool
-from .task import TaskToolRequest, TaskToolResult, TaskToolRunner, create_task_tool
+from .task import (
+    TaskToolRequest,
+    TaskToolResult,
+    TaskToolRunner,
+    create_task_cancel_tool,
+    create_task_status_tool,
+    create_task_tool,
+)
 from .todo import create_todo_write_tool
 
 __all__ = [
@@ -47,6 +54,8 @@ __all__ = [
     "create_shell_exec_tool",
     "create_shell_kill_tool",
     "create_shell_status_tool",
+    "create_task_cancel_tool",
+    "create_task_status_tool",
     "create_task_tool",
     "create_todo_write_tool",
     "create_write_file_tool",

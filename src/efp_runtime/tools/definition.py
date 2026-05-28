@@ -71,6 +71,15 @@ class ToolDef:
     permission: PermissionMetadata = field(default_factory=PermissionMetadata)
     output_policy: OutputPolicy = field(default_factory=OutputPolicy)
     metadata: dict[str, Any] = field(default_factory=dict)
+    runtime_metadata: dict[str, Any] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(self, "runtime_metadata", dict(self.runtime_metadata))
 
     def validate_args(self, args: Mapping[str, Any] | None) -> dict[str, Any]:
         return validate_args(self.input_schema, args or {})
