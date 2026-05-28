@@ -47,6 +47,9 @@ _RUNTIME_PROJECT_MARKER_DIRECTORIES = (
     ".opencode/skill",
     ".opencode/skills",
     ".opencode/agents",
+)
+
+_RUNTIME_COMPATIBILITY_SKILL_MARKER_DIRECTORIES = (
     ".claude/skills",
     ".agents/skills",
 )
@@ -863,7 +866,18 @@ def _has_runtime_project_marker(directory: Path) -> bool:
     for marker in _RUNTIME_PROJECT_MARKER_DIRECTORIES:
         if _resolve_workspace_path(directory, marker).is_dir():
             return True
+    if _is_user_home_directory(directory):
+        return False
+    for marker in _RUNTIME_COMPATIBILITY_SKILL_MARKER_DIRECTORIES:
+        if _resolve_workspace_path(directory, marker).is_dir():
+            return True
     return False
+
+
+def _is_user_home_directory(directory: Path) -> bool:
+    return directory.resolve(strict=False) == Path.home().expanduser().resolve(
+        strict=False,
+    )
 
 
 def _workspace_root_path(workspace_root: str | Path) -> Path:

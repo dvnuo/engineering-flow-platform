@@ -144,6 +144,51 @@ def test_parent_default_skill_marker_resolves_workspace_root(
     assert skill.skill_file == skills / "project-skill" / "SKILL.md"
 
 
+@pytest.mark.parametrize("marker", [".claude/skills", ".agents/skills"])
+def test_parent_compatibility_skill_marker_resolves_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    marker: str,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    skills = project / marker
+    _write_skill(skills, "project-skill", content="# Project skill")
+
+    result = load_runtime_config(nested)
+    skill = SkillDiscovery(result.config.skill_directories).get("project-skill")
+
+    assert resolve_runtime_workspace_root(nested) == project.resolve()
+    assert result.loaded_paths == []
+    assert result.config.workspace_root == project.resolve()
+    assert result.config.skill_directories == [skills.resolve()]
+    assert skill is not None
+    assert skill.skill_file == skills / "project-skill" / "SKILL.md"
+
+
+@pytest.mark.parametrize("marker", [".claude/skills", ".agents/skills"])
+def test_home_compatibility_skill_marker_does_not_resolve_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    marker: str,
+):
+    home = tmp_path / "home"
+    global_skills = home / marker
+    nested = home / "workspace" / "unmarked" / "src" / "pkg"
+    global_skills.mkdir(parents=True)
+    nested.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = load_runtime_config(nested)
+
+    assert resolve_runtime_workspace_root(nested) == nested.resolve()
+    assert result.config.workspace_root == nested.resolve()
+    assert result.config.workspace_root != home.resolve()
+    assert global_skills.resolve() in result.config.skill_directories
+
+
 def test_nested_project_marker_wins_over_parent_marker(tmp_path: Path):
     outer = tmp_path / "outer"
     inner = outer / "packages" / "app"
