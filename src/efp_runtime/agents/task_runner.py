@@ -435,6 +435,11 @@ def _child_config(
             if base_config is None
             else base_config.background_shell_max_buffer_bytes
         ),
+        inject_background_task_results=(
+            True
+            if base_config is None
+            else base_config.inject_background_task_results
+        ),
         metadata=base_metadata,
         include_default_system_prompt=(
             True

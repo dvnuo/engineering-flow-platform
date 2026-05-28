@@ -512,9 +512,13 @@ current runtime process; with `drain=true`, it returns completed/error/cancelled
 records that have not already been drained and marks them drained. Running
 tasks can be cancelled with `task_cancel(task_id)`, which defaults to ask
 permission because it mutates a running background operation. `AgentRuntime`
-does not automatically inject completed background task messages into session
-history; callers that want to surface completions around `run()` or `resume()`
-must call `drain_background_tasks(session_id?)` explicitly.
+also auto-injects completed/error/cancelled background task results as
+synthetic user messages on the next `run(..., session_id=...)` or
+`resume(session_id)` for the parent session, before preparing the next provider
+request. This lets the primary agent continue with finished subagent results
+without polling `task_status`. The automatic injection path has its own
+once-only tracking; `task_status` and `drain_background_tasks(session_id?)`
+remain explicit inspection APIs with independent drain semantics.
 
 The `question` tool is an optional first-class interactive pause. It is disabled
 by default and can be enabled with

@@ -47,6 +47,7 @@ class BackgroundTaskManager:
         self._records: dict[str, BackgroundTaskRecord] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._drained: set[str] = set()
+        self._injected: set[str] = set()
 
     def start(
         self,
@@ -127,6 +128,22 @@ class BackgroundTaskManager:
             self._drained.add(record.task_id)
             drained.append(record)
         return drained
+
+    def pending_injections(
+        self,
+        session_id: str | None = None,
+    ) -> list[BackgroundTaskRecord]:
+        """Return final-state records once for automatic session injection."""
+
+        injected: list[BackgroundTaskRecord] = []
+        for record in self.list(session_id=session_id):
+            if record.state not in FINAL_BACKGROUND_TASK_STATES:
+                continue
+            if record.task_id in self._injected:
+                continue
+            self._injected.add(record.task_id)
+            injected.append(record)
+        return injected
 
     def record_to_dict(self, record: BackgroundTaskRecord) -> dict[str, Any]:
         """Return a JSON-compatible task record payload."""

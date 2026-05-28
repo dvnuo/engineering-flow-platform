@@ -38,6 +38,7 @@ class RuntimeConfig:
     enable_lsp_tool: bool = False
     enable_background_shell: bool = True
     background_shell_max_buffer_bytes: int = 1024 * 1024
+    inject_background_task_results: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
     include_default_system_prompt: bool = True
     system_prompt_texts: list[str] = field(default_factory=list)
@@ -128,6 +129,9 @@ class RuntimeConfig:
         self.enable_background_shell = bool(self.enable_background_shell)
         self.background_shell_max_buffer_bytes = int(
             self.background_shell_max_buffer_bytes
+        )
+        self.inject_background_task_results = bool(
+            self.inject_background_task_results
         )
         self.disabled_tools = list(self.disabled_tools)
         self.tool_permissions = normalize_tool_permissions(self.tool_permissions)

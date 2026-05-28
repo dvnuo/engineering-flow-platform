@@ -6,7 +6,11 @@ from typing import Any
 
 import pytest
 
-from efp_runtime.agents import BackgroundTaskManager, create_agent_task_tools
+from efp_runtime.agents import (
+    BackgroundTaskManager,
+    BackgroundTaskRecord,
+    create_agent_task_tools,
+)
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import ToolCall
 from efp_runtime.permissions import PermissionDecision, PermissionMetadata
@@ -18,6 +22,7 @@ from efp_runtime.tools.builtin.task import (
     create_task_cancel_tool,
     create_task_status_tool,
     create_task_tool,
+    format_background_task_notification,
 )
 from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.registry import ToolRegistry
@@ -163,6 +168,47 @@ async def test_task_status_drain_returns_completed_records_once():
         "session_id": "session-drain",
         "drain": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_pending_injections_return_final_records_once_without_draining():
+    release = asyncio.Event()
+    manager = BackgroundTaskManager()
+
+    async def runner(request: TaskToolRequest) -> str:
+        if request.task_id == "task-running":
+            await release.wait()
+        return f"{request.task_id} result"
+
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                create_task_tool(
+                    runner,
+                    allow_background=True,
+                    background_manager=manager,
+                ),
+                create_task_status_tool(manager),
+            ]
+        )
+    )
+
+    await _start_background_task(runtime, "task-inject", "session-inject")
+    await _start_background_task(runtime, "task-other", "session-other")
+    await _start_background_task(runtime, "task-running", "session-inject")
+    await _wait_for_task_state(runtime, "task-inject", "completed")
+    await _wait_for_task_state(runtime, "task-other", "completed")
+
+    first = manager.pending_injections(session_id="session-inject")
+    second = manager.pending_injections(session_id="session-inject")
+    drained = manager.drain_completed(session_id="session-inject")
+
+    assert [record.task_id for record in first] == ["task-inject"]
+    assert second == []
+    assert [record.task_id for record in drained] == ["task-inject"]
+
+    release.set()
+    await _wait_for_task_state(runtime, "task-running", "completed")
 
 
 @pytest.mark.asyncio
@@ -398,6 +444,192 @@ async def test_agent_runtime_drain_background_tasks_returns_completed_once():
     assert second == []
 
 
+@pytest.mark.asyncio
+async def test_agent_runtime_resume_injects_completed_background_task_message():
+    manager = BackgroundTaskManager()
+    provider = ScriptedLLMProvider([{"content": "resume observed"}])
+
+    async def runner(request: TaskToolRequest) -> str:
+        return "resume background result"
+
+    runtime = _agent_runtime_with_background_tool(
+        provider=provider,
+        manager=manager,
+        runner=runner,
+    )
+    runtime.store.create_session(session_id="session-resume-inject")
+
+    await _start_background_task(
+        runtime.tool_runtime,
+        "task-resume-inject",
+        "session-resume-inject",
+    )
+    await _wait_for_task_state(
+        runtime.tool_runtime,
+        "task-resume-inject",
+        "completed",
+    )
+
+    result = await runtime.resume("session-resume-inject")
+
+    request_messages = provider.requests[0].provider_request.messages
+    user_messages = [
+        message for message in request_messages if message.role == "user"
+    ]
+    injected_text = user_messages[0].text
+    history = runtime.store.read_history("session-resume-inject")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(user_messages) == 1
+    assert '<task id="task-resume-inject" state="completed">' in injected_text
+    assert (
+        "<summary>Background task completed: Background task</summary>"
+        in injected_text
+    )
+    assert "<task_result>\nresume background result\n</task_result>" in injected_text
+    assert history[0].metadata == {
+        "source": "background_task.injected",
+        "synthetic": True,
+        "background_task_ids": ["task-resume-inject"],
+    }
+    drained = runtime.drain_background_tasks("session-resume-inject")
+    assert [record["task_id"] for record in drained] == ["task-resume-inject"]
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_run_injects_background_task_before_new_user_message():
+    manager = BackgroundTaskManager()
+    provider = ScriptedLLMProvider([{"content": "run observed"}])
+
+    async def runner(request: TaskToolRequest) -> str:
+        return "run background result"
+
+    runtime = _agent_runtime_with_background_tool(
+        provider=provider,
+        manager=manager,
+        runner=runner,
+    )
+    runtime.store.create_session(session_id="session-run-inject")
+
+    await _start_background_task(
+        runtime.tool_runtime,
+        "task-run-inject",
+        "session-run-inject",
+    )
+    await _wait_for_task_state(
+        runtime.tool_runtime,
+        "task-run-inject",
+        "completed",
+    )
+
+    result = await runtime.run("Continue after task.", session_id="session-run-inject")
+
+    user_messages = [
+        message
+        for message in provider.requests[0].provider_request.messages
+        if message.role == "user"
+    ]
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(user_messages) == 2
+    assert '<task id="task-run-inject" state="completed">' in user_messages[0].text
+    assert "<task_result>\nrun background result\n</task_result>" in user_messages[0].text
+    assert user_messages[1].text == "Continue after task."
+
+
+@pytest.mark.asyncio
+async def test_background_task_result_injection_can_be_disabled_without_draining():
+    manager = BackgroundTaskManager()
+    provider = ScriptedLLMProvider([{"content": "disabled observed"}])
+
+    async def runner(request: TaskToolRequest) -> str:
+        return "disabled background result"
+
+    runtime = _agent_runtime_with_background_tool(
+        provider=provider,
+        manager=manager,
+        runner=runner,
+        config=RuntimeConfig(
+            max_iterations=1,
+            inject_background_task_results=False,
+        ),
+    )
+    runtime.store.create_session(session_id="session-inject-disabled")
+
+    await _start_background_task(
+        runtime.tool_runtime,
+        "task-inject-disabled",
+        "session-inject-disabled",
+    )
+    await _wait_for_task_state(
+        runtime.tool_runtime,
+        "task-inject-disabled",
+        "completed",
+    )
+
+    result = await runtime.run("No automatic injection.", "session-inject-disabled")
+
+    request_text = "\n".join(
+        message.text for message in provider.requests[0].provider_request.messages
+    )
+    drained = runtime.drain_background_tasks("session-inject-disabled")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert "task-inject-disabled" not in request_text
+    assert [record["task_id"] for record in drained] == ["task-inject-disabled"]
+    assert drained[0]["text"] == "disabled background result"
+
+
+def test_background_task_notification_uses_task_error_for_error_and_cancelled():
+    error_record = BackgroundTaskRecord(
+        task_id='task-"error"',
+        description="Broken task",
+        prompt="Fail.",
+        subagent_type="general",
+        session_id="session-format",
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:01Z",
+        state="error",
+        result=TaskToolResult(
+            task_id='task-"error"',
+            text="boom",
+            state="error",
+        ),
+        error="boom",
+    )
+    cancelled_record = BackgroundTaskRecord(
+        task_id="task-cancelled",
+        description="Cancel task",
+        prompt="Cancel.",
+        subagent_type="general",
+        session_id="session-format",
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:01Z",
+        state="cancelled",
+        result=TaskToolResult(
+            task_id="task-cancelled",
+            text="Task cancelled.",
+            state="cancelled",
+        ),
+        error=None,
+    )
+
+    error_text = format_background_task_notification(error_record)
+    cancelled_text = format_background_task_notification(cancelled_record)
+
+    assert '<task id="task-&quot;error&quot;" state="error">' in error_text
+    assert "<summary>Background task failed: Broken task</summary>" in error_text
+    assert "<task_error>\nboom\n</task_error>" in error_text
+    assert "<task_result>" not in error_text
+    assert '<task id="task-cancelled" state="cancelled">' in cancelled_text
+    assert (
+        "<summary>Background task failed: Cancel task</summary>"
+        in cancelled_text
+    )
+    assert "<task_error>\nTask cancelled.\n</task_error>" in cancelled_text
+    assert "<task_result>" not in cancelled_text
+
+
 def test_agent_runtime_drain_background_tasks_without_manager_returns_empty():
     runtime = AgentRuntime(
         provider=ScriptedLLMProvider([{"content": "unused"}]),
@@ -405,6 +637,29 @@ def test_agent_runtime_drain_background_tasks_without_manager_returns_empty():
     )
 
     assert runtime.drain_background_tasks() == []
+
+
+def _agent_runtime_with_background_tool(
+    *,
+    provider: ScriptedLLMProvider,
+    manager: BackgroundTaskManager,
+    runner,
+    config: RuntimeConfig | None = None,
+) -> AgentRuntime:
+    return AgentRuntime(
+        provider=provider,
+        config=config,
+        tool_registry=ToolRegistry(
+            [
+                create_task_tool(
+                    runner,
+                    allow_background=True,
+                    background_manager=manager,
+                ),
+                create_task_status_tool(manager),
+            ]
+        ),
+    )
 
 
 async def _start_background_task(

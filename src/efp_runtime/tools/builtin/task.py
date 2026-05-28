@@ -506,6 +506,31 @@ def _format_task_cancelled(*, task_id: str, text: str) -> str:
     )
 
 
+def format_background_task_notification(record: Any) -> str:
+    """Format a final background task record as a synthetic user message."""
+
+    task_id = str(getattr(record, "task_id", ""))
+    state = _normalize_state(getattr(record, "state", ""))
+    description = str(getattr(record, "description", ""))
+    text = _background_task_result_text(record)
+    if state == "completed":
+        summary = f"Background task completed: {description}"
+        tag = "task_result"
+    else:
+        summary = f"Background task failed: {description}"
+        tag = "task_error"
+    return "\n".join(
+        [
+            f'<task id="{escape(task_id, quote=True)}" state="{escape(state, quote=True)}">',
+            f"<summary>{summary}</summary>",
+            f"<{tag}>",
+            text,
+            f"</{tag}>",
+            "</task>",
+        ]
+    )
+
+
 def _format_task_status_detail(output: Mapping[str, Any]) -> str:
     task_id = str(output.get("task_id") or "")
     state = str(output.get("state") or "")
@@ -565,6 +590,16 @@ def _metadata_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     return {}
+
+
+def _background_task_result_text(record: Any) -> str:
+    error = getattr(record, "error", None)
+    if error:
+        return str(error)
+    result = getattr(record, "result", None)
+    if result is not None:
+        return str(getattr(result, "text", ""))
+    return ""
 
 
 def _background_record_payload(manager: Any, record: Any) -> dict[str, Any]:
@@ -629,4 +664,5 @@ __all__ = [
     "create_task_cancel_tool",
     "create_task_status_tool",
     "create_task_tool",
+    "format_background_task_notification",
 ]

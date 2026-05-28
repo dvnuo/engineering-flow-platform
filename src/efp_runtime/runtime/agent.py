@@ -44,6 +44,7 @@ from ..tools.builtin import (
     create_plan_exit_tool,
     create_question_tool,
 )
+from ..tools.builtin.task import format_background_task_notification
 from ..tools.definition import OutputPolicy
 from ..tools.external import ExternalToolProvider, register_external_tools
 from ..tools.registry import ToolRegistry
@@ -221,6 +222,7 @@ class AgentRuntime:
         resolved_session_id = session_id or self.store.create_session().session_id
         run_id = self.run_state.begin(resolved_session_id)
         try:
+            self._inject_pending_background_task_results(resolved_session_id)
             run_metadata["max_iterations"] = iteration_limit
             run_metadata["run_id"] = run_id
             if selected_agent_source is not None:
@@ -308,6 +310,7 @@ class AgentRuntime:
         self.store.get_session(session_id)
         run_id = self.run_state.begin(session_id)
         try:
+            self._inject_pending_background_task_results(session_id)
             run_metadata = self._base_run_metadata(metadata)
             run_metadata["run_id"] = run_id
             active_skills = _visible_skill_names_for_permissions(
@@ -424,6 +427,46 @@ class AgentRuntime:
             _background_task_record_payload(manager, record)
             for record in manager.drain_completed(session_id=session_id)
         ]
+
+    def _inject_pending_background_task_results(
+        self,
+        session_id: str | None,
+    ) -> list[str]:
+        if not self.config.inject_background_task_results or session_id is None:
+            return []
+        manager = _background_task_manager(self.tool_runtime)
+        if manager is None:
+            return []
+        pending_injections = getattr(manager, "pending_injections", None)
+        if not callable(pending_injections):
+            return []
+        try:
+            self.store.get_session(session_id)
+        except KeyError:
+            return []
+        records = pending_injections(session_id=session_id)
+        injected_task_ids: list[str] = []
+        for record in records:
+            task_id = str(getattr(record, "task_id", ""))
+            metadata = {
+                "source": "background_task.injected",
+                "synthetic": True,
+                "background_task_ids": [task_id],
+            }
+            self.store.append_message(
+                session_id,
+                role=MessageRole.USER,
+                parts=[
+                    MessagePart.text_part(
+                        format_background_task_notification(record),
+                        metadata=metadata,
+                    )
+                ],
+                metadata=metadata,
+                status="complete",
+            )
+            injected_task_ids.append(task_id)
+        return injected_task_ids
 
     def cancel(self, session_id: str) -> bool:
         return self.run_state.cancel(session_id)
@@ -956,6 +999,7 @@ def _resolve_config(
         enable_lsp_tool=config.enable_lsp_tool,
         enable_background_shell=config.enable_background_shell,
         background_shell_max_buffer_bytes=config.background_shell_max_buffer_bytes,
+        inject_background_task_results=config.inject_background_task_results,
         metadata=resolved_metadata,
         include_default_system_prompt=config.include_default_system_prompt,
         system_prompt_texts=list(config.system_prompt_texts),
