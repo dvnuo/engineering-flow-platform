@@ -10,7 +10,12 @@ import pytest
 
 from efp_runtime.agents.profile import AgentProfile
 from efp_runtime.agents.task_runner import _child_config
-from efp_runtime.commands import CommandRegistry
+from efp_runtime.commands import (
+    CommandDefinition,
+    CommandRegistry,
+    command_definitions_from_config,
+    expand_command,
+)
 from efp_runtime.loop import ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import _resolve_config
@@ -37,6 +42,7 @@ def test_command_registry_discovers_and_parses_command_files(tmp_path: Path):
         "argument-hint: <issue>\n"
         "agent: coder\n"
         "model: gpt-test\n"
+        "subtask: false\n"
         "tools: [read_file, edit]\n"
         "---\n"
         "# Fix\nApply the smallest safe change.\n",
@@ -59,10 +65,128 @@ def test_command_registry_discovers_and_parses_command_files(tmp_path: Path):
     assert commands["fix"].metadata["argument-hint"] == "<issue>"
     assert commands["fix"].metadata["agent"] == "coder"
     assert commands["fix"].metadata["model"] == "gpt-test"
+    assert commands["fix"].metadata["subtask"] is False
+    assert commands["fix"].subtask is False
+    assert commands["fix"].source == "file"
     assert commands["fix"].metadata["tools"] == ["read_file", "edit"]
     assert commands["fix"].command_file == second_dir / "fix.md"
     assert commands["review:pr"].description == "Review a PR"
     assert commands["review:pr"].content == "# Review\nFocus on correctness."
+
+
+def test_config_command_definitions_parse_string_and_mapping_forms():
+    definitions = command_definitions_from_config(
+        {
+            "command": {
+                "test": {
+                    "template": "Run tests for $ARGUMENTS",
+                    "description": "Run tests",
+                    "argument-hint": "<target>",
+                    "agent": "build",
+                    "model": "provider/model",
+                    "tools": ["shell_exec"],
+                    "subtask": False,
+                },
+                "review": "Review $1",
+                "renamed": {
+                    "name": "/audit",
+                    "content": "Audit $ARGUMENTS",
+                },
+            }
+        }
+    )
+
+    commands = {definition.name: definition for definition in definitions}
+    assert sorted(commands) == ["audit", "review", "test"]
+    assert commands["test"].content == "Run tests for $ARGUMENTS"
+    assert commands["test"].description == "Run tests"
+    assert commands["test"].argument_hint == "<target>"
+    assert commands["test"].agent == "build"
+    assert commands["test"].model == "provider/model"
+    assert commands["test"].subtask is False
+    assert commands["test"].metadata["tools"] == ["shell_exec"]
+    assert commands["test"].source == "config"
+    assert commands["review"].content == "Review $1"
+    assert commands["audit"].content == "Audit $ARGUMENTS"
+
+
+def test_config_command_requires_template_or_content():
+    with pytest.raises(ValueError, match="missing"):
+        command_definitions_from_config(
+            {"command": {"missing": {"description": "No template"}}}
+        )
+
+
+def test_command_and_commands_aliases_override_in_stable_order():
+    first = CommandRegistry.from_sources(
+        definitions=command_definitions_from_config(
+            {
+                "command": {"dup": "from command", "only": "one"},
+                "commands": {"dup": "from commands"},
+            }
+        )
+    )
+    second = CommandRegistry.from_sources(
+        definitions=command_definitions_from_config(
+            {
+                "commands": {"dup": "from commands"},
+                "command": {"dup": "from command"},
+            }
+        )
+    )
+
+    assert first.get("dup").content == "from commands"
+    assert first.get("only").content == "one"
+    assert second.get("dup").content == "from command"
+
+
+def test_markdown_file_command_overrides_config_command(tmp_path: Path):
+    command_dir = _write_command(tmp_path, "fix.md", "File command.")
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="fix",
+                content="Config command.",
+                source="config",
+            )
+        ],
+        command_directories=[command_dir],
+    )
+
+    command = registry.get("fix")
+
+    assert command is not None
+    assert command.content == "File command."
+    assert command.source == "file"
+
+
+def test_command_template_variables_render_arguments_only():
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="tmpl",
+                content=(
+                    "all=$ARGUMENTS\n"
+                    "one=$1\n"
+                    "two=$2\n"
+                    "missing=$3\n"
+                    "home=$HOME\n"
+                    "joined=$1/$2"
+                ),
+                source="config",
+            )
+        ]
+    )
+
+    expansion = expand_command('/tmpl alpha "beta gamma"', registry)
+
+    assert expansion is not None
+    assert "all=alpha \"beta gamma\"" in expansion.text
+    assert "one=alpha" in expansion.text
+    assert "two=beta gamma" in expansion.text
+    assert "missing=\n" in expansion.text
+    assert "home=$HOME" in expansion.text
+    assert "joined=alpha/beta gamma" in expansion.text
 
 
 @pytest.mark.asyncio
@@ -90,7 +214,46 @@ async def test_slash_command_expands_into_provider_user_message(tmp_path: Path):
     assert request.metadata["command_name"] == "fix"
     assert request.metadata["command_file"] == str(command_dir / "fix.md")
     assert request.metadata["command_arguments"] == "ticket-123"
+    assert request.metadata["command_source"] == "file"
     assert request.provider_request.metadata["command_name"] == "fix"
+
+
+@pytest.mark.asyncio
+async def test_injected_command_registry_expands_without_config_directories():
+    definition = CommandDefinition(
+        name="build",
+        content="Build $1 with $ARGUMENTS.",
+        source="config",
+        agent="builder",
+        model="provider/model",
+        subtask=False,
+        metadata={"tools": ["shell_exec"]},
+    )
+    registry = CommandRegistry.from_sources(definitions=[definition])
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+    )
+
+    await runtime.run("/build target --fast", session_id="session-injected-command")
+    definition.metadata["tools"].append("write_file")
+
+    request = provider.requests[0]
+    text = request.provider_request.messages[0].text
+    assert "Build target with target --fast." in text
+    assert request.metadata["command_name"] == "build"
+    assert request.metadata["command_file"] == ""
+    assert request.metadata["command_source"] == "config"
+    assert request.metadata["command_agent"] == "builder"
+    assert request.metadata["command_model"] == "provider/model"
+    assert request.metadata["command_subtask"] is False
+    assert request.metadata["command_metadata"]["tools"] == ["shell_exec"]
 
 
 @pytest.mark.asyncio
@@ -195,6 +358,69 @@ async def test_command_content_is_truncated_by_configured_limit(tmp_path: Path):
     assert request.metadata["command_truncated"] is True
     assert request.metadata["command_original_chars"] == 6
     assert request.metadata["command_max_chars"] == 3
+
+
+@pytest.mark.asyncio
+async def test_command_shell_syntax_is_plain_text_and_not_executed(tmp_path: Path):
+    marker = tmp_path / "marker"
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="danger",
+                content=f"Do not run !touch {marker}\nNor !`touch {marker}`",
+                source="config",
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+    )
+
+    await runtime.run("/danger", session_id="session-shell-command")
+
+    text = provider.requests[0].provider_request.messages[0].text
+    assert f"!touch {marker}" in text
+    assert f"!`touch {marker}`" in text
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_command_file_references_are_resolved_after_expansion(tmp_path: Path):
+    (tmp_path / "notes.txt").write_text("alpha\n", encoding="utf-8")
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="inspect",
+                content="Inspect @notes.txt",
+                source="config",
+            )
+        ]
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+        command_registry=registry,
+    )
+
+    await runtime.run("/inspect", session_id="session-command-reference")
+
+    message = provider.requests[0].provider_request.messages[0]
+    assert "@notes.txt" in message.parts[0].text
+    assert message.attachments[0].text_ref == "notes.txt"
+    assert message.attachments[0].metadata["content"] == "alpha\n"
 
 
 def test_runtime_config_resolution_preserves_command_fields(tmp_path: Path):

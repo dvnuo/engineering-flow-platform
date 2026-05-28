@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any, Union
@@ -78,6 +79,7 @@ class AgentRuntime:
         skill_context_builder: SkillContextBuilder | None = None,
         instruction_context_builder: InstructionContextBuilder | None = None,
         system_prompt_builder: SystemPromptBuilder | None = None,
+        command_registry: CommandRegistry | None = None,
         event_bus: RuntimeEventBus | None = None,
         run_state: RuntimeRunState | None = None,
         compaction_summarizer: CompactionSummarizer | None = None,
@@ -119,7 +121,10 @@ class AgentRuntime:
             skill_discovery=self.skill_discovery,
             skill_context_builder=skill_context_builder,
         )
-        self.command_registry = _resolve_command_registry(self.config)
+        self.command_registry = _resolve_command_registry(
+            self.config,
+            command_registry=command_registry,
+        )
         self.instruction_context_builder = _resolve_instruction_context_builder(
             config=self.config,
             instruction_context_builder=instruction_context_builder,
@@ -425,8 +430,20 @@ class AgentRuntime:
             return user_text
 
         run_metadata["command_name"] = expansion.definition.name
-        run_metadata["command_file"] = str(expansion.definition.command_file)
+        run_metadata["command_file"] = (
+            str(expansion.definition.command_file)
+            if expansion.definition.source == "file"
+            else ""
+        )
         run_metadata["command_arguments"] = expansion.arguments
+        run_metadata["command_source"] = expansion.definition.source
+        if expansion.definition.agent is not None:
+            run_metadata["command_agent"] = expansion.definition.agent
+        if expansion.definition.model is not None:
+            run_metadata["command_model"] = expansion.definition.model
+        if expansion.definition.subtask is not None:
+            run_metadata["command_subtask"] = deepcopy(expansion.definition.subtask)
+        run_metadata["command_metadata"] = deepcopy(expansion.definition.metadata)
         run_metadata["command_truncated"] = expansion.truncated
         run_metadata["command_original_chars"] = expansion.original_chars
         run_metadata["command_max_chars"] = expansion.max_chars
@@ -714,10 +731,16 @@ def _resolve_skill_context_builder(
     )
 
 
-def _resolve_command_registry(config: RuntimeConfig) -> CommandRegistry | None:
+def _resolve_command_registry(
+    config: RuntimeConfig,
+    *,
+    command_registry: CommandRegistry | None,
+) -> CommandRegistry | None:
+    if command_registry is not None:
+        return command_registry
     if not config.command_directories:
         return None
-    return CommandRegistry(config.command_directories)
+    return CommandRegistry.from_sources(command_directories=config.command_directories)
 
 
 def _resolve_instruction_context_builder(

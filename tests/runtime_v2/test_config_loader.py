@@ -97,6 +97,7 @@ def test_runtime_config_field_mapping(tmp_path: Path):
             "systemPrompt": ["Base system prompt."],
             "skillDirectories": ["skills", "more-skills"],
             "activeSkills": ["review", "review"],
+            "commandDirectories": ["commands", "commands"],
             "runtime": {"mode": "plan"},
         },
     )
@@ -119,7 +120,76 @@ def test_runtime_config_field_mapping(tmp_path: Path):
         (tmp_path / "more-skills").resolve(),
     ]
     assert config.active_skills == ["review"]
+    assert config.command_directories == [
+        (tmp_path / "commands").resolve(),
+    ]
     assert config.runtime_mode == "plan"
+
+
+def test_loader_returns_command_definitions_registry_and_default_directory(
+    tmp_path: Path,
+):
+    default_commands = tmp_path / ".opencode" / "commands"
+    default_commands.mkdir(parents=True)
+    (default_commands / "test.md").write_text("Markdown override.", encoding="utf-8")
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "command": {
+                "test": {
+                    "template": "Run tests for $ARGUMENTS",
+                    "agent": "build",
+                    "model": "provider/model",
+                    "subtask": False,
+                },
+                "review": "Review $1",
+            },
+            "commandDirectories": ["project-commands"],
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert [definition.name for definition in result.command_definitions] == [
+        "test",
+        "review",
+    ]
+    assert result.command_definitions[0].source == "config"
+    assert result.command_definitions[0].agent == "build"
+    assert result.command_definitions[0].model == "provider/model"
+    assert result.command_definitions[0].subtask is False
+    assert result.config.command_directories == [
+        default_commands.resolve(),
+        (tmp_path / "project-commands").resolve(),
+    ]
+    assert result.command_registry is not None
+    assert result.command_registry.get("test").content == "Markdown override."
+    assert result.command_registry.get("review").content == "Review $1"
+    assert "command" not in result.metadata["unconsumed_config"]
+    assert "commandDirectories" not in result.metadata["unconsumed_config"]
+
+
+def test_loader_consumes_commands_alias(tmp_path: Path):
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "commands": {
+                "fmt": {
+                    "content": "Format $ARGUMENTS",
+                    "description": "Format files",
+                }
+            },
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert [definition.name for definition in result.command_definitions] == ["fmt"]
+    assert result.command_definitions[0].content == "Format $ARGUMENTS"
+    assert result.command_definitions[0].description == "Format files"
+    assert result.command_registry is not None
+    assert result.command_registry.get("fmt").content == "Format $ARGUMENTS"
+    assert "commands" not in result.metadata["unconsumed_config"]
 
 
 def test_agents_mapping_config_generates_agent_registry(tmp_path: Path):
@@ -199,7 +269,6 @@ def test_unconsumed_config_is_preserved_in_metadata(tmp_path: Path):
     assert result.metadata["unconsumed_config"] == {
         "model": "example-model",
         "mcp": {"server": {"command": "noop"}},
-        "commands": {"fmt": "python -m compileall"},
         "plugins": ["local-plugin"],
         "runtime": {"future": True},
     }

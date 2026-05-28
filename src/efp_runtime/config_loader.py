@@ -16,6 +16,11 @@ from typing import Any
 
 from .agents.profile import AgentProfile
 from .agents.registry import AgentRegistry
+from .commands import (
+    CommandDefinition,
+    CommandRegistry,
+    command_definitions_from_config,
+)
 from .runtime.config import RuntimeConfig
 
 
@@ -41,6 +46,10 @@ _RUNTIME_CONFIG_KEYS = {
     "skill_directories",
     "activeSkills",
     "active_skills",
+    "command",
+    "commands",
+    "commandDirectories",
+    "command_directories",
     "runtime",
     "runtime_mode",
     "agents",
@@ -67,6 +76,8 @@ class RuntimeConfigLoadResult:
 
     config: RuntimeConfig
     agent_registry: AgentRegistry | None = None
+    command_registry: CommandRegistry | None = None
+    command_definitions: list[CommandDefinition] = field(default_factory=list)
     loaded_paths: list[Path] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -122,10 +133,17 @@ def load_runtime_config(
     metadata = _loader_metadata(raw, loaded_paths)
     config = _runtime_config_from_raw(raw, root, metadata)
     agent_registry = _agent_registry_from_raw(raw)
+    command_definitions = command_definitions_from_config(raw)
+    command_registry = _command_registry_from_sources(
+        definitions=command_definitions,
+        command_directories=config.command_directories,
+    )
 
     return RuntimeConfigLoadResult(
         config=config,
         agent_registry=agent_registry,
+        command_registry=command_registry,
+        command_definitions=command_definitions,
         loaded_paths=loaded_paths,
         raw=raw,
         metadata=metadata,
@@ -312,6 +330,10 @@ def _runtime_config_from_raw(
     if active_skills is not None:
         kwargs["active_skills"] = active_skills
 
+    command_directories = _command_directories(raw, workspace_root=workspace_root)
+    if command_directories is not None:
+        kwargs["command_directories"] = command_directories
+
     runtime_mode = _runtime_mode(raw)
     if runtime_mode is not None:
         kwargs["runtime_mode"] = str(runtime_mode)
@@ -341,6 +363,19 @@ def _agent_registry_from_raw(raw: Mapping[str, Any]) -> AgentRegistry | None:
         raise ValueError("agents must be a mapping or list")
 
     return AgentRegistry(profiles, default_agent=default_agent_name)
+
+
+def _command_registry_from_sources(
+    *,
+    definitions: list[CommandDefinition],
+    command_directories: list[str | Path],
+) -> CommandRegistry | None:
+    if not definitions and not command_directories:
+        return None
+    return CommandRegistry.from_sources(
+        definitions=definitions,
+        command_directories=command_directories,
+    )
 
 
 def _agent_profile_from_mapping(
@@ -395,6 +430,29 @@ def _runtime_mode(raw: Mapping[str, Any]) -> Any:
         elif key == "runtime_mode" and value is not None:
             mode = value
     return mode
+
+
+def _command_directories(
+    raw: Mapping[str, Any],
+    *,
+    workspace_root: Path,
+) -> list[Path] | None:
+    paths: list[Path] = []
+    default_directory = workspace_root / ".opencode" / "commands"
+    if default_directory.is_dir():
+        paths.append(default_directory.resolve(strict=False))
+
+    configured = _merged_alias_paths(
+        raw,
+        ("commandDirectories", "command_directories"),
+        workspace_root=workspace_root,
+    )
+    if configured is not None:
+        paths.extend(configured)
+
+    if not paths and configured is None:
+        return None
+    return _dedupe_paths(paths)
 
 
 def _loader_metadata(

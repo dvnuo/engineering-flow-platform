@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
+import re
+import shlex
 from typing import Any
 
 
@@ -14,10 +18,16 @@ COMMAND_METADATA_KEYS = {
     "name",
     "description",
     "argument-hint",
+    "argument_hint",
+    "argumentHint",
     "agent",
     "model",
+    "subtask",
     "tools",
 }
+CONFIG_COMMAND_ALIASES = {"command", "commands"}
+CONFIG_TEMPLATE_KEYS = ("template", "content")
+TEMPLATE_VARIABLE_RE = re.compile(r"\$(ARGUMENTS|[1-9][0-9]*)(?![A-Za-z0-9_])")
 
 
 @dataclass
@@ -29,13 +39,45 @@ class CommandDefinition:
     content: str = ""
     command_file: Path = field(default_factory=Path)
     metadata: dict[str, Any] = field(default_factory=dict)
+    source: str = "file"
+    argument_hint: str | None = None
+    agent: str | None = None
+    model: str | None = None
+    subtask: Any = None
 
     def __post_init__(self) -> None:
         self.name = _normalize_command_name(self.name)
-        self.description = str(self.description or "")
+        self.metadata = dict(deepcopy(self.metadata))
+        self.source = str(self.source or self.metadata.get("source") or "file")
+        self.metadata["source"] = self.source
+        self.metadata["name"] = self.name
+        if self.description:
+            self.description = str(self.description)
+        elif self.metadata.get("description") is not None:
+            self.description = str(self.metadata["description"])
+        else:
+            self.description = ""
+        if self.description:
+            self.metadata["description"] = self.description
         self.content = str(self.content or "")
         self.command_file = Path(self.command_file)
-        self.metadata = dict(self.metadata)
+        self.argument_hint = _metadata_string_value(
+            self.argument_hint,
+            self.metadata,
+            ("argument-hint", "argument_hint", "argumentHint"),
+        )
+        if self.argument_hint is not None:
+            self.metadata["argument-hint"] = self.argument_hint
+        self.agent = _metadata_string_value(self.agent, self.metadata, ("agent",))
+        if self.agent is not None:
+            self.metadata["agent"] = self.agent
+        self.model = _metadata_string_value(self.model, self.metadata, ("model",))
+        if self.model is not None:
+            self.metadata["model"] = self.model
+        if self.subtask is None and "subtask" in self.metadata:
+            self.subtask = deepcopy(self.metadata["subtask"])
+        if self.subtask is not None:
+            self.metadata["subtask"] = deepcopy(self.subtask)
 
 
 @dataclass
@@ -54,15 +96,41 @@ class CommandExpansionResult:
 class CommandRegistry:
     """Discover custom command prompt templates from configured directories."""
 
-    def __init__(self, command_directories: Iterable[str | Path]):
+    def __init__(
+        self,
+        command_directories: Iterable[str | Path] | None = None,
+        *,
+        definitions: Iterable[CommandDefinition] | None = None,
+        commands: Iterable[CommandDefinition] | None = None,
+    ):
         self.command_directories = [
-            Path(directory).expanduser() for directory in command_directories
+            Path(directory).expanduser()
+            for directory in (command_directories or [])
         ]
+        self.definitions = list(definitions or [])
+        if commands is not None:
+            self.definitions.extend(commands)
         self._commands: dict[str, CommandDefinition] | None = None
+
+    @classmethod
+    def from_sources(
+        cls,
+        *,
+        definitions: Iterable[CommandDefinition] | None = None,
+        commands: Iterable[CommandDefinition] | None = None,
+        command_directories: Iterable[str | Path] | None = None,
+    ) -> "CommandRegistry":
+        return cls(
+            command_directories=command_directories,
+            definitions=definitions,
+            commands=commands,
+        )
 
     def discover(self, *, refresh: bool = False) -> list[CommandDefinition]:
         if self._commands is None or refresh:
             commands: dict[str, CommandDefinition] = {}
+            for command in self.definitions:
+                commands[command.name] = command
             for command in discover_commands(self.command_directories):
                 commands[command.name] = command
             self._commands = commands
@@ -98,6 +166,37 @@ def discover_commands(
     return commands
 
 
+def command_definitions_from_config(
+    raw: Mapping[str, Any],
+    *,
+    source: str = "config",
+) -> list[CommandDefinition]:
+    """Build command definitions from opencode-style config mappings.
+
+    Both ``command`` and the compatible ``commands`` alias are accepted. When
+    both aliases appear, entries are emitted in config key order so registry
+    composition can apply the same later-definition-wins semantics as files.
+    """
+
+    definitions: list[CommandDefinition] = []
+    for key, value in raw.items():
+        if str(key) not in CONFIG_COMMAND_ALIASES:
+            continue
+        if value is None:
+            continue
+        if not isinstance(value, Mapping):
+            raise ValueError(f"{key} must be a mapping")
+        for fallback_name, payload in value.items():
+            definitions.append(
+                _command_definition_from_config_entry(
+                    fallback_name=str(fallback_name),
+                    payload=payload,
+                    source=source,
+                )
+            )
+    return definitions
+
+
 def expand_command(
     text: str,
     registry: CommandRegistry,
@@ -125,9 +224,10 @@ def expand_command(
     if definition is None:
         return None
 
-    original_chars = len(definition.content)
+    rendered_content = _render_command_template(definition.content, arguments)
+    original_chars = len(rendered_content)
     truncated = original_chars > max_command_chars
-    command_content = definition.content[:max_command_chars]
+    command_content = rendered_content[:max_command_chars]
     expanded_text = _render_expanded_command(
         definition=definition,
         command_content=command_content,
@@ -179,6 +279,69 @@ def _load_command(command_file: Path, command_root: Path) -> CommandDefinition:
         content=body.strip("\n"),
         command_file=command_file,
         metadata=metadata,
+        source="file",
+    )
+
+
+def _command_definition_from_config_entry(
+    *,
+    fallback_name: str,
+    payload: Any,
+    source: str,
+) -> CommandDefinition:
+    if isinstance(payload, str):
+        name = _normalize_command_name(fallback_name)
+        return CommandDefinition(
+            name=name,
+            content=payload,
+            metadata={"name": name, "source": source},
+            source=source,
+        )
+
+    if not isinstance(payload, Mapping):
+        raise ValueError(
+            f"Config command {fallback_name} must be a string or mapping"
+        )
+
+    raw_name = payload.get("name", fallback_name)
+    name = _normalize_command_name(str(raw_name))
+    template_key = _first_present_key(payload, CONFIG_TEMPLATE_KEYS)
+    if template_key is None or payload.get(template_key) is None:
+        raise ValueError(
+            f"Config command {name or fallback_name} requires template or content"
+        )
+
+    metadata: dict[str, Any] = {}
+    for key, value in payload.items():
+        key_text = str(key)
+        if key_text in CONFIG_TEMPLATE_KEYS:
+            continue
+        canonical_key = _canonical_metadata_key(key_text)
+        metadata[canonical_key] = deepcopy(value)
+    metadata["name"] = name
+    metadata["source"] = source
+
+    description = str(payload.get("description") or "")
+    argument_hint = _first_present_value(
+        metadata,
+        ("argument-hint", "argument_hint", "argumentHint"),
+    )
+    return CommandDefinition(
+        name=name,
+        description=description,
+        content=str(payload[template_key]),
+        metadata=metadata,
+        source=source,
+        argument_hint=(
+            None if argument_hint is None else str(argument_hint)
+        ),
+        agent=(
+            None if payload.get("agent") is None else str(payload.get("agent"))
+        ),
+        model=(
+            None if payload.get("model") is None else str(payload.get("model"))
+        ),
+        subtask=deepcopy(payload.get("subtask")) if "subtask" in payload else None,
     )
 
 
@@ -221,7 +384,7 @@ def _parse_command_metadata(content: str) -> tuple[dict[str, Any], str]:
             metadata_lines = []
             body_start = 0
             break
-        key = stripped.split(":", 1)[0].strip()
+        key = _canonical_metadata_key(stripped.split(":", 1)[0].strip())
         if key not in COMMAND_METADATA_KEYS:
             if metadata_lines:
                 body_start = index
@@ -243,7 +406,7 @@ def _parse_simple_yaml_lines(lines: list[str]) -> dict[str, Any]:
         if not stripped or stripped.startswith("#") or ":" not in stripped:
             continue
         key, value = stripped.split(":", 1)
-        key = key.strip()
+        key = _canonical_metadata_key(key.strip())
         if key not in COMMAND_METADATA_KEYS:
             continue
         metadata[key] = _parse_metadata_value(key, value.strip())
@@ -253,6 +416,8 @@ def _parse_simple_yaml_lines(lines: list[str]) -> dict[str, Any]:
 def _parse_metadata_value(key: str, value: str) -> Any:
     if key == "tools":
         return _parse_tools_value(value)
+    if key == "subtask":
+        return _parse_subtask_value(value)
     return _strip_yaml_string(value)
 
 
@@ -273,6 +438,18 @@ def _strip_yaml_string(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
     return value
+
+
+def _parse_subtask_value(value: str) -> Any:
+    stripped = _strip_yaml_string(value.strip())
+    lowered = stripped.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in {"null", "none"}:
+        return None
+    return stripped
 
 
 def _parse_first_command_line(text: str) -> tuple[str, str, str] | None:
@@ -310,8 +487,17 @@ def _render_expanded_command(
 ) -> str:
     command_attrs = [
         f'name="{escape(definition.name, quote=True)}"',
-        f'source="{escape(str(definition.command_file), quote=True)}"',
     ]
+    command_file = _command_file_for_display(definition)
+    if command_file:
+        command_attrs.extend(
+            [
+                f'source="{escape(command_file, quote=True)}"',
+                f'command_source="{escape(definition.source, quote=True)}"',
+            ]
+        )
+    else:
+        command_attrs.append(f'source="{escape(definition.source, quote=True)}"')
     if truncated:
         command_attrs.extend(
             [
@@ -349,6 +535,37 @@ def _render_expanded_command(
     return "\n".join(parts)
 
 
+def _render_command_template(content: str, arguments: str) -> str:
+    positional = _split_command_arguments(arguments)
+
+    def replace(match: re.Match[str]) -> str:
+        variable = match.group(1)
+        if variable == "ARGUMENTS":
+            return arguments
+        index = int(variable) - 1
+        if 0 <= index < len(positional):
+            return positional[index]
+        return ""
+
+    return TEMPLATE_VARIABLE_RE.sub(replace, content)
+
+
+def _split_command_arguments(arguments: str) -> list[str]:
+    if not arguments:
+        return []
+    try:
+        return shlex.split(arguments)
+    except ValueError:
+        return arguments.split()
+
+
+def _command_file_for_display(definition: CommandDefinition) -> str:
+    if definition.source != "file":
+        return ""
+    command_file = str(definition.command_file)
+    return "" if command_file == "." else command_file
+
+
 def _normalize_command_name(name: str) -> str:
     return str(name or "").strip().lstrip("/")
 
@@ -361,10 +578,44 @@ def _has_hidden_relative_part(path: Path, root: Path) -> bool:
     return any(part.startswith(".") for part in relative.parts)
 
 
+def _metadata_string_value(
+    explicit: Any,
+    metadata: Mapping[str, Any],
+    keys: Iterable[str],
+) -> str | None:
+    value = explicit
+    if value is None:
+        value = _first_present_value(metadata, keys)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _first_present_key(mapping: Mapping[str, Any], keys: Iterable[str]) -> str | None:
+    for key in keys:
+        if key in mapping:
+            return key
+    return None
+
+
+def _first_present_value(mapping: Mapping[str, Any], keys: Iterable[str]) -> Any:
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
+def _canonical_metadata_key(key: str) -> str:
+    if key in {"argument_hint", "argumentHint"}:
+        return "argument-hint"
+    return key
+
+
 __all__ = [
     "CommandDefinition",
     "CommandExpansionResult",
     "CommandRegistry",
+    "command_definitions_from_config",
     "discover_commands",
     "expand_command",
 ]

@@ -164,18 +164,24 @@ The loader maps the following opencode-style and snake_case keys into
   `system_prompt_texts`.
 - `skillDirectories` / `skill_directories`.
 - `activeSkills` / `active_skills`.
+- `commandDirectories` / `command_directories`.
 - `runtime.mode` or `runtime_mode`.
 
 Configured path fields are resolved as workspace-local `Path` objects without
-requiring those files or directories to already exist. `agents` may be a mapping
-or a list. Mapping entries use the mapping key as the profile name unless a
-`name` field is supplied; list entries require `name`. Agent fields map to
-`AgentProfile` as `name`, `prompt`, `tools`, `maxIterations` /
-`max_iterations`, `skills` / `active_skills`, and `metadata`. `defaultAgent` /
-`default_agent` selects the registry fallback, otherwise `general` is used.
+requiring those files or directories to already exist. If
+`.opencode/commands` exists under the workspace root, the loader also adds it
+as a project command directory. `agents` may be a mapping or a list. Mapping
+entries use the mapping key as the profile name unless a `name` field is
+supplied; list entries require `name`. Agent fields map to `AgentProfile` as
+`name`, `prompt`, `tools`, `maxIterations` / `max_iterations`, `skills` /
+`active_skills`, and `metadata`. `defaultAgent` / `default_agent` selects the
+registry fallback, otherwise `general` is used.
 
-Keys that Runtime v2 does not consume in this phase, including `model`, `mcp`,
-`commands`, and `plugins`, are preserved in
+The loader consumes `command` and `commands` to build config-defined
+`CommandDefinition` records and a `CommandRegistry` that callers can pass to
+`AgentRuntime(command_registry=loaded.command_registry)`. Keys that Runtime v2
+does not consume in this phase, including `model`, `mcp`, and `plugins`, are
+preserved in
 `RuntimeConfigLoadResult.metadata["unconsumed_config"]`; the full merged object
 is preserved in `metadata["raw_config"]` and `RuntimeConfigLoadResult.raw`.
 Loading config is side-effect free: it only reads local files, does not start
@@ -483,9 +489,31 @@ sidecars, subject to the configured maximum character limit.
 ## Custom Commands
 
 Runtime v2 supports configured custom slash command directories through
-`RuntimeConfig.command_directories`. Command files are markdown or text prompt
-templates discovered from those directories, including hidden configured roots
-such as `.opencode/command`; hidden subdirectories are skipped by default.
+`RuntimeConfig.command_directories` and explicit `CommandRegistry` injection on
+`AgentRuntime`. Command files are markdown or text prompt templates discovered
+from those directories, including hidden configured roots such as
+`.opencode/command`; hidden subdirectories are skipped by default. The config
+loader also supports opencode-style `command` and compatible `commands`
+mappings:
+
+```json
+{
+  "command": {
+    "test": {
+      "template": "Run tests for $ARGUMENTS",
+      "description": "Run tests",
+      "agent": "build",
+      "model": "provider/model",
+      "subtask": false
+    },
+    "review": "Review $1"
+  }
+}
+```
+
+Config commands are registered before directory commands. Later discoveries
+with the same normalized name replace earlier ones, so project markdown command
+files can override config commands.
 
 When command expansion is enabled, `AgentRuntime.run(...)` checks the first
 effective non-empty user line after `/skill` lines have been parsed. A discovered
@@ -494,6 +522,27 @@ command content, command arguments, and any remaining body text. This is user
 prompt expansion only: it is not a tool call, does not create persisted system
 prompt state, does not mutate active skills, and does not call the legacy
 runtime/session stack. Unknown slash commands remain ordinary user text.
+
+Before the command content is placed inside the visible `<command>` block, the
+template renderer replaces `$ARGUMENTS` with the full argument string and
+positional variables such as `$1` and `$2` with shell-like positional arguments
+parsed by `shlex.split`, falling back to whitespace splitting on malformed
+quotes. Missing positional variables become empty strings, and unknown variables
+such as `$HOME` are preserved. The expansion still includes
+`<command_arguments>` and `<command_input>` blocks so the model can see the raw
+arguments and remaining body text.
+
+Command metadata flows into run metadata as `command_source`, optional
+`command_agent`, optional `command_model`, optional `command_subtask`, and a
+copied `command_metadata` object. `subtask` is recorded only; it does not start
+a subagent in this phase.
+
+`@file` references inside command templates are not read by the commands module.
+They remain in the expanded user prompt and are resolved later by the Runtime v2
+prompt reference resolver when `RuntimeConfig.resolve_prompt_references=True`.
+opencode-style shell interpolation such as `!cmd` or ``!`cmd` `` is also kept as
+plain text. Executing command-triggered shell snippets must go through the
+Runtime v2 tool runtime and permission path in a later design phase.
 
 `/skill` remains the independent skill activation command. It is parsed before
 custom command expansion and continues to control active skill context rendered
