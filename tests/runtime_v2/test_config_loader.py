@@ -131,8 +131,10 @@ def test_runtime_config_field_mapping(tmp_path: Path):
 def test_default_project_skill_directories_precede_configured_directories(
     tmp_path: Path,
 ):
+    opencode_skill = tmp_path / ".opencode" / "skill"
     opencode_skills = tmp_path / ".opencode" / "skills"
     claude_skills = tmp_path / ".claude" / "skills"
+    opencode_skill.mkdir(parents=True)
     opencode_skills.mkdir(parents=True)
     claude_skills.mkdir(parents=True)
     _write_json(
@@ -148,6 +150,7 @@ def test_default_project_skill_directories_precede_configured_directories(
     result = load_runtime_config(tmp_path)
 
     assert result.config.skill_directories == [
+        opencode_skill.resolve(),
         opencode_skills.resolve(),
         claude_skills.resolve(),
         (tmp_path / "skills").resolve(),
@@ -172,6 +175,7 @@ def test_missing_default_project_skill_directories_are_ignored(tmp_path: Path):
 def test_include_defaults_false_does_not_add_default_project_skill_directories(
     tmp_path: Path,
 ):
+    (tmp_path / ".opencode" / "skill").mkdir(parents=True)
     (tmp_path / ".opencode" / "skills").mkdir(parents=True)
     _write_json(
         tmp_path / "custom.json",
@@ -189,6 +193,96 @@ def test_include_defaults_false_does_not_add_default_project_skill_directories(
     assert result.config.skill_directories == [
         (tmp_path / "skills").resolve(),
     ]
+
+
+def test_skills_paths_string_form_resolves_workspace_relative_path(tmp_path: Path):
+    _write_json(
+        tmp_path / "custom.json",
+        {
+            "skills": {"paths": "local-skills"},
+        },
+    )
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=["custom.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.skill_directories == [
+        (tmp_path / "local-skills").resolve(),
+    ]
+    assert "skills" not in result.metadata["unconsumed_config"]
+
+
+def test_skills_paths_list_form_dedupes_with_skill_directories(
+    tmp_path: Path,
+):
+    default_skills = tmp_path / ".opencode" / "skill"
+    default_skills.mkdir(parents=True)
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "skillDirectories": ["shared-skills", "configured-skills"],
+            "skills": {
+                "paths": [
+                    "shared-skills",
+                    "extra-skills",
+                ],
+            },
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.config.skill_directories == [
+        default_skills.resolve(),
+        (tmp_path / "shared-skills").resolve(),
+        (tmp_path / "configured-skills").resolve(),
+        (tmp_path / "extra-skills").resolve(),
+    ]
+    assert "skills" not in result.metadata["unconsumed_config"]
+
+
+def test_unsupported_skills_urls_remain_unconsumed_config(tmp_path: Path):
+    _write_json(
+        tmp_path / "custom.json",
+        {
+            "skills": {
+                "paths": ["local-skills"],
+                "urls": ["https://example.test/skills/review"],
+            },
+        },
+    )
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=["custom.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.skill_directories == [
+        (tmp_path / "local-skills").resolve(),
+    ]
+    assert result.metadata["unconsumed_config"]["skills"] == {
+        "urls": ["https://example.test/skills/review"],
+    }
+
+
+def test_non_object_skills_config_raises_clear_error(tmp_path: Path):
+    _write_json(
+        tmp_path / "custom.json",
+        {
+            "skills": ["local-skills"],
+        },
+    )
+
+    with pytest.raises(ValueError, match="skills must be an object"):
+        load_runtime_config(
+            tmp_path,
+            paths=["custom.json"],
+            include_defaults=False,
+        )
 
 
 def test_load_runtime_config_includes_builtin_agents_by_default(tmp_path: Path):

@@ -50,6 +50,7 @@ _RUNTIME_CONFIG_KEYS = {
     "instructions",
     "systemPrompt",
     "system_prompt",
+    "skills",
     "skillDirectories",
     "skill_directories",
     "activeSkills",
@@ -339,7 +340,14 @@ def _runtime_config_from_raw(
     )
     if configured_skill_directories is not None:
         default_skill_dirs.extend(configured_skill_directories)
-    if default_skill_dirs or configured_skill_directories is not None:
+    skills_paths = _skills_paths(raw, workspace_root=workspace_root)
+    if skills_paths is not None:
+        default_skill_dirs.extend(skills_paths)
+    if (
+        default_skill_dirs
+        or configured_skill_directories is not None
+        or skills_paths is not None
+    ):
         kwargs["skill_directories"] = _dedupe_paths(default_skill_dirs)
 
     active_skills = _merged_alias_strings(raw, ("activeSkills", "active_skills"))
@@ -535,10 +543,40 @@ def _unconsumed_config(raw: Mapping[str, Any]) -> dict[str, Any]:
             else:
                 unconsumed[key_text] = deepcopy(value)
             continue
+        if key_text == "skills":
+            skills_extra = _unconsumed_skills_config(value)
+            if skills_extra:
+                unconsumed[key_text] = skills_extra
+            continue
         if key_text in _RUNTIME_CONFIG_KEYS:
             continue
         unconsumed[key_text] = deepcopy(value)
     return unconsumed
+
+
+def _skills_paths(
+    raw: Mapping[str, Any],
+    *,
+    workspace_root: Path,
+) -> list[Path] | None:
+    if "skills" not in raw:
+        return None
+    skills = raw["skills"]
+    if not isinstance(skills, Mapping):
+        raise ValueError("skills must be an object")
+    if "paths" not in skills:
+        return None
+    return _dedupe_paths(_resolve_path_values(workspace_root, skills["paths"]))
+
+
+def _unconsumed_skills_config(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("skills must be an object")
+    return {
+        str(skills_key): deepcopy(skills_value)
+        for skills_key, skills_value in value.items()
+        if str(skills_key) != "paths"
+    }
 
 
 def _instruction_sources(

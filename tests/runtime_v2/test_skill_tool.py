@@ -4,7 +4,11 @@ from efp_runtime.context import render_tool_schemas
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import ToolCall
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
-from efp_runtime.skills.discovery import SkillDiscovery, discover_skills
+from efp_runtime.skills.discovery import (
+    SkillDiscovery,
+    default_skill_directories,
+    discover_skills,
+)
 from efp_runtime.skills.tool import build_skill_tool
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.registry import ToolRegistry
@@ -32,6 +36,36 @@ def test_discovers_uppercase_and_lowercase_skill_files(tmp_path):
     assert skills[0].description == "Review pull requests"
     assert skills[1].content == "# Triage"
     assert skills[1].metadata["license"] == "Apache-2.0"
+
+
+def test_default_skill_directories_include_opencode_skill_before_plural(tmp_path):
+    opencode_skill = tmp_path / ".opencode" / "skill"
+    opencode_skills = tmp_path / ".opencode" / "skills"
+    opencode_skill.mkdir(parents=True)
+    opencode_skills.mkdir(parents=True)
+
+    assert default_skill_directories(tmp_path) == [
+        opencode_skill.resolve(),
+        opencode_skills.resolve(),
+    ]
+    assert default_skill_directories(tmp_path, include_defaults=False) == []
+
+
+def test_skill_discovery_loads_from_default_opencode_skill_directory(tmp_path):
+    opencode_skill = tmp_path / ".opencode" / "skill"
+    opencode_skill.mkdir(parents=True)
+    skill_dir = _write_skill(
+        opencode_skill,
+        "local-skill",
+        description="Local opencode skill",
+    )
+
+    discovery = SkillDiscovery(default_skill_directories(tmp_path))
+    skill = discovery.get("local-skill")
+
+    assert skill is not None
+    assert skill.root == skill_dir
+    assert skill.description == "Local opencode skill"
 
 
 def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp_path):

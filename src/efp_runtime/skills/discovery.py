@@ -11,6 +11,7 @@ from ..types import SkillPackage
 
 SKILL_FILE_NAMES = {"skill.md", "SKILL.md"}
 DEFAULT_PROJECT_SKILL_DIRECTORIES = (
+    ".opencode/skill",
     ".opencode/skills",
     ".claude/skills",
     ".agents/skills",
@@ -90,7 +91,11 @@ def _iter_skill_files(directory: Path) -> list[Path]:
     candidates = [
         path
         for path in directory.rglob("*")
-        if path.is_file() and path.name in SKILL_FILE_NAMES and not _is_hidden(path)
+        if (
+            path.is_file()
+            and path.name in SKILL_FILE_NAMES
+            and not _is_hidden(path.relative_to(directory))
+        )
     ]
     return sorted(candidates, key=lambda path: (str(path.parent), path.name.lower()))
 
@@ -196,7 +201,11 @@ def _collect_sidecars(root: Path, skill_file: Path) -> list[Path]:
     sidecars = [
         path
         for path in root.rglob("*")
-        if path.is_file() and path != skill_file and not _is_hidden(path)
+        if (
+            path.is_file()
+            and path != skill_file
+            and not _is_hidden(path.relative_to(root))
+        )
     ]
     return sorted(sidecars, key=lambda path: str(path.relative_to(root)))
 

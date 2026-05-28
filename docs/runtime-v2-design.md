@@ -179,7 +179,7 @@ The loader maps the following opencode-style and snake_case keys into
   to `instruction_paths` and `instruction_texts`.
 - `systemPrompt` / `system_prompt`, as a string or list, to
   `system_prompt_texts`.
-- `skillDirectories` / `skill_directories`.
+- `skillDirectories` / `skill_directories`, plus local `skills.paths`.
 - `activeSkills` / `active_skills`.
 - `commandDirectories` / `command_directories`.
 - `runtime.mode` or `runtime_mode`.
@@ -189,11 +189,17 @@ requiring those files or directories to already exist. If
 `.opencode/commands` exists under the workspace root, the loader also adds it
 as a project command directory.
 With `include_defaults=True`, existing project-local skill directories are also
-added before configured `skillDirectories`: `.opencode/skills`,
-`.claude/skills`, then `.agents/skills`. Missing default skill directories are
-ignored, and Runtime v2 does not scan user home or global skill directories in
-this phase. Passing `include_defaults=False` disables these default skill
-directories.
+added before configured `skillDirectories`: `.opencode/skill`,
+`.opencode/skills`, `.claude/skills`, then `.agents/skills`. Missing default
+skill directories are ignored, and Runtime v2 does not scan user home or global
+skill directories in this phase. Passing `include_defaults=False` disables
+these default skill directories. Local `skills.paths` can also add workspace
+skill directories as a string or list; relative paths resolve under the
+workspace root and are de-duplicated with `skillDirectories`.
+
+`skills.urls` and remote skill pulling are not implemented in this phase.
+Unsupported keys under `skills` are preserved in
+`RuntimeConfigLoadResult.metadata["unconsumed_config"]["skills"]`.
 
 The loader consumes `command` and `commands` to build config-defined
 `CommandDefinition` records and a `CommandRegistry` that callers can pass to
