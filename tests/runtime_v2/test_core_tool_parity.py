@@ -86,11 +86,10 @@ async def test_edit_replaces_single_match_with_allow_permission(tmp_path: Path):
     )
 
     assert result.status == "success"
-    assert result.output == {
-        "path": "notes.txt",
-        "replacement_count": 1,
-        "bytes": len("alpha\ngamma\n".encode("utf-8")),
-    }
+    assert result.output["path"] == "notes.txt"
+    assert result.output["replacement_count"] == 1
+    assert result.output["bytes"] == len("alpha\ngamma\n".encode("utf-8"))
+    assert result.output["changed"] is True
     assert target.read_text(encoding="utf-8") == "alpha\ngamma\n"
 
 

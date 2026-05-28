@@ -146,6 +146,17 @@ by `output_path` should be read incrementally with `read_file` `offset` and
 set their own truncation
 metadata are treated as already normalized and are not truncated a second time.
 
+Mutating file tools return model-readable diagnostics in addition to structured
+metadata. `edit` returns a successful `ToolResult` with the path, replacement
+count, old and new byte counts, changed/no-op state, and a bounded unified diff
+preview generated with the Python standard library. `apply_patch` returns the
+changed workspace-relative paths, process stdout/stderr/exit code, changed file
+count, and a bounded preview of the submitted patch. Patch failure results keep
+the same structured shape and include the error message, paths, exit code, and
+stderr preview in model-visible content. These previews default to 200 lines and
+12000 characters and remain subject to the Runtime v2 tool output truncation
+policy for very large final tool results.
+
 Validation errors and permission denies return structured tool results and do
 not execute the tool callable. A low-level ASK decision is represented as a
 `permission_requested` `ToolResult`, but the Runtime v2 loop treats that result
