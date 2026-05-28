@@ -148,3 +148,10 @@ not duplicate skill messages in history.
 Compaction operates on message parts. Tool calls and their matching results are
 grouped before deciding what to keep or summarize, so compaction never leaves
 one side of a tool call/result pair in the retained history.
+
+Runtime v2 can compact by either part count or an approximate character budget.
+The character budget is deterministic: text, reasoning, errors, tool arguments,
+tool results, and structured context metadata are counted without invoking an
+LLM summarizer. System and skill context messages are retained, pending tool
+calls are protected, and provider request metadata records the configured
+budget plus compacted/kept part, message, pair, and character counts.

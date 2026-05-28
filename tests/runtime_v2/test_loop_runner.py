@@ -156,12 +156,14 @@ async def test_max_context_parts_compacts_provider_request_metadata():
     assert result.status == LoopStatus.COMPLETED
     request = provider.requests[0]
     assert request.prepared_request.compaction_applied is True
-    assert request.prepared_request.compaction_metadata == {
-        "max_parts": 2,
-        "compacted_part_count": 2,
-        "compacted_message_count": 2,
-        "compacted_tool_pair_count": 0,
-    }
+    assert request.prepared_request.compaction_metadata["max_parts"] == 2
+    assert request.prepared_request.compaction_metadata["max_chars"] is None
+    assert request.prepared_request.compaction_metadata["reserve_chars"] == 0
+    assert request.prepared_request.compaction_metadata["compacted_part_count"] == 2
+    assert request.prepared_request.compaction_metadata["compacted_message_count"] == 2
+    assert request.prepared_request.compaction_metadata["compacted_tool_pair_count"] == 0
+    assert request.prepared_request.compaction_metadata["compacted_chars"] > 0
+    assert request.prepared_request.compaction_metadata["kept_chars"] > 0
     assert request.provider_request.metadata["caller"] == "test"
     assert request.provider_request.metadata["compaction"]["max_parts"] == 2
     assert request.provider_request.metadata["compaction"]["compacted_part_count"] == 2

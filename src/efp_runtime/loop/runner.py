@@ -78,6 +78,8 @@ class RuntimeLoopRunner:
         tool_runtime: ToolRuntime,
         max_iterations: int = 4,
         max_context_parts: Optional[int] = None,
+        max_context_chars: Optional[int] = None,
+        context_reserve_chars: int = 0,
         event_bus: Optional[RuntimeEventBus] = None,
         is_cancelled: Optional[CancelCallback] = None,
     ) -> None:
@@ -85,12 +87,18 @@ class RuntimeLoopRunner:
             raise ValueError("max_iterations must be at least 1")
         if max_context_parts is not None and max_context_parts < 1:
             raise ValueError("max_context_parts must be at least 1")
+        if max_context_chars is not None and max_context_chars < 1:
+            raise ValueError("max_context_chars must be at least 1")
+        if context_reserve_chars < 0:
+            raise ValueError("context_reserve_chars must be at least 0")
         self.store = store
         self.provider = provider
         self.adapter = adapter or DefaultLLMEventAdapter()
         self.tool_runtime = tool_runtime
         self.max_iterations = max_iterations
         self.max_context_parts = max_context_parts
+        self.max_context_chars = max_context_chars
+        self.context_reserve_chars = context_reserve_chars
         self.event_bus = event_bus
         self.is_cancelled = is_cancelled
 
@@ -212,6 +220,8 @@ class RuntimeLoopRunner:
                 tools=tools,
                 metadata=request_metadata,
                 max_parts=self.max_context_parts,
+                max_chars=self.max_context_chars,
+                reserve_chars=self.context_reserve_chars,
             )
             request = RuntimeRequest(
                 session_id=resolved_session_id,
@@ -589,6 +599,8 @@ async def run_runtime_loop(
     tool_runtime: ToolRuntime,
     max_iterations: int = 4,
     max_context_parts: Optional[int] = None,
+    max_context_chars: Optional[int] = None,
+    context_reserve_chars: int = 0,
     metadata: Optional[dict[str, Any]] = None,
     context_messages: Optional[list[Message]] = None,
     append_user_message: bool = True,
@@ -603,6 +615,8 @@ async def run_runtime_loop(
         tool_runtime=tool_runtime,
         max_iterations=max_iterations,
         max_context_parts=max_context_parts,
+        max_context_chars=max_context_chars,
+        context_reserve_chars=context_reserve_chars,
         event_bus=event_bus,
         is_cancelled=is_cancelled,
     )

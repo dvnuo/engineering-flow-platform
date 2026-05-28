@@ -7,7 +7,10 @@ from copy import deepcopy
 from dataclasses import asdict
 from typing import Any, Union
 
-from ..compaction.strategy import PartAwareCompactionStrategy
+from ..compaction.strategy import (
+    BudgetCompactionStrategy,
+    ContextBudget,
+)
 from ..llm.request import (
     JsonObject,
     PreparedProviderRequest,
@@ -87,33 +90,49 @@ def prepare_history_for_request(
     tools: Iterable[ToolDef] | None = None,
     metadata: Mapping[str, Any] | None = None,
     max_parts: int | None = None,
-    compaction_strategy: PartAwareCompactionStrategy | None = None,
+    max_chars: int | None = None,
+    reserve_chars: int = 0,
+    compaction_strategy: BudgetCompactionStrategy | None = None,
 ) -> PreparedProviderRequest:
     """Optionally compact history before rendering a provider request."""
 
     if max_parts is not None and max_parts < 1:
         raise ValueError("max_parts must be at least 1")
+    if max_chars is not None and max_chars < 1:
+        raise ValueError("max_chars must be at least 1")
+    if reserve_chars < 0:
+        raise ValueError("reserve_chars must be at least 0")
 
     messages, request_metadata = _coerce_history(history)
     request_metadata.update(_copy_mapping(metadata or {}))
 
-    limit = max_parts
-    if limit is None and compaction_strategy is not None:
-        limit = compaction_strategy.max_parts
-
     compaction_metadata: JsonObject = {}
     compaction_applied = False
-    if limit is not None and _part_count(messages) > limit:
-        strategy = compaction_strategy or PartAwareCompactionStrategy(max_parts=limit)
+    strategy = compaction_strategy
+    if strategy is None and (max_parts is not None or max_chars is not None):
+        strategy = BudgetCompactionStrategy(
+            budget=ContextBudget(
+                max_parts=max_parts,
+                max_chars=max_chars,
+                reserve_chars=reserve_chars,
+            )
+        )
+
+    if strategy is not None:
+        budget = _strategy_budget(strategy)
         result = strategy.compact(messages)
         messages = result.messages
         compaction_applied = result.compacted
         if result.compacted:
             compaction_metadata = {
-                "max_parts": limit,
+                "max_parts": budget.max_parts,
+                "max_chars": budget.max_chars,
+                "reserve_chars": budget.reserve_chars,
                 "compacted_part_count": result.compacted_part_count,
                 "compacted_message_count": result.compacted_message_count,
                 "compacted_tool_pair_count": result.compacted_tool_pair_count,
+                "compacted_chars": result.compacted_chars,
+                "kept_chars": result.kept_chars,
             }
             request_metadata["compaction"] = dict(compaction_metadata)
 
@@ -352,6 +371,17 @@ def _part_count(messages: Iterable[Message]) -> int:
     return sum(len(message.parts) for message in messages)
 
 
+def _strategy_budget(strategy: BudgetCompactionStrategy) -> ContextBudget:
+    budget = getattr(strategy, "budget", None)
+    if isinstance(budget, ContextBudget):
+        return budget
+    return ContextBudget(
+        max_parts=getattr(strategy, "max_parts", None),
+        max_chars=getattr(strategy, "max_chars", None),
+        reserve_chars=getattr(strategy, "reserve_chars", 0),
+    )
+
+
 def _copy_mapping(mapping: Mapping[str, Any]) -> JsonObject:
     copied = _copy_value(dict(mapping))
     if isinstance(copied, dict):
@@ -364,4 +394,3 @@ def _copy_value(value: Any) -> Any:
         return deepcopy(value)
     except Exception:
         return value
-

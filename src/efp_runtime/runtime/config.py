@@ -14,6 +14,8 @@ class RuntimeConfig:
     workspace_root: str | Path | None = None
     max_iterations: int = 4
     max_context_parts: int | None = None
+    max_context_chars: int | None = None
+    context_reserve_chars: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     skill_directories: list[str | Path] = field(default_factory=list)
     active_skills: list[str] = field(default_factory=list)
@@ -28,6 +30,10 @@ class RuntimeConfig:
             raise ValueError("max_iterations must be at least 1")
         if self.max_context_parts is not None and self.max_context_parts < 1:
             raise ValueError("max_context_parts must be at least 1")
+        if self.max_context_chars is not None and self.max_context_chars < 1:
+            raise ValueError("max_context_chars must be at least 1")
+        if self.context_reserve_chars < 0:
+            raise ValueError("context_reserve_chars must be at least 0")
         if self.max_prompt_reference_chars < 0:
             raise ValueError("max_prompt_reference_chars must be greater than or equal to 0")
         if self.max_prompt_directory_entries < 0:

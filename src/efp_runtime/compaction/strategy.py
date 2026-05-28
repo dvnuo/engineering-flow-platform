@@ -4,8 +4,39 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import json
+from typing import Any, Mapping
 
-from ..session.models import CompactionPart, Message, MessagePart, MessagePartType
+from ..session.models import (
+    CompactionPart,
+    Message,
+    MessagePart,
+    MessagePartType,
+    MessageRole,
+)
+
+
+@dataclass(frozen=True)
+class ContextBudget:
+    """Approximate request context budget."""
+
+    max_parts: int | None = None
+    max_chars: int | None = None
+    reserve_chars: int = 0
+
+    def __post_init__(self) -> None:
+        if self.max_parts is not None and self.max_parts < 1:
+            raise ValueError("max_parts must be at least 1")
+        if self.max_chars is not None and self.max_chars < 1:
+            raise ValueError("max_chars must be at least 1")
+        if self.reserve_chars < 0:
+            raise ValueError("reserve_chars must be at least 0")
+
+    @property
+    def effective_max_chars(self) -> int | None:
+        if self.max_chars is None:
+            return None
+        return max(0, self.max_chars - self.reserve_chars)
 
 
 @dataclass(frozen=True)
@@ -16,6 +47,8 @@ class CompactionResult:
     compacted_part_count: int = 0
     compacted_message_count: int = 0
     compacted_tool_pair_count: int = 0
+    compacted_chars: int = 0
+    kept_chars: int = 0
 
     @property
     def compacted(self) -> bool:
@@ -40,49 +73,115 @@ class _Block:
     def part_count(self) -> int:
         return len(self.refs)
 
+    @property
+    def char_count(self) -> int:
+        return sum(_part_chars(ref.part) for ref in self.refs)
 
-class PartAwareCompactionStrategy:
-    """Keep recent part blocks and summarize older blocks deterministically."""
 
-    def __init__(self, *, max_parts: int = 40):
-        if max_parts < 1:
-            raise ValueError("max_parts must be at least 1")
-        self.max_parts = max_parts
+class BudgetCompactionStrategy:
+    """Keep protected and recent part blocks inside an approximate budget."""
+
+    def __init__(
+        self,
+        *,
+        budget: ContextBudget | None = None,
+        max_parts: int | None = None,
+        max_chars: int | None = None,
+        reserve_chars: int = 0,
+    ):
+        if budget is not None and (
+            max_parts is not None or max_chars is not None or reserve_chars != 0
+        ):
+            raise ValueError("pass either budget or max_parts/max_chars/reserve_chars")
+        self.budget = budget or ContextBudget(
+            max_parts=max_parts,
+            max_chars=max_chars,
+            reserve_chars=reserve_chars,
+        )
+        self.max_parts = self.budget.max_parts
+        self.max_chars = self.budget.max_chars
+        self.reserve_chars = self.budget.reserve_chars
 
     def compact(self, messages: list[Message]) -> CompactionResult:
         refs = _flatten_messages(messages)
-        if len(refs) <= self.max_parts:
-            return CompactionResult(messages=list(messages))
+        total_chars = _messages_chars(messages)
+        if not self._over_budget(part_count=len(refs), char_count=total_chars):
+            return CompactionResult(messages=list(messages), kept_chars=total_chars)
 
         blocks = _group_part_blocks(refs)
-        kept_blocks = self._select_recent_blocks(blocks)
+        pending_call_ids = _pending_tool_call_ids(refs)
+        kept_blocks = self._select_recent_blocks(blocks, pending_call_ids=pending_call_ids)
         kept_keys = {ref.key for block in kept_blocks for ref in block.refs}
         compacted_blocks = [
             block for block in blocks if not any(ref.key in kept_keys for ref in block.refs)
         ]
         if not compacted_blocks:
-            return CompactionResult(messages=list(messages))
+            return CompactionResult(messages=list(messages), kept_chars=total_chars)
 
         compaction_message = _build_compaction_message(compacted_blocks)
-        remaining_messages = _rebuild_messages(messages, kept_keys)
+        remaining_items = _rebuild_message_items(messages, kept_keys)
+        final_messages = _insert_compaction_message(
+            compaction_message,
+            remaining_items,
+            compacted_blocks,
+        )
         return CompactionResult(
-            messages=[compaction_message, *remaining_messages],
+            messages=final_messages,
             compacted_part_count=sum(block.part_count for block in compacted_blocks),
             compacted_message_count=len(
                 {ref.message_index for block in compacted_blocks for ref in block.refs}
             ),
             compacted_tool_pair_count=sum(1 for block in compacted_blocks if block.is_tool_pair),
+            compacted_chars=sum(block.char_count for block in compacted_blocks),
+            kept_chars=_messages_chars(final_messages),
         )
 
-    def _select_recent_blocks(self, blocks: list[_Block]) -> list[_Block]:
-        kept_reversed: list[_Block] = []
-        used_parts = 1
-        for block in reversed(blocks):
-            if used_parts + block.part_count > self.max_parts:
-                break
-            kept_reversed.append(block)
-            used_parts += block.part_count
-        return list(reversed(kept_reversed))
+    def _over_budget(self, *, part_count: int, char_count: int) -> bool:
+        if self.budget.max_parts is not None and part_count > self.budget.max_parts:
+            return True
+        effective_max_chars = self.budget.effective_max_chars
+        if effective_max_chars is not None and char_count > effective_max_chars:
+            return True
+        return False
+
+    def _select_recent_blocks(
+        self,
+        blocks: list[_Block],
+        *,
+        pending_call_ids: set[str],
+    ) -> list[_Block]:
+        protected_indices = {
+            index
+            for index, block in enumerate(blocks)
+            if _is_protected_block(block, pending_call_ids=pending_call_ids)
+        }
+        kept_indices = set(protected_indices)
+
+        for index in reversed(range(len(blocks))):
+            if index in kept_indices:
+                continue
+            candidate_indices = {*kept_indices, index}
+            candidate_parts, candidate_chars = _selection_usage(blocks, candidate_indices)
+            if not self._fits_budget(part_count=candidate_parts, char_count=candidate_chars):
+                continue
+            kept_indices.add(index)
+
+        return [blocks[index] for index in sorted(kept_indices)]
+
+    def _fits_budget(self, *, part_count: int, char_count: int) -> bool:
+        if self.budget.max_parts is not None and part_count > self.budget.max_parts:
+            return False
+        effective_max_chars = self.budget.effective_max_chars
+        if effective_max_chars is not None and char_count > effective_max_chars:
+            return False
+        return True
+
+
+class PartAwareCompactionStrategy(BudgetCompactionStrategy):
+    """Keep recent part blocks and summarize older blocks deterministically."""
+
+    def __init__(self, *, max_parts: int = 40):
+        super().__init__(budget=ContextBudget(max_parts=max_parts))
 
 
 def _flatten_messages(messages: list[Message]) -> list[_PartRef]:
@@ -137,6 +236,46 @@ def _tool_pair_call_id(part: MessagePart) -> str | None:
     return None
 
 
+def _pending_tool_call_ids(refs: list[_PartRef]) -> set[str]:
+    call_ids = {
+        ref.part.tool_call.call_id
+        for ref in refs
+        if ref.part.type is MessagePartType.TOOL_CALL and ref.part.tool_call is not None
+    }
+    result_ids = {
+        ref.part.tool_result.call_id
+        for ref in refs
+        if ref.part.type is MessagePartType.TOOL_RESULT and ref.part.tool_result is not None
+    }
+    return call_ids - result_ids
+
+
+def _is_protected_block(block: _Block, *, pending_call_ids: set[str]) -> bool:
+    for ref in block.refs:
+        if ref.message.role is MessageRole.SYSTEM:
+            return True
+        if (
+            ref.part.type is MessagePartType.TOOL_CALL
+            and ref.part.tool_call is not None
+            and ref.part.tool_call.call_id in pending_call_ids
+        ):
+            return True
+    return False
+
+
+def _selection_usage(blocks: list[_Block], kept_indices: set[int]) -> tuple[int, int]:
+    kept_blocks = [block for index, block in enumerate(blocks) if index in kept_indices]
+    compacted_blocks = [
+        block for index, block in enumerate(blocks) if index not in kept_indices
+    ]
+    part_count = sum(block.part_count for block in kept_blocks)
+    char_count = sum(block.char_count for block in kept_blocks)
+    if compacted_blocks:
+        part_count += 1
+        char_count += _compaction_summary_chars(compacted_blocks)
+    return part_count, char_count
+
+
 def _build_compaction_message(compacted_blocks: list[_Block]) -> Message:
     part_count = sum(block.part_count for block in compacted_blocks)
     message_refs = {ref.message_index: ref.message for block in compacted_blocks for ref in block.refs}
@@ -155,6 +294,7 @@ def _build_compaction_message(compacted_blocks: list[_Block]) -> Message:
         original_part_count=part_count,
         original_message_count=message_count,
         tool_pair_count=tool_pair_count,
+        metadata={"approx_compacted_chars": sum(block.char_count for block in compacted_blocks)},
     )
     return Message(
         role="system",
@@ -165,7 +305,14 @@ def _build_compaction_message(compacted_blocks: list[_Block]) -> Message:
 
 
 def _rebuild_messages(messages: list[Message], kept_keys: set[tuple[int, int]]) -> list[Message]:
-    rebuilt: list[Message] = []
+    return [message for _, message in _rebuild_message_items(messages, kept_keys)]
+
+
+def _rebuild_message_items(
+    messages: list[Message],
+    kept_keys: set[tuple[int, int]],
+) -> list[tuple[int, Message]]:
+    rebuilt_items: list[tuple[int, Message]] = []
     for message_index, message in enumerate(messages):
         parts = [
             deepcopy(part)
@@ -174,18 +321,101 @@ def _rebuild_messages(messages: list[Message], kept_keys: set[tuple[int, int]]) 
         ]
         if not parts:
             continue
-        rebuilt.append(
-            Message(
-                role=message.role,
-                session_id=message.session_id,
-                message_id=message.message_id,
-                parts=parts,
-                parent_message_id=message.parent_message_id,
-                metadata=dict(message.metadata),
-                status=message.status,
-                usage=dict(message.usage),
-                created_at=message.created_at,
-                completed_at=message.completed_at,
-            )
+        rebuilt_message = Message(
+            role=message.role,
+            session_id=message.session_id,
+            message_id=message.message_id,
+            parts=parts,
+            parent_message_id=message.parent_message_id,
+            metadata=dict(message.metadata),
+            status=message.status,
+            usage=dict(message.usage),
+            created_at=message.created_at,
+            completed_at=message.completed_at,
         )
-    return rebuilt
+        rebuilt_items.append((message_index, rebuilt_message))
+    return rebuilt_items
+
+
+def _insert_compaction_message(
+    compaction_message: Message,
+    remaining_items: list[tuple[int, Message]],
+    compacted_blocks: list[_Block],
+) -> list[Message]:
+    first_compacted_message_index = min(
+        ref.message_index for block in compacted_blocks for ref in block.refs
+    )
+    inserted = False
+    final_messages: list[Message] = []
+    for message_index, message in remaining_items:
+        if not inserted and message_index >= first_compacted_message_index:
+            final_messages.append(compaction_message)
+            inserted = True
+        final_messages.append(message)
+    if not inserted:
+        final_messages.append(compaction_message)
+    return final_messages
+
+
+def _messages_chars(messages: list[Message]) -> int:
+    return sum(_part_chars(part) for message in messages for part in message.parts)
+
+
+def _part_chars(part: MessagePart) -> int:
+    if part.type is MessagePartType.TEXT:
+        return len(part.text or "")
+    if part.type is MessagePartType.REASONING:
+        return len(part.reasoning or part.text or "")
+    if part.type is MessagePartType.ERROR:
+        return len(part.text or "")
+    if part.type is MessagePartType.TOOL_CALL and part.tool_call is not None:
+        return len(part.tool_call.tool_name) + len(part.tool_call.arguments_text or "")
+    if part.type is MessagePartType.TOOL_RESULT and part.tool_result is not None:
+        return len(part.tool_result.content or "")
+    if part.type is MessagePartType.ATTACHMENT and part.attachment is not None:
+        metadata = {
+            "attachment_id": part.attachment.attachment_id,
+            "mime_type": part.attachment.mime_type,
+            "filename": part.attachment.filename,
+            "url": part.attachment.url,
+            "metadata": _copy_mapping(part.attachment.metadata),
+            "created_at": part.attachment.created_at,
+        }
+        return len(part.attachment.text_ref or part.text or "") + _json_chars(metadata)
+    if part.type is MessagePartType.TASK and part.task is not None:
+        metadata = {
+            "task_id": part.task.task_id,
+            "description": part.task.description,
+            "status": part.task.status,
+            "agent": part.task.agent,
+            "model": part.task.model,
+            "metadata": _copy_mapping(part.task.metadata),
+        }
+        return len(part.task.prompt or part.text or "") + _json_chars(metadata)
+    if part.type is MessagePartType.COMPACTION and part.compaction is not None:
+        metadata = {
+            "source_message_ids": list(part.compaction.source_message_ids),
+            "auto": part.compaction.auto,
+            "overflow": part.compaction.overflow,
+            "tail_start_message_id": part.compaction.tail_start_message_id,
+            "original_part_count": part.compaction.original_part_count,
+            "original_message_count": part.compaction.original_message_count,
+            "tool_pair_count": part.compaction.tool_pair_count,
+            "metadata": _copy_mapping(part.compaction.metadata),
+        }
+        return len(part.compaction.summary or part.text or "") + _json_chars(metadata)
+    return len(part.text or "")
+
+
+def _compaction_summary_chars(compacted_blocks: list[_Block]) -> int:
+    if not compacted_blocks:
+        return 0
+    return _messages_chars([_build_compaction_message(compacted_blocks)])
+
+
+def _json_chars(value: Mapping[str, Any]) -> int:
+    return len(json.dumps(value, sort_keys=True, default=str, separators=(",", ":")))
+
+
+def _copy_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    return dict(mapping)

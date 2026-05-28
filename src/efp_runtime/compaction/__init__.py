@@ -1,5 +1,15 @@
 """Runtime v2 compaction strategies."""
 
-from .strategy import CompactionResult, PartAwareCompactionStrategy
+from .strategy import (
+    BudgetCompactionStrategy,
+    CompactionResult,
+    ContextBudget,
+    PartAwareCompactionStrategy,
+)
 
-__all__ = ["CompactionResult", "PartAwareCompactionStrategy"]
+__all__ = [
+    "BudgetCompactionStrategy",
+    "CompactionResult",
+    "ContextBudget",
+    "PartAwareCompactionStrategy",
+]

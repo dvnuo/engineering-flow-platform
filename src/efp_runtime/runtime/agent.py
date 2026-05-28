@@ -37,6 +37,8 @@ class AgentRuntime:
         workspace_root: str | Path | None = None,
         max_iterations: int | None = None,
         max_context_parts: int | None = None,
+        max_context_chars: int | None = None,
+        context_reserve_chars: int | None = None,
         metadata: Mapping[str, Any] | None = None,
         store: SessionStore | None = None,
         tool_registry: ToolRegistry | None = None,
@@ -53,6 +55,8 @@ class AgentRuntime:
             workspace_root=workspace_root,
             max_iterations=max_iterations,
             max_context_parts=max_context_parts,
+            max_context_chars=max_context_chars,
+            context_reserve_chars=context_reserve_chars,
             metadata=metadata,
         )
         self.provider = provider
@@ -104,6 +108,8 @@ class AgentRuntime:
                 tool_runtime=self.tool_runtime,
                 max_iterations=self.config.max_iterations,
                 max_context_parts=self.config.max_context_parts,
+                max_context_chars=self.config.max_context_chars,
+                context_reserve_chars=self.config.context_reserve_chars,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(resolved_session_id),
             )
@@ -145,6 +151,8 @@ class AgentRuntime:
                 tool_runtime=self.tool_runtime,
                 max_iterations=self.config.max_iterations,
                 max_context_parts=self.config.max_context_parts,
+                max_context_chars=self.config.max_context_chars,
+                context_reserve_chars=self.config.context_reserve_chars,
                 event_bus=self.event_bus,
                 is_cancelled=lambda: self.run_state.is_cancelled(session_id),
             )
@@ -227,6 +235,8 @@ def _resolve_config(
     workspace_root: str | Path | None,
     max_iterations: int | None,
     max_context_parts: int | None,
+    max_context_chars: int | None,
+    context_reserve_chars: int | None,
     metadata: Mapping[str, Any] | None,
 ) -> RuntimeConfig:
     if config is None:
@@ -234,6 +244,10 @@ def _resolve_config(
             workspace_root=workspace_root,
             max_iterations=max_iterations if max_iterations is not None else 4,
             max_context_parts=max_context_parts,
+            max_context_chars=max_context_chars,
+            context_reserve_chars=(
+                context_reserve_chars if context_reserve_chars is not None else 0
+            ),
             metadata=dict(metadata or {}),
         )
 
@@ -244,6 +258,14 @@ def _resolve_config(
         max_iterations=max_iterations if max_iterations is not None else config.max_iterations,
         max_context_parts=(
             max_context_parts if max_context_parts is not None else config.max_context_parts
+        ),
+        max_context_chars=(
+            max_context_chars if max_context_chars is not None else config.max_context_chars
+        ),
+        context_reserve_chars=(
+            context_reserve_chars
+            if context_reserve_chars is not None
+            else config.context_reserve_chars
         ),
         metadata=resolved_metadata,
         skill_directories=list(config.skill_directories),
