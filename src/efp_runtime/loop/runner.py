@@ -267,6 +267,7 @@ class RuntimeLoopRunner:
                     tool_calls=pending_tool_calls,
                     runtime_events=runtime_events,
                     run_id=run_id,
+                    run_metadata=run_metadata,
                     iteration=None,
                     resume_pending=True,
                     enabled_tool_ids=enabled_tool_id_set,
@@ -415,6 +416,7 @@ class RuntimeLoopRunner:
                 tool_calls=tool_calls,
                 runtime_events=runtime_events,
                 run_id=run_id,
+                run_metadata=run_metadata,
                 iteration=iteration,
                 resume_pending=False,
                 enabled_tool_ids=enabled_tool_id_set,
@@ -826,6 +828,7 @@ class RuntimeLoopRunner:
         tool_calls: List[ToolCall],
         runtime_events: List[RuntimeEvent],
         run_id: str,
+        run_metadata: Mapping[str, Any],
         iteration: Optional[int],
         resume_pending: bool,
         enabled_tool_ids: set[str],
@@ -871,6 +874,7 @@ class RuntimeLoopRunner:
                 tool_call=tool_call,
                 runtime_events=runtime_events,
                 run_id=run_id,
+                run_metadata=run_metadata,
                 iteration=iteration,
                 resume_pending=resume_pending,
             )
@@ -889,6 +893,7 @@ class RuntimeLoopRunner:
                     session_id=session_id,
                     tool_call=tool_call,
                     run_id=run_id,
+                    run_metadata=run_metadata,
                     iteration=iteration,
                     resume_pending=resume_pending,
                 ),
@@ -1009,6 +1014,7 @@ class RuntimeLoopRunner:
         tool_call: ToolCall,
         runtime_events: List[RuntimeEvent],
         run_id: str,
+        run_metadata: Mapping[str, Any],
         iteration: Optional[int],
         resume_pending: bool,
     ) -> Optional[_ToolExecutionOutcome]:
@@ -1046,6 +1052,7 @@ class RuntimeLoopRunner:
             session_id=session_id,
             tool_call=tool_call,
             run_id=run_id,
+            run_metadata=run_metadata,
             iteration=iteration,
             resume_pending=resume_pending,
         )
@@ -1348,14 +1355,14 @@ def _tool_context(
     session_id: str,
     tool_call: ToolCall,
     run_id: str,
+    run_metadata: Mapping[str, Any] | None,
     iteration: Optional[int],
     resume_pending: bool,
 ) -> ToolContext:
-    metadata: dict[str, Any] = {
-        "tool_call_id": tool_call.call_id,
-        "tool_name": tool_call.tool_name,
-        "run_id": run_id,
-    }
+    metadata: dict[str, Any] = dict(run_metadata or {})
+    metadata["tool_call_id"] = tool_call.call_id
+    metadata["tool_name"] = tool_call.tool_name
+    metadata["run_id"] = run_id
     if iteration is not None:
         metadata["iteration"] = iteration
     elif resume_pending:

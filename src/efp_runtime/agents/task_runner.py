@@ -305,6 +305,9 @@ def _child_config(
             [] if base_config is None else list(base_config.skill_directories)
         ),
         active_skills=list(profile.active_skills),
+        enable_skill_list_tool=(
+            None if base_config is None else base_config.enable_skill_list_tool
+        ),
         include_skill_sidecar_content=(
             False
             if base_config is None

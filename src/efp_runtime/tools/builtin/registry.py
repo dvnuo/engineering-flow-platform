@@ -10,7 +10,7 @@ from ...lsp import LSPClient
 from ...permissions import ALLOW, PermissionMetadata
 from ...questions import QuestionBroker
 from ...skills.discovery import SkillDiscovery
-from ...skills.tool import build_skill_tool
+from ...skills.tool import build_skill_list_tool, build_skill_tool
 from ..registry import ToolRegistry
 from .apply_patch import create_apply_patch_tool
 from .edit import create_edit_tool
@@ -40,7 +40,9 @@ def create_core_tool_registry(
     skill_discovery: SkillDiscovery | None = None,
     skill_directories: Iterable[str | Path] | None = None,
     include_skill_tool: bool = False,
+    include_skill_list_tool: bool | None = None,
     skill_permission: PermissionMetadata | None = None,
+    skill_list_permission: PermissionMetadata | None = None,
     max_skill_sidecar_chars: int = 4000,
     instruction_resolver: ReadInstructionResolver | None = None,
     lsp_client: LSPClient | None = None,
@@ -55,6 +57,12 @@ def create_core_tool_registry(
         skill_discovery=skill_discovery,
         skill_directories=skill_directories,
         include_skill_tool=include_skill_tool,
+    )
+    skill_list_discovery = _resolve_skill_list_discovery(
+        skill_discovery=skill_discovery,
+        skill_directories=skill_directories,
+        include_skill_list_tool=include_skill_list_tool,
+        resolved_skill_discovery=resolved_skill_discovery,
     )
     registry = ToolRegistry()
     registry.register(create_apply_patch_tool(root, permission=write_permission))
@@ -93,6 +101,13 @@ def create_core_tool_registry(
                 permission=skill_permission or _default_skill_permission(),
             )
         )
+    if skill_list_discovery is not None:
+        registry.register(
+            build_skill_list_tool(
+                skill_list_discovery,
+                permission=skill_list_permission or _default_skill_permission(),
+            )
+        )
     return registry
 
 
@@ -109,6 +124,28 @@ def _resolve_skill_discovery(
         if directories:
             return SkillDiscovery(directories)
     if include_skill_tool:
+        return SkillDiscovery([])
+    return None
+
+
+def _resolve_skill_list_discovery(
+    *,
+    skill_discovery: SkillDiscovery | None,
+    skill_directories: Iterable[str | Path] | None,
+    include_skill_list_tool: bool | None,
+    resolved_skill_discovery: SkillDiscovery | None,
+) -> SkillDiscovery | None:
+    if include_skill_list_tool is False:
+        return None
+    if resolved_skill_discovery is not None:
+        return resolved_skill_discovery
+    if skill_discovery is not None:
+        return skill_discovery
+    if skill_directories is not None:
+        directories = list(skill_directories)
+        if directories:
+            return SkillDiscovery(directories)
+    if include_skill_list_tool is True:
         return SkillDiscovery([])
     return None
 

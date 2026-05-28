@@ -182,6 +182,8 @@ def _read_sidecar_text(path: Path, *, max_chars: int) -> dict[str, Any]:
         content = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return {"content": "", "content_type": "binary", "truncated": False}
+    if "\x00" in content:
+        return {"content": "", "content_type": "binary", "truncated": False}
 
     if max_chars >= 0 and len(content) > max_chars:
         return {

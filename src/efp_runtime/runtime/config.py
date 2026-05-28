@@ -43,6 +43,7 @@ class RuntimeConfig:
     max_instruction_chars: int = 20000
     skill_directories: list[str | Path] = field(default_factory=list)
     active_skills: list[str] = field(default_factory=list)
+    enable_skill_list_tool: bool | None = None
     include_skill_sidecar_content: bool = False
     max_skill_sidecar_chars: int = 4000
     resolve_prompt_references: bool = True
@@ -115,6 +116,11 @@ class RuntimeConfig:
         self.attach_read_instructions = bool(self.attach_read_instructions)
         self.skill_directories = list(self.skill_directories)
         self.active_skills = list(self.active_skills)
+        self.enable_skill_list_tool = (
+            None
+            if self.enable_skill_list_tool is None
+            else bool(self.enable_skill_list_tool)
+        )
         self.archive_truncated_tool_outputs = bool(self.archive_truncated_tool_outputs)
 
 

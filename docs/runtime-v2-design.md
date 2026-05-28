@@ -275,18 +275,27 @@ rendered as transient system context in the provider request before session
 history. It is not appended to the persisted session store, so repeated runs do
 not duplicate skill messages in history.
 
-Runtime v2 also exposes a `skill` tool when skill discovery is configured for
-the default core tool registry. This complements, rather than replaces,
-`/skill`: `/skill` explicitly activates context before the provider call, while
-the `skill` tool lets the model load a discovered skill by name during the loop.
-The tool result content is a model-visible `<skill_content name="...">` block,
-and the structured output keeps the skill name, description, skill file, raw
-skill markdown, sidecar inventory, and metadata for programmatic consumers.
+Runtime v2 exposes `skill_list` and `skill` tools when skill discovery is
+configured for the default core tool registry. `skill_list` is the lightweight
+registry view: it lists available skill names, descriptions, active skills, and
+sidecar path/size/content-type inventory without loading full skill context.
+The `skill` tool is the full context loader. It returns a model-visible
+`<skill_content name="...">` block, and the structured output keeps the skill
+name, description, skill file, raw skill markdown, sidecar inventory, and
+metadata for programmatic consumers.
 
-The `skill` tool is read-only context loading. It never imports or executes
-sidecar files, including Python files. By default it lists sidecar files in
-`<skill_files>`; callers may request bounded text content for sidecars, subject
-to the configured maximum character limit.
+These tools complement, rather than replace, `/skill`: `/skill` explicitly
+activates provider-only system context before the provider call, while
+`skill_list` lets the model discover candidate skills during the loop and
+`skill` lets it load one discovered skill by name on demand. Active skills are
+reported in run metadata and `skill_list` output, but active skill context
+remains transient provider-only system context and is not persisted.
+
+Skill tools are read-only context loading. They never import or execute sidecar
+files, including Python files. `skill_list` reports whether sidecars are text or
+binary but never returns sidecar bodies; `skill` lists sidecar files in
+`<skill_files>` by default, and callers may request bounded text content for
+sidecars, subject to the configured maximum character limit.
 
 ## System Prompt Stack
 

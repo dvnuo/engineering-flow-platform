@@ -23,7 +23,7 @@ from ..session.store import InMemorySessionStore
 from ..skills.commands import SkillCommandResult, parse_skill_commands
 from ..skills.context import SkillContextBuilder
 from ..skills.discovery import SkillDiscovery
-from ..skills.tool import build_skill_tool
+from ..skills.tool import build_skill_list_tool, build_skill_tool
 from ..system_prompt import SystemPromptBuilder
 from ..tools.builtin import (
     create_core_tool_registry,
@@ -130,7 +130,7 @@ class AgentRuntime:
         try:
             run_metadata = self._base_run_metadata(metadata)
             run_metadata["run_id"] = run_id
-            run_metadata["active_skills"] = list(active_skills)
+            self._annotate_skill_metadata(run_metadata, active_skills)
             run_metadata["skill_command"] = {
                 "add": list(skill_command.add),
                 "clear": skill_command.clear,
@@ -209,7 +209,7 @@ class AgentRuntime:
         try:
             run_metadata = self._base_run_metadata(metadata)
             run_metadata["run_id"] = run_id
-            run_metadata["active_skills"] = list(self.active_skills)
+            self._annotate_skill_metadata(run_metadata, self.active_skills)
             run_metadata["resume"] = True
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             instruction_context_messages = self._build_instruction_context_messages()
@@ -353,6 +353,17 @@ class AgentRuntime:
         )
         return run_metadata
 
+    def _annotate_skill_metadata(
+        self,
+        run_metadata: dict[str, Any],
+        active_skills: Iterable[str],
+    ) -> None:
+        active = list(active_skills)
+        run_metadata["active_skills"] = active
+        run_metadata["active_skill_count"] = len(active)
+        if self.skill_discovery is not None:
+            run_metadata["available_skill_count"] = len(self.skill_discovery.discover())
+
 
 def _resolve_config(
     config: RuntimeConfig | None,
@@ -422,6 +433,7 @@ def _resolve_config(
         max_instruction_chars=config.max_instruction_chars,
         skill_directories=list(config.skill_directories),
         active_skills=list(config.active_skills),
+        enable_skill_list_tool=config.enable_skill_list_tool,
         include_skill_sidecar_content=config.include_skill_sidecar_content,
         max_skill_sidecar_chars=config.max_skill_sidecar_chars,
         resolve_prompt_references=config.resolve_prompt_references,
@@ -467,6 +479,7 @@ def _resolve_tool_runtime(
             registry = create_core_tool_registry(
                 workspace_root,
                 skill_discovery=skill_discovery,
+                include_skill_list_tool=config.enable_skill_list_tool,
                 max_skill_sidecar_chars=config.max_skill_sidecar_chars,
                 question_broker=question_broker,
                 include_question_tool=config.enable_question_tool,
@@ -489,6 +502,10 @@ def _resolve_tool_runtime(
                         skill_discovery,
                         max_sidecar_chars=config.max_skill_sidecar_chars,
                     )
+                )
+            if _skill_list_tool_enabled(config, skill_discovery=skill_discovery):
+                registry.register(
+                    build_skill_list_tool(skill_discovery or SkillDiscovery([]))
                 )
     return ToolRuntime(
         registry,
@@ -644,6 +661,16 @@ def _plan_tool_enabled(config: RuntimeConfig) -> bool:
     if config.enable_plan_tool is None:
         return config.runtime_mode == "plan"
     return bool(config.enable_plan_tool)
+
+
+def _skill_list_tool_enabled(
+    config: RuntimeConfig,
+    *,
+    skill_discovery: SkillDiscovery | None,
+) -> bool:
+    if config.enable_skill_list_tool is not None:
+        return bool(config.enable_skill_list_tool)
+    return skill_discovery is not None or bool(config.skill_directories)
 
 
 def _permission_request_to_dict(request: Any) -> dict[str, Any]:
