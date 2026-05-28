@@ -607,7 +607,9 @@ Agent-backed task tool definitions include a deterministic list of visible
 subagent profiles in the provider schema description. Hidden profiles and
 primary-only `build` / `plan` profiles are omitted; visible task-capable
 profiles are listed by name with their description so the model can choose an
-appropriate `subagent_type`.
+appropriate `subagent_type`. Subject-aware `permission.task` rules also filter
+this list by profile name: only `deny` hides a subagent entry, while `ask`,
+`allow`, and no matching rule keep the current visibility behavior.
 
 `create_agent_task_tool(...)` preserves the historical single-tool helper.
 `create_agent_task_tools(..., allow_background=True)` returns `task`,

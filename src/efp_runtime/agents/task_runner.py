@@ -15,6 +15,7 @@ from ..permissions import (
     AGENT_PERMISSION_OVERLAY_METADATA_KEY,
     AGENT_PERMISSION_OVERLAY_SOURCE,
     AGENT_PERMISSION_OVERLAY_SOURCE_KEY,
+    is_permission_subject_visible,
     merge_tool_permission_configs,
     normalize_agent_permission_overlay,
 )
@@ -189,7 +190,12 @@ def create_agent_task_tool(
             session_id_prefix=session_id_prefix,
         ),
         tool_id=tool_id,
-        description=create_agent_task_tool_description(registry),
+        description=create_agent_task_tool_description(
+            registry,
+            tool_permissions=(
+                None if base_config is None else base_config.tool_permissions
+            ),
+        ),
         allow_background=allow_background,
         background_manager=background_manager,
     )
@@ -224,7 +230,12 @@ def create_agent_task_tools(
         tool_runtime_factory=tool_runtime_factory,
         session_id_prefix=session_id_prefix,
     )
-    description = create_agent_task_tool_description(registry)
+    description = create_agent_task_tool_description(
+        registry,
+        tool_permissions=(
+            None if base_config is None else base_config.tool_permissions
+        ),
+    )
     if not allow_background:
         return [
             create_task_tool(
@@ -259,13 +270,17 @@ def _resolve_registry(
     return AgentRegistry(profiles, default_agent="general")
 
 
-def create_agent_task_tool_description(registry: AgentRegistry) -> str:
+def create_agent_task_tool_description(
+    registry: AgentRegistry,
+    tool_permissions: Mapping[str, Any] | None = None,
+) -> str:
     """Return provider-facing task tool text for visible subagent profiles."""
 
     profile_lines = [
         _agent_type_description_line(profile)
         for profile in registry.profiles()
         if _is_task_profile(profile)
+        and _is_task_profile_permission_visible(profile, tool_permissions)
     ]
     lines = [
         DEFAULT_TASK_TOOL_DESCRIPTION,
@@ -292,6 +307,19 @@ def _is_task_profile(profile: AgentProfile) -> bool:
         return False
     mode = str(profile.metadata.get("mode") or "").strip().lower()
     return mode not in _PRIMARY_TASK_PROFILE_MODES
+
+
+def _is_task_profile_permission_visible(
+    profile: AgentProfile,
+    tool_permissions: Mapping[str, Any] | None,
+) -> bool:
+    return is_permission_subject_visible(
+        tool_permissions,
+        tool_id="task",
+        category="task",
+        resource="subagent",
+        subject=profile.name,
+    )
 
 
 def _child_config(

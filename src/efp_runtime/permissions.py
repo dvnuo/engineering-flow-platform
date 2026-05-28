@@ -740,6 +740,28 @@ class ConfiguredPermissionBroker(PermissionBroker):
         )
 
 
+def is_permission_subject_visible(
+    tool_permissions: Mapping[str, Any] | None,
+    *,
+    tool_id: str,
+    category: str,
+    resource: str = "",
+    subject: str,
+) -> bool:
+    """Return whether a subject should be shown for a permissioned tool."""
+
+    match = PermissionConfig(tool_permissions).match(
+        tool_id=tool_id,
+        args={},
+        metadata=PermissionMetadata(
+            category=category,
+            resource=resource,
+            data={"subject": subject},
+        ),
+    )
+    return match is None or match.rule.action != DENY
+
+
 def _rule_from_request(
     request: PermissionRequest,
     *,

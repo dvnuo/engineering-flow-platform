@@ -133,6 +133,63 @@ def test_create_agent_task_tool_description_lists_custom_profiles():
     )
 
 
+def test_agent_task_tool_description_hides_denied_subagent_profiles():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tool = create_agent_task_tool(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="general", description="General Runtime v2 work."),
+            AgentProfile(name="debugger", description="Debug failing tests."),
+            AgentProfile(name="reviewer", description="Review code changes."),
+        ],
+        base_config=RuntimeConfig(
+            tool_permissions={"task": {"debugger": "deny", "*": "allow"}},
+        ),
+    )
+
+    assert "- debugger:" not in tool.description
+    assert "- general: General Runtime v2 work." in tool.description
+    assert "- reviewer: Review code changes." in tool.description
+
+
+def test_agent_task_tool_description_keeps_ask_subagent_profiles_visible():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tool = create_agent_task_tool(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="debugger", description="Debug failing tests."),
+            AgentProfile(name="reviewer", description="Review code changes."),
+        ],
+        base_config=RuntimeConfig(
+            tool_permissions={"task": {"reviewer": "ask", "*": "allow"}},
+        ),
+    )
+
+    assert "- debugger: Debug failing tests." in tool.description
+    assert "- reviewer: Review code changes." in tool.description
+
+
+def test_agent_task_tool_description_reports_no_permission_visible_subagents():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tool = create_agent_task_tool(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="debugger", description="Debug failing tests."),
+            AgentProfile(name="reviewer", description="Review code changes."),
+        ],
+        base_config=RuntimeConfig(tool_permissions={"task": {"*": "deny"}}),
+    )
+
+    assert tool.description == "\n".join(
+        [
+            "Delegate a task to an injected Runtime v2 task runner.",
+            "",
+            "Available agent types:",
+            "No subagents are available.",
+        ]
+    )
+
+
 def test_agent_task_tool_description_filters_primary_profiles_and_empty_text():
     provider = ScriptedLLMProvider([{"content": "unused"}])
     tool = create_agent_task_tool(
@@ -173,6 +230,27 @@ def test_agent_task_tool_description_filters_primary_profiles_and_empty_text():
     assert "- builder:" not in tool.description
     assert "- hidden:" not in tool.description
     assert "- primary:" not in tool.description
+
+
+def test_agent_task_tool_without_base_config_preserves_visible_profiles():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tool = create_agent_task_tool(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="debugger", description="Debug failing tests."),
+            AgentProfile(name="reviewer", description="Review code changes."),
+        ],
+    )
+
+    assert tool.description == "\n".join(
+        [
+            "Delegate a task to an injected Runtime v2 task runner.",
+            "",
+            "Available agent types:",
+            "- debugger: Debug failing tests.",
+            "- reviewer: Review code changes.",
+        ]
+    )
 
 
 def test_agent_task_tool_description_reports_no_available_subagents():
@@ -222,6 +300,33 @@ def test_create_agent_task_tools_background_keeps_task_description_consistent():
         == "Read status and results from background subagent tasks."
     )
     assert tools[2].description == "Cancel a running background subagent task."
+
+
+def test_create_agent_task_tools_background_uses_filtered_task_description():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    tools = create_agent_task_tools(
+        provider=provider,
+        profiles=[
+            AgentProfile(name="general", description="General work."),
+            AgentProfile(name="debugger", description="Debug failures."),
+            AgentProfile(name="reviewer", description="Review changes."),
+        ],
+        base_config=RuntimeConfig(
+            tool_permissions={"task": {"debugger": "deny", "*": "allow"}},
+        ),
+        allow_background=True,
+    )
+
+    assert [tool.id for tool in tools] == ["task", "task_status", "task_cancel"]
+    assert tools[0].description == "\n".join(
+        [
+            "Delegate a task to an injected Runtime v2 task runner.",
+            "",
+            "Available agent types:",
+            "- general: General work.",
+            "- reviewer: Review changes.",
+        ]
+    )
 
 
 def test_agent_task_tool_description_lists_default_general_profile():
