@@ -185,9 +185,11 @@ The loader maps the following opencode-style and snake_case keys into
 - `runtime.mode` or `runtime_mode`.
 
 Configured path fields are resolved as workspace-local `Path` objects without
-requiring those files or directories to already exist. If
-`.opencode/commands` exists under the workspace root, the loader also adds it
-as a project command directory.
+requiring those files or directories to already exist. If `.opencode/command`
+or `.opencode/commands` exists under the workspace root, the loader also adds
+the existing project command defaults in that order. Configured
+`commandDirectories` / `command_directories` entries are appended after those
+defaults.
 With `include_defaults=True`, existing user-level skill directories are added
 first: `~/.claude/skills`, then `~/.agents/skills`. Existing project-local
 skill directories are added next: `.opencode/skill`, `.opencode/skills`,
@@ -792,7 +794,9 @@ Runtime v2 supports configured custom slash command directories through
 `AgentRuntime`. Command files are markdown or text prompt templates discovered
 from those directories, including hidden configured roots such as
 `.opencode/command`; hidden subdirectories are skipped by default. The config
-loader also supports opencode-style `command` and compatible `commands`
+loader discovers existing project defaults from `.opencode/command` first and
+`.opencode/commands` second, then appends configured command directories. The
+config loader also supports opencode-style `command` and compatible `commands`
 mappings:
 
 ```json

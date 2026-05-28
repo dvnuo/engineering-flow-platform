@@ -518,9 +518,12 @@ def _command_directories(
     workspace_root: Path,
 ) -> list[Path] | None:
     paths: list[Path] = []
-    default_directory = workspace_root / ".opencode" / "commands"
-    if default_directory.is_dir():
-        paths.append(default_directory.resolve(strict=False))
+    for default_directory in (
+        workspace_root / ".opencode" / "command",
+        workspace_root / ".opencode" / "commands",
+    ):
+        if default_directory.is_dir():
+            paths.append(default_directory.resolve(strict=False))
 
     configured = _merged_alias_paths(
         raw,

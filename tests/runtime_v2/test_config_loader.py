@@ -543,6 +543,49 @@ def test_loader_returns_command_definitions_registry_and_default_directory(
     assert "commandDirectories" not in result.metadata["unconsumed_config"]
 
 
+def test_loader_returns_singular_default_command_directory(tmp_path: Path):
+    default_commands = tmp_path / ".opencode" / "command"
+    default_commands.mkdir(parents=True)
+    (default_commands / "test.md").write_text("Singular command.", encoding="utf-8")
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.config.command_directories == [default_commands.resolve()]
+    assert result.command_registry is not None
+    assert result.command_registry.get("test").content == "Singular command."
+
+
+def test_loader_orders_singular_plural_then_configured_command_directories(
+    tmp_path: Path,
+):
+    singular_commands = tmp_path / ".opencode" / "command"
+    plural_commands = tmp_path / ".opencode" / "commands"
+    project_commands = tmp_path / "project-commands"
+    singular_commands.mkdir(parents=True)
+    plural_commands.mkdir(parents=True)
+    project_commands.mkdir()
+    (singular_commands / "dup.md").write_text("Singular command.", encoding="utf-8")
+    (plural_commands / "dup.md").write_text("Plural command.", encoding="utf-8")
+    (project_commands / "custom.md").write_text("Configured command.", encoding="utf-8")
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "commandDirectories": ["project-commands"],
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.config.command_directories == [
+        singular_commands.resolve(),
+        plural_commands.resolve(),
+        project_commands.resolve(),
+    ]
+    assert result.command_registry is not None
+    assert result.command_registry.get("dup").content == "Plural command."
+    assert result.command_registry.get("custom").content == "Configured command."
+
+
 def test_loader_consumes_commands_alias(tmp_path: Path):
     _write_json(
         tmp_path / "opencode.json",
