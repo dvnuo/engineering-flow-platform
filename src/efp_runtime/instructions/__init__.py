@@ -1,5 +1,5 @@
 """Instruction context support for EFP Runtime v2."""
 
-from .context import InstructionContextBuilder
+from .context import InstructionContextBuilder, ReadInstructionResolver
 
-__all__ = ["InstructionContextBuilder"]
+__all__ = ["InstructionContextBuilder", "ReadInstructionResolver"]

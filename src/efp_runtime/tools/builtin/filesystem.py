@@ -6,6 +6,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from ...instructions import ReadInstructionResolver
 from ...permissions import ALLOW, ASK, PermissionMetadata
 from ..definition import ToolContext, ToolDef
 
@@ -48,7 +49,11 @@ def workspace_relative_path(workspace_root: str | Path, path: str | Path) -> str
     return text or "."
 
 
-def create_read_file_tool(workspace_root: str | Path) -> ToolDef:
+def create_read_file_tool(
+    workspace_root: str | Path,
+    *,
+    instruction_resolver: ReadInstructionResolver | None = None,
+) -> ToolDef:
     root = normalize_workspace_root(workspace_root)
 
     async def execute(args: dict[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -60,12 +65,20 @@ def create_read_file_tool(workspace_root: str | Path) -> ToolDef:
 
         encoding = args.get("encoding") or "utf-8"
         data = path.read_bytes()
-        return {
+        output = {
             "path": workspace_relative_path(root, path),
             "content": data.decode(encoding, errors="replace"),
             "encoding": encoding,
             "bytes": len(data),
         }
+        if instruction_resolver is not None:
+            instructions = instruction_resolver.resolve_for_path(path)
+            if instructions:
+                output["instructions"] = instructions
+                output["loaded_instruction_paths"] = [
+                    str(entry["path"]) for entry in instructions
+                ]
+        return output
 
     return ToolDef(
         id="read_file",
@@ -189,9 +202,13 @@ def create_filesystem_tools(
     workspace_root: str | Path,
     *,
     write_permission: PermissionMetadata | None = None,
+    instruction_resolver: ReadInstructionResolver | None = None,
 ) -> list[ToolDef]:
     return [
-        create_read_file_tool(workspace_root),
+        create_read_file_tool(
+            workspace_root,
+            instruction_resolver=instruction_resolver,
+        ),
         create_list_dir_tool(workspace_root),
         create_write_file_tool(workspace_root, permission=write_permission),
     ]

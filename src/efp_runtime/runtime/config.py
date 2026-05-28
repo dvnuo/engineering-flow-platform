@@ -25,6 +25,7 @@ class RuntimeConfig:
     instruction_paths: list[str | Path] = field(default_factory=list)
     instruction_texts: list[str] = field(default_factory=list)
     include_default_instructions: bool = True
+    attach_read_instructions: bool = True
     max_instruction_chars: int = 20000
     skill_directories: list[str | Path] = field(default_factory=list)
     active_skills: list[str] = field(default_factory=list)
@@ -61,6 +62,7 @@ class RuntimeConfig:
         self.instruction_paths = list(self.instruction_paths)
         self.instruction_texts = list(self.instruction_texts)
         self.include_default_instructions = bool(self.include_default_instructions)
+        self.attach_read_instructions = bool(self.attach_read_instructions)
         self.skill_directories = list(self.skill_directories)
         self.active_skills = list(self.active_skills)
 

@@ -224,10 +224,22 @@ user messages. Each run rebuilds the provider-only context from the configured
 sources, so persisted history remains limited to user, assistant, tool, task,
 and compaction records created by the runtime loop.
 
-This phase only performs request-time context injection. It does not implement
-opencode read-time nearby instruction attachment, does not scan outside
-`workspace_root` for default files, and does not read global home instruction
-files unless a caller explicitly configures such a path.
+Runtime v2 also supports read-time nearby instruction attachment for the
+workspace `read_file` tool. Request-time instruction context is provider-only
+system context that is rebuilt at the start of a run or resume. Read-time
+attachment is tool output context: when `read_file` reads a workspace file, the
+tool walks from that file's parent directory up to `workspace_root` and attaches
+the nearest default instruction file in each directory, using `AGENTS.md`,
+`CLAUDE.md`, then `CONTEXT.md` priority. It skips the file being read and does
+not scan global home directories or fetch remote instruction sources.
+
+When no nearby instruction is found, `read_file` keeps the original structured
+output shape. When nearby instructions are found, the output additionally
+contains `instructions` and `loaded_instruction_paths`; each instruction entry
+contains the workspace-relative path, content, truncation flag, and original
+character count. `RuntimeConfig(attach_read_instructions=False)` disables this
+read-time attachment independently of `include_default_instructions`, which only
+controls request-time system instruction injection.
 
 
 ## Compaction

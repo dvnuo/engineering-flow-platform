@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
+from ...instructions import ReadInstructionResolver
 from ...permissions import ALLOW, PermissionMetadata
 from ...questions import QuestionBroker
 from ...skills.discovery import SkillDiscovery
@@ -35,6 +36,7 @@ def create_core_tool_registry(
     include_skill_tool: bool = False,
     skill_permission: PermissionMetadata | None = None,
     max_skill_sidecar_chars: int = 4000,
+    instruction_resolver: ReadInstructionResolver | None = None,
 ) -> ToolRegistry:
     """Create a registry containing Runtime v2 core built-in tools."""
 
@@ -47,7 +49,11 @@ def create_core_tool_registry(
     registry = ToolRegistry()
     registry.register(create_apply_patch_tool(root, permission=write_permission))
     registry.register(create_edit_tool(root, permission=write_permission))
-    for tool in create_filesystem_tools(root, write_permission=write_permission):
+    for tool in create_filesystem_tools(
+        root,
+        write_permission=write_permission,
+        instruction_resolver=instruction_resolver,
+    ):
         registry.register(tool)
     registry.register(create_glob_tool(root))
     registry.register(create_grep_tool(root))

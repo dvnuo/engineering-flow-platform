@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from ..session.models import Message, MessagePart, MessageRole
 
@@ -106,6 +107,81 @@ class InstructionContextBuilder:
         return f"{content[:kept]}\n\n{notice}", True
 
 
+class ReadInstructionResolver:
+    """Resolve instruction files near a workspace file read."""
+
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        default_file_names: Iterable[str] = DEFAULT_INSTRUCTION_FILES,
+        max_instruction_chars: int = 20000,
+    ) -> None:
+        if max_instruction_chars < 0:
+            raise ValueError("max_instruction_chars must be greater than or equal to 0")
+        self.workspace_root = Path(workspace_root).expanduser().resolve()
+        self.default_file_names = [str(name) for name in default_file_names if str(name)]
+        self.max_instruction_chars = max_instruction_chars
+
+    def resolve_for_path(self, path: str | Path) -> list[dict[str, Any]]:
+        target = self._resolve_workspace_path(path)
+        if target is None:
+            return []
+
+        entries: list[dict[str, Any]] = []
+        seen_paths: set[Path] = set()
+        current = target.parent if target != self.workspace_root else target
+
+        while _is_relative_to(current, self.workspace_root):
+            instruction_path = self._find_instruction_file(current)
+            if instruction_path is not None:
+                resolved_instruction = _resolved_file_path(instruction_path)
+                if (
+                    resolved_instruction is not None
+                    and _is_relative_to(resolved_instruction, self.workspace_root)
+                    and resolved_instruction != target
+                    and resolved_instruction not in seen_paths
+                ):
+                    seen_paths.add(resolved_instruction)
+                    content = _read_instruction_text_file(resolved_instruction)
+                    if content is not None:
+                        entries.append(self._entry(resolved_instruction, content))
+
+            if current == self.workspace_root:
+                break
+            current = current.parent
+
+        return entries
+
+    def _resolve_workspace_path(self, path: str | Path) -> Path | None:
+        raw_path = Path(path).expanduser()
+        candidate = raw_path if raw_path.is_absolute() else self.workspace_root / raw_path
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            return None
+        if not _is_relative_to(resolved, self.workspace_root):
+            return None
+        return resolved
+
+    def _find_instruction_file(self, directory: Path) -> Path | None:
+        for name in self.default_file_names:
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _entry(self, path: Path, content: str) -> dict[str, Any]:
+        original_chars = len(content)
+        truncated = original_chars > self.max_instruction_chars
+        rendered_content = content[: self.max_instruction_chars] if truncated else content
+        return {
+            "path": _relative_posix(self.workspace_root, path),
+            "content": rendered_content,
+            "truncated": truncated,
+            "original_chars": original_chars,
+        }
+
+
 def _system_text_message(text: str, *, metadata: dict[str, object]) -> Message:
     return Message(
         role=MessageRole.SYSTEM,
@@ -152,3 +228,30 @@ def _read_text_file(path: Path) -> str | None:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def _read_instruction_text_file(path: Path) -> str | None:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _relative_posix(root: Path, path: Path) -> str:
+    relative = path.relative_to(root)
+    text = relative.as_posix()
+    return text or "."

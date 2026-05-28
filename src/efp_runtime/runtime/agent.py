@@ -10,7 +10,7 @@ from typing import Any, Union
 
 from ..compaction.controller import CompactionSummarizer
 from ..event_bus import RuntimeEventBus
-from ..instructions import InstructionContextBuilder
+from ..instructions import InstructionContextBuilder, ReadInstructionResolver
 from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
 from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
@@ -336,6 +336,7 @@ def _resolve_config(
         instruction_paths=list(config.instruction_paths),
         instruction_texts=list(config.instruction_texts),
         include_default_instructions=config.include_default_instructions,
+        attach_read_instructions=config.attach_read_instructions,
         max_instruction_chars=config.max_instruction_chars,
         skill_directories=list(config.skill_directories),
         active_skills=list(config.active_skills),
@@ -367,12 +368,21 @@ def _resolve_tool_runtime(
     registry = tool_registry
     if registry is None:
         if workspace_root is not None:
+            instruction_resolver = (
+                ReadInstructionResolver(
+                    workspace_root,
+                    max_instruction_chars=config.max_instruction_chars,
+                )
+                if config.attach_read_instructions
+                else None
+            )
             registry = create_core_tool_registry(
                 workspace_root,
                 skill_discovery=skill_discovery,
                 max_skill_sidecar_chars=config.max_skill_sidecar_chars,
                 question_broker=question_broker,
                 include_question_tool=config.enable_question_tool,
+                instruction_resolver=instruction_resolver,
             )
         else:
             registry = ToolRegistry()
