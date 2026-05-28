@@ -23,6 +23,7 @@ from .output import (
 
 
 DEFAULT_TIMEOUT_SECONDS = 30
+_CANCEL_POLL_SECONDS = 0.05
 
 
 def create_shell_exec_tool(
@@ -136,15 +137,13 @@ def _create_shell_tool(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        timed_out = False
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
-            exit_code = process.returncode
-        except asyncio.TimeoutError:
-            timed_out = True
-            process.kill()
-            stdout_bytes, stderr_bytes = await process.communicate()
-            exit_code = None
+        stdout_bytes, stderr_bytes, timed_out, cancelled, exit_code = (
+            await _communicate_with_timeout_and_cancel(
+                process,
+                timeout=timeout,
+                context=context,
+            )
+        )
         duration_ms = int(round((time.monotonic() - started) * 1000))
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -154,6 +153,7 @@ def _create_shell_tool(
             "stderr": stderr,
             "exit_code": exit_code,
             "timed_out": timed_out,
+            "cancelled": cancelled,
             "cwd": cwd_relative,
             "duration_ms": duration_ms,
         }
@@ -161,6 +161,7 @@ def _create_shell_tool(
             stdout=stdout,
             stderr=stderr,
             timed_out=timed_out,
+            cancelled=cancelled,
             timeout_ms=timeout_ms,
         )
         content, truncated = truncate_tail(
@@ -180,6 +181,7 @@ def _create_shell_tool(
             "cwd": cwd_relative,
             "exit_code": exit_code,
             "timed_out": timed_out,
+            "cancelled": cancelled,
             "duration_ms": duration_ms,
             "output_path": output_path,
             "full_output_chars": len(full_content),
@@ -198,6 +200,9 @@ def _create_shell_tool(
         return ToolResult(
             call_id=tool_call_id,
             tool_name=tool_id,
+            status="cancelled" if cancelled else "success",
+            success=not cancelled,
+            error="Shell command cancelled." if cancelled else None,
             content=content,
             output=output,
             metadata=metadata,
@@ -286,11 +291,60 @@ def _positive_int_arg(args: dict[str, Any], name: str, default: int) -> int:
     return value
 
 
+async def _communicate_with_timeout_and_cancel(
+    process: asyncio.subprocess.Process,
+    *,
+    timeout: float,
+    context: ToolContext,
+) -> tuple[bytes, bytes, bool, bool, int | None]:
+    communicate_task = asyncio.create_task(process.communicate())
+    timeout_task = asyncio.create_task(asyncio.sleep(timeout))
+    cancel_task = asyncio.create_task(_wait_for_cancel(context))
+    tasks = {communicate_task, timeout_task, cancel_task}
+
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    if communicate_task in done:
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        stdout_bytes, stderr_bytes = communicate_task.result()
+        return stdout_bytes, stderr_bytes, False, False, process.returncode
+
+    cancelled = cancel_task in done and cancel_task.result()
+    timed_out = not cancelled
+    for task in (timeout_task, cancel_task):
+        if task is not communicate_task and not task.done():
+            task.cancel()
+
+    _kill_process(process)
+    stdout_bytes, stderr_bytes = await communicate_task
+    await asyncio.gather(
+        *(task for task in (timeout_task, cancel_task) if task is not communicate_task),
+        return_exceptions=True,
+    )
+    return stdout_bytes, stderr_bytes, timed_out, cancelled, None
+
+
+async def _wait_for_cancel(context: ToolContext) -> bool:
+    while True:
+        if await context.is_cancelled():
+            return True
+        await asyncio.sleep(_CANCEL_POLL_SECONDS)
+
+
+def _kill_process(process: asyncio.subprocess.Process) -> None:
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+
 def _format_shell_content(
     *,
     stdout: str,
     stderr: str,
     timed_out: bool,
+    cancelled: bool,
     timeout_ms: int,
 ) -> str:
     parts: list[str] = []
@@ -306,6 +360,16 @@ def _format_shell_content(
                 [
                     "<shell_metadata>",
                     f"shell tool terminated command after exceeding timeout {timeout_ms}ms.",
+                    "</shell_metadata>",
+                ]
+            )
+        )
+    if cancelled:
+        parts.append(
+            "\n".join(
+                [
+                    "<shell_metadata>",
+                    "User aborted the command",
                     "</shell_metadata>",
                 ]
             )

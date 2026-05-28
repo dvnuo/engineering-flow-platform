@@ -141,6 +141,50 @@ async def test_permission_deny_returns_denied_without_execution():
     assert called is False
 
 
+@pytest.mark.asyncio
+async def test_cancelled_context_stops_after_permission_before_execution():
+    called = False
+
+    async def execute(args, context):
+        nonlocal called
+        called = True
+        return "should not run"
+
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                ToolDef(
+                    id="cancel_me",
+                    description="Cancelled tool",
+                    input_schema={"type": "object", "properties": {}},
+                    execute=execute,
+                )
+            ]
+        )
+    )
+
+    result = await runtime.execute(
+        ToolCall(id="call-cancelled", tool_id="cancel_me", args={}),
+        context=ToolContext(
+            session_id="session-cancelled",
+            run_id="run-cancelled",
+            cancel_requested=lambda: True,
+        ),
+    )
+
+    assert result.status == "cancelled"
+    assert result.success is False
+    assert result.error == "Tool execution cancelled."
+    assert result.content == "Tool execution cancelled."
+    assert called is False
+    assert "cancel_requested" not in ToolContext(
+        cancel_requested=lambda: True,
+    ).to_metadata()
+    assert result.events[0].type == "tool.cancelled"
+    assert result.events[0].payload["tool_call_id"] == "call-cancelled"
+    assert result.events[0].payload["run_id"] == "run-cancelled"
+
+
 def test_registry_rejects_duplicate_tool_ids():
     async def execute(args, context):
         return "ok"

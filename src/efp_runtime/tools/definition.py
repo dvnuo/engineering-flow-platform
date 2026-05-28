@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+import inspect
 from typing import Any
 
 from ..permissions import PermissionMetadata
@@ -37,6 +38,11 @@ class ToolContext:
     tool_name: str | None = None
     run_id: str | None = None
     iteration: int | None = None
+    cancel_requested: Callable[[], bool | Awaitable[bool]] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def to_metadata(self) -> dict[str, Any]:
         """Return metadata with first-class execution context mirrored into it."""
@@ -47,6 +53,16 @@ class ToolContext:
         _set_missing_metadata(metadata, "run_id", self.run_id)
         _set_missing_metadata(metadata, "iteration", self.iteration)
         return metadata
+
+    async def is_cancelled(self) -> bool:
+        """Return whether the surrounding runtime has requested cancellation."""
+
+        if self.cancel_requested is None:
+            return False
+        result = self.cancel_requested()
+        if inspect.isawaitable(result):
+            result = await result
+        return bool(result)
 
 
 AsyncToolExecute = Callable[[dict[str, Any], ToolContext], Awaitable[Any]]

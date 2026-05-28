@@ -165,6 +165,28 @@ class ToolRuntime:
                 ],
             )
 
+        if await context.is_cancelled():
+            message = "Tool execution cancelled."
+            return ToolResult(
+                call_id=tool_call.call_id,
+                tool_name=tool.id,
+                status="cancelled",
+                success=False,
+                error=message,
+                content=message,
+                events=[
+                    RuntimeEvent(
+                        type="tool.cancelled",
+                        message=message,
+                        payload=_tool_event_payload(
+                            tool_id=tool.id,
+                            tool_call_id=tool_call.call_id,
+                            context=context,
+                        ),
+                    )
+                ],
+            )
+
         try:
             raw_output = tool.execute(args, context)
             if inspect.isawaitable(raw_output):
@@ -483,6 +505,7 @@ def _tool_execution_context(
         tool_name=str(resolved_tool_name) if resolved_tool_name is not None else None,
         run_id=str(run_id) if run_id is not None else None,
         iteration=iteration,
+        cancel_requested=context.cancel_requested,
     )
 
 

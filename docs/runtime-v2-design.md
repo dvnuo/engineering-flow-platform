@@ -520,6 +520,10 @@ for `communicate()`, kills the process on timeout, and returns the collected
 stdout, stderr, exit code, timeout flag, and saved full output path. Runtime v2
 also exposes the opencode-style `bash` tool id as an alias over the same shell
 execution path; `shell_exec` remains registered and unchanged. Long-running
+foreground shell commands also receive the run cancellation callback through
+their tool context. When cancellation is requested, the shell tool kills the
+subprocess, preserves collected stdout/stderr, marks the result as cancelled,
+and adds shell metadata noting the user abort. Background
 shell commands can be started with either `shell_exec(background=true)` or
 `bash(background=true)`. That call still uses the normal shell permission
 boundary, starts the process, and immediately returns a `job_id`. Callers read

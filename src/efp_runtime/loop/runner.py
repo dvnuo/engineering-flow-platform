@@ -945,6 +945,9 @@ class RuntimeLoopRunner:
         resume_pending: bool,
         enabled_tool_ids: set[str],
     ) -> _ToolExecutionOutcome:
+        async def tool_cancel_requested() -> bool:
+            return await self._cancel_requested(session_id)
+
         for tool_call in tool_calls:
             if await self._cancel_requested(session_id):
                 return _ToolExecutionOutcome(cancelled=True)
@@ -989,6 +992,7 @@ class RuntimeLoopRunner:
                 run_metadata=run_metadata,
                 iteration=iteration,
                 resume_pending=resume_pending,
+                cancel_requested=tool_cancel_requested,
             )
             if doom_loop_outcome is not None:
                 if (
@@ -1008,6 +1012,7 @@ class RuntimeLoopRunner:
                     run_metadata=run_metadata,
                     iteration=iteration,
                     resume_pending=resume_pending,
+                    cancel_requested=tool_cancel_requested,
                 ),
             )
             permission_request = _permission_request_payload(result.metadata)
@@ -1133,6 +1138,7 @@ class RuntimeLoopRunner:
         run_metadata: Mapping[str, Any],
         iteration: Optional[int],
         resume_pending: bool,
+        cancel_requested: Callable[[], Any] | None,
     ) -> Optional[_ToolExecutionOutcome]:
         threshold = self.doom_loop_threshold
         if threshold is None:
@@ -1171,6 +1177,7 @@ class RuntimeLoopRunner:
             run_metadata=run_metadata,
             iteration=iteration,
             resume_pending=resume_pending,
+            cancel_requested=cancel_requested,
         )
         decision = await self.tool_runtime.permission_evaluator.evaluate(
             tool_id=tool_call.tool_name,
@@ -1564,6 +1571,7 @@ def _tool_context(
     run_metadata: Mapping[str, Any] | None,
     iteration: Optional[int],
     resume_pending: bool,
+    cancel_requested: Callable[[], Any] | None = None,
 ) -> ToolContext:
     metadata: dict[str, Any] = dict(run_metadata or {})
     metadata["tool_call_id"] = tool_call.call_id
@@ -1583,6 +1591,7 @@ def _tool_context(
         tool_name=tool_call.tool_name,
         run_id=run_id,
         iteration=iteration,
+        cancel_requested=cancel_requested,
     )
 
 

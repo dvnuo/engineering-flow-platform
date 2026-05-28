@@ -142,8 +142,10 @@ async def test_bash_timeout_matches_shell_exec(tmp_path: Path):
     for result in (bash, shell_exec):
         assert result.status == "success"
         assert result.output["timed_out"] is True
+        assert result.output["cancelled"] is False
         assert result.output["exit_code"] is None
         assert result.metadata["timed_out"] is True
+        assert result.metadata["cancelled"] is False
         assert result.metadata["timeout_ms"] == 100
         assert "<shell_metadata>" in result.content
         assert "100ms" in result.content

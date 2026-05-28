@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import shlex
 import sys
 from pathlib import Path
@@ -77,11 +78,55 @@ async def test_timeout_ms_takes_precedence_and_adds_shell_metadata(tmp_path: Pat
 
     assert result.status == "success"
     assert result.output["timed_out"] is True
+    assert result.output["cancelled"] is False
     assert result.output["exit_code"] is None
     assert result.metadata["timed_out"] is True
+    assert result.metadata["cancelled"] is False
     assert result.metadata["timeout_ms"] == 100
     assert "<shell_metadata>" in result.content
     assert "100ms" in result.content
+
+
+@pytest.mark.asyncio
+async def test_shell_command_cancellation_kills_process_and_preserves_output(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    cancel_requested = False
+
+    async def flip_cancel() -> None:
+        nonlocal cancel_requested
+        await asyncio.sleep(0.1)
+        cancel_requested = True
+
+    async def is_cancelled() -> bool:
+        return cancel_requested
+
+    cancel_task = asyncio.create_task(flip_cancel())
+    result = await asyncio.wait_for(
+        runtime.execute(
+            ToolCall(
+                id="call-shell-cancel",
+                tool_id="shell_exec",
+                args={
+                    "command": _python_command(
+                        "import sys, time; print('before'); sys.stdout.flush(); time.sleep(5)"
+                    ),
+                },
+            ),
+            context=ToolContext(cancel_requested=is_cancelled),
+        ),
+        timeout=2,
+    )
+    await cancel_task
+
+    assert result.status == "cancelled"
+    assert result.success is False
+    assert result.error == "Shell command cancelled."
+    assert result.output["cancelled"] is True
+    assert result.output["timed_out"] is False
+    assert result.output["exit_code"] is None
+    assert result.metadata["cancelled"] is True
+    assert "before" in result.content
+    assert "User aborted the command" in result.content
 
 
 @pytest.mark.asyncio

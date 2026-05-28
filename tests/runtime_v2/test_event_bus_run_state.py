@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -12,13 +13,22 @@ import pytest
 from efp_runtime.event_bus import RuntimeEventBus
 from efp_runtime.events import RuntimeEvent
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
-from efp_runtime.runtime import AgentRuntime, RuntimeRunState, SessionBusyError
+from efp_runtime.runtime import (
+    AgentRuntime,
+    RuntimeConfig,
+    RuntimeRunState,
+    SessionBusyError,
+)
 from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _python_command(script: str) -> str:
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
 
 @pytest.mark.asyncio
@@ -150,6 +160,63 @@ async def test_agent_runtime_cancel_stops_before_next_provider_round():
     assert "run_cancelled" in event_types
     assert event_types[-1] == "run_finish"
     assert bus.history("session-cancel")[-1].payload["status"] == LoopStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_cancel_interrupts_foreground_shell_tool(tmp_path: Path):
+    session_id = "session-shell-cancel"
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call_shell_cancel",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": json.dumps(
+                                {
+                                    "command": _python_command(
+                                        "import sys, time; print('before'); sys.stdout.flush(); time.sleep(5)"
+                                    ),
+                                }
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "This should not be requested."},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=3,
+            tool_permissions={"bash": "allow"},
+        ),
+    )
+
+    async def cancel_later() -> None:
+        await asyncio.sleep(0.1)
+        runtime.cancel(session_id)
+
+    cancel_task = asyncio.create_task(cancel_later())
+    result = await asyncio.wait_for(
+        runtime.run("Run a long shell command.", session_id=session_id),
+        timeout=2,
+    )
+    await cancel_task
+
+    assert result.status == LoopStatus.CANCELLED
+    assert len(provider.requests) == 1
+    history = runtime.store.read_history(session_id)
+    tool_result = history[2].parts[0].tool_result
+    assert tool_result is not None
+    assert tool_result.status == "cancelled"
+    assert tool_result.success is False
+    assert tool_result.output["cancelled"] is True
+    assert "before" in tool_result.content
 
 
 def test_event_bus_run_state_import_boundary():
