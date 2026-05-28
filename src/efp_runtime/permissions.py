@@ -765,8 +765,8 @@ def _validate_permission_action(value: Any, *, key: str) -> PermissionAction:
 
 
 _PERMISSION_CATEGORY_ALIASES: dict[str, frozenset[str]] = {
-    "read": frozenset({"read_file"}),
-    "edit": frozenset({"write_file", "edit", "apply_patch"}),
+    "read": frozenset({"read", "read_file"}),
+    "edit": frozenset({"write", "write_file", "edit", "apply_patch"}),
     "glob": frozenset({"glob"}),
     "grep": frozenset({"grep"}),
     "list": frozenset({"list_dir"}),

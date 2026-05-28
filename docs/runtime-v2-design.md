@@ -379,11 +379,11 @@ and is appended as a final tool result on resume.
 
 `RuntimeConfig.tool_permissions` adds an opencode-style execution permission
 layer on top of the static permission metadata carried by each tool definition.
-Keys can be exact tool ids such as `shell_exec`, `read_file`, `write_file`,
-`apply_patch`, `skill`, or `task_status`; category aliases such as `bash`,
-`edit`, `read`, `list`, `grep`, `glob`, `task`, `todowrite`, `webfetch`, `lsp`,
-`skill`, `question`, and `doom_loop`; wildcard patterns such as `external_*`;
-or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
+Keys can be exact tool ids such as `shell_exec`, `read`, `read_file`, `write`,
+`write_file`, `apply_patch`, `skill`, or `task_status`; category aliases such
+as `bash`, `edit`, `read`, `list`, `grep`, `glob`, `task`, `todowrite`,
+`webfetch`, `lsp`, `skill`, `question`, and `doom_loop`; wildcard patterns
+such as `external_*`; or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
 `"deny"`, or a mapping like
 `{"action": "ask", "reason": "...", "risk": "medium", "patterns": ["..."]}`.
 Runtime config matching is ordered by exact tool id, wildcard specificity,
@@ -420,11 +420,11 @@ to the next provider iteration. Set
 Runtime v2 supports a minimal `plan` runtime mode alongside the default `build`
 mode. In plan mode, `AgentRuntime` registers the `plan_exit` built-in tool by
 default and, while `RuntimeConfig.plan_mode_read_only=True`, hides mutating
-tools from the provider request schema: `apply_patch`, `edit`, `write_file`,
-`shell_exec`, and `shell_kill`. These tools remain registered in the underlying
-registry so the policy is enforced through tool selection rather than by
-changing registry shape. Caller-supplied `disabled_tools` still apply, and
-caller-supplied `enabled_tools` cannot expose those mutating tools unless
+tools from the provider request schema: `apply_patch`, `edit`, `write`,
+`write_file`, `shell_exec`, and `shell_kill`. These tools remain registered in
+the underlying registry so the policy is enforced through tool selection rather
+than by changing registry shape. Caller-supplied `disabled_tools` still apply,
+and caller-supplied `enabled_tools` cannot expose those mutating tools unless
 `plan_mode_read_only=False`.
 
 `plan_exit` lets the model submit a final structured plan. Its `ToolResult`
@@ -437,8 +437,11 @@ request. The final assistant message remains the assistant message that made the
 tool call; the runtime does not synthesize assistant text after a terminal tool.
 
 The core built-in registry is workspace-contained and intentionally independent
-from the legacy runtime. It includes read/list/write, grep/glob, shell execution,
-single-file edit, unified-diff apply_patch, session-local todo_write planning,
+from the legacy runtime. It includes legacy EFP file ids `read_file`,
+`list_dir`, and `write_file`, plus opencode-style file aliases `read` and
+`write` that use `filePath` schemas. The legacy ids and their behavior remain
+available. The registry also includes grep/glob, shell execution, single-file
+edit, unified-diff apply_patch, session-local todo_write planning,
 invalid-argument feedback, and HTTP(S) fetch tools. Mutating filesystem tools
 default to ask permission; read/search, todo planning, invalid feedback, and
 fetch tools default to allow. The fetch tool is categorized as medium-risk
@@ -747,13 +750,14 @@ sources, so persisted history remains limited to user, assistant, tool, task,
 and compaction records created by the runtime loop.
 
 Runtime v2 also supports read-time nearby instruction attachment for the
-workspace `read_file` tool. Request-time instruction context is provider-only
-system context that is rebuilt at the start of a run or resume. Read-time
-attachment is tool output context: when `read_file` reads a workspace file, the
-tool walks from that file's parent directory up to `workspace_root` and attaches
-the nearest default instruction file in each directory, using `AGENTS.md`,
-`CLAUDE.md`, then `CONTEXT.md` priority. It skips the file being read and does
-not scan global home directories or fetch remote instruction sources.
+workspace `read_file` tool and the opencode-style `read` file alias.
+Request-time instruction context is provider-only system context that is rebuilt
+at the start of a run or resume. Read-time attachment is tool output context:
+when either tool reads a workspace file, it walks from that file's parent
+directory up to `workspace_root` and attaches the nearest default instruction
+file in each directory, using `AGENTS.md`, `CLAUDE.md`, then `CONTEXT.md`
+priority. It skips the file being read and does not scan global home
+directories or fetch remote instruction sources.
 
 When called without `offset` or `limit`, `read_file` keeps the original
 structured output shape and returns the full decoded text. When either range

@@ -288,11 +288,13 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
         "grep",
         "invalid",
         "list_dir",
+        "read",
         "read_file",
         "shell_exec",
         "shell_kill",
         "shell_status",
         "todo_write",
+        "write",
         "write_file",
     ]
     assert registry.require("glob").permission.action == ALLOW

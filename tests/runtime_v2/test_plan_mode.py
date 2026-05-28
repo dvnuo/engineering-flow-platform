@@ -26,14 +26,23 @@ DEFAULT_TOOL_IDS = [
     "grep",
     "invalid",
     "list_dir",
+    "read",
     "read_file",
     "shell_exec",
     "shell_kill",
     "shell_status",
     "todo_write",
+    "write",
     "write_file",
 ]
-MUTATING_TOOL_IDS = {"apply_patch", "edit", "write_file", "shell_exec", "shell_kill"}
+MUTATING_TOOL_IDS = {
+    "apply_patch",
+    "edit",
+    "write",
+    "write_file",
+    "shell_exec",
+    "shell_kill",
+}
 
 
 @pytest.mark.asyncio
@@ -212,11 +221,13 @@ async def test_plan_mode_enabled_tools_cannot_bypass_read_only_policy(
         "grep",
         "invalid",
         "list_dir",
+        "read",
         "read_file",
         "shell_exec",
         "shell_kill",
         "shell_status",
         "todo_write",
+        "write",
         "write_file",
     ]
 
