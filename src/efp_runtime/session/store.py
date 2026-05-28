@@ -51,6 +51,9 @@ class InMemorySessionStore:
         message_id: Optional[str] = None,
         parent_message_id: Optional[str] = None,
         metadata: Optional[dict] = None,
+        status: str = "pending",
+        usage: Optional[dict] = None,
+        completed_at: Optional[str] = None,
     ) -> Message:
         with self._lock:
             session = self._require_session(session_id)
@@ -60,6 +63,9 @@ class InMemorySessionStore:
                 message_id=message_id or new_id("msg"),
                 parent_message_id=parent_message_id,
                 metadata=dict(metadata or {}),
+                status=status,
+                usage=dict(usage or {}),
+                completed_at=completed_at,
             )
             session.messages.append(message)
             for part in parts or []:
