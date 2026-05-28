@@ -110,6 +110,27 @@ class CommandDefinition:
 
 
 @dataclass
+class CommandInfo:
+    """Safe listing view for a slash command.
+
+    This view is intended for UI, CLI, and service routing. It deliberately
+    omits the template content used by command expansion.
+    """
+
+    name: str
+    description: str = ""
+    source: str = ""
+    argument_hint: str | None = None
+    agent: str | None = None
+    model: str | None = None
+    subtask: Any = None
+    tools: list[str] = field(default_factory=list)
+    hints: list[str] = field(default_factory=list)
+    command_file: Path | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class _RenderedCommandTemplate:
     text: str
     template_mask: tuple[bool, ...]
@@ -206,6 +227,12 @@ class CommandRegistry:
             self._commands = commands
         return [self._commands[name] for name in sorted(self._commands)]
 
+    def list(self, *, refresh: bool = False) -> list[CommandInfo]:
+        return [
+            _command_info_from_definition(command)
+            for command in self.discover(refresh=refresh)
+        ]
+
     def get(self, name: str, *, refresh: bool = False) -> CommandDefinition | None:
         normalized = _normalize_command_name(name)
         if not normalized:
@@ -234,6 +261,24 @@ def discover_commands(
         for command_file in _iter_command_files(directory):
             commands.append(_load_command(command_file, directory))
     return commands
+
+
+def command_template_hints(template: str) -> list[str]:
+    """Return display hints for command template variables."""
+
+    positional: set[int] = set()
+    has_arguments = False
+    for match in TEMPLATE_VARIABLE_RE.finditer(str(template or "")):
+        variable = match.group(1)
+        if variable == "ARGUMENTS":
+            has_arguments = True
+        else:
+            positional.add(int(variable))
+
+    hints = [f"${index}" for index in sorted(positional)]
+    if has_arguments:
+        hints.append("$ARGUMENTS")
+    return hints
 
 
 def command_definitions_from_config(
@@ -358,6 +403,55 @@ def _load_command(command_file: Path, command_root: Path) -> CommandDefinition:
         metadata=metadata,
         source="file",
     )
+
+
+def _command_info_from_definition(definition: CommandDefinition) -> CommandInfo:
+    return CommandInfo(
+        name=definition.name,
+        description=definition.description,
+        source=definition.source,
+        argument_hint=definition.argument_hint,
+        agent=definition.agent,
+        model=definition.model,
+        subtask=deepcopy(definition.subtask),
+        tools=_command_tools_for_listing(definition.metadata.get("tools")),
+        hints=command_template_hints(definition.content),
+        command_file=_command_file_for_listing(definition),
+        metadata=deepcopy(definition.metadata),
+    )
+
+
+def _command_file_for_listing(definition: CommandDefinition) -> Path | None:
+    if definition.source != "file":
+        return None
+    command_file = Path(definition.command_file)
+    if str(command_file) == ".":
+        return None
+    return command_file
+
+
+def _command_tools_for_listing(value: Any) -> list[str]:
+    tools: list[str] = []
+    seen: set[str] = set()
+
+    def append(raw: Any) -> None:
+        tool = str(raw).strip()
+        if not tool or tool in seen:
+            return
+        seen.add(tool)
+        tools.append(tool)
+
+    if isinstance(value, str):
+        for item in value.split(","):
+            append(item)
+        return tools
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            append(item)
+        return tools
+
+    return []
 
 
 def _command_definition_from_config_entry(
@@ -972,12 +1066,14 @@ def _canonical_metadata_key(key: str) -> str:
 __all__ = [
     "CommandDefinition",
     "CommandExpansionResult",
+    "CommandInfo",
     "CommandShellExecutionResult",
     "CommandShellInterpolation",
     "CommandRegistry",
     "apply_command_shell_execution_results",
     "builtin_command_definitions",
     "command_definitions_from_config",
+    "command_template_hints",
     "discover_commands",
     "expand_command",
     "find_command_shell_interpolations",

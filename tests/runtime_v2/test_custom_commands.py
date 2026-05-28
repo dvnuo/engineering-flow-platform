@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 import os
 import subprocess
@@ -16,6 +17,7 @@ from efp_runtime.commands import (
     CommandRegistry,
     builtin_command_definitions,
     command_definitions_from_config,
+    command_template_hints,
     expand_command,
 )
 from efp_runtime.config_loader import load_runtime_config
@@ -114,6 +116,151 @@ def test_config_command_definitions_parse_string_and_mapping_forms():
     assert commands["test"].source == "config"
     assert commands["review"].content == "Review $1"
     assert commands["audit"].content == "Audit $ARGUMENTS"
+
+
+def test_command_registry_list_returns_safe_effective_command_info(tmp_path: Path):
+    definitions = [
+        *builtin_command_definitions(tmp_path),
+        *command_definitions_from_config(
+            {
+                "command": {
+                    "review": {
+                        "template": "Config review $1",
+                        "description": "Config review",
+                        "argument-hint": "<config-target>",
+                        "agent": "config-agent",
+                        "model": "provider/config",
+                        "tools": ["edit"],
+                        "subtask": False,
+                    },
+                    "deploy": {
+                        "template": "Deploy $1 with $ARGUMENTS",
+                        "description": "Deploy service",
+                        "argument-hint": "<service>",
+                        "agent": "release",
+                        "model": "provider/release",
+                        "tools": "edit, shell_exec, edit, ",
+                        "subtask": {"kind": "release"},
+                    },
+                    "maptools": {
+                        "template": "Mapped tools",
+                        "tools": {"read_file": True},
+                    },
+                }
+            }
+        ),
+    ]
+    config_registry = CommandRegistry.from_sources(definitions=definitions)
+
+    config_infos = {info.name: info for info in config_registry.list()}
+
+    assert config_infos["init"].source == "builtin"
+    assert config_infos["init"].command_file is None
+    assert config_infos["review"].source == "config"
+    assert config_infos["review"].description == "Config review"
+    assert config_infos["review"].command_file is None
+
+    command_dir = tmp_path / ".opencode" / "commands"
+    command_dir.mkdir(parents=True)
+    command_file = command_dir / "review.md"
+    command_file.write_text(
+        "---\n"
+        "description: File review\n"
+        "argument-hint: <file-target>\n"
+        "agent: file-agent\n"
+        "model: provider/file\n"
+        "subtask: true\n"
+        "tools: [read_file, shell_exec, read_file]\n"
+        "---\n"
+        "Run $2 then $1 with $ARGUMENTS and $HOME\n",
+        encoding="utf-8",
+    )
+    registry = CommandRegistry.from_sources(
+        definitions=definitions,
+        command_directories=[command_dir],
+    )
+
+    infos = {info.name: info for info in registry.list()}
+
+    assert sorted(infos) == ["deploy", "init", "maptools", "review"]
+    review = infos["review"]
+    assert review.description == "File review"
+    assert review.source == "file"
+    assert review.argument_hint == "<file-target>"
+    assert review.agent == "file-agent"
+    assert review.model == "provider/file"
+    assert review.subtask is True
+    assert review.tools == ["read_file", "shell_exec"]
+    assert review.hints == ["$1", "$2", "$ARGUMENTS"]
+    assert review.command_file == command_file
+    assert review.metadata["source"] == "file"
+    assert review.metadata["tools"] == ["read_file", "shell_exec", "read_file"]
+    assert not hasattr(review, "content")
+    assert "content" not in asdict(review)
+
+    assert infos["deploy"].source == "config"
+    assert infos["deploy"].command_file is None
+    assert infos["deploy"].argument_hint == "<service>"
+    assert infos["deploy"].agent == "release"
+    assert infos["deploy"].model == "provider/release"
+    assert infos["deploy"].subtask == {"kind": "release"}
+    assert infos["deploy"].tools == ["edit", "shell_exec"]
+    assert infos["deploy"].hints == ["$1", "$ARGUMENTS"]
+    assert infos["maptools"].tools == []
+
+    review.metadata["tools"].append("write_file")
+    review.tools.append("write_file")
+    review.hints.append("$99")
+    fresh_info = {info.name: info for info in registry.list()}["review"]
+    assert fresh_info.metadata["tools"] == ["read_file", "shell_exec", "read_file"]
+    assert fresh_info.tools == ["read_file", "shell_exec"]
+    assert fresh_info.hints == ["$1", "$2", "$ARGUMENTS"]
+
+
+def test_command_template_hints_ignore_environment_variables():
+    assert command_template_hints(
+        "Run $2 then $1 with $ARGUMENTS and $HOME"
+    ) == ["$1", "$2", "$ARGUMENTS"]
+    assert command_template_hints(
+        "$1 $1 ${VAR} $FOO $10 $2x $ARGUMENTS_EXTRA"
+    ) == ["$1", "$10"]
+
+
+def test_command_registry_list_refresh_controls_file_cache(tmp_path: Path):
+    command_dir = tmp_path / "commands"
+    command_dir.mkdir()
+    alpha = command_dir / "alpha.md"
+    alpha.write_text("description: Alpha\n\nRun $1\n", encoding="utf-8")
+    registry = CommandRegistry([command_dir])
+
+    initial = {info.name: info for info in registry.list()}
+
+    assert sorted(initial) == ["alpha"]
+    assert initial["alpha"].description == "Alpha"
+    assert initial["alpha"].hints == ["$1"]
+
+    alpha.write_text(
+        "description: Alpha updated\nagent: cache\n\nRun $2\n",
+        encoding="utf-8",
+    )
+    beta = command_dir / "beta.md"
+    beta.write_text("description: Beta\n\nUse $ARGUMENTS\n", encoding="utf-8")
+
+    cached = {info.name: info for info in registry.list()}
+
+    assert sorted(cached) == ["alpha"]
+    assert cached["alpha"].description == "Alpha"
+    assert cached["alpha"].agent is None
+    assert cached["alpha"].hints == ["$1"]
+
+    refreshed = {info.name: info for info in registry.list(refresh=True)}
+
+    assert sorted(refreshed) == ["alpha", "beta"]
+    assert refreshed["alpha"].description == "Alpha updated"
+    assert refreshed["alpha"].agent == "cache"
+    assert refreshed["alpha"].hints == ["$2"]
+    assert refreshed["beta"].description == "Beta"
+    assert refreshed["beta"].hints == ["$ARGUMENTS"]
 
 
 def test_config_command_requires_template_or_content():

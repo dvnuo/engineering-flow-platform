@@ -861,6 +861,19 @@ keeps `RuntimeConfigLoadResult.command_definitions` limited to config-defined
 commands; `RuntimeConfigLoadResult.command_registry` contains the full registry,
 including built-ins.
 
+`CommandRegistry.list(refresh=False)` returns a stable display and routing view
+for the final effective commands. It uses the same cache and sort order as
+`discover()`: by default it returns the cached registry state, while
+`refresh=True` rescans command files before building the listing. Each
+`CommandInfo` includes `name`, `description`, `source`, `argument_hint`,
+`agent`, `model`, `subtask`, normalized `tools`, static template `hints`,
+`command_file`, and copied `metadata`. Built-in and config commands report
+`command_file=None`; file commands report the concrete markdown or text file.
+The listing does not include command template content, so callers can show and
+route commands without exposing the prompt body. Hints are computed statically
+from `$1`, `$2`, and `$ARGUMENTS` style variables; ordinary environment-looking
+variables such as `$HOME` are ignored by the listing helper.
+
 When command expansion is enabled, `AgentRuntime.run(...)` checks the first
 effective non-empty user line after `/skill` lines have been parsed. A discovered
 command such as `/fix bug-123` is expanded into the current user prompt with the
