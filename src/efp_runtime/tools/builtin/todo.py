@@ -54,8 +54,11 @@ def _create_todo_tool(
         ]
         session_key = context.session_id or "default"
         store[session_key] = normalized
-        output = {"todos": normalized}
         counts = _todo_counts(normalized)
+        output = {
+            "todos": normalized,
+            **counts,
+        }
         metadata = {
             "todos": normalized,
             **counts,

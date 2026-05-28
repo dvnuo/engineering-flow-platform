@@ -150,7 +150,11 @@ async def test_todowrite_uses_todo_write_schema_and_normalizes_todos(tmp_path: P
                 "priority": "medium",
             },
             {"content": "Run tests", "status": "in_progress", "priority": "medium"},
-        ]
+        ],
+        "todo_count": 2,
+        "active_todo_count": 1,
+        "completed_todo_count": 1,
+        "cancelled_todo_count": 0,
     }
     assert result.metadata["todo_count"] == 2
     assert result.metadata["active_todo_count"] == 1

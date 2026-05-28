@@ -291,9 +291,16 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
         {"content": "Run tests", "status": "in_progress", "priority": "medium"},
         {"content": "Drop stale task", "status": "cancelled", "priority": "low"},
     ]
+    output = {
+        "todos": todos,
+        "todo_count": 3,
+        "active_todo_count": 1,
+        "completed_todo_count": 1,
+        "cancelled_todo_count": 1,
+    }
     assert result.status == "success"
-    assert result.output == {"todos": todos}
-    assert json.loads(result.content) == {"todos": todos}
+    assert result.output == output
+    assert json.loads(result.content) == output
     assert result.metadata["todos"] == todos
     assert result.metadata["todo_count"] == 3
     assert result.metadata["active_todo_count"] == 1
