@@ -19,6 +19,9 @@ ASK: PermissionAction = "ask"
 PermissionRuleScope = str
 ONCE: PermissionRuleScope = "once"
 ALWAYS: PermissionRuleScope = "always"
+AGENT_PERMISSION_OVERLAY_METADATA_KEY = "agent_permission_overlay"
+AGENT_PERMISSION_OVERLAY_SOURCE_KEY = "agent_permission_overlay_source"
+AGENT_PERMISSION_OVERLAY_SOURCE = "agent_profile"
 
 
 @dataclass(frozen=True)
@@ -411,6 +414,14 @@ class PermissionBroker:
                 )
             return self._decision_from_rule(rule)
 
+        pending_request = self._matching_pending_request(
+            tool_id=tool_id,
+            args=args,
+            metadata=metadata,
+        )
+        if pending_request is not None:
+            return PermissionDecision.ask(pending_request)
+
         action = metadata.action or ALLOW
         if action == ALLOW:
             return PermissionDecision.allow(metadata.reason)
@@ -478,6 +489,24 @@ class PermissionBroker:
             return rule
         return None
 
+    def _matching_pending_request(
+        self,
+        *,
+        tool_id: str,
+        args: dict[str, Any],
+        metadata: PermissionMetadata,
+    ) -> PermissionRequest | None:
+        normalized_args = dict(args)
+        for request in self._pending.values():
+            if request.tool_id != tool_id:
+                continue
+            if request.category != metadata.category:
+                continue
+            if request.args != normalized_args:
+                continue
+            return request
+        return None
+
     def _decision_from_rule(self, rule: PermissionRule) -> PermissionDecision:
         if rule.action == ALLOW:
             return PermissionDecision.allow(rule.reason)
@@ -539,6 +568,23 @@ class ConfiguredPermissionBroker(PermissionBroker):
         context: Any = None,
     ) -> PermissionDecision:
         match = self.permission_config.match(tool_id=tool_id, metadata=metadata)
+        overlay_match = _context_permission_overlay_match(
+            context,
+            tool_id=tool_id,
+            metadata=metadata,
+        )
+        if overlay_match is not None:
+            return await super().evaluate(
+                tool_id=tool_id,
+                args=args,
+                metadata=_metadata_from_permission_config(
+                    metadata,
+                    overlay_match,
+                    source=AGENT_PERMISSION_OVERLAY_METADATA_KEY,
+                    deny_reason_label="agent permission overlay",
+                ),
+                context=context,
+            )
         if match is None:
             return await super().evaluate(
                 tool_id=tool_id,
@@ -641,6 +687,40 @@ def normalize_tool_permissions(
     return normalized
 
 
+def normalize_agent_permission_overlay(
+    metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return normalized permission metadata from an agent profile."""
+
+    if not metadata:
+        return {}
+    if not isinstance(metadata, Mapping):
+        raise ValueError("agent profile metadata must be a mapping")
+    if "permission" not in metadata:
+        return {}
+
+    permissions = metadata.get("permission")
+    if permissions is None:
+        return {}
+    if not isinstance(permissions, Mapping):
+        raise ValueError("agent profile permission metadata must be a mapping")
+    try:
+        return normalize_tool_permissions(permissions)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid agent profile permission metadata: {exc}") from exc
+
+
+def merge_tool_permission_configs(
+    base_permissions: Mapping[str, Any] | None,
+    overlay_permissions: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return normalized permissions with overlay keys replacing base keys."""
+
+    merged = normalize_tool_permissions(base_permissions)
+    merged.update(normalize_tool_permissions(overlay_permissions))
+    return merged
+
+
 def _permission_config_rules(
     permissions: Mapping[str, Any],
 ) -> list[PermissionConfigRule]:
@@ -736,16 +816,21 @@ def _permission_category_matches(
 def _metadata_from_permission_config(
     metadata: PermissionMetadata,
     match: PermissionConfigMatch,
+    *,
+    source: str | None = None,
+    deny_reason_label: str = "runtime config",
 ) -> PermissionMetadata:
     rule = match.rule
     data = dict(metadata.data)
     data["permission_config_key"] = rule.key
     data["permission_config_match"] = match.match_type
+    if source:
+        data["permission_config_source"] = source
     if rule.patterns:
         data["patterns"] = list(rule.patterns)
 
     if rule.action == DENY:
-        reason = rule.reason or f"Permission denied by runtime config: {rule.key}"
+        reason = rule.reason or f"Permission denied by {deny_reason_label}: {rule.key}"
     else:
         reason = rule.reason or metadata.reason
 
@@ -868,6 +953,24 @@ def _context_request_metadata(context: Any) -> dict[str, Any]:
     if isinstance(request_metadata, Mapping):
         return dict(request_metadata)
     return {}
+
+
+def _context_permission_overlay_match(
+    context: Any,
+    *,
+    tool_id: str,
+    metadata: PermissionMetadata,
+) -> PermissionConfigMatch | None:
+    context_metadata = _context_metadata(context)
+    if (
+        context_metadata.get(AGENT_PERMISSION_OVERLAY_SOURCE_KEY)
+        != AGENT_PERMISSION_OVERLAY_SOURCE
+    ):
+        return None
+    overlay = context_metadata.get(AGENT_PERMISSION_OVERLAY_METADATA_KEY)
+    if overlay is None:
+        return None
+    return PermissionConfig(overlay).match(tool_id=tool_id, metadata=metadata)
 
 
 def _context_metadata(context: Any) -> Mapping[str, Any]:

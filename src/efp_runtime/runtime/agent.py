@@ -17,7 +17,14 @@ from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
 from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
 from ..lsp import LSPClient
-from ..permissions import ConfiguredPermissionBroker, PermissionEvaluator
+from ..permissions import (
+    AGENT_PERMISSION_OVERLAY_METADATA_KEY,
+    AGENT_PERMISSION_OVERLAY_SOURCE,
+    AGENT_PERMISSION_OVERLAY_SOURCE_KEY,
+    ConfiguredPermissionBroker,
+    PermissionEvaluator,
+    normalize_agent_permission_overlay,
+)
 from ..prompt import resolve_prompt_references
 from ..questions import QuestionBroker
 from ..session.protocol import SessionStore
@@ -586,9 +593,16 @@ class AgentRuntime:
     ) -> None:
         if profile is None:
             return
+        profile_metadata = _profile_metadata(profile)
         run_metadata["agent_name"] = _profile_name(profile)
         run_metadata["agent_description"] = _profile_description(profile)
-        run_metadata["agent_metadata"] = _profile_metadata(profile)
+        run_metadata["agent_metadata"] = profile_metadata
+        permission_overlay = normalize_agent_permission_overlay(profile_metadata)
+        if permission_overlay:
+            run_metadata[AGENT_PERMISSION_OVERLAY_METADATA_KEY] = permission_overlay
+            run_metadata[AGENT_PERMISSION_OVERLAY_SOURCE_KEY] = (
+                AGENT_PERMISSION_OVERLAY_SOURCE
+            )
         run_metadata["agent_prompt_context_count"] = prompt_context_count
         max_iterations = _profile_configured_max_iterations(profile)
         if max_iterations is not None:
@@ -919,7 +933,7 @@ def _resolve_tool_runtime(
             allow_override=external_tools_allow_override,
         )
     resolved_permission_evaluator = permission_evaluator
-    if resolved_permission_evaluator is None and config.tool_permissions:
+    if resolved_permission_evaluator is None:
         resolved_permission_evaluator = ConfiguredPermissionBroker(
             config.tool_permissions
         )

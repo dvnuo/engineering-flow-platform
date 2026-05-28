@@ -11,6 +11,13 @@ import re
 from typing import Any
 
 from ..loop import LoopStatus
+from ..permissions import (
+    AGENT_PERMISSION_OVERLAY_METADATA_KEY,
+    AGENT_PERMISSION_OVERLAY_SOURCE,
+    AGENT_PERMISSION_OVERLAY_SOURCE_KEY,
+    merge_tool_permission_configs,
+    normalize_agent_permission_overlay,
+)
 from ..runtime import AgentRuntime, RuntimeConfig
 from ..session.models import Message, MessagePartType
 from ..session.protocol import SessionStore
@@ -253,6 +260,10 @@ def _child_config(
         if profile.max_iterations is not None
         else (base_config.max_iterations if base_config is not None else 4)
     )
+    profile_permission_overlay = normalize_agent_permission_overlay(profile.metadata)
+    base_tool_permissions = (
+        {} if base_config is None else base_config.tool_permissions
+    )
     base_metadata = dict(base_config.metadata) if base_config is not None else {}
     base_metadata.update(metadata)
     return RuntimeConfig(
@@ -312,8 +323,9 @@ def _child_config(
         disabled_tools=(
             [] if base_config is None else list(base_config.disabled_tools)
         ),
-        tool_permissions=(
-            {} if base_config is None else dict(base_config.tool_permissions)
+        tool_permissions=merge_tool_permission_configs(
+            base_tool_permissions,
+            profile_permission_overlay,
         ),
         runtime_mode=(
             "build" if base_config is None else base_config.runtime_mode
@@ -482,6 +494,10 @@ def _child_metadata(
     }
     if profile.metadata:
         metadata["agent_profile_metadata"] = dict(profile.metadata)
+    permission_overlay = normalize_agent_permission_overlay(profile.metadata)
+    if permission_overlay:
+        metadata[AGENT_PERMISSION_OVERLAY_METADATA_KEY] = permission_overlay
+        metadata[AGENT_PERMISSION_OVERLAY_SOURCE_KEY] = AGENT_PERMISSION_OVERLAY_SOURCE
     if request.metadata:
         metadata["parent_task_metadata"] = dict(request.metadata)
     return metadata

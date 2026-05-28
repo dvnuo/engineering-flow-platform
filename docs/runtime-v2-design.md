@@ -227,9 +227,10 @@ Keys that Runtime v2 does not consume in this phase, including root-level
 is preserved in `metadata["raw_config"]` and `RuntimeConfigLoadResult.raw`.
 Loading config is side-effect free: it only reads local files, does not start
 subprocess tool providers, does not load Portal, and does not instantiate LLM or
-tool providers. Agent metadata such as `mode`, `model`, `permission`, and
-`hidden` is informational here; it does not switch providers, change
-`RuntimeConfig`, or start subagents.
+tool providers. Agent metadata such as `mode`, `model`, and `hidden` is
+informational here; it does not switch providers, change `RuntimeConfig`, or
+start subagents. Agent `permission` metadata is preserved and is applied only
+when that profile is selected for a primary or child run.
 
 ## Session Checkpoints
 
@@ -356,15 +357,23 @@ or `*` as a fallback. Values can be `"allow"`, `"ask"`, or
 `{"action": "ask", "reason": "...", "risk": "medium", "patterns": ["..."]}`.
 Runtime config matching is ordered by exact tool id, wildcard specificity,
 category/metadata category, `*`, then the tool definition's original
-`PermissionMetadata`.
+`PermissionMetadata`. When an agent profile selected for a run has
+`metadata["permission"]`, that normalized profile permission map is carried in
+run metadata as `agent_permission_overlay` and is evaluated after
+`RuntimeConfig.tool_permissions`. The profile overlay wins for any matching
+exact, category, wildcard, or fallback rule in that run; runs without a selected
+profile overlay keep the runtime-level behavior unchanged.
 
 This config controls execution permission only. It does not remove tools from
 provider schemas. `enabled_tools`, `disabled_tools`, per-run `tools={...}`, and
 plan-mode read-only selection still control what tools are visible to the
-provider. For example, `tool_permissions={"edit": "deny"}` keeps edit tools in
-the schema but denies execution; `disabled_tools=["edit"]` hides the `edit`
-tool from the provider request. Configured `"ask"` decisions still create normal
-`PermissionBroker` pending requests, so `pending_permissions()`,
+provider. Profile `tools` metadata participates only in schema selection, while
+profile `permission` metadata participates only in execution permission
+decisions. For example, `tool_permissions={"edit": "deny"}` keeps edit tools in
+the schema but denies execution; `disabled_tools=["edit"]` or profile
+`tools={"edit": false}` hides the `edit` tool from the provider request.
+Configured `"ask"` decisions still create normal `PermissionBroker` pending
+requests, so `pending_permissions()`,
 `approve_permission(...)`, `deny_permission(...)`, and `resume(...)` keep the
 same flow as static ASK permissions.
 
@@ -486,10 +495,12 @@ profile tool entries, and caller-supplied `tools={...}` wins over both. Profile
 `max_iterations` changes only the current loop limit, and profile
 `active_skills` are the base active skills for that run without leaking into
 the runtime instance's long-lived active skill list. `/skill` commands still
-add to or clear that run's profile skill base. Profile metadata, including
-future routing hints such as `model`, `mode`, or `temperature`, is recorded in
-run metadata as profile metadata only; this phase does not switch provider,
-model, mode, or sampling settings.
+add to or clear that run's profile skill base. Profile
+`metadata["permission"]` is normalized into `agent_permission_overlay` run
+metadata and overlays `RuntimeConfig.tool_permissions` for tool execution in
+that run. Profile metadata also records future routing hints such as `model`,
+`mode`, or `temperature`, but those hints do not switch provider, model, mode,
+or sampling settings.
 
 `create_subagent_task_runner(...)` builds the task runner used by the injectable
 `task` tool. The runner does not start a legacy agent or separate process. It
@@ -504,10 +515,14 @@ Child config is derived from the supplied `base_config` without mutating it.
 `workspace_root` passed to the runner wins over `base_config.workspace_root`;
 profile `max_iterations` wins over the base limit; profile `active_skills`
 replace base active skills to avoid implicit skill leakage; and base
-enabled/disabled tool settings remain in the child config. Profile `tools` are
-passed to `AgentRuntime.run(..., tools=...)` as the per-run override. The core
-registry still does not register `task` by default; callers must explicitly wire
-the runner, for example by passing
+enabled/disabled tool settings remain in the child config. Profile
+`metadata["permission"]` is normalized, merged into the child
+`RuntimeConfig.tool_permissions` with profile keys winning, and carried in child
+run metadata as `agent_permission_overlay` so it still takes precedence over
+matching base permission rules during execution. Profile `tools` are passed to
+`AgentRuntime.run(..., tools=...)` as the per-run schema-selection override. The
+core registry still does not register `task` by default; callers must explicitly
+wire the runner, for example by passing
 `task_runner=create_subagent_task_runner(...)` to `create_core_tool_registry`.
 
 `create_agent_task_tool(...)` preserves the historical single-tool helper.

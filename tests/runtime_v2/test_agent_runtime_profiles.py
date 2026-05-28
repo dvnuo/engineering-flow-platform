@@ -311,6 +311,150 @@ async def test_profile_tools_apply_and_caller_tools_override_profile_tools():
 
 
 @pytest.mark.asyncio
+async def test_profile_permission_overlay_denies_base_allowed_tool():
+    called: list[str] = []
+
+    async def execute(args, context):
+        called.append(context.session_id)
+        return "ran"
+
+    provider = ScriptedLLMProvider(
+        [
+            {"tool_calls": [_tool_call("call-alpha", "alpha")]},
+            {"content": "done"},
+        ]
+    )
+    profile = AgentProfile(
+        name="review",
+        metadata={"permission": {"alpha": "deny"}},
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            max_iterations=2,
+            tool_permissions={"alpha": "allow"},
+        ),
+        tool_registry=ToolRegistry([_tool("alpha", execute=execute)]),
+    )
+
+    result = await runtime.run(
+        "Run alpha.",
+        session_id="session-profile-permission",
+        agent=profile,
+    )
+
+    history = runtime.store.read_history("session-profile-permission")
+    tool_result = history[2].parts[0].tool_result
+
+    assert result.status == LoopStatus.COMPLETED
+    assert called == []
+    assert tool_result is not None
+    assert tool_result.status == "permission_denied"
+    assert tool_result.error == "Permission denied by agent permission overlay: alpha"
+    assert provider.requests[0].metadata["agent_permission_overlay"] == {
+        "alpha": "deny"
+    }
+    assert provider.requests[0].provider_request.metadata[
+        "agent_permission_overlay"
+    ] == {"alpha": "deny"}
+    assert profile.metadata == {"permission": {"alpha": "deny"}}
+
+
+@pytest.mark.asyncio
+async def test_runtime_permission_config_still_applies_without_profile_overlay():
+    called: list[str] = []
+
+    async def execute(args, context):
+        called.append(context.session_id)
+        return "ran"
+
+    provider = ScriptedLLMProvider(
+        [
+            {"tool_calls": [_tool_call("call-alpha", "alpha")]},
+            {"content": "done"},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=2, tool_permissions={"alpha": "deny"}),
+        tool_registry=ToolRegistry([_tool("alpha", execute=execute)]),
+    )
+
+    result = await runtime.run(
+        "Run alpha.",
+        session_id="session-runtime-permission",
+    )
+
+    history = runtime.store.read_history("session-runtime-permission")
+    tool_result = history[2].parts[0].tool_result
+
+    assert result.status == LoopStatus.COMPLETED
+    assert called == []
+    assert tool_result is not None
+    assert tool_result.status == "permission_denied"
+    assert tool_result.error == "Permission denied by runtime config: alpha"
+    assert "agent_permission_overlay" not in provider.requests[0].metadata
+
+
+@pytest.mark.asyncio
+async def test_invalid_profile_permission_metadata_raises_before_provider_call():
+    provider = ScriptedLLMProvider([{"content": "unused"}])
+    profile = AgentProfile(
+        name="bad-permission",
+        metadata={"permission": {"alpha": "block"}},
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=1),
+        tool_registry=ToolRegistry([_tool("alpha")]),
+    )
+
+    with pytest.raises(ValueError, match="agent profile permission"):
+        await runtime.run(
+            "Do not call provider.",
+            session_id="session-invalid-profile-permission",
+            agent=profile,
+        )
+
+    assert provider.requests == []
+
+
+@pytest.mark.asyncio
+async def test_profile_permission_ask_remains_pending_until_approved():
+    called: list[str] = []
+
+    async def execute(args, context):
+        called.append(context.session_id)
+        return "ran"
+
+    provider = ScriptedLLMProvider(
+        [{"tool_calls": [_tool_call("call-alpha", "alpha")]}]
+    )
+    profile = AgentProfile(
+        name="review",
+        metadata={"permission": {"alpha": "ask"}},
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(max_iterations=2, tool_permissions={"alpha": "allow"}),
+        tool_registry=ToolRegistry([_tool("alpha", execute=execute)]),
+    )
+
+    first = await runtime.run(
+        "Run alpha.",
+        session_id="session-profile-permission-ask",
+        agent=profile,
+    )
+    resumed = await runtime.resume("session-profile-permission-ask")
+
+    assert first.status == LoopStatus.WAITING_FOR_PERMISSION
+    assert resumed.status == LoopStatus.WAITING_FOR_PERMISSION
+    assert resumed.pending_permission_request == first.pending_permission_request
+    assert called == []
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_profile_max_iterations_overrides_run_limit_without_mutating_config():
     provider = ScriptedLLMProvider(
         [{"tool_calls": [_tool_call("call-alpha", "alpha")]}]

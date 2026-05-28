@@ -13,7 +13,7 @@ from efp_runtime.agents.profile import AgentProfile
 from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import ToolCall
-from efp_runtime.permissions import ALLOW, PermissionMetadata
+from efp_runtime.permissions import ALLOW, ConfiguredPermissionBroker, PermissionMetadata
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import _resolve_config
 from efp_runtime.tools.definition import ToolContext, ToolDef
@@ -175,6 +175,56 @@ async def test_more_specific_wildcard_permission_wins_over_earlier_match():
     assert result.metadata["permission_request"]["metadata"][
         "permission_config_key"
     ] == "external_alpha*"
+
+
+@pytest.mark.asyncio
+async def test_agent_permission_overlay_precedes_base_exact_category_and_wildcard():
+    broker = ConfiguredPermissionBroker(
+        {
+            "alpha": "allow",
+            "write_file": "allow",
+            "external_*": "allow",
+        }
+    )
+    context = ToolContext(
+        session_id="session-overlay",
+        metadata={
+            "agent_permission_overlay": {
+                "alpha": "deny",
+                "edit": "deny",
+                "external_*": "deny",
+            },
+            "agent_permission_overlay_source": "agent_profile",
+        },
+    )
+
+    exact = await broker.evaluate(
+        tool_id="alpha",
+        args={},
+        metadata=PermissionMetadata(action=ALLOW),
+        context=context,
+    )
+    category = await broker.evaluate(
+        tool_id="write_file",
+        args={},
+        metadata=PermissionMetadata(action=ALLOW, category="filesystem"),
+        context=context,
+    )
+    wildcard = await broker.evaluate(
+        tool_id="external_beta",
+        args={},
+        metadata=PermissionMetadata(action=ALLOW, category="external"),
+        context=context,
+    )
+
+    assert exact.action == "deny"
+    assert exact.reason == "Permission denied by agent permission overlay: alpha"
+    assert category.action == "deny"
+    assert category.reason == "Permission denied by agent permission overlay: edit"
+    assert wildcard.action == "deny"
+    assert wildcard.reason == (
+        "Permission denied by agent permission overlay: external_*"
+    )
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from efp_runtime.agents import (
     AgentRegistry,
     create_subagent_task_runner,
 )
+from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest, ScriptedLLMProvider
 from efp_runtime.runtime import RuntimeConfig
 from efp_runtime.session.models import MessagePartType, MessageRole
@@ -175,6 +176,107 @@ async def test_profile_tools_are_applied_as_per_run_overrides():
         "enabled": ["alpha"],
         "disabled": ["beta"],
     }
+
+
+def test_child_config_merges_profile_permission_over_base_without_mutation(
+    tmp_path: Path,
+):
+    profile_permission = {
+        "alpha": "deny",
+        "gamma": {"action": "ask", "reason": "Review gamma."},
+    }
+    profile = AgentProfile(
+        name="reviewer",
+        metadata={"permission": profile_permission},
+    )
+    base_config = RuntimeConfig(
+        workspace_root=tmp_path,
+        tool_permissions={"alpha": "allow", "beta": "deny"},
+    )
+
+    child_config = _child_config(
+        profile=profile,
+        base_config=base_config,
+        workspace_root=None,
+        metadata={"child": True},
+    )
+
+    assert child_config.tool_permissions == {
+        "alpha": "deny",
+        "beta": "deny",
+        "gamma": {"action": "ask", "reason": "Review gamma."},
+    }
+    assert base_config.tool_permissions == {"alpha": "allow", "beta": "deny"}
+    assert profile.metadata == {"permission": profile_permission}
+    assert child_config.tool_permissions is not base_config.tool_permissions
+
+
+@pytest.mark.asyncio
+async def test_child_profile_permission_overlay_denies_base_allowed_tool(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-write",
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": json.dumps(
+                                {
+                                    "path": "blocked.txt",
+                                    "content": "blocked",
+                                },
+                                sort_keys=True,
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    profile = AgentProfile(
+        name="reviewer",
+        metadata={"permission": {"edit": "deny"}},
+    )
+    base_config = RuntimeConfig(
+        workspace_root=tmp_path,
+        max_iterations=2,
+        tool_permissions={"write_file": "allow"},
+    )
+    runner = create_subagent_task_runner(
+        provider=provider,
+        profiles=[profile],
+        base_config=base_config,
+    )
+
+    result = await runner(
+        TaskToolRequest(
+            description="Write",
+            prompt="Write the file.",
+            subagent_type="reviewer",
+            task_id="task-permission",
+            session_id="parent-permission",
+        )
+    )
+
+    tool_message = provider.requests[1].messages[-1]
+    tool_result = tool_message.parts[0].tool_result
+
+    assert result.state == "completed"
+    assert result.text == "done"
+    assert tool_result is not None
+    assert tool_result.status == "permission_denied"
+    assert tool_result.error == "Permission denied by agent permission overlay: edit"
+    assert (tmp_path / "blocked.txt").exists() is False
+    assert provider.requests[0].metadata["agent_permission_overlay"] == {
+        "edit": "deny"
+    }
+    assert base_config.tool_permissions == {"write_file": "allow"}
+    assert profile.metadata == {"permission": {"edit": "deny"}}
 
 
 @pytest.mark.asyncio
