@@ -130,6 +130,7 @@ class PermissionRequest:
             else _request_patterns(args=args, metadata=metadata, context=context)
         )
         request_metadata = dict(metadata.data)
+        request_metadata.update(_args_request_metadata(tool_id, args, metadata))
         request_metadata.update(_context_request_metadata(context))
         return cls(
             session_id=_context_session_id(context),
@@ -494,7 +495,6 @@ def _request_patterns(
     metadata: PermissionMetadata,
     context: Any,
 ) -> list[str]:
-    del args
     patterns = _normalize_patterns(metadata.data.get("patterns"))
     if not patterns:
         patterns = _normalize_patterns(metadata.data.get("pattern"))
@@ -509,7 +509,49 @@ def _request_patterns(
             patterns = _normalize_patterns(permission_hints.get("pattern"))
     if not patterns and context_metadata:
         patterns = _normalize_patterns(context_metadata.get("permission_patterns"))
+    if not patterns and metadata.category == "shell":
+        command = _string_arg(args, "command")
+        if command:
+            patterns = [command[:500]]
     return patterns
+
+
+def _args_request_metadata(
+    tool_id: str,
+    args: Mapping[str, Any],
+    metadata: PermissionMetadata,
+) -> dict[str, Any]:
+    if tool_id != "shell_exec" and metadata.category != "shell":
+        return {}
+
+    request_metadata: dict[str, Any] = {}
+    command = _string_arg(args, "command")
+    if command:
+        request_metadata["command_preview"] = _preview_text(command)
+
+    description = _string_arg(args, "description")
+    if description is not None:
+        request_metadata["description"] = description
+
+    workdir = _string_arg(args, "workdir") or _string_arg(args, "cwd") or "."
+    request_metadata["workdir"] = workdir
+    return request_metadata
+
+
+def _string_arg(args: Mapping[str, Any], key: str) -> str | None:
+    value = args.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _preview_text(value: str, *, max_chars: int = 240) -> str:
+    text = " ".join(value.split())
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return f"{text[: max_chars - 3]}..."
 
 
 def _context_request_metadata(context: Any) -> dict[str, Any]:

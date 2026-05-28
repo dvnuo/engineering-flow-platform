@@ -182,13 +182,16 @@ async def test_shell_succeeds_with_allow_evaluator(tmp_path: Path):
     )
 
     assert result.status == "success"
-    assert result.output == {
-        "stdout": "ok\n",
-        "stderr": "",
-        "exit_code": 0,
-        "timed_out": False,
-        "cwd": ".",
-    }
+    assert result.output["stdout"] == "ok\n"
+    assert result.output["stderr"] == ""
+    assert result.output["exit_code"] == 0
+    assert result.output["timed_out"] is False
+    assert result.output["cwd"] == "."
+    assert isinstance(result.output["duration_ms"], int)
+    assert result.metadata["cwd"] == "."
+    assert result.metadata["timed_out"] is False
+    assert result.metadata["truncated"] is False
+    assert result.content == "<stdout>\nok\n</stdout>"
 
 
 def test_builtin_tools_import_standalone_without_legacy_modules():
