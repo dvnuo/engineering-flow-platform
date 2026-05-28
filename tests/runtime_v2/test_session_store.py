@@ -1,0 +1,106 @@
+import pytest
+
+from efp_runtime import (
+    CompactionPart,
+    InMemorySessionStore,
+    MessagePart,
+    MessagePartType,
+    TaskPart,
+    ToolCall,
+    ToolResult,
+)
+
+
+def test_store_creates_sessions_appends_messages_and_reads_history():
+    store = InMemorySessionStore()
+    session = store.create_session(session_id="session-1", title="Runtime v2")
+
+    user_message = store.append_message(
+        session.session_id,
+        role="user",
+        parts=[MessagePart.text_part("Build the runtime v2 foundation.")],
+    )
+    assistant_message = store.append_message(session.session_id, role="assistant")
+    store.append_part(
+        session.session_id,
+        assistant_message.message_id,
+        MessagePart.reasoning_part("Create contracts before processors."),
+    )
+    store.append_part(
+        session.session_id,
+        assistant_message.message_id,
+        MessagePart.compaction_part(
+            CompactionPart(
+                summary="Runtime v2 scope is contracts and store only.",
+                source_message_ids=[user_message.message_id],
+                auto=False,
+            )
+        ),
+    )
+    store.append_part(
+        session.session_id,
+        assistant_message.message_id,
+        MessagePart.task_part(TaskPart(prompt="Add tests", status="completed")),
+    )
+
+    history = store.read_history(session.session_id)
+
+    assert [message.role.value for message in history] == ["user", "assistant"]
+    assert history[0].parts[0].type is MessagePartType.TEXT
+    assert history[1].parts[0].type is MessagePartType.REASONING
+    assert history[1].parts[1].type is MessagePartType.COMPACTION
+    assert history[1].parts[2].type is MessagePartType.TASK
+
+
+def test_store_preserves_tool_call_result_pairing():
+    store = InMemorySessionStore()
+    session = store.create_session(session_id="session-tools")
+    assistant_message = store.append_message(session.session_id, role="assistant")
+
+    call = ToolCall(tool_name="read_file", arguments={"path": "README.md"}, call_id="call-read")
+    call_part = store.append_part(
+        session.session_id,
+        assistant_message.message_id,
+        MessagePart.tool_call_part(call),
+    )
+    result_part = store.append_part(
+        session.session_id,
+        assistant_message.message_id,
+        MessagePart.tool_result_part(
+            ToolResult(call_id=call.call_id, tool_name=call.tool_name, output="README contents")
+        ),
+    )
+
+    history = store.read_history(session.session_id)
+    pairs = store.tool_pairs(session.session_id)
+
+    assert history[0].parts[0].tool_call.call_id == history[0].parts[1].tool_result.call_id
+    assert pairs["call-read"][0].part_id == call_part.part_id
+    assert pairs["call-read"][1].part_id == result_part.part_id
+
+
+def test_store_rejects_unpaired_or_mismatched_tool_results():
+    store = InMemorySessionStore()
+    session = store.create_session(session_id="session-invalid")
+    assistant_message = store.append_message(session.session_id, role="assistant")
+
+    with pytest.raises(ValueError, match="no matching tool call"):
+        store.append_part(
+            session.session_id,
+            assistant_message.message_id,
+            MessagePart.tool_result_part(
+                ToolResult(call_id="missing-call", tool_name="read_file", output="")
+            ),
+        )
+
+    call = ToolCall(tool_name="read_file", arguments={}, call_id="call-mismatch")
+    store.append_part(session.session_id, assistant_message.message_id, MessagePart.tool_call_part(call))
+
+    with pytest.raises(ValueError, match="tool name mismatch"):
+        store.append_part(
+            session.session_id,
+            assistant_message.message_id,
+            MessagePart.tool_result_part(
+                ToolResult(call_id=call.call_id, tool_name="write_file", output="")
+            ),
+        )
