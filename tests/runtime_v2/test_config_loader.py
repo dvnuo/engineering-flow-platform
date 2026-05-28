@@ -144,6 +144,25 @@ def test_parent_default_skill_marker_resolves_workspace_root(
     assert skill.skill_file == skills / "project-skill" / "SKILL.md"
 
 
+def test_loader_exposes_default_project_skill_as_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    skills = tmp_path / ".opencode" / "skill"
+    skill_dir = _write_skill(skills, "project-skill", content="# Project skill")
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.command_registry is not None
+    infos = {info.name: info for info in result.command_registry.list()}
+    assert result.config.skill_directories == [skills.resolve()]
+    assert infos["project-skill"].source == "skill"
+    assert infos["project-skill"].command_file == skill_dir / "SKILL.md"
+    assert result.command_registry.get("project-skill").source == "skill"
+    assert result.command_registry.get("project-skill").content == "# Project skill"
+
+
 @pytest.mark.parametrize("marker", [".claude/skills", ".agents/skills"])
 def test_parent_compatibility_skill_marker_resolves_workspace_root(
     tmp_path: Path,

@@ -221,7 +221,10 @@ Unsupported keys under `skills` are preserved in
 
 The loader consumes `command` and `commands` to build config-defined
 `CommandDefinition` records and a `CommandRegistry` that callers can pass to
-`AgentRuntime(command_registry=loaded.command_registry)`.
+`AgentRuntime(command_registry=loaded.command_registry)`. The loaded command
+registry also sees the resolved local skill directories and exposes discovered
+skill packages as lower-precedence command entries when their names are not
+already used by a built-in, config, or file command.
 
 Agent profiles can come from markdown files and config entries. With
 `include_defaults=True`, the loader discovers project-local
@@ -815,6 +818,14 @@ activates provider-only system context before the provider call, while
 reported in run metadata and `skill_list` output, but active skill context
 remains transient provider-only system context and is not persisted.
 
+Discovered local skills are also exposed through the command registry as
+skill-backed slash commands when their normalized name is not already used by a
+built-in, config-defined, or file-backed command. A skill-backed slash command
+such as `/review-pr target` expands the skill markdown into the user prompt like
+other custom commands. It does not activate the skill, mutate active skills, or
+insert full skill context. `/skill review-pr` remains the explicit activation
+path for provider-only skill context.
+
 Skill tools are read-only context loading. They never import or execute sidecar
 files, including Python files. `skill_list` reports whether sidecars are text or
 binary but never returns sidecar bodies; `skill` lists sampled sidecar files in
@@ -827,8 +838,9 @@ Runtime v2 supports custom slash command directories through
 `RuntimeConfig.command_directories` and explicit `CommandRegistry` injection on
 `AgentRuntime`. When no explicit `command_registry` is injected, Runtime v2
 seeds the registry with built-in `/init` and `/review` commands even if no
-command directories are configured. Explicit `command_registry` injection is
-used as supplied and is not wrapped with built-ins.
+command directories are configured, and also passes the resolved local skill
+discovery into the registry. Explicit `command_registry` injection is used as
+supplied and is not wrapped with built-ins or skills.
 
 Built-in commands are ordinary `CommandDefinition` records with
 `source="builtin"`, so they use the same variable rendering, prompt reference
@@ -874,7 +886,10 @@ config can override built-in `/init` or `/review`, and project markdown command
 files can override both config and built-in commands. `load_runtime_config(...)`
 keeps `RuntimeConfigLoadResult.command_definitions` limited to config-defined
 commands; `RuntimeConfigLoadResult.command_registry` contains the full registry,
-including built-ins.
+including built-ins and eligible skill-backed commands. Skill-backed commands
+are added only after built-in, config, and file commands have claimed their
+names; if a command and skill share a normalized name, the command wins and the
+skill is not exposed as that slash command.
 
 `CommandRegistry.list(refresh=False)` returns a stable display and routing view
 for the final effective commands. It uses the same cache and sort order as
@@ -883,18 +898,20 @@ for the final effective commands. It uses the same cache and sort order as
 `CommandInfo` includes `name`, `description`, `source`, `argument_hint`,
 `agent`, `model`, `subtask`, normalized `tools`, static template `hints`,
 `command_file`, and copied `metadata`. Built-in and config commands report
-`command_file=None`; file commands report the concrete markdown or text file.
-The listing does not include command template content, so callers can show and
-route commands without exposing the prompt body. Hints are computed statically
-from `$1`, `$2`, and `$ARGUMENTS` style variables; ordinary environment-looking
-variables such as `$HOME` are ignored by the listing helper.
+`command_file=None`; file commands report the concrete markdown or text file;
+skill-backed commands report the discovered `SKILL.md` or `skill.md` file and
+use `source="skill"`. The listing does not include command template content, so
+callers can show and route commands without exposing the prompt body. Hints are
+computed statically from `$1`, `$2`, and `$ARGUMENTS` style variables; ordinary
+environment-looking variables such as `$HOME` are ignored by the listing helper.
 
 When command expansion is enabled, `AgentRuntime.run(...)` checks the first
 effective non-empty user line after `/skill` lines have been parsed. A discovered
-command such as `/fix bug-123` is expanded into the current user prompt with the
-command content, command arguments, and any remaining body text. This is user
-prompt expansion only: it is not a tool call, does not create persisted system
-prompt state, does not mutate active skills, and does not call the legacy
+command such as `/fix bug-123`, or an eligible skill-backed command such as
+`/review-pr target`, is expanded into the current user prompt with the command
+content, command arguments, and any remaining body text. This is user prompt
+expansion only: it is not a tool call, does not create persisted system prompt
+state, does not mutate active skills, and does not call the legacy
 runtime/session stack. Unknown slash commands remain ordinary user text.
 
 Command expansion happens before final primary-run profile resolution. The
@@ -919,7 +936,7 @@ such as `$HOME` are preserved. The expansion still includes
 arguments and remaining body text.
 
 Command metadata flows into run metadata as `command_source` (`builtin`,
-`config`, or `file`), optional `command_agent`, optional `command_model`,
+`config`, `file`, or `skill`), optional `command_agent`, optional `command_model`,
 optional `command_subtask`, and a copied `command_metadata` object. When command
 `model` is present, Runtime v2 also records `requested_model`. For generic
 providers that field remains metadata only. `OpenAICompatibleProvider` honors it

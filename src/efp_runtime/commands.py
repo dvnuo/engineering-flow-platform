@@ -12,6 +12,9 @@ import re
 import shlex
 from typing import Any
 
+from .skills.discovery import SkillDiscovery
+from .types import SkillPackage
+
 
 COMMAND_EXTENSIONS = {".md", ".txt"}
 COMMAND_METADATA_KEYS = {
@@ -193,6 +196,7 @@ class CommandRegistry:
         *,
         definitions: Iterable[CommandDefinition] | None = None,
         commands: Iterable[CommandDefinition] | None = None,
+        skill_discovery: SkillDiscovery | None = None,
     ):
         self.command_directories = [
             Path(directory).expanduser()
@@ -201,6 +205,7 @@ class CommandRegistry:
         self.definitions = list(definitions or [])
         if commands is not None:
             self.definitions.extend(commands)
+        self.skill_discovery = skill_discovery
         self._commands: dict[str, CommandDefinition] | None = None
 
     @classmethod
@@ -210,11 +215,13 @@ class CommandRegistry:
         definitions: Iterable[CommandDefinition] | None = None,
         commands: Iterable[CommandDefinition] | None = None,
         command_directories: Iterable[str | Path] | None = None,
+        skill_discovery: SkillDiscovery | None = None,
     ) -> "CommandRegistry":
         return cls(
             command_directories=command_directories,
             definitions=definitions,
             commands=commands,
+            skill_discovery=skill_discovery,
         )
 
     def discover(self, *, refresh: bool = False) -> list[CommandDefinition]:
@@ -224,6 +231,9 @@ class CommandRegistry:
                 commands[command.name] = command
             for command in discover_commands(self.command_directories):
                 commands[command.name] = command
+            for command in self._discover_skill_commands(refresh=refresh):
+                if command.name and command.name not in commands:
+                    commands[command.name] = command
             self._commands = commands
         return [self._commands[name] for name in sorted(self._commands)]
 
@@ -241,6 +251,18 @@ class CommandRegistry:
             self.discover(refresh=refresh)
         assert self._commands is not None
         return self._commands.get(normalized)
+
+    def _discover_skill_commands(
+        self,
+        *,
+        refresh: bool,
+    ) -> list[CommandDefinition]:
+        if self.skill_discovery is None:
+            return []
+        return [
+            _command_definition_from_skill(skill)
+            for skill in self.skill_discovery.discover(refresh=refresh)
+        ]
 
 
 def discover_commands(
@@ -405,6 +427,25 @@ def _load_command(command_file: Path, command_root: Path) -> CommandDefinition:
     )
 
 
+def _command_definition_from_skill(skill: SkillPackage) -> CommandDefinition:
+    name = _normalize_command_name(skill.name)
+    metadata = {
+        "name": name,
+        "source": "skill",
+        "skill_name": skill.name,
+        "skill_file": str(skill.skill_file),
+        "skill_root": str(skill.root),
+    }
+    return CommandDefinition(
+        name=name,
+        description=skill.description,
+        content=skill.content,
+        command_file=skill.skill_file,
+        metadata=metadata,
+        source="skill",
+    )
+
+
 def _command_info_from_definition(definition: CommandDefinition) -> CommandInfo:
     return CommandInfo(
         name=definition.name,
@@ -422,7 +463,7 @@ def _command_info_from_definition(definition: CommandDefinition) -> CommandInfo:
 
 
 def _command_file_for_listing(definition: CommandDefinition) -> Path | None:
-    if definition.source != "file":
+    if definition.source not in {"file", "skill"}:
         return None
     command_file = Path(definition.command_file)
     if str(command_file) == ".":
@@ -971,7 +1012,7 @@ def _split_command_arguments(arguments: str) -> list[str]:
 
 
 def _command_file_for_display(definition: CommandDefinition) -> str:
-    if definition.source != "file":
+    if definition.source not in {"file", "skill"}:
         return ""
     command_file = str(definition.command_file)
     return "" if command_file == "." else command_file

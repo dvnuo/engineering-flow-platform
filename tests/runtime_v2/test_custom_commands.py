@@ -25,6 +25,7 @@ from efp_runtime.llm.provider import OpenAICompatibleProvider, RecordingTranspor
 from efp_runtime.loop import ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import _resolve_config
+from efp_runtime.skills.discovery import SkillDiscovery
 from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
 
@@ -217,6 +218,69 @@ def test_command_registry_list_returns_safe_effective_command_info(tmp_path: Pat
     assert fresh_info.hints == ["$1", "$2", "$ARGUMENTS"]
 
 
+def test_command_registry_exposes_discovered_skill_as_command(tmp_path: Path):
+    skill_dir = _write_skill(
+        tmp_path,
+        "reviewer",
+        description="Review changes",
+        content="# Reviewer\nInspect $ARGUMENTS.",
+    )
+    registry = CommandRegistry.from_sources(
+        skill_discovery=SkillDiscovery([tmp_path]),
+    )
+
+    command = registry.get("reviewer")
+    info = {item.name: item for item in registry.list()}["reviewer"]
+    expansion = expand_command("/reviewer inspect this", registry)
+
+    assert command is not None
+    assert command.name == "reviewer"
+    assert command.description == "Review changes"
+    assert command.content == "# Reviewer\nInspect $ARGUMENTS."
+    assert command.source == "skill"
+    assert command.command_file == skill_dir / "SKILL.md"
+    assert command.metadata["name"] == "reviewer"
+    assert command.metadata["source"] == "skill"
+    assert command.metadata["skill_name"] == "reviewer"
+    assert command.metadata["skill_file"] == str(skill_dir / "SKILL.md")
+    assert command.metadata["skill_root"] == str(skill_dir)
+    assert info.source == "skill"
+    assert info.command_file == skill_dir / "SKILL.md"
+    assert not hasattr(info, "content")
+    assert "content" not in asdict(info)
+    assert expansion is not None
+    assert expansion.definition.source == "skill"
+    assert "# Reviewer\nInspect inspect this." in expansion.text
+    assert "<command_arguments>\ninspect this\n</command_arguments>" in expansion.text
+
+
+def test_skill_commands_do_not_override_existing_commands(tmp_path: Path):
+    command_dir = _write_command(tmp_path, "auditor.md", "File auditor.")
+    _write_skill(tmp_path, "reviewer", content="Skill reviewer.")
+    _write_skill(tmp_path, "auditor", content="Skill auditor.")
+    registry = CommandRegistry.from_sources(
+        definitions=[
+            CommandDefinition(
+                name="reviewer",
+                content="Config reviewer.",
+                source="config",
+            )
+        ],
+        command_directories=[command_dir],
+        skill_discovery=SkillDiscovery([tmp_path]),
+    )
+
+    commands = {command.name: command for command in registry.discover()}
+    infos = {info.name: info for info in registry.list()}
+
+    assert commands["reviewer"].source == "config"
+    assert commands["reviewer"].content == "Config reviewer."
+    assert commands["auditor"].source == "file"
+    assert commands["auditor"].content == "File auditor."
+    assert infos["reviewer"].source == "config"
+    assert infos["auditor"].source == "file"
+
+
 def test_command_template_hints_ignore_environment_variables():
     assert command_template_hints(
         "Run $2 then $1 with $ARGUMENTS and $HOME"
@@ -261,6 +325,25 @@ def test_command_registry_list_refresh_controls_file_cache(tmp_path: Path):
     assert refreshed["alpha"].hints == ["$2"]
     assert refreshed["beta"].description == "Beta"
     assert refreshed["beta"].hints == ["$ARGUMENTS"]
+
+
+def test_command_registry_list_refresh_controls_skill_cache(tmp_path: Path):
+    _write_skill(tmp_path, "alpha-skill", description="Alpha")
+    registry = CommandRegistry.from_sources(
+        skill_discovery=SkillDiscovery([tmp_path]),
+    )
+
+    initial = {info.name: info for info in registry.list()}
+    _write_skill(tmp_path, "beta-skill", description="Beta")
+    cached = {info.name: info for info in registry.list()}
+    refreshed = {info.name: info for info in registry.list(refresh=True)}
+
+    assert sorted(initial) == ["alpha-skill"]
+    assert initial["alpha-skill"].source == "skill"
+    assert sorted(cached) == ["alpha-skill"]
+    assert sorted(refreshed) == ["alpha-skill", "beta-skill"]
+    assert refreshed["beta-skill"].source == "skill"
+    assert refreshed["beta-skill"].description == "Beta"
 
 
 def test_config_command_requires_template_or_content():
@@ -384,6 +467,54 @@ async def test_slash_command_expands_into_provider_user_message(tmp_path: Path):
     assert request.metadata["command_arguments"] == "ticket-123"
     assert request.metadata["command_source"] == "file"
     assert request.provider_request.metadata["command_name"] == "fix"
+
+
+@pytest.mark.asyncio
+async def test_skill_backed_slash_command_expands_into_provider_user_message(
+    tmp_path: Path,
+):
+    skill_dir = _write_skill(
+        tmp_path,
+        "review-pr",
+        description="Review pull requests",
+        content="# Review\nInspect $ARGUMENTS.",
+    )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            skill_directories=[tmp_path],
+            max_iterations=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    assert runtime.command_registry.get("review-pr").source == "skill"
+
+    await runtime.run("/review-pr check the diff", session_id="session-skill-command")
+
+    request = provider.requests[0]
+    text = _last_user_text(request)
+    assert '<command name="review-pr"' in text
+    assert f'source="{skill_dir / "SKILL.md"}"' in text
+    assert 'command_source="skill"' in text
+    assert "# Review\nInspect check the diff." in text
+    assert "<command_arguments>\ncheck the diff\n</command_arguments>" in text
+    assert request.metadata["command_name"] == "review-pr"
+    assert request.metadata["command_source"] == "skill"
+    assert request.metadata["command_file"] == str(skill_dir / "SKILL.md")
+    assert request.metadata["command_arguments"] == "check the diff"
+    assert request.metadata["command_metadata"]["skill_name"] == "review-pr"
+    assert request.metadata["command_metadata"]["skill_file"] == str(
+        skill_dir / "SKILL.md"
+    )
+    assert request.metadata["active_skills"] == []
+    assert "skill_slash_command" not in request.metadata
+    assert all(
+        '<skill_content name="review-pr">' not in message.text
+        for message in request.provider_request.messages
+    )
 
 
 @pytest.mark.asyncio
@@ -938,8 +1069,11 @@ async def test_unknown_slash_command_is_left_as_user_text(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_skill_slash_fallback_activates_discovered_skill(tmp_path: Path):
+async def test_skill_slash_fallback_activates_discovered_skill_when_unhandled(
+    tmp_path: Path,
+):
     _write_skill(tmp_path, "review-pr")
+    registry = CommandRegistry.from_sources(definitions=[])
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
@@ -949,7 +1083,11 @@ async def test_skill_slash_fallback_activates_discovered_skill(tmp_path: Path):
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),
+        command_registry=registry,
     )
+
+    assert runtime.command_registry is registry
+    assert runtime.command_registry.get("review-pr") is None
 
     await runtime.run("/review-pr check the diff", session_id="session-skill-slash")
 
@@ -973,6 +1111,7 @@ async def test_skill_slash_fallback_activates_discovered_skill(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_skill_slash_fallback_handles_multiline_form(tmp_path: Path):
     _write_skill(tmp_path, "review-pr")
+    registry = CommandRegistry.from_sources(definitions=[])
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
@@ -982,6 +1121,7 @@ async def test_skill_slash_fallback_handles_multiline_form(tmp_path: Path):
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),
+        command_registry=registry,
     )
 
     await runtime.run(
@@ -1039,6 +1179,8 @@ async def test_skill_command_does_not_trigger_custom_command(tmp_path: Path):
             include_runtime_reminders=False,
         ),
     )
+
+    assert runtime.command_registry.get("review-pr").source == "skill"
 
     await runtime.run(
         "/skill review-pr\nPlease inspect the diff.",

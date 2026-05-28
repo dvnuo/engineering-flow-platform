@@ -194,6 +194,7 @@ class AgentRuntime:
         self.command_registry = _resolve_command_registry(
             self.config,
             command_registry=command_registry,
+            skill_discovery=self.skill_discovery,
         )
         self.instruction_context_builder = _resolve_instruction_context_builder(
             config=self.config,
@@ -816,11 +817,7 @@ class AgentRuntime:
             return None
 
         run_metadata["command_name"] = expansion.definition.name
-        run_metadata["command_file"] = (
-            str(expansion.definition.command_file)
-            if expansion.definition.source == "file"
-            else ""
-        )
+        run_metadata["command_file"] = _command_file_metadata(expansion.definition)
         run_metadata["command_arguments"] = expansion.arguments
         run_metadata["command_source"] = expansion.definition.source
         if expansion.definition.agent is not None:
@@ -1238,9 +1235,17 @@ def _command_shell_context_metadata(
         "command_shell_interpolation_index": index,
         "command_metadata": deepcopy(expansion.definition.metadata),
     }
-    if expansion.definition.source == "file":
-        metadata["command_file"] = str(expansion.definition.command_file)
+    command_file = _command_file_metadata(expansion.definition)
+    if command_file:
+        metadata["command_file"] = command_file
     return metadata
+
+
+def _command_file_metadata(definition: CommandDefinition) -> str:
+    if definition.source not in {"file", "skill"}:
+        return ""
+    command_file = str(definition.command_file)
+    return "" if command_file == "." else command_file
 
 
 def _parse_agent_mention(text: str) -> _AgentMentionCandidate | None:
@@ -1738,12 +1743,14 @@ def _resolve_command_registry(
     config: RuntimeConfig,
     *,
     command_registry: CommandRegistry | None,
+    skill_discovery: SkillDiscovery | None,
 ) -> CommandRegistry | None:
     if command_registry is not None:
         return command_registry
     return CommandRegistry.from_sources(
         definitions=builtin_command_definitions(config.workspace_root),
         command_directories=config.command_directories,
+        skill_discovery=skill_discovery,
     )
 
 

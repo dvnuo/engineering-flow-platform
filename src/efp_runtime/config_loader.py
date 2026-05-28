@@ -30,7 +30,7 @@ from .commands import (
     command_definitions_from_config,
 )
 from .runtime.config import RuntimeConfig
-from .skills.discovery import default_skill_directories
+from .skills.discovery import SkillDiscovery, default_skill_directories
 
 
 DEFAULT_CONFIG_FILE_NAMES = (
@@ -191,6 +191,7 @@ def load_runtime_config(
         workspace_root=root,
         definitions=command_definitions,
         command_directories=config.command_directories,
+        skill_directories=config.skill_directories,
     )
 
     return RuntimeConfigLoadResult(
@@ -507,6 +508,7 @@ def _command_registry_from_sources(
     workspace_root: str | Path | None,
     definitions: list[CommandDefinition],
     command_directories: list[str | Path],
+    skill_directories: list[str | Path],
 ) -> CommandRegistry | None:
     return CommandRegistry.from_sources(
         definitions=[
@@ -514,6 +516,9 @@ def _command_registry_from_sources(
             *definitions,
         ],
         command_directories=command_directories,
+        skill_discovery=(
+            SkillDiscovery(skill_directories) if skill_directories else None
+        ),
     )
 
 
