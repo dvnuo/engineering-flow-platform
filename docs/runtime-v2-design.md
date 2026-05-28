@@ -598,9 +598,14 @@ enabled/disabled tool settings remain in the child config. Profile
 `RuntimeConfig.tool_permissions` with profile keys winning, and carried in child
 run metadata as `agent_permission_overlay` so it still takes precedence over
 matching base permission rules during execution. Profile `tools` are passed to
-`AgentRuntime.run(..., tools=...)` as the per-run schema-selection override. The
-core registry still does not register `task` by default; callers must explicitly
-wire the runner, for example by passing
+`AgentRuntime.run(..., tools=...)` as the per-run schema-selection override.
+Child runs also hide recursive `task` and todo-write tools (`todo_write` and
+`todowrite`) by default. A profile can expose them only when its own
+`metadata["permission"]` overlay contains a non-deny `task`, `todo_write`, or
+`todowrite` rule; inherited base permissions and wildcard fallbacks do not opt
+in, and explicit `profile.tools={...: false}` entries still hide matching
+tools. The core registry still does not register `task` by default; callers must
+explicitly wire the runner, for example by passing
 `task_runner=create_subagent_task_runner(...)` to `create_core_tool_registry`.
 
 Agent-backed task tool definitions include a deterministic list of visible

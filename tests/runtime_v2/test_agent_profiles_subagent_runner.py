@@ -474,6 +474,79 @@ async def test_profile_tools_are_applied_as_per_run_overrides():
     }
 
 
+@pytest.mark.asyncio
+async def test_subagent_child_tools_hide_recursive_task_and_todos_by_default():
+    visible_tool_ids = await _visible_child_tool_ids(AgentProfile(name="guarded"))
+
+    assert visible_tool_ids == ["alpha"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_child_tools_keep_guarded_tools_with_direct_permission():
+    visible_tool_ids = await _visible_child_tool_ids(
+        AgentProfile(
+            name="guarded",
+            metadata={"permission": {"task": "allow", "todowrite": "ask"}},
+        )
+    )
+
+    assert visible_tool_ids == ["alpha", "task", "todo_write", "todowrite"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_child_tools_keep_guarded_tools_with_nested_permission():
+    visible_tool_ids = await _visible_child_tool_ids(
+        AgentProfile(
+            name="guarded",
+            metadata={
+                "permission": {
+                    "task": {"general": "allow"},
+                    "todowrite": {"*": "ask"},
+                }
+            },
+        )
+    )
+
+    assert visible_tool_ids == ["alpha", "task", "todo_write", "todowrite"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_child_tools_do_not_treat_wildcard_permission_as_opt_in():
+    visible_tool_ids = await _visible_child_tool_ids(
+        AgentProfile(
+            name="guarded",
+            metadata={"permission": {"*": "allow"}},
+        )
+    )
+
+    assert visible_tool_ids == ["alpha"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_profile_tools_cannot_reenable_guarded_tools():
+    visible_tool_ids = await _visible_child_tool_ids(
+        AgentProfile(
+            name="guarded",
+            tools={"task": True, "todowrite": True},
+        )
+    )
+
+    assert visible_tool_ids == ["alpha"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_profile_tools_false_wins_over_guard_permission():
+    visible_tool_ids = await _visible_child_tool_ids(
+        AgentProfile(
+            name="guarded",
+            tools={"task": False},
+            metadata={"permission": {"task": "allow", "todowrite": "allow"}},
+        )
+    )
+
+    assert visible_tool_ids == ["alpha", "todo_write", "todowrite"]
+
+
 def test_child_config_merges_profile_permission_over_base_without_mutation(
     tmp_path: Path,
 ):
@@ -818,6 +891,43 @@ def _tool(tool_id: str) -> ToolDef:
         input_schema={"type": "object", "properties": {}},
         execute=execute,
     )
+
+
+async def _visible_child_tool_ids(profile: AgentProfile) -> list[str]:
+    provider = ScriptedLLMProvider([{"content": "done"}])
+
+    def tool_runtime_factory(selected_profile: AgentProfile) -> ToolRuntime:
+        assert selected_profile.name == profile.name
+        return ToolRuntime(
+            ToolRegistry(
+                [
+                    _tool("alpha"),
+                    _tool("task"),
+                    _tool("todo_write"),
+                    _tool("todowrite"),
+                ]
+            )
+        )
+
+    runner = create_subagent_task_runner(
+        provider=provider,
+        profiles=[profile],
+        base_config=RuntimeConfig(max_iterations=1),
+        tool_runtime_factory=tool_runtime_factory,
+    )
+    result = await runner(
+        TaskToolRequest(
+            description="Inspect child tools",
+            prompt="Return without using tools.",
+            subagent_type=profile.name,
+            task_id=f"task-{profile.name}",
+            session_id="parent-guarded-tools",
+        )
+    )
+
+    assert result.state == "completed", result.text
+    assert len(provider.requests) == 1
+    return [tool.id for tool in provider.requests[0].tools]
 
 
 def _write_skill(

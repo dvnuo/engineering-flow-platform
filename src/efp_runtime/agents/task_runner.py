@@ -45,6 +45,9 @@ MANUAL_SUBAGENT_DESCRIPTION = (
 )
 _PRIMARY_TASK_PROFILE_NAMES = {"build", "plan"}
 _PRIMARY_TASK_PROFILE_MODES = {"primary", "build", "plan"}
+_SUBAGENT_TASK_TOOL_IDS = frozenset({"task"})
+_SUBAGENT_TODO_WRITE_TOOL_IDS = frozenset({"todo_write", "todowrite"})
+_SUBAGENT_GUARD_ALLOW_ACTIONS = frozenset({"allow", "ask"})
 
 
 @dataclass(frozen=True)
@@ -108,7 +111,10 @@ def create_subagent_task_runner(
                 _child_prompt(profile, request),
                 session_id=child_session_id,
                 metadata=child_metadata,
-                tools=profile.tools,
+                tools=_child_tool_overrides(
+                    profile,
+                    available_tool_ids=runtime.tool_runtime.registry.ids(),
+                ),
             )
             text = _assistant_text(result.final_assistant_message)
             if not text and result.status != LoopStatus.COMPLETED:
@@ -515,6 +521,84 @@ def _child_config(
             None if base_config is None else base_config.tool_output_dir
         ),
     )
+
+
+def _child_tool_overrides(
+    profile: AgentProfile,
+    *,
+    available_tool_ids: Iterable[str] | None = None,
+) -> dict[str, bool] | None:
+    overrides = dict(profile.tools or {})
+    available = (
+        None
+        if available_tool_ids is None
+        else {str(tool_id) for tool_id in available_tool_ids}
+    )
+    permission_overlay = normalize_agent_permission_overlay(profile.metadata)
+
+    if not _permission_overlay_explicitly_permits(
+        permission_overlay,
+        _SUBAGENT_TASK_TOOL_IDS,
+    ):
+        for tool_id in _SUBAGENT_TASK_TOOL_IDS:
+            _force_child_tool_disabled(overrides, tool_id, available)
+
+    if not _permission_overlay_explicitly_permits(
+        permission_overlay,
+        _SUBAGENT_TODO_WRITE_TOOL_IDS,
+    ):
+        for tool_id in _SUBAGENT_TODO_WRITE_TOOL_IDS:
+            _force_child_tool_disabled(overrides, tool_id, available)
+
+    return overrides or None
+
+
+def _force_child_tool_disabled(
+    overrides: dict[str, bool],
+    tool_id: str,
+    available_tool_ids: set[str] | None,
+) -> None:
+    if available_tool_ids is not None and tool_id not in available_tool_ids:
+        if tool_id not in overrides:
+            return
+    overrides[tool_id] = False
+
+
+def _permission_overlay_explicitly_permits(
+    permission_overlay: Mapping[str, Any],
+    permission_keys: Iterable[str],
+) -> bool:
+    for permission_key in permission_keys:
+        if permission_key not in permission_overlay:
+            continue
+        if _permission_rule_explicitly_permits(permission_overlay[permission_key]):
+            return True
+    return False
+
+
+def _permission_rule_explicitly_permits(rule: Any) -> bool:
+    if isinstance(rule, str):
+        return rule in _SUBAGENT_GUARD_ALLOW_ACTIONS
+    if not isinstance(rule, Mapping):
+        return False
+
+    action = rule.get("action")
+    if isinstance(action, str):
+        return action in _SUBAGENT_GUARD_ALLOW_ACTIONS
+
+    for nested_rule in rule.values():
+        if isinstance(nested_rule, str):
+            if nested_rule in _SUBAGENT_GUARD_ALLOW_ACTIONS:
+                return True
+            continue
+        if isinstance(nested_rule, Mapping):
+            nested_action = nested_rule.get("action")
+            if (
+                isinstance(nested_action, str)
+                and nested_action in _SUBAGENT_GUARD_ALLOW_ACTIONS
+            ):
+                return True
+    return False
 
 
 def _make_store(store_factory: Callable[[], SessionStore] | None) -> SessionStore | None:
