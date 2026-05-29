@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime
+import importlib
 import logging
 import os
 from pathlib import Path
@@ -440,9 +441,8 @@ class RuntimeV2SessionManager:
         self.store.update_session(session_id, metadata=metadata, replace_metadata=True)
 
     async def recover_session_state(self, session_id: str) -> dict[str, Any]:
-        from src.runtime.recovery_pipeline import get_recovery_pipeline
-
-        hydration = await get_recovery_pipeline().hydrate_session_state(session_id)
+        recovery_module = importlib.import_module("src.runtime.recovery_pipeline")
+        hydration = await recovery_module.get_recovery_pipeline().hydrate_session_state(session_id)
         return {
             "session_id": hydration.session_id,
             "recovered": hydration.recovered,

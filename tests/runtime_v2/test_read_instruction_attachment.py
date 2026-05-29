@@ -26,16 +26,15 @@ async def test_read_file_without_instructions_keeps_existing_output_shape(tmp_pa
     runtime = _runtime_with_resolver(tmp_path)
 
     result = await runtime.execute(
-        ToolCall(id="call-read", tool_id="read_file", args={"path": "src/app.py"})
+        ToolCall(id="call-read", tool_id="read", args={"filePath": "src/app.py"})
     )
 
     assert result.status == "success"
-    assert result.output == {
-        "path": "src/app.py",
-        "content": "print('hello')\n",
-        "encoding": "utf-8",
-        "bytes": 15,
-    }
+    assert result.output["path"] == "src/app.py"
+    assert result.output["filePath"] == "src/app.py"
+    assert result.output["content"] == "print('hello')\n"
+    assert result.output["encoding"] == "utf-8"
+    assert result.output["bytes"] == 15
 
 
 @pytest.mark.asyncio
@@ -52,7 +51,7 @@ async def test_read_file_attaches_nearby_instructions_from_near_to_far(tmp_path:
     runtime = _runtime_with_resolver(tmp_path)
 
     result = await runtime.execute(
-        ToolCall(id="call-read", tool_id="read_file", args={"path": "src/pkg/app.py"})
+        ToolCall(id="call-read", tool_id="read", args={"filePath": "src/pkg/app.py"})
     )
 
     assert result.status == "success"
@@ -85,8 +84,8 @@ async def test_read_file_does_not_attach_instruction_file_to_itself(tmp_path: Pa
     result = await runtime.execute(
         ToolCall(
             id="call-read",
-            tool_id="read_file",
-            args={"path": "src/pkg/AGENTS.md"},
+            tool_id="read",
+            args={"filePath": "src/pkg/AGENTS.md"},
         )
     )
 
@@ -104,7 +103,7 @@ async def test_read_file_instruction_truncation_metadata(tmp_path: Path):
     runtime = _runtime_with_resolver(tmp_path, max_instruction_chars=3)
 
     result = await runtime.execute(
-        ToolCall(id="call-read", tool_id="read_file", args={"path": "app.py"})
+        ToolCall(id="call-read", tool_id="read", args={"filePath": "app.py"})
     )
 
     instruction = result.output["instructions"][0]
@@ -125,12 +124,11 @@ async def test_agent_runtime_default_registry_attaches_read_instructions(tmp_pat
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
-            include_legacy_tool_aliases=True,
         ),
     )
 
     result = await runtime.tool_runtime.execute(
-        ToolCall(id="call-read", tool_id="read_file", args={"path": "app.py"})
+        ToolCall(id="call-read", tool_id="read", args={"filePath": "app.py"})
     )
 
     assert result.status == "success"
@@ -147,21 +145,20 @@ async def test_agent_runtime_can_disable_read_instruction_attachment(tmp_path: P
             workspace_root=tmp_path,
             max_iterations=1,
             attach_read_instructions=False,
-            include_legacy_tool_aliases=True,
         ),
     )
 
     result = await runtime.tool_runtime.execute(
-        ToolCall(id="call-read", tool_id="read_file", args={"path": "app.py"})
+        ToolCall(id="call-read", tool_id="read", args={"filePath": "app.py"})
     )
 
     assert result.status == "success"
-    assert result.output == {
-        "path": "app.py",
-        "content": "print('app')\n",
-        "encoding": "utf-8",
-        "bytes": 13,
-    }
+    assert result.output["path"] == "app.py"
+    assert result.output["filePath"] == "app.py"
+    assert result.output["content"] == "print('app')\n"
+    assert result.output["encoding"] == "utf-8"
+    assert result.output["bytes"] == 13
+    assert "loaded_instruction_paths" not in result.output
 
 
 @pytest.mark.asyncio
@@ -169,7 +166,7 @@ async def test_read_file_path_traversal_is_still_rejected_with_resolver(tmp_path
     runtime = _runtime_with_resolver(tmp_path)
 
     result = await runtime.execute(
-        ToolCall(id="call-read", tool_id="read_file", args={"path": "../outside.txt"})
+        ToolCall(id="call-read", tool_id="read", args={"filePath": "../outside.txt"})
     )
 
     assert result.status == "error"
@@ -226,6 +223,5 @@ def _runtime_with_resolver(
         create_core_tool_registry(
             workspace_root,
             instruction_resolver=resolver,
-            include_legacy_aliases=True,
         )
     )

@@ -243,14 +243,14 @@ async def test_runner_error_result_returns_tool_runtime_error_status():
 
 
 @pytest.mark.asyncio
-async def test_core_registry_registers_task_only_with_runner(tmp_path: Path):
+async def test_core_registry_registers_task_by_default_and_accepts_runner(tmp_path: Path):
     async def runner(request: TaskToolRequest) -> str:
         return "ok"
 
     default_registry = create_core_tool_registry(tmp_path)
     task_registry = create_core_tool_registry(tmp_path, task_runner=runner)
 
-    assert "task" not in default_registry.ids()
+    assert "task" in default_registry.ids()
     assert "task" in task_registry.ids()
 
 

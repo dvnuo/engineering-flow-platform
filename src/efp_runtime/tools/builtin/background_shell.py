@@ -10,10 +10,7 @@ import signal
 import time
 from typing import Any, Mapping
 
-from ...permissions import ALLOW, ASK, PermissionMetadata
-from ...types import ToolResult, new_id, utc_now_iso
-from ..definition import ToolContext, ToolDef
-from .filesystem import normalize_workspace_root, workspace_relative_path
+from ...types import new_id, utc_now_iso
 
 
 DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
@@ -182,114 +179,6 @@ class ShellJobManager:
             raise KeyError(f"Unknown background shell job: {job_id}") from exc
 
 
-def create_shell_status_tool(
-    job_manager: ShellJobManager,
-    workspace_root: str | Path,
-    *,
-    permission: PermissionMetadata | None = None,
-) -> ToolDef:
-    root = normalize_workspace_root(workspace_root)
-
-    async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
-        job_id = args["job_id"]
-        offset = _non_negative_int_arg(args, "offset", 0)
-        limit = _optional_positive_int_arg(args, "limit")
-        output = await job_manager.read(job_id, offset=offset, limit=limit)
-        output["cwd"] = _display_cwd(root, output["cwd"])
-        return ToolResult(
-            call_id=_result_call_id(context, "shell_status"),
-            tool_name="shell_status",
-            content=_format_status_content(output),
-            output=output,
-            metadata={
-                "background": True,
-                "job_id": output["job_id"],
-                "status": output["status"],
-                "exit_code": output["exit_code"],
-                "killed": output["killed"],
-                "has_more": output["has_more"],
-                "next_offset": output["next_offset"],
-                "truncated": output["truncated"],
-            },
-            truncated=bool(output["truncated"]),
-        )
-
-    return ToolDef(
-        id="shell_status",
-        description="Read status and retained output from a background shell job.",
-        input_schema={
-            "type": "object",
-            "required": ["job_id"],
-            "properties": {
-                "job_id": {"type": "string"},
-                "offset": {"type": "integer", "minimum": 0},
-                "limit": {"type": "integer", "minimum": 1},
-            },
-            "additionalProperties": False,
-        },
-        execute=execute,
-        permission=permission
-        or PermissionMetadata(
-            action=ALLOW,
-            category="shell",
-            resource="workspace",
-            risk="low",
-        ),
-    )
-
-
-def create_shell_kill_tool(
-    job_manager: ShellJobManager,
-    workspace_root: str | Path,
-    *,
-    permission: PermissionMetadata | None = None,
-) -> ToolDef:
-    root = normalize_workspace_root(workspace_root)
-
-    async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
-        job = await job_manager.kill(args["job_id"])
-        output = _job_payload(job)
-        output["cwd"] = _display_cwd(root, output["cwd"])
-        return ToolResult(
-            call_id=_result_call_id(context, "shell_kill"),
-            tool_name="shell_kill",
-            content=(
-                f"shell job {job.job_id} is {job.status}"
-                f" (exit_code={job.returncode})."
-            ),
-            output=output,
-            metadata={
-                "background": True,
-                "job_id": job.job_id,
-                "status": job.status,
-                "exit_code": job.returncode,
-                "killed": job.status == "killed",
-            },
-        )
-
-    return ToolDef(
-        id="shell_kill",
-        description="Terminate a running background shell job.",
-        input_schema={
-            "type": "object",
-            "required": ["job_id"],
-            "properties": {
-                "job_id": {"type": "string"},
-            },
-            "additionalProperties": False,
-        },
-        execute=execute,
-        permission=permission
-        or PermissionMetadata(
-            action=ASK,
-            reason="Stopping a shell job requires approval.",
-            category="shell",
-            resource="workspace",
-            risk="medium",
-        ),
-    )
-
-
 class _StreamBuffer:
     def __init__(self, max_bytes: int) -> None:
         self.max_bytes = max_bytes
@@ -447,69 +336,8 @@ def _display_cwd(root: Path, cwd: str) -> str:
         return cwd
 
 
-def _format_status_content(output: Mapping[str, Any]) -> str:
-    parts = [
-        (
-            f"shell job {output['job_id']} is {output['status']}"
-            f" (exit_code={output['exit_code']})."
-        )
-    ]
-    stdout = str(output.get("stdout") or "")
-    stderr = str(output.get("stderr") or "")
-    if stdout:
-        parts.append(_tagged_output("stdout", stdout))
-    if stderr:
-        parts.append(_tagged_output("stderr", stderr))
-    if not stdout and not stderr:
-        parts.append("(no output)")
-    if output.get("truncated"):
-        parts.append("retained output has been truncated to the configured buffer.")
-    if output.get("has_more"):
-        parts.append(f"more output is available at offset {output['next_offset']}.")
-    return "\n".join(parts)
-
-
-def _tagged_output(tag: str, content: str) -> str:
-    if content.endswith("\n"):
-        return f"<{tag}>\n{content}</{tag}>"
-    return f"<{tag}>\n{content}\n</{tag}>"
-
-
-def _non_negative_int_arg(args: Mapping[str, Any], name: str, default: int) -> int:
-    value = args.get(name, default)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{name} must be an integer.")
-    if value < 0:
-        raise ValueError(f"{name} must be greater than or equal to 0.")
-    return value
-
-
-def _optional_positive_int_arg(
-    args: Mapping[str, Any],
-    name: str,
-) -> int | None:
-    value = args.get(name)
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{name} must be an integer.")
-    if value < 1:
-        raise ValueError(f"{name} must be greater than 0.")
-    return value
-
-
-def _result_call_id(context: ToolContext, fallback: str) -> str:
-    if context.tool_call_id:
-        return context.tool_call_id
-    if context.request_id:
-        return str(context.request_id)
-    return fallback
-
-
 __all__ = [
     "DEFAULT_MAX_BUFFER_BYTES",
     "ShellJob",
     "ShellJobManager",
-    "create_shell_kill_tool",
-    "create_shell_status_tool",
 ]

@@ -63,7 +63,7 @@ from ..skills.commands import (
 )
 from ..skills.context import SkillContextBuilder, available_skills_system_message
 from ..skills.discovery import SkillDiscovery
-from ..skills.tool import build_skill_list_tool, build_skill_tool
+from ..skills.tool import build_skill_tool
 from ..system_prompt import SystemPromptBuilder
 from ..tools.builtin import (
     DEFAULT_STRUCTURED_OUTPUT_TOOL_ID,
@@ -74,8 +74,6 @@ from ..tools.builtin import (
 )
 from ..tools.builtin.task import format_background_task_notification
 from ..tools.definition import OutputPolicy, ToolContext
-from ..tools.external import ExternalToolProvider, register_external_tools
-from ..tools.local import register_local_tools
 from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection, resolve_tool_selection
@@ -98,13 +96,8 @@ PLAN_MODE_MUTATING_TOOLS = {
     "apply_patch",
     "bash",
     "edit",
-    "repo_clone",
-    "shell_exec",
-    "shell_kill",
     "task",
-    "task_cancel",
     "write",
-    "write_file",
 }
 
 STRUCTURED_OUTPUT_SYSTEM_PROMPT = (
@@ -157,8 +150,6 @@ class AgentRuntime:
         store: SessionStore | None = None,
         tool_registry: ToolRegistry | None = None,
         tool_runtime: ToolRuntime | None = None,
-        external_tool_providers: Iterable[ExternalToolProvider] | None = None,
-        external_tools_allow_override: bool = False,
         permission_evaluator: PermissionEvaluator | None = None,
         adapter: LLMEventAdapter | None = None,
         skill_discovery: SkillDiscovery | None = None,
@@ -204,17 +195,20 @@ class AgentRuntime:
             config=self.config,
             skill_discovery=skill_discovery,
         )
+        self.agent_registry = agent_registry
+        self.default_agent = _normalize_optional_name(default_agent)
         self.tool_runtime = _resolve_tool_runtime(
+            provider=provider,
             workspace_root=self.config.workspace_root,
             config=self.config,
+            store=self.store,
             tool_registry=tool_registry,
             tool_runtime=tool_runtime,
-            external_tool_providers=external_tool_providers,
-            external_tools_allow_override=external_tools_allow_override,
             permission_evaluator=permission_evaluator,
             skill_discovery=self.skill_discovery,
             question_broker=self.question_broker,
             lsp_client=lsp_client,
+            agent_registry=self.agent_registry,
         )
         self._todo_store = (
             _find_session_todo_store(self.tool_runtime.registry) or SessionTodoStore()
@@ -240,8 +234,6 @@ class AgentRuntime:
         self.active_skills = _unique_skill_names(self.config.active_skills)
         self.event_bus = event_bus or RuntimeEventBus()
         self.run_state = run_state or RuntimeRunState()
-        self.agent_registry = agent_registry
-        self.default_agent = _normalize_optional_name(default_agent)
 
     def create_session(
         self,
@@ -1254,7 +1246,7 @@ class AgentRuntime:
                 interpolation.index,
             )
             tool_call = ToolCall(
-                tool_name="shell_exec",
+                tool_name="bash",
                 arguments={
                     "command": interpolation.command,
                     "description": (
@@ -1270,7 +1262,7 @@ class AgentRuntime:
                     session_id=session_id,
                     run_id=run_id,
                     tool_call_id=tool_call_id,
-                    tool_name="shell_exec",
+                    tool_name="bash",
                     metadata=_command_shell_context_metadata(
                         expansion,
                         interpolation.index,
@@ -1441,17 +1433,6 @@ class AgentRuntime:
             self.config.model_aware_tool_selection
         )
         run_metadata["emit_llm_stream_events"] = self.config.emit_llm_stream_events
-        run_metadata["enable_local_python_tools"] = (
-            self.config.enable_local_python_tools
-        )
-        if (
-            self.config.local_tool_directories
-            and not self.config.enable_local_python_tools
-        ):
-            run_metadata["local_python_tools_disabled"] = True
-            run_metadata["local_python_tool_directories"] = [
-                str(path) for path in self.config.local_tool_directories
-            ]
         if self.config.workspace_root is not None:
             run_metadata["workspace_root"] = str(self.config.workspace_root)
         run_metadata["tool_output_truncation_enabled"] = (
@@ -1642,7 +1623,7 @@ class AgentRuntime:
 
 
 def _find_session_todo_store(registry: ToolRegistry) -> SessionTodoStore | None:
-    for tool_id in ("todowrite", "todo_write"):
+    for tool_id in ("todowrite",):
         tool = registry.get(tool_id)
         if tool is None:
             continue
@@ -2441,8 +2422,6 @@ def _resolve_config(
         ),
         disabled_tools=list(config.disabled_tools),
         model_aware_tool_selection=config.model_aware_tool_selection,
-        tool_surface=config.tool_surface,
-        include_legacy_tool_aliases=config.include_legacy_tool_aliases,
         tool_permissions=dict(config.tool_permissions),
         runtime_mode=config.runtime_mode,
         enable_plan_tool=config.enable_plan_tool,
@@ -2471,14 +2450,11 @@ def _resolve_config(
         max_instruction_chars=config.max_instruction_chars,
         skill_directories=list(config.skill_directories),
         active_skills=list(config.active_skills),
-        enable_skill_list_tool=config.enable_skill_list_tool,
         include_skill_sidecar_content=config.include_skill_sidecar_content,
         max_skill_sidecar_chars=config.max_skill_sidecar_chars,
         command_directories=list(config.command_directories),
         enable_command_expansion=config.enable_command_expansion,
         max_command_chars=config.max_command_chars,
-        enable_local_python_tools=config.enable_local_python_tools,
-        local_tool_directories=list(config.local_tool_directories),
         resolve_prompt_references=config.resolve_prompt_references,
         max_prompt_reference_chars=config.max_prompt_reference_chars,
         max_prompt_directory_entries=config.max_prompt_directory_entries,
@@ -2490,18 +2466,38 @@ def _resolve_config(
     )
 
 
+def _default_task_runner(
+    *,
+    provider: Union[LLMProvider, ProviderCallable],
+    workspace_root: str | Path,
+    config: RuntimeConfig,
+    store: SessionStore,
+    agent_registry: "AgentRegistry | None",
+):
+    from ..agents.task_runner import create_subagent_task_runner
+
+    return create_subagent_task_runner(
+        provider=provider,
+        workspace_root=workspace_root,
+        profiles=agent_registry,
+        base_config=config,
+        store_factory=lambda: store,
+    )
+
+
 def _resolve_tool_runtime(
     *,
+    provider: Union[LLMProvider, ProviderCallable],
     workspace_root: str | Path | None,
     config: RuntimeConfig,
+    store: SessionStore,
     tool_registry: ToolRegistry | None,
     tool_runtime: ToolRuntime | None,
-    external_tool_providers: Iterable[ExternalToolProvider] | None,
-    external_tools_allow_override: bool,
     permission_evaluator: PermissionEvaluator | None,
     skill_discovery: SkillDiscovery | None,
     question_broker: QuestionBroker,
     lsp_client: LSPClient | None,
+    agent_registry: "AgentRegistry | None",
 ) -> ToolRuntime:
     if tool_runtime is not None:
         if tool_registry is not None and tool_registry is not tool_runtime.registry:
@@ -2521,12 +2517,17 @@ def _resolve_tool_runtime(
                 if config.attach_read_instructions
                 else None
             )
+            task_runner = _default_task_runner(
+                provider=provider,
+                workspace_root=workspace_root,
+                config=config,
+                store=store,
+                agent_registry=agent_registry,
+            )
             registry = create_core_tool_registry(
                 workspace_root,
-                tool_surface=config.tool_surface,
-                include_legacy_aliases=config.include_legacy_tool_aliases,
+                task_runner=task_runner,
                 skill_discovery=skill_discovery,
-                include_skill_list_tool=config.enable_skill_list_tool,
                 tool_permissions=config.tool_permissions,
                 max_skill_sidecar_chars=config.max_skill_sidecar_chars,
                 question_broker=question_broker,
@@ -2556,24 +2557,6 @@ def _resolve_tool_runtime(
                         tool_permissions=config.tool_permissions,
                     )
                 )
-            if (
-                config.include_legacy_tool_aliases
-                and _skill_list_tool_enabled(config, skill_discovery=skill_discovery)
-            ):
-                registry.register(
-                    build_skill_list_tool(
-                        skill_discovery or SkillDiscovery([]),
-                        tool_permissions=config.tool_permissions,
-                    )
-                )
-    if config.enable_local_python_tools and config.local_tool_directories:
-        register_local_tools(registry, config.local_tool_directories)
-    if external_tool_providers is not None:
-        register_external_tools(
-            registry,
-            external_tool_providers,
-            allow_override=external_tools_allow_override,
-        )
     resolved_permission_evaluator = permission_evaluator
     if resolved_permission_evaluator is None:
         resolved_permission_evaluator = ConfiguredPermissionBroker(
@@ -2891,16 +2874,6 @@ def _plan_tool_enabled(config: RuntimeConfig) -> bool:
     if config.enable_plan_tool is None:
         return config.runtime_mode == "plan"
     return bool(config.enable_plan_tool)
-
-
-def _skill_list_tool_enabled(
-    config: RuntimeConfig,
-    *,
-    skill_discovery: SkillDiscovery | None,
-) -> bool:
-    if config.enable_skill_list_tool is not None:
-        return bool(config.enable_skill_list_tool)
-    return skill_discovery is not None or bool(config.skill_directories)
 
 
 def _background_task_manager(tool_runtime: ToolRuntime) -> Any:

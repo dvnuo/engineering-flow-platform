@@ -47,8 +47,8 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
         "grep",
         "invalid",
         "read",
-        "repo_clone",
-        "repo_overview",
+        "skill",
+        "task",
         "todowrite",
         "webfetch",
         "write",
@@ -62,16 +62,14 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert [schema.id for schema in request.provider_request.tools] == [
         "apply_patch",
         "bash",
-        "edit",
         "glob",
         "grep",
         "invalid",
         "read",
-        "repo_clone",
-        "repo_overview",
+        "skill",
+        "task",
         "todowrite",
         "webfetch",
-        "write",
     ]
     assert request.metadata["suite"] == "facade"
     assert request.metadata["request_id"] == "run-1"

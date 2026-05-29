@@ -27,27 +27,13 @@ FETCH_FORMATS = {"markdown", "text", "html"}
 DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; EFP Runtime v2)"
 
 
-def create_fetch_tool(
-    *,
-    permission: PermissionMetadata | None = None,
-    default_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-    default_max_chars: int = DEFAULT_MAX_CHARS,
-) -> ToolDef:
-    return _create_fetch_tool(
-        tool_id="fetch",
-        permission=permission,
-        default_timeout_seconds=default_timeout_seconds,
-        default_max_chars=default_max_chars,
-    )
-
-
 def create_webfetch_tool(
     *,
     permission: PermissionMetadata | None = None,
     default_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     default_max_chars: int = DEFAULT_MAX_CHARS,
 ) -> ToolDef:
-    return _create_fetch_tool(
+    return _create_webfetch_tool(
         tool_id="webfetch",
         permission=permission,
         default_timeout_seconds=default_timeout_seconds,
@@ -55,7 +41,7 @@ def create_webfetch_tool(
     )
 
 
-def _create_fetch_tool(
+def _create_webfetch_tool(
     *,
     tool_id: str,
     permission: PermissionMetadata | None,

@@ -26,15 +26,15 @@ def create_edit_tool(
     root = normalize_workspace_root(workspace_root)
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
-        path = resolve_workspace_path(root, args["path"])
+        path = resolve_workspace_path(root, args["filePath"])
         if not path.exists():
             raise FileNotFoundError(f"File does not exist: {workspace_relative_path(root, path)}")
         if not path.is_file():
             raise IsADirectoryError(f"Path is not a file: {workspace_relative_path(root, path)}")
 
-        old_text = args["old_text"]
+        old_text = args["oldString"]
         if old_text == "":
-            raise ValueError("old_text must not be empty.")
+            raise ValueError("oldString must not be empty.")
         max_diff_lines = args.get("max_diff_lines", DEFAULT_MAX_PREVIEW_LINES)
         max_diff_chars = args.get("max_diff_chars", DEFAULT_MAX_PREVIEW_CHARS)
 
@@ -43,27 +43,27 @@ def create_edit_tool(
         replacement_count = content.count(old_text)
         if replacement_count == 0:
             raise ValueError(
-                "old_text was not found in "
-                f"{relative_path}. old_text preview: {text_preview(old_text)}. "
+                "oldString was not found in "
+                f"{relative_path}. oldString preview: {text_preview(old_text)}. "
                 f"file characters: {len(content)}."
             )
         if (
-            args["new_text"] != old_text
-            and not args.get("replace_all")
+            args["newString"] != old_text
+            and not args.get("replaceAll")
             and replacement_count > 1
         ):
             raise ValueError(
-                "old_text occurs multiple times "
+                "oldString occurs multiple times "
                 f"({replacement_count} times) in {relative_path}; set "
-                "replace_all=true or provide a more precise old_text."
+                "replaceAll=true or provide a more precise oldString."
             )
 
-        new_content = content.replace(old_text, args["new_text"], -1 if args.get("replace_all") else 1)
+        new_content = content.replace(old_text, args["newString"], -1 if args.get("replaceAll") else 1)
         old_bytes = len(content.encode("utf-8"))
         encoded = new_content.encode("utf-8")
         new_bytes = len(encoded)
         changed = new_content != content
-        applied_replacement_count = replacement_count if args.get("replace_all") else 1
+        applied_replacement_count = replacement_count if args.get("replaceAll") else 1
 
         if changed:
             path.write_bytes(encoded)
@@ -114,15 +114,15 @@ def create_edit_tool(
 
     return ToolDef(
         id="edit",
-        description="Replace text in an existing UTF-8 workspace file.",
+        description="Replace oldString with newString in an existing UTF-8 workspace file.",
         input_schema={
             "type": "object",
-            "required": ["path", "old_text", "new_text"],
+            "required": ["filePath", "oldString", "newString"],
             "properties": {
-                "path": {"type": "string"},
-                "old_text": {"type": "string"},
-                "new_text": {"type": "string"},
-                "replace_all": {"type": "boolean"},
+                "filePath": {"type": "string"},
+                "oldString": {"type": "string"},
+                "newString": {"type": "string"},
+                "replaceAll": {"type": "boolean"},
                 "max_diff_lines": {"type": "integer", "minimum": 0},
                 "max_diff_chars": {"type": "integer", "minimum": 0},
             },

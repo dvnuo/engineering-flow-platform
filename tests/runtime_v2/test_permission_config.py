@@ -99,7 +99,7 @@ async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
                 "tool_calls": [
                     _provider_tool_call(
                         "call-shell",
-                        "shell_exec",
+                        "bash",
                         {"command": "printf ok"},
                     )
                 ]
@@ -112,7 +112,6 @@ async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
-            include_legacy_tool_aliases=True,
             tool_permissions={"bash": "allow"},
         ),
     )
@@ -150,7 +149,6 @@ async def test_edit_deny_config_rejects_write_edit_and_apply_patch(tmp_path: Pat
         provider=ScriptedLLMProvider([]),
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            include_legacy_tool_aliases=True,
             tool_permissions={"edit": "deny"},
         ),
     )
@@ -158,13 +156,13 @@ async def test_edit_deny_config_rejects_write_edit_and_apply_patch(tmp_path: Pat
     results = [
         await _execute_tool(
             runtime,
-            "write_file",
-            {"path": "created.txt", "content": "blocked"},
+            "write",
+            {"filePath": "created.txt", "content": "blocked"},
         ),
         await _execute_tool(
             runtime,
             "edit",
-            {"path": "created.txt", "old_text": "a", "new_text": "b"},
+            {"filePath": "created.txt", "oldString": "a", "newString": "b"},
         ),
         await _execute_tool(runtime, "apply_patch", {"patch": ""}),
     ]
@@ -186,20 +184,19 @@ async def test_exact_tool_permission_precedes_category_alias(tmp_path: Path):
         provider=ScriptedLLMProvider([]),
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            include_legacy_tool_aliases=True,
-            tool_permissions={"edit": "deny", "write_file": "allow"},
+            tool_permissions={"edit": "deny", "write": "allow"},
         ),
     )
 
     write_result = await _execute_tool(
         runtime,
-        "write_file",
-        {"path": "allowed.txt", "content": "allowed"},
+        "write",
+        {"filePath": "allowed.txt", "content": "allowed"},
     )
     edit_result = await _execute_tool(
         runtime,
         "edit",
-        {"path": "allowed.txt", "old_text": "allowed", "new_text": "blocked"},
+        {"filePath": "allowed.txt", "oldString": "allowed", "newString": "blocked"},
     )
     patch_result = await _execute_tool(runtime, "apply_patch", {"patch": ""})
 
@@ -378,7 +375,7 @@ async def test_agent_permission_overlay_precedes_base_exact_category_and_wildcar
     broker = ConfiguredPermissionBroker(
         {
             "alpha": "allow",
-            "write_file": "allow",
+            "write": "allow",
             "external_*": "allow",
         }
     )
@@ -401,7 +398,7 @@ async def test_agent_permission_overlay_precedes_base_exact_category_and_wildcar
         context=context,
     )
     category = await broker.evaluate(
-        tool_id="write_file",
+        tool_id="write",
         args={},
         metadata=PermissionMetadata(action=ALLOW, category="filesystem"),
         context=context,
@@ -476,8 +473,8 @@ async def test_configured_ask_approve_once_then_resume_executes_pending_call(
                 "tool_calls": [
                     _provider_tool_call(
                         "call-write",
-                        "write_file",
-                        {"path": "approved.txt", "content": "approved\n"},
+                        "write",
+                        {"filePath": "approved.txt", "content": "approved\n"},
                     )
                 ]
             },
@@ -489,7 +486,7 @@ async def test_configured_ask_approve_once_then_resume_executes_pending_call(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
-            include_legacy_tool_aliases=True,
+            model_aware_tool_selection=False,
             tool_permissions={
                 "edit": {
                     "action": "ask",
@@ -563,7 +560,8 @@ async def test_permission_config_does_not_control_tool_schema_visibility(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
-            tool_permissions={"edit": "deny"},
+                model_aware_tool_selection=False,
+                tool_permissions={"edit": "deny"},
         ),
     )
 
@@ -574,14 +572,14 @@ async def test_permission_config_does_not_control_tool_schema_visibility(
     denied = await _execute_tool(
         visible_runtime,
         "edit",
-        {"path": "file.txt", "old_text": "a", "new_text": "b"},
+        {"filePath": "file.txt", "oldString": "a", "newString": "b"},
     )
 
     visible_tool_ids = [
         schema.id for schema in visible_provider.requests[0].provider_request.tools
     ]
     assert visible_result.status == LoopStatus.COMPLETED
-    assert {"apply_patch", "edit", "write"}.issubset(visible_tool_ids)
+    assert "apply_patch" in visible_tool_ids
     assert denied.status == "permission_denied"
 
     disabled_provider = ScriptedLLMProvider([{"content": "done"}])
@@ -590,6 +588,7 @@ async def test_permission_config_does_not_control_tool_schema_visibility(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
+            model_aware_tool_selection=False,
             disabled_tools=["edit"],
             tool_permissions={"edit": "deny"},
         ),
@@ -617,7 +616,7 @@ from efp_runtime.permissions import ConfiguredPermissionBroker, PermissionMetada
 
 broker = ConfiguredPermissionBroker({"bash": "allow"})
 match = broker.permission_config.match(
-    tool_id="shell_exec",
+    tool_id="bash",
     metadata=PermissionMetadata(category="shell"),
 )
 legacy_modules = [

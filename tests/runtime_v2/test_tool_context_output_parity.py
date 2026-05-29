@@ -227,16 +227,16 @@ async def test_resume_pending_tool_call_has_context_and_does_not_append_user_mes
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_saves_full_output_when_not_truncated(tmp_path: Path):
+async def test_bash_saves_full_output_when_not_truncated(tmp_path: Path):
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
+        create_core_tool_registry(tmp_path),
         permission_evaluator=AllowEvaluator(),
     )
 
     result = await runtime.execute(
         ToolCall(
             id="call-shell-full",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={"command": _python_command("print('visible-output')")},
         ),
         context=ToolContext(session_id="session-shell", run_id="run-shell"),
@@ -259,18 +259,18 @@ async def test_shell_exec_saves_full_output_when_not_truncated(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_truncates_visible_content_but_saves_complete_output(
+async def test_bash_truncates_visible_content_but_saves_complete_output(
     tmp_path: Path,
 ):
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
+        create_core_tool_registry(tmp_path),
         permission_evaluator=AllowEvaluator(),
     )
 
     result = await runtime.execute(
         ToolCall(
             id="call-shell-truncated",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={
                 "command": _python_command(
                     "import sys\n"

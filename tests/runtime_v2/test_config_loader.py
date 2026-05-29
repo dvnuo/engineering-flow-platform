@@ -26,7 +26,7 @@ def test_default_file_lookup_and_merge_order(tmp_path: Path):
         tmp_path / "opencode.json",
         {
             "permissions": {"edit": "deny"},
-            "disabledTools": ["read_file"],
+            "disabledTools": ["read"],
             "instructions": ["base.md"],
             "activeSkills": ["base"],
             "runtime_mode": "build",
@@ -37,7 +37,7 @@ def test_default_file_lookup_and_merge_order(tmp_path: Path):
         nested,
         {
             "permission": {"edit": "allow", "bash": "allow"},
-            "disabled_tools": ["write_file", "read_file"],
+            "disabled_tools": ["write", "read"],
             "instructions": ["override.md", "base.md"],
             "active_skills": ["base", "review"],
             "runtime": {"mode": "plan"},
@@ -52,7 +52,7 @@ def test_default_file_lookup_and_merge_order(tmp_path: Path):
     assert result.raw["runtime_mode"] == "build"
     assert result.config.runtime_mode == "plan"
     assert result.config.tool_permissions == {"edit": "allow", "bash": "allow"}
-    assert result.config.disabled_tools == ["read_file", "write_file"]
+    assert result.config.disabled_tools == ["read", "write"]
     assert result.config.instruction_paths == [
         (tmp_path / "base.md").resolve(),
         (tmp_path / "override.md").resolve(),
@@ -119,56 +119,6 @@ def test_parent_default_commands_marker_resolves_workspace_root(
     assert result.config.command_directories == [commands.resolve()]
     assert result.command_registry is not None
     assert result.command_registry.get("audit").content == "Audit nested work."
-
-
-@pytest.mark.parametrize("default_name", ["tool", "tools"])
-def test_parent_default_tool_marker_resolves_workspace_root_without_local_tool_dirs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    default_name: str,
-):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    project = tmp_path / "project"
-    nested = project / "src" / "pkg"
-    nested.mkdir(parents=True)
-    tools = project / ".opencode" / default_name
-    tools.mkdir(parents=True)
-    (tools / "hello.py").write_text(
-        "TOOL = {'description': 'Hello', 'execute': lambda args, context: 'hi'}\n",
-        encoding="utf-8",
-    )
-
-    result = load_runtime_config(nested)
-
-    assert result.loaded_paths == []
-    assert result.config.workspace_root == project.resolve()
-    assert result.config.enable_local_python_tools is False
-    assert result.config.local_tool_directories == []
-
-
-@pytest.mark.parametrize("default_name", ["tool", "tools"])
-def test_enable_local_python_tools_discovers_default_tool_directories(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    default_name: str,
-):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    project = tmp_path / "project"
-    nested = project / "src" / "pkg"
-    nested.mkdir(parents=True)
-    tools = project / ".opencode" / default_name
-    tools.mkdir(parents=True)
-    (tools / "hello.py").write_text(
-        "TOOL = {'description': 'Hello', 'execute': lambda args, context: 'hi'}\n",
-        encoding="utf-8",
-    )
-    _write_json(project / "opencode.json", {"enableLocalPythonTools": True})
-
-    result = load_runtime_config(nested)
-
-    assert result.config.workspace_root == project.resolve()
-    assert result.config.enable_local_python_tools is True
-    assert result.config.local_tool_directories == [tools.resolve()]
 
 
 @pytest.mark.parametrize("default_name", ["skill", "skills"])
@@ -292,7 +242,6 @@ def test_include_defaults_false_does_not_resolve_parent_marker(tmp_path: Path):
     assert result.config.runtime_mode == "build"
     assert result.config.command_directories == []
     assert result.config.skill_directories == []
-    assert result.config.local_tool_directories == []
 
 
 def test_jsonc_comments_trailing_commas_and_comment_like_strings(tmp_path: Path):
@@ -307,7 +256,7 @@ def test_jsonc_comments_trailing_commas_and_comment_like_strings(tmp_path: Path)
           "instructions": [
             {"text": "Do not strip // inside strings"},
           ],
-          "enabledTools": ["read_file",],
+          "enabledTools": ["read",],
           /* block comment */
         }
         """,
@@ -318,7 +267,7 @@ def test_jsonc_comments_trailing_commas_and_comment_like_strings(tmp_path: Path)
 
     assert result.config.system_prompt_texts == ["Keep https://example.test//literal"]
     assert result.config.instruction_texts == ["Do not strip // inside strings"]
-    assert result.config.enabled_tools == ["read_file"]
+    assert result.config.enabled_tools == ["read"]
 
 
 def test_config_variable_substitutes_env_in_json_string(
@@ -437,8 +386,8 @@ def test_runtime_config_field_mapping(tmp_path: Path):
         tmp_path / "custom.json",
         {
             "permission": {"edit": "deny"},
-            "enabledTools": ["read_file", "grep"],
-            "disabled_tools": ["write_file"],
+            "enabledTools": ["read", "grep"],
+            "disabled_tools": ["write"],
             "instructions": [
                 "docs/AGENTS.md",
                 {"path": "docs/extra.md"},
@@ -460,8 +409,8 @@ def test_runtime_config_field_mapping(tmp_path: Path):
 
     assert config.workspace_root == tmp_path.resolve()
     assert config.tool_permissions == {"edit": "deny"}
-    assert config.enabled_tools == ["read_file", "grep"]
-    assert config.disabled_tools == ["write_file"]
+    assert config.enabled_tools == ["read", "grep"]
+    assert config.disabled_tools == ["write"]
     assert config.instruction_paths == [
         (tmp_path / "docs/AGENTS.md").resolve(),
         (tmp_path / "docs/extra.md").resolve(),
@@ -476,12 +425,6 @@ def test_runtime_config_field_mapping(tmp_path: Path):
     assert config.command_directories == [
         (tmp_path / "commands").resolve(),
     ]
-    assert config.local_tool_directories == [
-        (tmp_path / "tools").resolve(),
-        (tmp_path / "more-tools").resolve(),
-    ]
-    assert config.tool_surface == "opencode"
-    assert config.include_legacy_tool_aliases is True
     assert config.runtime_mode == "plan"
 
 
@@ -504,96 +447,6 @@ def test_config_loader_maps_environment_context_aliases(
     assert result.config.include_environment_context is False
     assert alias not in result.metadata["unconsumed_config"]
 
-
-def test_tool_surface_config_aliases(tmp_path: Path):
-    _write_json(
-        tmp_path / "camel.json",
-        {
-            "toolSurface": "legacy",
-            "includeLegacyToolAliases": False,
-        },
-    )
-    _write_json(
-        tmp_path / "snake.json",
-        {
-            "runtime": {
-                "tool_surface": "opencode",
-                "include_legacy_tool_aliases": True,
-            },
-        },
-    )
-
-    camel = load_runtime_config(
-        tmp_path,
-        paths=["camel.json"],
-        include_defaults=False,
-    )
-    snake = load_runtime_config(
-        tmp_path,
-        paths=["snake.json"],
-        include_defaults=False,
-    )
-
-    assert camel.config.tool_surface == "legacy"
-    assert camel.config.include_legacy_tool_aliases is True
-    assert camel.metadata["unconsumed_config"] == {}
-    assert snake.config.tool_surface == "opencode"
-    assert snake.config.include_legacy_tool_aliases is True
-    assert snake.metadata["unconsumed_config"] == {}
-
-
-@pytest.mark.parametrize(
-    "alias",
-    ["enableLocalPythonTools", "enable_local_python_tools"],
-)
-def test_enable_local_python_tools_config_aliases(tmp_path: Path, alias: str):
-    _write_json(tmp_path / "custom.json", {alias: True})
-
-    result = load_runtime_config(
-        tmp_path,
-        paths=["custom.json"],
-        include_defaults=False,
-    )
-
-    assert result.config.enable_local_python_tools is True
-    assert result.metadata["unconsumed_config"] == {}
-
-
-def test_invalid_tool_surface_config_raises(tmp_path: Path):
-    _write_json(tmp_path / "custom.json", {"tool_surface": "expanded"})
-
-    with pytest.raises(ValueError, match="tool_surface must be 'opencode' or 'legacy'"):
-        load_runtime_config(
-            tmp_path,
-            paths=["custom.json"],
-            include_defaults=False,
-        )
-
-
-def test_configured_local_tool_directories_append_after_defaults(tmp_path: Path):
-    default_tool = tmp_path / ".opencode" / "tool"
-    default_tools = tmp_path / ".opencode" / "tools"
-    default_tool.mkdir(parents=True)
-    default_tools.mkdir(parents=True)
-    _write_json(
-        tmp_path / "opencode.json",
-        {
-            "enableLocalPythonTools": True,
-            "toolDirectories": ["project-tools", ".opencode/tool"],
-            "tool_directories": ["more-tools"],
-        },
-    )
-
-    result = load_runtime_config(tmp_path)
-
-    assert result.config.local_tool_directories == [
-        default_tool.resolve(),
-        default_tools.resolve(),
-        (tmp_path / "project-tools").resolve(),
-        (tmp_path / "more-tools").resolve(),
-    ]
-    assert "toolDirectories" not in result.metadata["unconsumed_config"]
-    assert "tool_directories" not in result.metadata["unconsumed_config"]
 
 
 def test_model_aware_tool_selection_config_aliases(tmp_path: Path):
@@ -1157,13 +1010,13 @@ def test_builtin_read_focused_agents_carry_permission_metadata(tmp_path: Path):
     scout = registry.resolve("scout")
     deny_overlay = {
         "edit": "deny",
-        "write_file": "deny",
+        "write": "deny",
         "write": "deny",
         "apply_patch": "deny",
-        "shell_exec": "deny",
+        "bash": "deny",
         "bash": "deny",
         "task": "deny",
-        "task_cancel": "deny",
+        "task": "deny",
     }
     ask_overlay = {tool_id: "ask" for tool_id in deny_overlay}
     assert normalize_agent_permission_overlay(plan.metadata) == deny_overlay
@@ -1353,7 +1206,7 @@ def test_agents_mapping_config_generates_agent_registry(tmp_path: Path):
             "agents": {
                 "general": {
                     "prompt": "General agent.",
-                    "tools": {"read_file": True, "write_file": False},
+                    "tools": {"read": True, "write": False},
                     "maxIterations": 3,
                     "skills": ["base", "base"],
                     "metadata": {"tier": "default"},
@@ -1379,7 +1232,7 @@ def test_agents_mapping_config_generates_agent_registry(tmp_path: Path):
     general = registry.resolve(None)
     assert general.name == "general"
     assert general.prompt == "General agent."
-    assert general.tools == {"read_file": True, "write_file": False}
+    assert general.tools == {"read": True, "write": False}
     assert general.max_iterations == 3
     assert general.active_skills == ["base"]
     assert general.metadata == {"tier": "default", "mode": "all"}
@@ -1420,7 +1273,7 @@ def test_agent_singular_alias_is_compatible_with_agents(tmp_path: Path):
             "agent": {
                 "review": {
                     "prompt": "Review changes.",
-                    "tools": ["read_file", "grep"],
+                    "tools": ["read", "grep"],
                     "mode": "subagent",
                 }
             },
@@ -1439,7 +1292,7 @@ def test_agent_singular_alias_is_compatible_with_agents(tmp_path: Path):
 
     assert registry is not None
     assert registry.names() == ["debug", "review"]
-    assert registry.resolve("review").tools == {"read_file": True, "grep": True}
+    assert registry.resolve("review").tools == {"read": True, "grep": True}
     assert registry.resolve("review").metadata["mode"] == "subagent"
     assert registry.resolve("debug").max_iterations == 5
 
@@ -1451,7 +1304,7 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
         ---
         description: Markdown review
         tools:
-          write_file: false
+          write: false
         model: markdown-model
         ---
         Markdown prompt.
@@ -1465,7 +1318,7 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
                 "review": {
                     "description": "Config review",
                     "prompt": "Config prompt.",
-                    "tools": {"read_file": True},
+                    "tools": {"read": True},
                     "model": "config-model",
                 },
             },
@@ -1484,7 +1337,7 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
     profile = registry.resolve("review")
     assert profile.description == "Config review"
     assert profile.prompt == "Config prompt."
-    assert profile.tools == {"read_file": True}
+    assert profile.tools == {"read": True}
     assert profile.metadata["model"] == "config-model"
 
 

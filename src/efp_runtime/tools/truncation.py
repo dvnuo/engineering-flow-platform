@@ -255,7 +255,7 @@ def _format_truncated_content(
         )
     else:
         hint = (
-            f"Full tool output was saved to {output_path}. Use read_file or "
+            f"Full tool output was saved to {output_path}. Use read or "
             "grep to inspect specific sections; avoid reading the entire large "
             "file at once."
         )

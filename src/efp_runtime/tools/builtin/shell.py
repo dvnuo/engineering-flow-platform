@@ -26,23 +26,6 @@ DEFAULT_TIMEOUT_SECONDS = 30
 _CANCEL_POLL_SECONDS = 0.05
 
 
-def create_shell_exec_tool(
-    workspace_root: str | Path,
-    *,
-    permission: PermissionMetadata | None = None,
-    shell_job_manager: ShellJobManager | None = None,
-    enable_background: bool = False,
-) -> ToolDef:
-    return _create_shell_tool(
-        "shell_exec",
-        workspace_root,
-        description="Run a shell command from a workspace-contained working directory.",
-        permission=permission,
-        shell_job_manager=shell_job_manager,
-        enable_background=enable_background,
-    )
-
-
 def create_bash_tool(
     workspace_root: str | Path,
     *,

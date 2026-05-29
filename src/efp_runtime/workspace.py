@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     from .skills.context import SkillContextBuilder
     from .skills.discovery import SkillDiscovery
     from .system_prompt import SystemPromptBuilder
-    from .tools.external import ExternalToolProvider
     from .tools.registry import ToolRegistry
     from .tools.runtime import ToolRuntime
 
@@ -87,8 +86,6 @@ def create_agent_runtime_from_workspace(
     store: "SessionStore | None" = None,
     tool_registry: "ToolRegistry | None" = None,
     tool_runtime: "ToolRuntime | None" = None,
-    external_tool_providers: Iterable["ExternalToolProvider"] | None = None,
-    external_tools_allow_override: bool = False,
     permission_evaluator: "PermissionEvaluator | None" = None,
     adapter: "LLMEventAdapter | None" = None,
     skill_discovery: "SkillDiscovery | None" = None,
@@ -137,8 +134,6 @@ def create_agent_runtime_from_workspace(
         store=store,
         tool_registry=tool_registry,
         tool_runtime=tool_runtime,
-        external_tool_providers=external_tool_providers,
-        external_tools_allow_override=external_tools_allow_override,
         permission_evaluator=permission_evaluator,
         adapter=adapter,
         skill_discovery=skill_discovery,

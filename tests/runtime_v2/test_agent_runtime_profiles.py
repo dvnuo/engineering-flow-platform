@@ -21,13 +21,10 @@ from efp_runtime.tools.registry import ToolRegistry
 ROOT = Path(__file__).resolve().parents[2]
 BUILT_IN_MUTATING_PERMISSION_OVERLAY = {
     "edit": "deny",
-    "write_file": "deny",
     "write": "deny",
     "apply_patch": "deny",
-    "shell_exec": "deny",
     "bash": "deny",
     "task": "deny",
-    "task_cancel": "deny",
 }
 BUILT_IN_MUTATING_ASK_OVERLAY = {
     tool_id: "ask" for tool_id in BUILT_IN_MUTATING_PERMISSION_OVERLAY
@@ -116,7 +113,7 @@ async def test_builtin_read_only_agent_records_metadata_and_applies_prompt():
     assert request.provider_request.messages[0].text == plan.prompt
 
 
-def test_builtin_agent_permission_overlays_cover_tool_aliases():
+def test_builtin_agent_permission_overlays_cover_opencode_tools():
     profiles = {profile.name: profile for profile in default_agent_profiles()}
 
     assert profiles["plan"].metadata["permission"] == (

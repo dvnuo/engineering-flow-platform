@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.mark.asyncio
 async def test_builtin_ask_requests_are_recorded_as_pending(tmp_path: Path):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path, include_legacy_aliases=True))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path, ))
     broker = runtime.permission_evaluator
     assert isinstance(broker, PermissionBroker)
     context = ToolContext(session_id="session-permissions")
@@ -29,13 +29,13 @@ async def test_builtin_ask_requests_are_recorded_as_pending(tmp_path: Path):
     write_result = await runtime.execute(
         ToolCall(
             id="call-write",
-            tool_id="write_file",
-            args={"path": "created.txt", "content": "blocked"},
+            tool_id="write",
+            args={"filePath": "created.txt", "content": "blocked"},
         ),
         context=context,
     )
     shell_result = await runtime.execute(
-        ToolCall(id="call-shell", tool_id="shell_exec", args={"command": "printf ok"}),
+        ToolCall(id="call-shell", tool_id="bash", args={"command": "printf ok"}),
         context=context,
     )
 
@@ -46,7 +46,7 @@ async def test_builtin_ask_requests_are_recorded_as_pending(tmp_path: Path):
     shell_request = shell_result.metadata["permission_request"]
     assert write_request["request_id"].startswith("perm_")
     assert shell_request["request_id"].startswith("perm_")
-    assert write_request["tool_id"] == "write_file"
+    assert write_request["tool_id"] == "write"
     assert write_request["action"] == "ask"
     assert write_request["category"] == "filesystem"
     assert write_request["session_id"] == "session-permissions"
@@ -60,25 +60,25 @@ async def test_builtin_ask_requests_are_recorded_as_pending(tmp_path: Path):
 async def test_approve_once_allows_the_next_matching_retry_only(tmp_path: Path):
     broker = PermissionBroker()
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
+        create_core_tool_registry(tmp_path, ),
         permission_evaluator=broker,
     )
     context = ToolContext(session_id="session-once")
-    args = {"path": "notes/result.txt", "content": "approved\n", "create_dirs": True}
+    args = {"filePath": "notes/result.txt", "content": "approved\n"}
 
     first = await runtime.execute(
-        ToolCall(id="call-write-ask", tool_id="write_file", args=args),
+        ToolCall(id="call-write-ask", tool_id="write", args=args),
         context=context,
     )
     request_id = first.metadata["permission_request"]["request_id"]
 
     decision = broker.approve(request_id, always=False)
     retry = await runtime.execute(
-        ToolCall(id="call-write-retry", tool_id="write_file", args=args),
+        ToolCall(id="call-write-retry", tool_id="write", args=args),
         context=context,
     )
     third = await runtime.execute(
-        ToolCall(id="call-write-third", tool_id="write_file", args=args),
+        ToolCall(id="call-write-third", tool_id="write", args=args),
         context=context,
     )
 
@@ -93,7 +93,7 @@ async def test_approve_once_allows_the_next_matching_retry_only(tmp_path: Path):
 async def test_approve_always_allows_subsequent_same_tool_and_category(tmp_path: Path):
     broker = PermissionBroker()
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
+        create_core_tool_registry(tmp_path, ),
         permission_evaluator=broker,
     )
     context = ToolContext(session_id="session-always")
@@ -101,8 +101,8 @@ async def test_approve_always_allows_subsequent_same_tool_and_category(tmp_path:
     first = await runtime.execute(
         ToolCall(
             id="call-write-ask",
-            tool_id="write_file",
-            args={"path": "first.txt", "content": "first"},
+            tool_id="write",
+            args={"filePath": "first.txt", "content": "first"},
         ),
         context=context,
     )
@@ -111,8 +111,8 @@ async def test_approve_always_allows_subsequent_same_tool_and_category(tmp_path:
     second = await runtime.execute(
         ToolCall(
             id="call-write-allow",
-            tool_id="write_file",
-            args={"path": "second.txt", "content": "second"},
+            tool_id="write",
+            args={"filePath": "second.txt", "content": "second"},
         ),
         context=context,
     )
@@ -126,7 +126,7 @@ async def test_approve_always_allows_subsequent_same_tool_and_category(tmp_path:
 async def test_deny_always_denies_subsequent_same_tool_and_category(tmp_path: Path):
     broker = PermissionBroker()
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
+        create_core_tool_registry(tmp_path, ),
         permission_evaluator=broker,
     )
     context = ToolContext(session_id="session-deny")
@@ -134,8 +134,8 @@ async def test_deny_always_denies_subsequent_same_tool_and_category(tmp_path: Pa
     first = await runtime.execute(
         ToolCall(
             id="call-write-ask",
-            tool_id="write_file",
-            args={"path": "blocked.txt", "content": "blocked"},
+            tool_id="write",
+            args={"filePath": "blocked.txt", "content": "blocked"},
         ),
         context=context,
     )
@@ -148,8 +148,8 @@ async def test_deny_always_denies_subsequent_same_tool_and_category(tmp_path: Pa
     denied = await runtime.execute(
         ToolCall(
             id="call-write-denied",
-            tool_id="write_file",
-            args={"path": "other.txt", "content": "blocked"},
+            tool_id="write",
+            args={"filePath": "other.txt", "content": "blocked"},
         ),
         context=context,
     )
@@ -205,7 +205,7 @@ import sys
 from efp_runtime.permissions import PermissionBroker, PermissionRule
 
 broker = PermissionBroker()
-rule = PermissionRule(tool_id="write_file", action="allow")
+rule = PermissionRule(tool_id="write", action="allow")
 broker.add_rule(rule)
 legacy_modules = [
     "src.agents.core",
@@ -239,7 +239,7 @@ print(json.dumps({
         "pending": [],
         "rules": [
             {
-                "tool_id": "write_file",
+                "tool_id": "write",
                 "category": None,
                 "action": "allow",
                 "patterns": [],

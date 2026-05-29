@@ -139,30 +139,16 @@ def test_runtime_todos_are_isolated_by_session_id(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_legacy_todo_write_and_todowrite_share_session_store(tmp_path: Path):
-    registry = create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+async def test_todowrite_uses_session_store(tmp_path: Path):
+    registry = create_core_tool_registry(tmp_path)
     runtime = ToolRuntime(registry)
-    legacy_store = registry.require("todo_write").runtime_metadata["todo_store"]
-    opencode_store = registry.require("todowrite").runtime_metadata["todo_store"]
+    store = registry.require("todowrite").runtime_metadata["todo_store"]
 
-    assert isinstance(legacy_store, SessionTodoStore)
-    assert opencode_store is legacy_store
+    assert isinstance(store, SessionTodoStore)
     assert (
-        registry.require("todo_write").runtime_metadata["todos_by_session"]
-        is registry.require("todowrite").runtime_metadata["todos_by_session"]
+        registry.require("todowrite").runtime_metadata["todos_by_session"]
+        is store.todos_by_session
     )
-
-    await runtime.execute(
-        ToolCall(
-            id="call-legacy",
-            tool_id="todo_write",
-            args={"todos": [{"content": "From legacy", "status": "pending"}]},
-        ),
-        context=ToolContext(session_id="session-shared"),
-    )
-    assert legacy_store.get("session-shared") == [
-        {"content": "From legacy", "status": "pending", "priority": "medium"}
-    ]
 
     await runtime.execute(
         ToolCall(
@@ -180,7 +166,7 @@ async def test_legacy_todo_write_and_todowrite_share_session_store(tmp_path: Pat
         ),
         context=ToolContext(session_id="session-shared"),
     )
-    assert legacy_store.get("session-shared") == [
+    assert store.get("session-shared") == [
         {"content": "From opencode", "status": "completed", "priority": "high"}
     ]
 

@@ -41,7 +41,7 @@ def test_resolve_tool_selection_applies_sorted_overrides_and_rejects_unknown():
 
 def test_resolve_model_aware_tool_selection_does_not_run_without_model_hint():
     selection = resolve_model_aware_tool_selection(
-        ["apply_patch", "edit", "write", "write_file"],
+        ["apply_patch", "edit", "write"],
         metadata={"model": "  "},
     )
 
@@ -76,10 +76,10 @@ async def test_model_hint_gpt_5_prefers_apply_patch_tool():
         "ran": True,
         "model_hint": "gpt-5",
         "mode": "patch",
-        "forced_disabled": ["edit", "write", "write_file"],
+        "forced_disabled": ["edit", "write"],
     }
     assert request.metadata["tools"]["enabled"] == ["apply_patch"]
-    assert request.metadata["tools"]["disabled"] == ["edit", "write", "write_file"]
+    assert request.metadata["tools"]["disabled"] == ["edit", "write"]
 
 
 @pytest.mark.asyncio
@@ -98,11 +98,10 @@ async def test_model_hint_gpt_4_prefers_direct_file_tools():
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert _request_tool_ids(provider.requests[0]) == ["edit", "write", "write_file"]
+    assert _request_tool_ids(provider.requests[0]) == ["edit", "write"]
     assert [schema.id for schema in provider.requests[0].provider_request.tools] == [
         "edit",
         "write",
-        "write_file",
     ]
     assert provider.requests[0].metadata["model_aware_tool_selection"]["mode"] == (
         "direct"
@@ -128,7 +127,7 @@ async def test_model_hint_gpt_oss_prefers_direct_file_tools():
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert _request_tool_ids(provider.requests[0]) == ["edit", "write", "write_file"]
+    assert _request_tool_ids(provider.requests[0]) == ["edit", "write"]
     assert "apply_patch" not in [
         schema.id for schema in provider.requests[0].provider_request.tools
     ]
@@ -146,18 +145,13 @@ async def test_without_model_hint_keeps_default_file_tool_selection():
     result = await runtime.run("run", session_id="session-no-model-hint")
 
     assert result.status == LoopStatus.COMPLETED
-    assert _request_tool_ids(provider.requests[0]) == [
-        "apply_patch",
-        "edit",
-        "write",
-        "write_file",
-    ]
+    assert _request_tool_ids(provider.requests[0]) == ["apply_patch"]
     assert provider.requests[0].metadata["model_aware_tool_selection"] == {
         "enabled": True,
-        "ran": False,
-        "model_hint": None,
-        "mode": "none",
-        "forced_disabled": [],
+        "ran": True,
+        "model_hint": "gpt-5-mini",
+        "mode": "patch",
+        "forced_disabled": ["edit", "write"],
     }
 
 
@@ -184,7 +178,6 @@ async def test_model_aware_tool_selection_can_be_disabled_by_config():
         "apply_patch",
         "edit",
         "write",
-        "write_file",
     ]
     assert provider.requests[0].metadata["model_aware_tool_selection"] == {
         "enabled": False,
@@ -497,4 +490,4 @@ def _tool_call(call_id: str, tool_name: str) -> dict[str, Any]:
     }
 
 
-_FILE_TOOL_IDS = ("apply_patch", "edit", "write", "write_file")
+_FILE_TOOL_IDS = ("apply_patch", "edit", "write")

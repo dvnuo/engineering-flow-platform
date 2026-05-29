@@ -26,8 +26,8 @@ def _write_file_call(path: str = "created.txt", content: str = "approved") -> di
         "id": "call_write",
         "type": "function",
         "function": {
-            "name": "write_file",
-            "arguments": json.dumps({"path": path, "content": content}),
+            "name": "write",
+            "arguments": json.dumps({"filePath": path, "content": content}),
         },
     }
 
@@ -41,7 +41,7 @@ async def test_permission_request_waits_without_appending_tool_result(tmp_path: 
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
-            include_legacy_tool_aliases=True,
+            model_aware_tool_selection=False,
         ),
         event_bus=bus,
     )
@@ -50,7 +50,7 @@ async def test_permission_request_waits_without_appending_tool_result(tmp_path: 
 
     assert result.status == LoopStatus.WAITING_FOR_PERMISSION
     assert result.pending_permission_request is not None
-    assert result.pending_permission_request["tool_id"] == "write_file"
+    assert result.pending_permission_request["tool_id"] == "write"
     assert (tmp_path / "created.txt").exists() is False
 
     history = runtime.store.read_history("session-wait")
@@ -71,7 +71,7 @@ async def test_permission_request_waits_without_appending_tool_result(tmp_path: 
     ]
     assert len(permission_events) == 1
     assert permission_events[0].payload["tool_call_id"] == "call_write"
-    assert permission_events[0].payload["tool_name"] == "write_file"
+    assert permission_events[0].payload["tool_name"] == "write"
     assert permission_events[0].payload["permission_request"] == result.pending_permission_request
     assert bus.history("session-wait")[-1].type == "run_finish"
     assert bus.history("session-wait")[-1].payload["status"] == (
@@ -95,7 +95,7 @@ async def test_approve_then_resume_executes_pending_tool_call_without_empty_user
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
-            include_legacy_tool_aliases=True,
+            model_aware_tool_selection=False,
         ),
     )
 
@@ -144,7 +144,7 @@ async def test_deny_then_resume_appends_denial_tool_result_for_provider(tmp_path
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
-            include_legacy_tool_aliases=True,
+            model_aware_tool_selection=False,
         ),
     )
 
@@ -272,12 +272,13 @@ def test_permission_resume_sources_stay_inside_runtime_v2_boundary():
 async def test_default_core_tool_registry_is_used_for_permission_resume(tmp_path: Path):
     runtime = AgentRuntime(
         provider=ScriptedLLMProvider([{"tool_calls": [_write_file_call()]}]),
+        config=RuntimeConfig(model_aware_tool_selection=False),
         tool_runtime=ToolRuntime(
-            create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+            create_core_tool_registry(tmp_path)
         ),
     )
 
     result = await runtime.run("Write through injected core runtime.", session_id="session-core")
 
     assert result.status == LoopStatus.WAITING_FOR_PERMISSION
-    assert result.pending_permission_request["tool_id"] == "write_file"
+    assert result.pending_permission_request["tool_id"] == "write"

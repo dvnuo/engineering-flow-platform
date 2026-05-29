@@ -32,7 +32,7 @@ class AllowEvaluator:
 
 def _runtime(tmp_path: Path) -> ToolRuntime:
     return ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
+        create_core_tool_registry(tmp_path),
         permission_evaluator=AllowEvaluator(),
     )
 
@@ -49,7 +49,7 @@ async def test_workdir_alias_sets_workspace_relative_cwd(tmp_path: Path):
     result = await runtime.execute(
         ToolCall(
             id="call-shell-workdir",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={"command": "printf ok", "workdir": "pkg", "description": "Print ok"},
         )
     )
@@ -67,7 +67,7 @@ async def test_timeout_ms_takes_precedence_and_adds_shell_metadata(tmp_path: Pat
     result = await runtime.execute(
         ToolCall(
             id="call-shell-timeout",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={
                 "command": _python_command("import time; time.sleep(1)"),
                 "timeout": 5,
@@ -105,7 +105,7 @@ async def test_shell_command_cancellation_kills_process_and_preserves_output(tmp
         runtime.execute(
             ToolCall(
                 id="call-shell-cancel",
-                tool_id="shell_exec",
+                tool_id="bash",
                 args={
                     "command": _python_command(
                         "import sys, time; print('before'); sys.stdout.flush(); time.sleep(5)"
@@ -136,7 +136,7 @@ async def test_stdout_and_stderr_are_both_visible_and_exit_code_is_kept(tmp_path
     result = await runtime.execute(
         ToolCall(
             id="call-shell-streams",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={
                 "command": _python_command(
                     "import sys; print('out'); print('err', file=sys.stderr); sys.exit(7)"
@@ -161,7 +161,7 @@ async def test_long_output_is_truncated_and_full_output_saved_inside_workspace(t
     result = await runtime.execute(
         ToolCall(
             id="call-shell-long-output",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={
                 "command": _python_command(
                     "for i in range(80): print('line-%03d' % i)"
@@ -197,7 +197,7 @@ async def test_cwd_and_workdir_conflict_is_an_error(tmp_path: Path):
     result = await runtime.execute(
         ToolCall(
             id="call-shell-conflict",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={"command": "printf ok", "cwd": "a", "workdir": "b"},
         )
     )
@@ -213,7 +213,7 @@ async def test_workdir_cannot_escape_workspace(tmp_path: Path):
     result = await runtime.execute(
         ToolCall(
             id="call-shell-escape",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={"command": "printf ok", "workdir": "../"},
         )
     )
@@ -226,13 +226,13 @@ async def test_workdir_cannot_escape_workspace(tmp_path: Path):
 async def test_shell_permission_request_includes_usable_metadata(tmp_path: Path):
     (tmp_path / "src").mkdir()
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+        create_core_tool_registry(tmp_path)
     )
 
     result = await runtime.execute(
         ToolCall(
             id="call-shell-permission",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={
                 "command": "printf ok",
                 "description": "Print ok",

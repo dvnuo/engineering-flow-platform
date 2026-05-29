@@ -10,7 +10,7 @@ from efp_runtime.skills.discovery import (
     default_skill_directories,
     discover_skills,
 )
-from efp_runtime.skills.tool import build_skill_list_tool, build_skill_tool
+from efp_runtime.skills.tool import build_skill_tool
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
@@ -330,12 +330,9 @@ def test_skill_tool_permission_subject_metadata(tmp_path):
     discovery = SkillDiscovery([tmp_path])
 
     skill_tool = build_skill_tool(discovery)
-    skill_list_tool = build_skill_list_tool(discovery)
 
     assert skill_tool.permission.category == "skill"
     assert skill_tool.permission.data["subject_arg"] == "name"
-    assert skill_list_tool.permission.category == "skill"
-    assert "subject_arg" not in skill_list_tool.permission.data
 
 
 @pytest.mark.asyncio
@@ -473,10 +470,10 @@ async def test_skill_tool_unknown_skill_error_lists_only_visible_skills(tmp_path
     assert "internal-docs" not in result.error
 
 
-def test_core_registry_does_not_include_skill_tool_by_default(tmp_path):
+def test_core_registry_includes_skill_tool_by_default(tmp_path):
     registry = create_core_tool_registry(tmp_path)
 
-    assert "skill" not in registry.ids()
+    assert "skill" in registry.ids()
 
 
 def test_core_registry_can_include_skill_tool_with_provider_schema_description(tmp_path):

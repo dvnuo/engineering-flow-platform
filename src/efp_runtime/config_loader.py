@@ -34,7 +34,6 @@ from .commands import (
 )
 from .runtime.config import RuntimeConfig
 from .skills.discovery import SkillDiscovery, default_skill_directories
-from .tools.local import default_local_tool_directories
 
 
 DEFAULT_CONFIG_FILE_NAMES = (
@@ -48,8 +47,6 @@ DEFAULT_CONFIG_FILE_NAMES = (
 _RUNTIME_PROJECT_MARKER_DIRECTORIES = (
     ".opencode/command",
     ".opencode/commands",
-    ".opencode/tool",
-    ".opencode/tools",
     ".opencode/skill",
     ".opencode/skills",
     ".opencode/agent",
@@ -82,10 +79,6 @@ _RUNTIME_CONFIG_KEYS = {
     "context_reserve_tokens",
     "modelAwareToolSelection",
     "model_aware_tool_selection",
-    "toolSurface",
-    "tool_surface",
-    "includeLegacyToolAliases",
-    "include_legacy_tool_aliases",
     "compaction",
     "compaction_auto",
     "compaction_prune",
@@ -110,10 +103,6 @@ _RUNTIME_CONFIG_KEYS = {
     "commands",
     "commandDirectories",
     "command_directories",
-    "enableLocalPythonTools",
-    "enable_local_python_tools",
-    "toolDirectories",
-    "tool_directories",
     "runtime",
     "runtime_mode",
     "agent",
@@ -508,18 +497,6 @@ def _runtime_config_from_raw(
 
     kwargs.update(_model_context_fields(raw))
 
-    tool_surface = _tool_surface(raw)
-    if tool_surface is not None:
-        kwargs["tool_surface"] = tool_surface
-
-    include_legacy_tool_aliases = _include_legacy_tool_aliases(raw)
-    if include_legacy_tool_aliases is not None:
-        kwargs["include_legacy_tool_aliases"] = include_legacy_tool_aliases
-
-    enable_local_python_tools = _enable_local_python_tools(raw)
-    if enable_local_python_tools is not None:
-        kwargs["enable_local_python_tools"] = enable_local_python_tools
-
     kwargs.update(_compaction_policy_fields(raw))
 
     instruction_paths, instruction_texts = _instruction_sources(
@@ -574,19 +551,6 @@ def _runtime_config_from_raw(
     )
     if command_directories is not None:
         kwargs["command_directories"] = command_directories
-
-    local_tool_directories = _local_tool_directories(
-        raw,
-        workspace_root=workspace_root,
-        include_defaults=include_defaults,
-        enable_local_python_tools=(
-            False
-            if enable_local_python_tools is None
-            else bool(enable_local_python_tools)
-        ),
-    )
-    if local_tool_directories is not None:
-        kwargs["local_tool_directories"] = local_tool_directories
 
     runtime_mode = _runtime_mode(raw)
     if runtime_mode is not None:
@@ -754,37 +718,6 @@ def _model_aware_tool_selection(raw: Mapping[str, Any]) -> Any:
     return selection
 
 
-def _tool_surface(raw: Mapping[str, Any]) -> Any:
-    return _runtime_alias_value(raw, ("toolSurface", "tool_surface"))
-
-
-def _include_legacy_tool_aliases(raw: Mapping[str, Any]) -> Any:
-    return _runtime_alias_value(
-        raw,
-        ("includeLegacyToolAliases", "include_legacy_tool_aliases"),
-    )
-
-
-def _enable_local_python_tools(raw: Mapping[str, Any]) -> Any:
-    return _runtime_alias_value(
-        raw,
-        ("enableLocalPythonTools", "enable_local_python_tools"),
-    )
-
-
-def _runtime_alias_value(raw: Mapping[str, Any], aliases: Iterable[str]) -> Any:
-    alias_set = set(aliases)
-    value = None
-    for key, item in raw.items():
-        if key == "runtime" and isinstance(item, Mapping):
-            for nested_key, nested_value in item.items():
-                if nested_key in alias_set and nested_value is not None:
-                    value = nested_value
-        elif key in alias_set and item is not None:
-            value = item
-    return value
-
-
 _COMPACTION_NESTED_ALIASES = {
     "auto": "compaction_auto",
     "prune": "compaction_prune",
@@ -919,35 +852,6 @@ def default_command_directories(
     return directories
 
 
-def _local_tool_directories(
-    raw: Mapping[str, Any],
-    *,
-    workspace_root: Path,
-    include_defaults: bool,
-    enable_local_python_tools: bool,
-) -> list[Path] | None:
-    paths = (
-        default_local_tool_directories(
-            workspace_root,
-            include_defaults=include_defaults,
-        )
-        if enable_local_python_tools
-        else []
-    )
-
-    configured = _merged_alias_paths(
-        raw,
-        ("toolDirectories", "tool_directories"),
-        workspace_root=workspace_root,
-    )
-    if configured is not None:
-        paths.extend(configured)
-
-    if not paths and configured is None:
-        return None
-    return _dedupe_paths(paths)
-
-
 def _loader_metadata(
     raw: Mapping[str, Any],
     loaded_paths: Iterable[Path],
@@ -975,12 +879,6 @@ def _unconsumed_config(raw: Mapping[str, Any]) -> dict[str, Any]:
                         "mode",
                         "modelAwareToolSelection",
                         "model_aware_tool_selection",
-                        "toolSurface",
-                        "tool_surface",
-                        "includeLegacyToolAliases",
-                        "include_legacy_tool_aliases",
-                        "enableLocalPythonTools",
-                        "enable_local_python_tools",
                     }
                 }
                 if runtime_extra:

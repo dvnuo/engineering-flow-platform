@@ -1063,18 +1063,17 @@ def _validate_permission_action(value: Any, *, key: str) -> PermissionAction:
 
 
 _PERMISSION_CATEGORY_ALIASES: dict[str, frozenset[str]] = {
-    "read": frozenset({"read", "read_file"}),
-    "edit": frozenset({"write", "write_file", "edit", "apply_patch"}),
+    "read": frozenset({"read"}),
+    "edit": frozenset({"write", "edit", "apply_patch"}),
     "glob": frozenset({"glob"}),
     "grep": frozenset({"grep"}),
-    "list": frozenset({"list_dir"}),
-    "bash": frozenset({"shell_exec", "shell_status", "shell_kill"}),
-    "task": frozenset({"task", "task_status", "task_cancel"}),
-    "todowrite": frozenset({"todo_write", "todowrite"}),
-    "webfetch": frozenset({"fetch", "webfetch"}),
+    "bash": frozenset({"bash"}),
+    "task": frozenset({"task"}),
+    "todowrite": frozenset({"todowrite"}),
+    "webfetch": frozenset({"webfetch"}),
     "websearch": frozenset({"websearch", "web_search"}),
     "lsp": frozenset({"lsp"}),
-    "skill": frozenset({"skill", "skill_list"}),
+    "skill": frozenset({"skill"}),
     "question": frozenset({"question"}),
     "doom_loop": frozenset(),
 }
@@ -1229,11 +1228,11 @@ def _args_request_metadata(
 
 
 def _is_shell_permission(tool_id: str, metadata: PermissionMetadata) -> bool:
-    return tool_id in {"bash", "shell_exec"} or metadata.category == "shell"
+    return tool_id == "bash" or metadata.category == "shell"
 
 
 def _is_fetch_permission(tool_id: str, metadata: PermissionMetadata) -> bool:
-    return tool_id in {"fetch", "webfetch"} or (
+    return tool_id == "webfetch" or (
         metadata.category == "network" and metadata.resource == "url"
     )
 

@@ -24,16 +24,15 @@ async def test_default_read_file_output_shape_stays_compatible(tmp_path: Path):
     runtime = _runtime(tmp_path)
 
     result = await runtime.execute(
-        ToolCall(id="call-read", tool_id="read_file", args={"path": "app.txt"})
+        ToolCall(id="call-read", tool_id="read", args={"filePath": "app.txt"})
     )
 
     assert result.status == "success"
-    assert result.output == {
-        "path": "app.txt",
-        "content": "alpha\nbeta\n",
-        "encoding": "utf-8",
-        "bytes": len("alpha\nbeta\n".encode("utf-8")),
-    }
+    assert result.output["path"] == "app.txt"
+    assert result.output["filePath"] == "app.txt"
+    assert result.output["content"] == "alpha\nbeta\n"
+    assert result.output["encoding"] == "utf-8"
+    assert result.output["bytes"] == len("alpha\nbeta\n".encode("utf-8"))
 
 
 @pytest.mark.asyncio
@@ -45,26 +44,25 @@ async def test_read_file_offset_and_limit_return_requested_lines(tmp_path: Path)
     result = await runtime.execute(
         ToolCall(
             id="call-read-range",
-            tool_id="read_file",
-            args={"path": "log.txt", "offset": 2, "limit": 2},
+            tool_id="read",
+            args={"filePath": "log.txt", "offset": 2, "limit": 2},
         )
     )
 
     assert result.status == "success"
-    assert result.output == {
-        "path": "log.txt",
-        "content": "two\nthree\n",
-        "encoding": "utf-8",
-        "bytes": len(content.encode("utf-8")),
-        "start_line": 2,
-        "end_line": 3,
-        "total_lines": 4,
-        "line_count": 2,
-        "has_more": True,
-        "next_offset": 4,
-        "range_truncated": True,
-        "returned_bytes": len("two\nthree\n".encode("utf-8")),
-    }
+    assert result.output["path"] == "log.txt"
+    assert result.output["filePath"] == "log.txt"
+    assert result.output["content"] == "two\nthree\n"
+    assert result.output["encoding"] == "utf-8"
+    assert result.output["bytes"] == len(content.encode("utf-8"))
+    assert result.output["start_line"] == 2
+    assert result.output["end_line"] == 3
+    assert result.output["total_lines"] == 4
+    assert result.output["line_count"] == 2
+    assert result.output["has_more"] is True
+    assert result.output["next_offset"] == 4
+    assert result.output["range_truncated"] is True
+    assert result.output["returned_bytes"] == len("two\nthree\n".encode("utf-8"))
 
 
 @pytest.mark.asyncio
@@ -76,8 +74,8 @@ async def test_read_file_limit_zero_returns_empty_range_metadata(tmp_path: Path)
     result = await runtime.execute(
         ToolCall(
             id="call-read-empty-range",
-            tool_id="read_file",
-            args={"path": "log.txt", "offset": 2, "limit": 0},
+            tool_id="read",
+            args={"filePath": "log.txt", "offset": 2, "limit": 0},
         )
     )
 
@@ -102,21 +100,13 @@ async def test_read_file_offset_past_eof_returns_empty_range(tmp_path: Path):
     result = await runtime.execute(
         ToolCall(
             id="call-read-past-eof",
-            tool_id="read_file",
-            args={"path": "log.txt", "offset": 5},
+            tool_id="read",
+            args={"filePath": "log.txt", "offset": 5},
         )
     )
 
-    assert result.status == "success"
-    assert result.output["content"] == ""
-    assert result.output["start_line"] == 5
-    assert result.output["end_line"] == 4
-    assert result.output["total_lines"] == 2
-    assert result.output["line_count"] == 0
-    assert result.output["has_more"] is False
-    assert result.output["next_offset"] is None
-    assert result.output["range_truncated"] is False
-    assert result.output["returned_bytes"] == 0
+    assert result.status == "error"
+    assert "Offset 5 is out of range" in result.error
 
 
 @pytest.mark.asyncio
@@ -140,8 +130,8 @@ async def test_read_file_rejects_invalid_range_arguments(
     result = await runtime.execute(
         ToolCall(
             id=f"call-read-invalid-{field}",
-            tool_id="read_file",
-            args={"path": "log.txt", **args},
+            tool_id="read",
+            args={"filePath": "log.txt", **args},
         )
     )
 
@@ -160,8 +150,8 @@ async def test_read_file_range_still_attaches_nearby_instructions(tmp_path: Path
     result = await runtime.execute(
         ToolCall(
             id="call-read-range-instructions",
-            tool_id="read_file",
-            args={"path": "src/pkg/app.py", "offset": 2, "limit": 1},
+            tool_id="read",
+            args={"filePath": "src/pkg/app.py", "offset": 2, "limit": 1},
         )
     )
 
@@ -183,9 +173,9 @@ async def test_read_file_range_reads_archived_tool_output_path(tmp_path: Path):
     result = await runtime.execute(
         ToolCall(
             id="call-read-output-path",
-            tool_id="read_file",
+            tool_id="read",
             args={
-                "path": ".efp_runtime/tool-output/call-shell.log",
+                "filePath": ".efp_runtime/tool-output/call-shell.log",
                 "offset": 2,
                 "limit": 2,
             },
@@ -209,9 +199,9 @@ import json
 import sys
 from pathlib import Path
 
-from efp_runtime.tools.builtin.filesystem import create_read_file_tool
+from efp_runtime.tools.builtin.filesystem import create_read_tool
 
-create_read_file_tool(Path(".").resolve())
+create_read_tool(Path(".").resolve())
 blocked = [
     "src.sessions",
     "src.agents.core",
@@ -245,7 +235,7 @@ print(json.dumps([name for name in blocked if name in sys.modules]))
 
 def _runtime(workspace_root: Path) -> ToolRuntime:
     return ToolRuntime(
-        create_core_tool_registry(workspace_root, include_legacy_aliases=True)
+        create_core_tool_registry(workspace_root)
     )
 
 
@@ -255,6 +245,6 @@ def _runtime_with_resolver(workspace_root: Path) -> ToolRuntime:
         create_core_tool_registry(
             workspace_root,
             instruction_resolver=resolver,
-            include_legacy_aliases=True,
+            
         )
     )

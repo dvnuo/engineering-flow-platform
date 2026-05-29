@@ -160,10 +160,6 @@ def _runtime_config(model: str, *, track_usage: bool) -> RuntimeConfig:
         default_provider_id="github-copilot",
         default_model=model,
         max_iterations=_resolve_max_iterations(),
-        tool_surface="opencode",
-        include_legacy_tool_aliases=False,
-        enable_local_python_tools=False,
-        local_tool_directories=[],
         track_usage=track_usage,
     )
 

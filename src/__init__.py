@@ -59,8 +59,6 @@ class Tool:
 def _create_registry() -> ToolRegistry:
     return create_core_tool_registry(
         Path.cwd(),
-        tool_surface="opencode",
-        include_legacy_aliases=False,
     )
 
 

@@ -17,18 +17,6 @@ TODO_PRIORITIES = ("high", "medium", "low")
 TodoStore = dict[str, list[dict[str, str]]]
 
 
-def create_todo_write_tool(
-    *,
-    todo_store: SessionTodoStore | None = None,
-    todos_by_session: TodoStore | None = None,
-) -> ToolDef:
-    return _create_todo_tool(
-        tool_id="todo_write",
-        todo_store=todo_store,
-        todos_by_session=todos_by_session,
-    )
-
-
 def create_todowrite_tool(
     *,
     todo_store: SessionTodoStore | None = None,

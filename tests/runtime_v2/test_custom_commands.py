@@ -58,7 +58,7 @@ def test_command_registry_discovers_and_parses_command_files(tmp_path: Path):
         "agent: coder\n"
         "model: gpt-test\n"
         "subtask: false\n"
-        "tools: [read_file, edit]\n"
+        "tools: [read, edit]\n"
         "---\n"
         "# Fix\nApply the smallest safe change.\n",
         encoding="utf-8",
@@ -83,7 +83,7 @@ def test_command_registry_discovers_and_parses_command_files(tmp_path: Path):
     assert commands["fix"].metadata["subtask"] is False
     assert commands["fix"].subtask is False
     assert commands["fix"].source == "file"
-    assert commands["fix"].metadata["tools"] == ["read_file", "edit"]
+    assert commands["fix"].metadata["tools"] == ["read", "edit"]
     assert commands["fix"].command_file == second_dir / "fix.md"
     assert commands["review:pr"].description == "Review a PR"
     assert commands["review:pr"].content == "# Review\nFocus on correctness."
@@ -99,7 +99,7 @@ def test_config_command_definitions_parse_string_and_mapping_forms():
                     "argument-hint": "<target>",
                     "agent": "build",
                     "model": "provider/model",
-                    "tools": ["shell_exec"],
+                    "tools": ["bash"],
                     "subtask": False,
                 },
                 "review": "Review $1",
@@ -119,7 +119,7 @@ def test_config_command_definitions_parse_string_and_mapping_forms():
     assert commands["test"].agent == "build"
     assert commands["test"].model == "provider/model"
     assert commands["test"].subtask is False
-    assert commands["test"].metadata["tools"] == ["shell_exec"]
+    assert commands["test"].metadata["tools"] == ["bash"]
     assert commands["test"].source == "config"
     assert commands["review"].content == "Review $1"
     assert commands["audit"].content == "Audit $ARGUMENTS"
@@ -146,12 +146,12 @@ def test_command_registry_list_returns_safe_effective_command_info(tmp_path: Pat
                         "argument-hint": "<service>",
                         "agent": "release",
                         "model": "provider/release",
-                        "tools": "edit, shell_exec, edit, ",
+                        "tools": "edit, bash, edit, ",
                         "subtask": {"kind": "release"},
                     },
                     "maptools": {
                         "template": "Mapped tools",
-                        "tools": {"read_file": True},
+                        "tools": {"read": True},
                     },
                 }
             }
@@ -177,7 +177,7 @@ def test_command_registry_list_returns_safe_effective_command_info(tmp_path: Pat
         "agent: file-agent\n"
         "model: provider/file\n"
         "subtask: true\n"
-        "tools: [read_file, shell_exec, read_file]\n"
+        "tools: [read, bash, read]\n"
         "---\n"
         "Run $2 then $1 with $ARGUMENTS and $HOME\n",
         encoding="utf-8",
@@ -197,11 +197,11 @@ def test_command_registry_list_returns_safe_effective_command_info(tmp_path: Pat
     assert review.agent == "file-agent"
     assert review.model == "provider/file"
     assert review.subtask is True
-    assert review.tools == ["read_file", "shell_exec"]
+    assert review.tools == ["read", "bash"]
     assert review.hints == ["$1", "$2", "$ARGUMENTS"]
     assert review.command_file == command_file
     assert review.metadata["source"] == "file"
-    assert review.metadata["tools"] == ["read_file", "shell_exec", "read_file"]
+    assert review.metadata["tools"] == ["read", "bash", "read"]
     assert not hasattr(review, "content")
     assert "content" not in asdict(review)
 
@@ -211,16 +211,16 @@ def test_command_registry_list_returns_safe_effective_command_info(tmp_path: Pat
     assert infos["deploy"].agent == "release"
     assert infos["deploy"].model == "provider/release"
     assert infos["deploy"].subtask == {"kind": "release"}
-    assert infos["deploy"].tools == ["edit", "shell_exec"]
+    assert infos["deploy"].tools == ["edit", "bash"]
     assert infos["deploy"].hints == ["$1", "$ARGUMENTS"]
     assert infos["maptools"].tools == []
 
-    review.metadata["tools"].append("write_file")
-    review.tools.append("write_file")
+    review.metadata["tools"].append("write")
+    review.tools.append("write")
     review.hints.append("$99")
     fresh_info = {info.name: info for info in registry.list()}["review"]
-    assert fresh_info.metadata["tools"] == ["read_file", "shell_exec", "read_file"]
-    assert fresh_info.tools == ["read_file", "shell_exec"]
+    assert fresh_info.metadata["tools"] == ["read", "bash", "read"]
+    assert fresh_info.tools == ["read", "bash"]
     assert fresh_info.hints == ["$1", "$2", "$ARGUMENTS"]
 
 
@@ -784,10 +784,10 @@ async def test_command_executed_event_emits_on_pause_and_not_resume(tmp_path: Pa
                         "id": "call_write",
                         "type": "function",
                         "function": {
-                            "name": "write_file",
+                            "name": "write",
                             "arguments": json.dumps(
                                 {
-                                    "path": "created.txt",
+                                    "filePath": "created.txt",
                                     "content": "approved\n",
                                 }
                             ),
@@ -804,7 +804,7 @@ async def test_command_executed_event_emits_on_pause_and_not_resume(tmp_path: Pa
             workspace_root=tmp_path,
             command_directories=[command_dir],
             max_iterations=3,
-            include_legacy_tool_aliases=True,
+            model_aware_tool_selection=False,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -916,20 +916,25 @@ async def test_builtin_review_available_without_config_or_command_directory(
 
     await runtime.run("/review feature/rework", session_id="session-builtin-review")
 
-    request = provider.requests[0]
+    child_request = provider.requests[0]
+    child_text = child_request.provider_request.messages[0].text
+    assert '<task_prompt description="Review working tree, commit, branch, or PR changes" command="review">' in child_text
+    assert "Review the requested code changes." in child_text
+    assert "git diff" in child_text
+    assert "git diff --cached" in child_text
+    assert "git diff feature/rework...HEAD" in child_text
+    assert "feature/rework" in child_text
+    assert "Report findings first" in child_text
+
+    request = provider.requests[-1]
     text = request.provider_request.messages[0].text
     assert request.metadata["command_name"] == "review"
     assert request.metadata["command_source"] == "builtin"
     assert request.metadata["command_subtask"] is True
     assert request.metadata["command_subtask_requested"] is True
-    assert request.metadata["command_subtask_available"] is False
-    assert request.metadata["command_subtask_executed"] is False
-    assert "Review the requested code changes." in text
-    assert "git diff" in text
-    assert "git diff --cached" in text
-    assert "git diff feature/rework...HEAD" in text
-    assert "feature/rework" in text
-    assert "Report findings first" in text
+    assert request.metadata["command_subtask_available"] is True
+    assert request.metadata["command_subtask_executed"] is True
+    assert '<command_subtask_result name="review" agent="general"' in text
 
 
 @pytest.mark.asyncio
@@ -997,7 +1002,7 @@ async def test_injected_command_registry_expands_without_config_directories():
         agent="builder",
         model="provider/model",
         subtask=False,
-        metadata={"tools": ["shell_exec"]},
+        metadata={"tools": ["bash"]},
     )
     registry = CommandRegistry.from_sources(definitions=[definition])
     provider = ScriptedLLMProvider([{"content": "Done."}])
@@ -1014,14 +1019,14 @@ async def test_injected_command_registry_expands_without_config_directories():
             [AgentProfile(name="builder")],
             default_agent=None,
         ),
-        tool_registry=ToolRegistry([_tool("shell_exec")]),
+        tool_registry=ToolRegistry([_tool("bash")]),
     )
 
     assert runtime.command_registry is registry
     assert runtime.command_registry.get("init") is None
 
     await runtime.run("/build target --fast", session_id="session-injected-command")
-    definition.metadata["tools"].append("write_file")
+    definition.metadata["tools"].append("write")
 
     request = provider.requests[0]
     text = request.provider_request.messages[0].text
@@ -1032,7 +1037,7 @@ async def test_injected_command_registry_expands_without_config_directories():
     assert request.metadata["command_agent"] == "builder"
     assert request.metadata["command_model"] == "provider/model"
     assert request.metadata["command_subtask"] is False
-    assert request.metadata["command_metadata"]["tools"] == ["shell_exec"]
+    assert request.metadata["command_metadata"]["tools"] == ["bash"]
 
 
 @pytest.mark.asyncio
@@ -1671,7 +1676,7 @@ async def test_command_tools_merge_profile_command_and_caller_overrides():
                 name="listtools",
                 content="Use listed tools.",
                 source="config",
-                metadata={"tools": ["read_file", "edit"]},
+                metadata={"tools": ["read", "edit"]},
             ),
             CommandDefinition(
                 name="maptools",
@@ -1679,9 +1684,9 @@ async def test_command_tools_merge_profile_command_and_caller_overrides():
                 source="config",
                 metadata={
                     "tools": {
-                        "read_file": True,
+                        "read": True,
                         "edit": False,
-                        "shell_exec": True,
+                        "bash": True,
                     }
                 },
             ),
@@ -1689,7 +1694,7 @@ async def test_command_tools_merge_profile_command_and_caller_overrides():
     )
     profile = AgentProfile(
         name="limited",
-        tools={"read_file": False, "edit": False, "shell_exec": False},
+        tools={"read": False, "edit": False, "bash": False},
     )
     provider = ScriptedLLMProvider(
         [
@@ -1699,10 +1704,10 @@ async def test_command_tools_merge_profile_command_and_caller_overrides():
     )
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=1, model_aware_tool_selection=False),
         command_registry=registry,
         tool_registry=ToolRegistry(
-            [_tool("read_file"), _tool("edit"), _tool("shell_exec")]
+            [_tool("read"), _tool("edit"), _tool("bash")]
         ),
     )
 
@@ -1716,25 +1721,25 @@ async def test_command_tools_merge_profile_command_and_caller_overrides():
         "/maptools",
         session_id="session-command-map-tools",
         agent=profile,
-        tools={"edit": True, "shell_exec": False},
+        tools={"edit": True, "bash": False},
     )
 
-    assert [tool.id for tool in provider.requests[0].tools] == ["read_file"]
-    assert provider.requests[0].metadata["enabled_tool_ids"] == ["read_file"]
+    assert [tool.id for tool in provider.requests[0].tools] == ["read"]
+    assert provider.requests[0].metadata["enabled_tool_ids"] == ["read"]
     assert provider.requests[0].metadata["disabled_tool_ids"] == [
+        "bash",
         "edit",
-        "shell_exec",
     ]
-    assert [tool.id for tool in provider.requests[1].tools] == ["edit", "read_file"]
+    assert [tool.id for tool in provider.requests[1].tools] == ["edit", "read"]
     assert provider.requests[1].metadata["enabled_tool_ids"] == [
         "edit",
-        "read_file",
+        "read",
     ]
-    assert provider.requests[1].metadata["disabled_tool_ids"] == ["shell_exec"]
+    assert provider.requests[1].metadata["disabled_tool_ids"] == ["bash"]
     assert profile.tools == {
-        "read_file": False,
+        "read": False,
         "edit": False,
-        "shell_exec": False,
+        "bash": False,
     }
 
 
@@ -1746,7 +1751,7 @@ async def test_invalid_command_tools_raise_before_provider_request():
                 name="badtools",
                 content="Bad tools.",
                 source="config",
-                metadata={"tools": "read_file"},
+                metadata={"tools": "read"},
             )
         ]
     )
@@ -1754,7 +1759,7 @@ async def test_invalid_command_tools_raise_before_provider_request():
     runtime = AgentRuntime(
         provider=provider,
         command_registry=registry,
-        tool_registry=ToolRegistry([_tool("read_file")]),
+        tool_registry=ToolRegistry([_tool("read")]),
     )
 
     with pytest.raises(ValueError, match="command tools metadata"):
@@ -2011,8 +2016,7 @@ async def test_command_shell_interpolation_renders_tool_results(tmp_path: Path):
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
-            include_legacy_tool_aliases=True,
-            tool_permissions={"shell_exec": "allow"},
+            tool_permissions={"bash": "allow"},
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -2038,7 +2042,7 @@ async def test_command_shell_interpolation_renders_tool_results(tmp_path: Path):
     assert [
         interpolation["tool_id"]
         for interpolation in request.metadata["command_shell_interpolations"]
-    ] == ["shell_exec", "shell_exec"]
+    ] == ["bash", "bash"]
 
 
 @pytest.mark.asyncio
@@ -2061,8 +2065,7 @@ async def test_command_shell_interpolation_permission_denial_is_visible(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
-            include_legacy_tool_aliases=True,
-            tool_permissions={"shell_exec": "deny"},
+            tool_permissions={"bash": "deny"},
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -2099,7 +2102,7 @@ async def test_command_arguments_and_body_shell_syntax_are_not_interpolated(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
-            tool_permissions={"shell_exec": "allow"},
+            tool_permissions={"bash": "allow"},
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,

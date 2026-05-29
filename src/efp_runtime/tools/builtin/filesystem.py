@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import stat
 from pathlib import Path
 from typing import Any
@@ -18,13 +17,13 @@ from .diff_preview import (
     unified_diff_preview,
 )
 
-READ_ALIAS_DEFAULT_LIMIT = 2000
-READ_ALIAS_MAX_VISIBLE_BYTES = 50 * 1024
-READ_ALIAS_MAX_LINE_LENGTH = 2000
-READ_ALIAS_MAX_LINE_SUFFIX = (
-    f"... (line truncated to {READ_ALIAS_MAX_LINE_LENGTH} chars)"
+READ_DEFAULT_LIMIT = 2000
+READ_MAX_VISIBLE_BYTES = 50 * 1024
+READ_MAX_LINE_LENGTH = 2000
+READ_MAX_LINE_SUFFIX = (
+    f"... (line truncated to {READ_MAX_LINE_LENGTH} chars)"
 )
-READ_ALIAS_BINARY_SAMPLE_BYTES = 4096
+READ_BINARY_SAMPLE_BYTES = 4096
 
 
 def normalize_workspace_root(workspace_root: str | Path) -> Path:
@@ -65,73 +64,6 @@ def workspace_relative_path(workspace_root: str | Path, path: str | Path) -> str
     return text or "."
 
 
-def create_read_file_tool(
-    workspace_root: str | Path,
-    *,
-    instruction_resolver: ReadInstructionResolver | None = None,
-) -> ToolDef:
-    root = normalize_workspace_root(workspace_root)
-
-    async def execute(args: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        path = resolve_workspace_path(root, args["path"])
-        if not path.exists():
-            raise FileNotFoundError(f"File does not exist: {workspace_relative_path(root, path)}")
-        if not path.is_file():
-            raise IsADirectoryError(f"Path is not a file: {workspace_relative_path(root, path)}")
-
-        encoding = args.get("encoding") or "utf-8"
-        data = path.read_bytes()
-        text = data.decode(encoding, errors="replace")
-        range_requested = "offset" in args or "limit" in args
-
-        if range_requested:
-            offset = args.get("offset", 1)
-            limit = args.get("limit")
-            _validate_read_range(offset=offset, limit=limit)
-            content, range_metadata = _read_text_range(
-                text,
-                offset=offset,
-                limit=limit,
-                encoding=encoding,
-            )
-        else:
-            content = text
-            range_metadata = {}
-
-        output = {
-            "path": workspace_relative_path(root, path),
-            "content": content,
-            "encoding": encoding,
-            "bytes": len(data),
-        }
-        output.update(range_metadata)
-        _attach_read_instructions(output, instruction_resolver, path)
-        return output
-
-    return ToolDef(
-        id="read_file",
-        description="Read a text file inside the workspace, optionally by line range.",
-        input_schema={
-            "type": "object",
-            "required": ["path"],
-            "properties": {
-                "path": {"type": "string"},
-                "encoding": {"type": "string"},
-                "offset": {"type": "integer", "minimum": 1},
-                "limit": {"type": "integer", "minimum": 0},
-            },
-            "additionalProperties": False,
-        },
-        execute=execute,
-        permission=PermissionMetadata(
-            action=ALLOW,
-            category="filesystem",
-            resource="workspace",
-            risk="low",
-        ),
-    )
-
-
 def create_read_tool(
     workspace_root: str | Path,
     *,
@@ -145,7 +77,7 @@ def create_read_tool(
             raise FileNotFoundError(_missing_path_message(root, path))
 
         if path.is_file():
-            return _read_alias_file(
+            return _read_workspace_file(
                 root,
                 path,
                 args=args,
@@ -153,7 +85,7 @@ def create_read_tool(
                 instruction_resolver=instruction_resolver,
             )
         if path.is_dir():
-            return _read_alias_directory(root, path, args=args, context=context)
+            return _read_workspace_directory(root, path, args=args, context=context)
 
         raise ValueError(
             f"Path is not a file or directory: {workspace_relative_path(root, path)}"
@@ -235,7 +167,7 @@ def _read_text_range(
     return content, metadata
 
 
-def _read_alias_file(
+def _read_workspace_file(
     workspace_root: Path,
     path: Path,
     *,
@@ -248,9 +180,9 @@ def _read_alias_file(
     data, text = _read_text_file_strict(workspace_root, path, encoding)
     offset = args.get("offset", 1)
     default_limit_applied = "limit" not in args
-    limit = args.get("limit", READ_ALIAS_DEFAULT_LIMIT)
+    limit = args.get("limit", READ_DEFAULT_LIMIT)
     _validate_read_range(offset=offset, limit=limit)
-    content, range_metadata = _read_alias_text_range(
+    content, range_metadata = _read_text_for_display_range(
         text,
         offset=offset,
         limit=limit,
@@ -273,7 +205,7 @@ def _read_alias_file(
     return ToolResult(
         call_id=context.tool_call_id or "read",
         tool_name="read",
-        content=_format_read_file_content(
+        content=_format_read_content(
             path=relative_path,
             content=content,
             range_metadata=range_metadata,
@@ -287,7 +219,7 @@ def _read_alias_file(
     )
 
 
-def _read_alias_text_range(
+def _read_text_for_display_range(
     text: str,
     *,
     offset: int,
@@ -324,7 +256,7 @@ def _read_alias_text_range(
                 _append_unique(truncated_by, "line_length")
 
             line_bytes = len(line.encode(encoding, errors="replace"))
-            if returned_bytes + line_bytes > READ_ALIAS_MAX_VISIBLE_BYTES:
+            if returned_bytes + line_bytes > READ_MAX_VISIBLE_BYTES:
                 byte_truncated = True
                 _append_unique(truncated_by, "bytes")
                 break
@@ -352,8 +284,8 @@ def _read_alias_text_range(
         "range_truncated": range_truncated,
         "returned_bytes": returned_bytes,
         "default_limit_applied": default_limit_applied,
-        "max_visible_bytes": READ_ALIAS_MAX_VISIBLE_BYTES,
-        "max_line_length": READ_ALIAS_MAX_LINE_LENGTH,
+        "max_visible_bytes": READ_MAX_VISIBLE_BYTES,
+        "max_line_length": READ_MAX_LINE_LENGTH,
         "truncated_by": truncated_by,
     }
     return content, metadata
@@ -361,10 +293,10 @@ def _read_alias_text_range(
 
 def _truncate_visible_line(line: str) -> tuple[str, bool]:
     body, ending = _split_line_ending(line)
-    if len(body) <= READ_ALIAS_MAX_LINE_LENGTH:
+    if len(body) <= READ_MAX_LINE_LENGTH:
         return line, False
     return (
-        f"{body[:READ_ALIAS_MAX_LINE_LENGTH]}{READ_ALIAS_MAX_LINE_SUFFIX}{ending}",
+        f"{body[:READ_MAX_LINE_LENGTH]}{READ_MAX_LINE_SUFFIX}{ending}",
         True,
     )
 
@@ -384,7 +316,7 @@ def _read_text_file_strict(
 ) -> tuple[bytes, str]:
     relative_path = workspace_relative_path(workspace_root, path)
     data = path.read_bytes()
-    if _looks_binary(data[:READ_ALIAS_BINARY_SAMPLE_BYTES]):
+    if _looks_binary(data[:READ_BINARY_SAMPLE_BYTES]):
         raise ValueError(f"File is binary and cannot be read as text: {relative_path}")
     try:
         text = data.decode(encoding)
@@ -449,7 +381,7 @@ def _append_unique(items: list[str], value: str) -> None:
         items.append(value)
 
 
-def _read_alias_directory(
+def _read_workspace_directory(
     workspace_root: Path,
     path: Path,
     *,
@@ -459,7 +391,7 @@ def _read_alias_directory(
     relative_path = workspace_relative_path(workspace_root, path)
     offset = args.get("offset", 1)
     default_limit_applied = "limit" not in args
-    limit = args.get("limit", READ_ALIAS_DEFAULT_LIMIT)
+    limit = args.get("limit", READ_DEFAULT_LIMIT)
     all_entries = [
         _directory_entry(workspace_root, entry)
         for entry in sorted(path.iterdir(), key=_sort_key)
@@ -528,42 +460,6 @@ def _slice_directory_entries(
         "truncated": truncated,
         "default_limit_applied": default_limit_applied,
     }
-
-
-def create_list_dir_tool(workspace_root: str | Path) -> ToolDef:
-    root = normalize_workspace_root(workspace_root)
-
-    async def execute(args: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        path = resolve_workspace_path(root, args.get("path") or ".")
-        if not path.exists():
-            raise FileNotFoundError(f"Directory does not exist: {workspace_relative_path(root, path)}")
-        if not path.is_dir():
-            raise NotADirectoryError(f"Path is not a directory: {workspace_relative_path(root, path)}")
-
-        entries = [_directory_entry(root, entry) for entry in sorted(path.iterdir(), key=_sort_key)]
-        return {
-            "path": workspace_relative_path(root, path),
-            "entries": entries,
-        }
-
-    return ToolDef(
-        id="list_dir",
-        description="List directory entries inside the workspace.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-            },
-            "additionalProperties": False,
-        },
-        execute=execute,
-        permission=PermissionMetadata(
-            action=ALLOW,
-            category="filesystem",
-            resource="workspace",
-            risk="low",
-        ),
-    )
 
 
 def create_write_tool(
@@ -680,119 +576,6 @@ def create_write_tool(
     )
 
 
-def create_write_file_tool(
-    workspace_root: str | Path,
-    *,
-    permission: PermissionMetadata | None = None,
-) -> ToolDef:
-    root = normalize_workspace_root(workspace_root)
-
-    async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
-        path = resolve_workspace_path(root, args["path"])
-        parent = path.parent
-        if args.get("create_dirs"):
-            parent.mkdir(parents=True, exist_ok=True)
-        elif not parent.exists():
-            raise FileNotFoundError(
-                f"Parent directory does not exist: {workspace_relative_path(root, parent)}"
-            )
-        if not parent.is_dir():
-            raise NotADirectoryError(
-                f"Parent path is not a directory: {workspace_relative_path(root, parent)}"
-            )
-
-        content = args["content"]
-        encoding = args.get("encoding") or "utf-8"
-        relative_path = workspace_relative_path(root, path)
-        existed = path.exists()
-        old_data = path.read_bytes() if existed else b""
-        old_text = (
-            _decode_existing_text_for_diff(old_data, encoding) if existed else ""
-        )
-        mode = "a" if args.get("append") else "w"
-        with path.open(mode, encoding=encoding) as handle:
-            handle.write(content)
-        new_data = path.read_bytes()
-        new_text = _decode_existing_text_for_diff(new_data, encoding)
-        diff = ""
-        if old_text is not None and new_text is not None:
-            diff, _ = unified_diff_preview(
-                old_text,
-                new_text,
-                f"a/{relative_path}",
-                f"b/{relative_path}",
-                DEFAULT_MAX_PREVIEW_LINES,
-                DEFAULT_MAX_PREVIEW_CHARS,
-            )
-        filediff = (
-            file_diff_record(
-                path=relative_path,
-                old_text=old_text,
-                new_text=new_text,
-                patch=diff,
-            )
-            if old_text is not None and new_text is not None
-            else None
-        )
-        output = {
-            "path": relative_path,
-            "encoding": encoding,
-            "bytes": len(content.encode(encoding)),
-            "append": bool(args.get("append")),
-        }
-        metadata = {}
-        if filediff is not None:
-            output["filediff"] = filediff
-            metadata["filediff"] = filediff
-        return ToolResult(
-            call_id=context.tool_call_id or "write_file",
-            tool_name="write_file",
-            content=json.dumps(output, indent=2, sort_keys=True),
-            output=output,
-            metadata=metadata,
-        )
-
-    return ToolDef(
-        id="write_file",
-        description="Write a text file inside the workspace.",
-        input_schema={
-            "type": "object",
-            "required": ["path", "content"],
-            "properties": {
-                "path": {"type": "string"},
-                "content": {"type": "string"},
-                "encoding": {"type": "string"},
-                "append": {"type": "boolean"},
-                "create_dirs": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-        },
-        execute=execute,
-        permission=permission or _default_write_permission(),
-    )
-
-
-def create_filesystem_tools(
-    workspace_root: str | Path,
-    *,
-    write_permission: PermissionMetadata | None = None,
-    instruction_resolver: ReadInstructionResolver | None = None,
-) -> list[ToolDef]:
-    return [
-        create_read_tool(
-            workspace_root,
-            instruction_resolver=instruction_resolver,
-        ),
-        create_read_file_tool(
-            workspace_root,
-            instruction_resolver=instruction_resolver,
-        ),
-        create_list_dir_tool(workspace_root),
-        create_write_tool(workspace_root, permission=write_permission),
-        create_write_file_tool(workspace_root, permission=write_permission),
-    ]
-
-
 def _directory_entry(workspace_root: Path, path: Path) -> dict[str, Any]:
     file_stat = path.lstat()
     mode = file_stat.st_mode
@@ -840,7 +623,7 @@ def _directory_display_name(entry: dict[str, Any]) -> str:
     return name
 
 
-def _format_read_file_content(
+def _format_read_content(
     *,
     path: str,
     content: str,
@@ -871,7 +654,7 @@ def _numbered_read_content(*, content: str, range_metadata: dict[str, Any]) -> s
     if "bytes" in range_metadata.get("truncated_by", []):
         next_offset = range_metadata["next_offset"] or end_line + 1
         marker = (
-            f"(Output capped at {READ_ALIAS_MAX_VISIBLE_BYTES // 1024} KB. "
+            f"(Output capped at {READ_MAX_VISIBLE_BYTES // 1024} KB. "
             f"Showing lines {start_line}-{end_line}. Use offset={next_offset} "
             "to continue.)"
         )

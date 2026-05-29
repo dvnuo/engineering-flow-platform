@@ -115,15 +115,15 @@ def test_shell_permission_scan_parse_failure_falls_back_to_command_pattern():
 
 
 @pytest.mark.asyncio
-async def test_legacy_shell_exec_permission_request_uses_same_scan(tmp_path: Path):
+async def test_bash_permission_request_uses_same_scan(tmp_path: Path):
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+        create_core_tool_registry(tmp_path)
     )
 
     result = await runtime.execute(
         ToolCall(
             id="call-shell-exec-cat",
-            tool_id="shell_exec",
+            tool_id="bash",
             args={"command": "cat legacy.py"},
         ),
         context=ToolContext(session_id="session-shell-exec-cat"),

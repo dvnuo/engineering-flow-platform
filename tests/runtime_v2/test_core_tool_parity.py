@@ -10,6 +10,7 @@ import pytest
 
 from efp_runtime.models import ToolCall
 from efp_runtime.permissions import ALLOW, ASK, PermissionDecision, PermissionMetadata
+from efp_runtime.opencode_parity import DEFAULT_CORE_TOOL_IDS
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.runtime import ToolRuntime
@@ -87,7 +88,7 @@ async def test_edit_replaces_single_match_with_allow_permission(tmp_path: Path):
         ToolCall(
             id="call-edit",
             tool_id="edit",
-            args={"path": "notes.txt", "old_text": "beta", "new_text": "gamma"},
+            args={"filePath": "notes.txt", "oldString": "beta", "newString": "gamma"},
         )
     )
 
@@ -109,7 +110,7 @@ async def test_edit_protects_multiple_matches_unless_replace_all(tmp_path: Path)
         ToolCall(
             id="call-edit-blocked",
             tool_id="edit",
-            args={"path": "dup.txt", "old_text": "same", "new_text": "diff"},
+            args={"filePath": "dup.txt", "oldString": "same", "newString": "diff"},
         )
     )
 
@@ -122,10 +123,10 @@ async def test_edit_protects_multiple_matches_unless_replace_all(tmp_path: Path)
             id="call-edit-all",
             tool_id="edit",
             args={
-                "path": "dup.txt",
-                "old_text": "same",
-                "new_text": "diff",
-                "replace_all": True,
+                "filePath": "dup.txt",
+                "oldString": "same",
+                "newString": "diff",
+                "replaceAll": True,
             },
         )
     )
@@ -151,12 +152,12 @@ async def test_edit_errors_when_old_text_is_missing(tmp_path: Path):
         ToolCall(
             id="call-edit-missing",
             tool_id="edit",
-            args={"path": "notes.txt", "old_text": "missing", "new_text": "beta"},
+            args={"filePath": "notes.txt", "oldString": "missing", "newString": "beta"},
         )
     )
 
     assert result.status == "error"
-    assert "old_text was not found" in result.error
+    assert "oldString was not found" in result.error
     assert target.read_text(encoding="utf-8") == "alpha\n"
 
 
@@ -168,7 +169,7 @@ async def test_edit_rejects_outside_path_with_allow_permission(tmp_path: Path):
         ToolCall(
             id="call-edit-outside",
             tool_id="edit",
-            args={"path": "../outside.txt", "old_text": "a", "new_text": "b"},
+            args={"filePath": "../outside.txt", "oldString": "a", "newString": "b"},
         )
     )
 
@@ -353,20 +354,7 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
 @pytest.mark.asyncio
 async def test_new_core_tool_permission_defaults(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path)
-    assert registry.ids() == [
-        "apply_patch",
-        "bash",
-        "edit",
-        "glob",
-        "grep",
-        "invalid",
-        "read",
-        "repo_clone",
-        "repo_overview",
-        "todowrite",
-        "webfetch",
-        "write",
-    ]
+    assert registry.ids() == list(DEFAULT_CORE_TOOL_IDS)
     assert registry.require("glob").permission.action == ALLOW
     assert registry.require("webfetch").permission.action == ALLOW
     assert registry.require("webfetch").permission.category == "network"
@@ -383,26 +371,13 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
     assert registry.require("bash").permission.category == "shell"
     assert registry.require("bash").permission.resource == "workspace"
     assert registry.require("bash").permission.risk == "high"
-    assert registry.require("repo_clone").permission.action == ASK
-    assert registry.require("repo_clone").permission.category == "repository"
-    assert registry.require("repo_clone").permission.risk == "medium"
-    assert registry.require("repo_overview").permission.action == ASK
-    assert registry.require("repo_overview").permission.category == "repository"
-    assert registry.require("repo_overview").permission.risk == "low"
-
-    legacy_registry = create_core_tool_registry(tmp_path, include_legacy_aliases=True)
-    assert legacy_registry.require("fetch").permission.action == ALLOW
-    assert legacy_registry.require("fetch").permission.category == "network"
-    assert legacy_registry.require("fetch").permission.risk == "medium"
-    assert legacy_registry.require("todo_write").permission.action == ALLOW
-    assert legacy_registry.require("todo_write").permission.category == "planning"
-    assert legacy_registry.require("todo_write").permission.resource == "session"
-    assert legacy_registry.require("todo_write").permission.risk == "low"
-    assert legacy_registry.require("shell_status").permission.action == ALLOW
-    assert legacy_registry.require("shell_status").permission.risk == "low"
-    assert legacy_registry.require("shell_exec").permission.action == ASK
-    assert legacy_registry.require("shell_kill").permission.action == ASK
-    assert legacy_registry.require("shell_kill").permission.risk == "medium"
+    repo_registry = create_core_tool_registry(tmp_path, include_repository_tools=True)
+    assert repo_registry.require("repo_clone").permission.action == ASK
+    assert repo_registry.require("repo_clone").permission.category == "repository"
+    assert repo_registry.require("repo_clone").permission.risk == "medium"
+    assert repo_registry.require("repo_overview").permission.action == ASK
+    assert repo_registry.require("repo_overview").permission.category == "repository"
+    assert repo_registry.require("repo_overview").permission.risk == "low"
 
     target = tmp_path / "notes.txt"
     target.write_text("alpha\n", encoding="utf-8")
@@ -411,7 +386,7 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
         ToolCall(
             id="call-edit-permission",
             tool_id="edit",
-            args={"path": "notes.txt", "old_text": "alpha", "new_text": "beta"},
+            args={"filePath": "notes.txt", "oldString": "alpha", "newString": "beta"},
         )
     )
 

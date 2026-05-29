@@ -285,7 +285,7 @@ def test_create_agent_task_tools_background_keeps_task_description_consistent():
         allow_background=True,
     )
 
-    assert [tool.id for tool in tools] == ["task", "task_status", "task_cancel"]
+    assert [tool.id for tool in tools] == ["task"]
     assert tools[0].description == "\n".join(
         [
             "Delegate a task to an injected Runtime v2 task runner.",
@@ -295,11 +295,6 @@ def test_create_agent_task_tools_background_keeps_task_description_consistent():
             "- general: General work.",
         ]
     )
-    assert (
-        tools[1].description
-        == "Read status and results from background subagent tasks."
-    )
-    assert tools[2].description == "Cancel a running background subagent task."
 
 
 def test_create_agent_task_tools_background_uses_filtered_task_description():
@@ -317,7 +312,7 @@ def test_create_agent_task_tools_background_uses_filtered_task_description():
         allow_background=True,
     )
 
-    assert [tool.id for tool in tools] == ["task", "task_status", "task_cancel"]
+    assert [tool.id for tool in tools] == ["task"]
     assert tools[0].description == "\n".join(
         [
             "Delegate a task to an injected Runtime v2 task runner.",
@@ -490,7 +485,7 @@ async def test_subagent_child_tools_keep_guarded_tools_with_direct_permission():
         )
     )
 
-    assert visible_tool_ids == ["alpha", "task", "todo_write", "todowrite"]
+    assert visible_tool_ids == ["alpha", "task", "todowrite"]
 
 
 @pytest.mark.asyncio
@@ -507,7 +502,7 @@ async def test_subagent_child_tools_keep_guarded_tools_with_nested_permission():
         )
     )
 
-    assert visible_tool_ids == ["alpha", "task", "todo_write", "todowrite"]
+    assert visible_tool_ids == ["alpha", "task", "todowrite"]
 
 
 @pytest.mark.asyncio
@@ -544,7 +539,7 @@ async def test_subagent_profile_tools_false_wins_over_guard_permission():
         )
     )
 
-    assert visible_tool_ids == ["alpha", "todo_write", "todowrite"]
+    assert visible_tool_ids == ["alpha", "todowrite"]
 
 
 def test_child_config_merges_profile_permission_over_base_without_mutation(
@@ -562,8 +557,6 @@ def test_child_config_merges_profile_permission_over_base_without_mutation(
         workspace_root=tmp_path,
         tool_permissions={"alpha": "allow", "beta": "deny"},
         inject_background_task_results=False,
-        enable_local_python_tools=True,
-        local_tool_directories=[tmp_path / "tools"],
     )
 
     child_config = _child_config(
@@ -582,8 +575,8 @@ def test_child_config_merges_profile_permission_over_base_without_mutation(
     assert profile.metadata == {"permission": profile_permission}
     assert child_config.tool_permissions is not base_config.tool_permissions
     assert child_config.inject_background_task_results is False
-    assert child_config.enable_local_python_tools is True
-    assert child_config.local_tool_directories == [tmp_path / "tools"]
+    assert not hasattr(child_config, "enable_local_python_tools")
+    assert not hasattr(child_config, "local_tool_directories")
 
 
 @pytest.mark.asyncio
@@ -598,10 +591,10 @@ async def test_child_profile_permission_overlay_denies_base_allowed_tool(
                         "id": "call-write",
                         "type": "function",
                         "function": {
-                            "name": "write_file",
+                            "name": "write",
                             "arguments": json.dumps(
                                 {
-                                    "path": "blocked.txt",
+                                    "filePath": "blocked.txt",
                                     "content": "blocked",
                                 },
                                 sort_keys=True,
@@ -620,8 +613,7 @@ async def test_child_profile_permission_overlay_denies_base_allowed_tool(
     base_config = RuntimeConfig(
         workspace_root=tmp_path,
         max_iterations=2,
-        include_legacy_tool_aliases=True,
-        tool_permissions={"write_file": "allow"},
+        tool_permissions={"write": "allow"},
     )
     runner = create_subagent_task_runner(
         provider=provider,
@@ -645,13 +637,13 @@ async def test_child_profile_permission_overlay_denies_base_allowed_tool(
     assert result.state == "completed"
     assert result.text == "done"
     assert tool_result is not None
-    assert tool_result.status == "permission_denied"
-    assert tool_result.error == "Permission denied by agent permission overlay: edit"
+    assert tool_result.status == "disabled"
+    assert tool_result.error == "Tool is disabled: write"
     assert (tmp_path / "blocked.txt").exists() is False
     assert provider.requests[0].metadata["agent_permission_overlay"] == {
         "edit": "deny"
     }
-    assert base_config.tool_permissions == {"write_file": "allow"}
+    assert base_config.tool_permissions == {"write": "allow"}
     assert profile.metadata == {"permission": {"edit": "deny"}}
 
 
@@ -913,7 +905,6 @@ async def _visible_child_tool_ids(profile: AgentProfile) -> list[str]:
                 [
                     _tool("alpha"),
                     _tool("task"),
-                    _tool("todo_write"),
                     _tool("todowrite"),
                 ]
             )

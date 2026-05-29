@@ -17,30 +17,22 @@ from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
+from efp_runtime.opencode_parity import DEFAULT_CORE_TOOL_IDS
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_TOOL_IDS = [
-    "apply_patch",
-    "bash",
-    "edit",
-    "glob",
-    "grep",
-    "invalid",
-    "read",
-    "repo_clone",
-    "repo_overview",
-    "todowrite",
-    "webfetch",
-    "write",
+DEFAULT_TOOL_IDS = list(DEFAULT_CORE_TOOL_IDS)
+MODEL_FILTERED_DEFAULT_TOOL_IDS = [
+    tool_id for tool_id in DEFAULT_TOOL_IDS if tool_id not in {"edit", "write"}
 ]
 MUTATING_TOOL_IDS = {
     "apply_patch",
     "bash",
     "edit",
-    "repo_clone",
+    "task",
     "write",
 }
+MODEL_FILTERED_MUTATING_TOOL_IDS = MUTATING_TOOL_IDS - {"edit", "write"}
 
 
 @pytest.mark.asyncio
@@ -56,9 +48,9 @@ async def test_build_mode_defaults_do_not_register_or_expose_plan_exit(tmp_path:
     assert result.status == LoopStatus.COMPLETED
     assert create_core_tool_registry(tmp_path).ids() == DEFAULT_TOOL_IDS
     assert runtime.tool_runtime.registry.ids() == DEFAULT_TOOL_IDS
-    assert [tool.id for tool in provider.requests[0].tools] == DEFAULT_TOOL_IDS
+    assert [tool.id for tool in provider.requests[0].tools] == MODEL_FILTERED_DEFAULT_TOOL_IDS
     assert [schema.id for schema in provider.requests[0].provider_request.tools] == (
-        DEFAULT_TOOL_IDS
+        MODEL_FILTERED_DEFAULT_TOOL_IDS
     )
 
 
@@ -104,8 +96,6 @@ async def test_plan_mode_custom_alias_registry_hides_mutating_aliases(tmp_path: 
                 _tool("read"),
                 _tool("write"),
                 _tool("bash"),
-                _tool("shell_exec"),
-                _tool("shell_status"),
             ]
         ),
     )
@@ -118,17 +108,10 @@ async def test_plan_mode_custom_alias_registry_hides_mutating_aliases(tmp_path: 
     assert result.status == LoopStatus.COMPLETED
     request_tool_ids = [tool.id for tool in provider.requests[0].tools]
     schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
-    assert request_tool_ids == ["read", "shell_status"]
-    assert schema_ids == ["read", "shell_status"]
-    assert provider.requests[0].metadata["enabled_tool_ids"] == [
-        "read",
-        "shell_status",
-    ]
-    assert provider.requests[0].metadata["disabled_tool_ids"] == [
-        "bash",
-        "shell_exec",
-        "write",
-    ]
+    assert request_tool_ids == ["read"]
+    assert schema_ids == ["read"]
+    assert provider.requests[0].metadata["enabled_tool_ids"] == ["read"]
+    assert provider.requests[0].metadata["disabled_tool_ids"] == ["bash", "write"]
 
 
 @pytest.mark.asyncio
@@ -145,7 +128,7 @@ async def test_plan_mode_disabled_alias_calls_append_results_without_execution(
         [
             {
                 "tool_calls": [
-                    _tool_call("call-write", "write", {"path": "blocked.txt"}),
+                    _tool_call("call-write", "write", {"filePath": "blocked.txt"}),
                     _tool_call("call-bash", "bash", {"command": "printf blocked"}),
                 ]
             },
@@ -164,8 +147,6 @@ async def test_plan_mode_disabled_alias_calls_append_results_without_execution(
                 _tool("read"),
                 _tool("write", execute=execute),
                 _tool("bash", execute=execute),
-                _tool("shell_exec", execute=execute),
-                _tool("shell_status"),
             ]
         ),
     )
@@ -179,10 +160,7 @@ async def test_plan_mode_disabled_alias_calls_append_results_without_execution(
     assert result.iterations == 2
     assert called == []
     assert len(provider.requests) == 2
-    assert [tool.id for tool in provider.requests[0].tools] == [
-        "read",
-        "shell_status",
-    ]
+    assert [tool.id for tool in provider.requests[0].tools] == ["read"]
 
     history = runtime.store.read_history("session-plan-disabled-alias-calls")
     disabled_results = [
@@ -280,7 +258,7 @@ async def test_enable_plan_tool_registers_plan_exit_in_build_mode(tmp_path: Path
     assert "plan_exit" in runtime.tool_runtime.registry.ids()
     request_tool_ids = [tool.id for tool in provider.requests[0].tools]
     assert "plan_exit" in request_tool_ids
-    assert MUTATING_TOOL_IDS.issubset(set(request_tool_ids))
+    assert MODEL_FILTERED_MUTATING_TOOL_IDS.issubset(set(request_tool_ids))
 
 
 @pytest.mark.asyncio
@@ -303,7 +281,7 @@ async def test_plan_mode_read_only_false_does_not_force_hide_mutating_tools(
     assert result.status == LoopStatus.COMPLETED
     request_tool_ids = [tool.id for tool in provider.requests[0].tools]
     assert "plan_exit" in request_tool_ids
-    assert MUTATING_TOOL_IDS.issubset(set(request_tool_ids))
+    assert MODEL_FILTERED_MUTATING_TOOL_IDS.issubset(set(request_tool_ids))
 
 
 @pytest.mark.asyncio
@@ -335,8 +313,8 @@ async def test_plan_mode_enabled_tools_cannot_bypass_read_only_policy(
         "grep",
         "invalid",
         "read",
-        "repo_clone",
-        "repo_overview",
+        "skill",
+        "task",
         "todowrite",
         "webfetch",
         "write",

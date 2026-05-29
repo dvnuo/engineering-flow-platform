@@ -36,7 +36,7 @@ async def test_edit_success_returns_tool_result_with_diff_diagnostics(tmp_path: 
 
     result = await tool.execute(
         tool.validate_args(
-            {"path": "notes.txt", "old_text": "beta", "new_text": "gamma"}
+            {"filePath": "notes.txt", "oldString": "beta", "newString": "gamma"}
         ),
         ToolContext(tool_call_id="call-edit"),
     )
@@ -83,7 +83,7 @@ async def test_edit_no_op_returns_changed_false_without_writing(tmp_path: Path):
         ToolCall(
             id="call-edit",
             tool_id="edit",
-            args={"path": "notes.txt", "old_text": "alpha", "new_text": "alpha"},
+            args={"filePath": "notes.txt", "oldString": "alpha", "newString": "alpha"},
         )
     )
 
@@ -118,14 +118,14 @@ async def test_edit_multiple_matches_error_includes_count_and_replace_all_hint(
         ToolCall(
             id="call-edit",
             tool_id="edit",
-            args={"path": "dup.txt", "old_text": "same", "new_text": "diff"},
+            args={"filePath": "dup.txt", "oldString": "same", "newString": "diff"},
         )
     )
 
     assert result.status == "error"
     assert "2 times" in result.error
-    assert "replace_all=true" in result.error
-    assert "more precise old_text" in result.error
+    assert "replaceAll=true" in result.error
+    assert "more precise oldString" in result.error
     assert target.read_text(encoding="utf-8") == "same\nsame\n"
 
 
@@ -145,15 +145,15 @@ async def test_edit_missing_old_text_error_includes_path_preview_and_file_size(
         ToolCall(
             id="call-edit",
             tool_id="edit",
-            args={"path": "notes.txt", "old_text": missing, "new_text": "beta"},
+            args={"filePath": "notes.txt", "oldString": missing, "newString": "beta"},
         )
     )
 
     assert result.status == "error"
-    assert "old_text was not found in notes.txt" in result.error
-    assert "old_text preview: missing-" in result.error
+    assert "oldString was not found in notes.txt" in result.error
+    assert "oldString preview: missing-" in result.error
     assert "file characters: 6" in result.error
-    preview = result.error.split("old_text preview: ", 1)[1].split(
+    preview = result.error.split("oldString preview: ", 1)[1].split(
         ". file characters:",
         1,
     )[0]
@@ -175,9 +175,9 @@ async def test_edit_diff_preview_limits_truncate_and_mark_output(tmp_path: Path)
             id="call-edit-lines",
             tool_id="edit",
             args={
-                "path": "lines.txt",
-                "old_text": "two",
-                "new_text": "changed",
+                "filePath": "lines.txt",
+                "oldString": "two",
+                "newString": "changed",
                 "max_diff_lines": 3,
             },
         )
@@ -195,9 +195,9 @@ async def test_edit_diff_preview_limits_truncate_and_mark_output(tmp_path: Path)
             id="call-edit-chars",
             tool_id="edit",
             args={
-                "path": "chars.txt",
-                "old_text": "short",
-                "new_text": "x" * 200,
+                "filePath": "chars.txt",
+                "oldString": "short",
+                "newString": "x" * 200,
                 "max_diff_chars": 60,
             },
         )

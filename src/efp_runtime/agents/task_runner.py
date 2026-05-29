@@ -29,8 +29,6 @@ from ..tools.builtin.task import (
     TaskToolRequest,
     TaskToolResult,
     TaskToolRunner,
-    create_task_cancel_tool,
-    create_task_status_tool,
     create_task_tool,
 )
 from ..tools.definition import ToolDef
@@ -47,7 +45,7 @@ MANUAL_SUBAGENT_DESCRIPTION = (
 _PRIMARY_TASK_PROFILE_NAMES = {"build", "plan"}
 _PRIMARY_TASK_PROFILE_MODES = {"primary", "build", "plan"}
 _SUBAGENT_TASK_TOOL_IDS = frozenset({"task"})
-_SUBAGENT_TODO_WRITE_TOOL_IDS = frozenset({"todo_write", "todowrite"})
+_SUBAGENT_TODO_WRITE_TOOL_IDS = frozenset({"todowrite"})
 _SUBAGENT_GUARD_ALLOW_ACTIONS = frozenset({"allow", "ask"})
 
 
@@ -218,8 +216,6 @@ def create_agent_task_tools(
     tool_runtime_factory: Callable[[AgentProfile], ToolRuntime] | None = None,
     session_id_prefix: str = "subagent",
     tool_id: str = "task",
-    status_tool_id: str = "task_status",
-    cancel_tool_id: str = "task_cancel",
     allow_background: bool = False,
     background_manager: BackgroundTaskManager | None = None,
 ) -> list[ToolDef]:
@@ -243,27 +239,17 @@ def create_agent_task_tools(
             None if base_config is None else base_config.tool_permissions
         ),
     )
-    if not allow_background:
-        return [
-            create_task_tool(
-                runner,
-                tool_id=tool_id,
-                description=description,
-                allow_background=False,
-            )
-        ]
-
-    manager = background_manager or BackgroundTaskManager()
+    manager = background_manager if allow_background else None
+    if allow_background and manager is None:
+        manager = BackgroundTaskManager()
     return [
         create_task_tool(
             runner,
             tool_id=tool_id,
             description=description,
-            allow_background=True,
+            allow_background=allow_background,
             background_manager=manager,
-        ),
-        create_task_status_tool(manager, tool_id=status_tool_id),
-        create_task_cancel_tool(manager, tool_id=cancel_tool_id),
+        )
     ]
 
 
@@ -455,14 +441,6 @@ def _child_config(
             if base_config is None
             else base_config.model_aware_tool_selection
         ),
-        tool_surface=(
-            "opencode" if base_config is None else base_config.tool_surface
-        ),
-        include_legacy_tool_aliases=(
-            False
-            if base_config is None
-            else base_config.include_legacy_tool_aliases
-        ),
         tool_permissions=merge_tool_permission_configs(
             base_tool_permissions,
             profile_permission_overlay,
@@ -542,9 +520,6 @@ def _child_config(
             [] if base_config is None else list(base_config.skill_directories)
         ),
         active_skills=list(profile.active_skills),
-        enable_skill_list_tool=(
-            None if base_config is None else base_config.enable_skill_list_tool
-        ),
         include_skill_sidecar_content=(
             False
             if base_config is None
@@ -561,14 +536,6 @@ def _child_config(
         ),
         max_command_chars=(
             20000 if base_config is None else base_config.max_command_chars
-        ),
-        enable_local_python_tools=(
-            False
-            if base_config is None
-            else base_config.enable_local_python_tools
-        ),
-        local_tool_directories=(
-            [] if base_config is None else list(base_config.local_tool_directories)
         ),
         resolve_prompt_references=(
             True if base_config is None else base_config.resolve_prompt_references

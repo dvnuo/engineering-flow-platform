@@ -27,7 +27,7 @@ class AllowEvaluator:
 
 
 def test_core_registry_includes_repository_tools(tmp_path: Path):
-    registry = create_core_tool_registry(tmp_path)
+    registry = create_core_tool_registry(tmp_path, include_repository_tools=True)
 
     assert {"repo_clone", "repo_overview"}.issubset(set(registry.ids()))
     clone_permission = registry.require("repo_clone").permission
@@ -216,7 +216,7 @@ async def test_repo_overview_missing_cached_repository_errors(tmp_path: Path):
 
 def _runtime(workspace_root: Path) -> ToolRuntime:
     return ToolRuntime(
-        create_core_tool_registry(workspace_root),
+        create_core_tool_registry(workspace_root, include_repository_tools=True),
         permission_evaluator=AllowEvaluator(),
     )
 

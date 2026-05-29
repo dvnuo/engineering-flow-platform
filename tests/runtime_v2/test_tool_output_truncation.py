@@ -50,7 +50,7 @@ def test_max_lines_truncates_and_archives_full_output(tmp_path: Path):
     assert "line-1" in result.content
     assert "line-5" not in result.content
     assert "lines/" in result.content
-    assert "read_file" in result.content
+    assert "read" in result.content
     assert "grep" in result.content
     assert "Task tool" not in result.content
 
@@ -150,7 +150,7 @@ async def test_agent_runtime_archives_under_workspace_and_preserves_explicit_run
     assert result.status == LoopStatus.COMPLETED
     tool_result = _first_tool_result(runtime.store.read_history("session-tool-output"))
     assert tool_result.truncated is True
-    assert "read_file or grep" in tool_result.content
+    assert "read or grep" in tool_result.content
     assert "Task tool" not in tool_result.content
     output_path = Path(tool_result.metadata["output_path"])
     output_path.relative_to(tmp_path.resolve())
@@ -201,7 +201,7 @@ async def test_agent_runtime_uses_task_hint_when_task_tool_is_enabled(tmp_path: 
     assert "explore or research subagent" in tool_result.content
     assert "grep and read using offset/limit" in tool_result.content
     assert "Do not read the entire file at once." in tool_result.content
-    assert "read_file or grep" not in tool_result.content
+    assert "read or grep" not in tool_result.content
 
 
 def test_tool_output_truncation_sources_stay_inside_runtime_v2_boundary():

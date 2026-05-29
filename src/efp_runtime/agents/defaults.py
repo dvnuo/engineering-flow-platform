@@ -12,13 +12,10 @@ DEFAULT_AGENT_PROFILE_NAMES = ("general", "build", "plan", "explore", "scout")
 
 _MUTATING_PERMISSION_TOOL_IDS = (
     "edit",
-    "write_file",
     "write",
     "apply_patch",
-    "shell_exec",
     "bash",
     "task",
-    "task_cancel",
 )
 
 _READ_ONLY_PERMISSION = {

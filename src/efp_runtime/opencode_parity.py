@@ -31,7 +31,7 @@ class CapabilityEntry:
 
 
 OPENCODE_UPSTREAM_REPO = "https://github.com/anomalyco/opencode"
-OPENCODE_DEV_HEAD = "031f82adc89e254bed8bc7a3a88fde5c4066dc8b"
+OPENCODE_DEV_HEAD = "c7e1fc5e4260fc3e1aea24e26d67ed4074e3575d"
 
 DEFAULT_CORE_TOOL_IDS = (
     "apply_patch",
@@ -41,36 +41,14 @@ DEFAULT_CORE_TOOL_IDS = (
     "grep",
     "invalid",
     "read",
-    "repo_clone",
-    "repo_overview",
+    "skill",
+    "task",
     "todowrite",
     "webfetch",
     "write",
 )
 
-LEGACY_ALIAS_TOOL_IDS = (
-    "fetch",
-    "list_dir",
-    "read_file",
-    "shell_exec",
-    "shell_kill",
-    "shell_status",
-    "skill_list",
-    "task_cancel",
-    "task_status",
-    "todo_write",
-    "write_file",
-)
-
 OPTIONAL_CONDITIONAL_TOOL_IDS: dict[str, SurfaceEntry] = {
-    "fetch": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface.",
-    ),
-    "list_dir": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface.",
-    ),
     "lsp": SurfaceEntry(
         status="conditional",
         reason="Enabled by RuntimeConfig.enable_lsp_tool, include_lsp_tool, or an injected LSP client.",
@@ -83,53 +61,17 @@ OPTIONAL_CONDITIONAL_TOOL_IDS: dict[str, SurfaceEntry] = {
         status="conditional",
         reason="Enabled by RuntimeConfig.enable_question_tool or include_question_tool.",
     ),
-    "read_file": SurfaceEntry(
+    "repo_clone": SurfaceEntry(
         status="conditional",
-        reason="Enabled by the legacy alias surface.",
+        reason="Disabled by default; registered only when repository scout tools are explicitly requested.",
     ),
-    "shell_exec": SurfaceEntry(
+    "repo_overview": SurfaceEntry(
         status="conditional",
-        reason="Enabled by the legacy alias surface.",
-    ),
-    "shell_kill": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface when background shell jobs are enabled.",
-    ),
-    "shell_status": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface when background shell jobs are enabled.",
-    ),
-    "skill": SurfaceEntry(
-        status="conditional",
-        reason="Enabled when skill discovery or skill directories are configured.",
-    ),
-    "skill_list": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface when skill discovery is configured.",
-    ),
-    "task": SurfaceEntry(
-        status="conditional",
-        reason="Enabled when a task runner is injected into the registry.",
-    ),
-    "task_cancel": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface when background task execution is enabled.",
-    ),
-    "task_status": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface when background task execution is enabled.",
-    ),
-    "todo_write": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface.",
+        reason="Disabled by default; registered only when repository scout tools are explicitly requested.",
     ),
     "websearch": SurfaceEntry(
         status="conditional",
         reason="Registered only when callers inject a provider-neutral websearch runner; default core registry leaves it disabled.",
-    ),
-    "write_file": SurfaceEntry(
-        status="conditional",
-        reason="Enabled by the legacy alias surface.",
     ),
 }
 
@@ -179,7 +121,6 @@ __all__ = [
     "CAPABILITY_GROUPS",
     "DEFAULT_CORE_TOOL_IDS",
     "EXCLUDED_TOOL_IDS",
-    "LEGACY_ALIAS_TOOL_IDS",
     "OPENCODE_DEV_HEAD",
     "OPENCODE_UPSTREAM_REPO",
     "OPTIONAL_CONDITIONAL_TOOL_IDS",

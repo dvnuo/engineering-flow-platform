@@ -46,8 +46,6 @@ class RuntimeConfig:
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
     model_aware_tool_selection: bool = True
-    tool_surface: str = "opencode"
-    include_legacy_tool_aliases: bool = False
     tool_permissions: dict[str, Any] = field(default_factory=dict)
     runtime_mode: str = "build"
     enable_plan_tool: bool | None = None
@@ -72,14 +70,11 @@ class RuntimeConfig:
     max_instruction_chars: int = 20000
     skill_directories: list[str | Path] = field(default_factory=list)
     active_skills: list[str] = field(default_factory=list)
-    enable_skill_list_tool: bool | None = None
     include_skill_sidecar_content: bool = False
     max_skill_sidecar_chars: int = 4000
     command_directories: list[str | Path] = field(default_factory=list)
     enable_command_expansion: bool = True
     max_command_chars: int = 20000
-    enable_local_python_tools: bool = False
-    local_tool_directories: list[str | Path] = field(default_factory=list)
     resolve_prompt_references: bool = True
     max_prompt_reference_chars: int = 20000
     max_prompt_directory_entries: int = 200
@@ -192,12 +187,6 @@ class RuntimeConfig:
             None if self.enable_plan_tool is None else bool(self.enable_plan_tool)
         )
         self.model_aware_tool_selection = bool(self.model_aware_tool_selection)
-        self.tool_surface = str(self.tool_surface).strip()
-        if self.tool_surface not in ("opencode", "legacy"):
-            raise ValueError("tool_surface must be 'opencode' or 'legacy'")
-        self.include_legacy_tool_aliases = bool(self.include_legacy_tool_aliases)
-        if self.tool_surface == "legacy":
-            self.include_legacy_tool_aliases = True
         self.plan_mode_read_only = bool(self.plan_mode_read_only)
         self.enable_question_tool = bool(self.enable_question_tool)
         self.enable_lsp_tool = bool(self.enable_lsp_tool)
@@ -230,15 +219,8 @@ class RuntimeConfig:
         self.attach_read_instructions = bool(self.attach_read_instructions)
         self.skill_directories = list(self.skill_directories)
         self.active_skills = list(self.active_skills)
-        self.enable_skill_list_tool = (
-            None
-            if self.enable_skill_list_tool is None
-            else bool(self.enable_skill_list_tool)
-        )
         self.command_directories = list(self.command_directories)
         self.enable_command_expansion = bool(self.enable_command_expansion)
-        self.enable_local_python_tools = bool(self.enable_local_python_tools)
-        self.local_tool_directories = list(self.local_tool_directories)
         self.archive_truncated_tool_outputs = bool(self.archive_truncated_tool_outputs)
 
 

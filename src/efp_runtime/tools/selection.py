@@ -33,9 +33,15 @@ class ModelAwareToolSelection:
     forced_disabled: tuple[str, ...] = ()
 
 
-MODEL_HINT_KEYS = ("model", "model_id", "requested_model", "provider_model")
+MODEL_HINT_KEYS = (
+    "model",
+    "model_id",
+    "requested_model",
+    "provider_model",
+    "default_model",
+)
 PATCH_FILE_TOOL_ID = "apply_patch"
-DIRECT_FILE_TOOL_IDS = frozenset({"edit", "write", "write_file"})
+DIRECT_FILE_TOOL_IDS = frozenset({"edit", "write"})
 
 
 def resolve_model_aware_tool_selection(

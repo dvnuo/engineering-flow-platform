@@ -7,7 +7,6 @@ from efp_runtime.opencode_parity import (
     CAPABILITY_GROUPS,
     DEFAULT_CORE_TOOL_IDS,
     EXCLUDED_TOOL_IDS,
-    LEGACY_ALIAS_TOOL_IDS,
     OPTIONAL_CONDITIONAL_TOOL_IDS,
 )
 from efp_runtime.skills.discovery import SkillDiscovery
@@ -35,26 +34,18 @@ def test_default_registry_matches_manifest_default_core_ids(tmp_path: Path):
 def test_conditional_manifest_tool_ids_are_registrable(tmp_path: Path):
     registry = create_core_tool_registry(
         tmp_path,
-        include_legacy_aliases=True,
         task_runner=_task_runner,
         allow_background_task=True,
         include_question_tool=True,
         skill_discovery=SkillDiscovery([]),
-        include_skill_list_tool=True,
         include_lsp_tool=True,
         include_plan_tool=True,
+        include_repository_tools=True,
         websearch_runner=_websearch_runner,
     )
 
     assert "websearch" in OPTIONAL_CONDITIONAL_TOOL_IDS
     assert set(OPTIONAL_CONDITIONAL_TOOL_IDS).issubset(registry.ids())
-
-
-def test_legacy_aliases_are_not_default_core_ids(tmp_path: Path):
-    registry = create_core_tool_registry(tmp_path)
-
-    assert set(LEGACY_ALIAS_TOOL_IDS).isdisjoint(DEFAULT_CORE_TOOL_IDS)
-    assert set(LEGACY_ALIAS_TOOL_IDS).isdisjoint(registry.ids())
 
 
 def test_capability_group_statuses_are_explicit_and_known():

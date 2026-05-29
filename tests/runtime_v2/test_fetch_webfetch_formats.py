@@ -109,7 +109,7 @@ async def test_webfetch_defaults_to_markdown_for_html(
     tmp_path: Path,
     local_http_server: str,
 ):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path, include_legacy_aliases=True))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path, ))
 
     result = await runtime.execute(
         ToolCall(
@@ -218,12 +218,12 @@ async def test_fetch_timeout_above_limit_is_capped_in_metadata(
     tmp_path: Path,
     local_http_server: str,
 ):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path, include_legacy_aliases=True))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path, ))
 
     result = await runtime.execute(
         ToolCall(
             id="call-fetch-timeout-cap",
-            tool_id="fetch",
+            tool_id="webfetch",
             args={"url": f"{local_http_server}/plain", "timeout": 999},
         )
     )
@@ -274,12 +274,12 @@ async def test_fetch_rejects_declared_response_over_five_mib(
     tmp_path: Path,
     local_http_server: str,
 ):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path, include_legacy_aliases=True))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path, ))
 
     result = await runtime.execute(
         ToolCall(
             id="call-fetch-declared-large",
-            tool_id="fetch",
+            tool_id="webfetch",
             args={"url": f"{local_http_server}/declared-too-large"},
         )
     )
@@ -295,12 +295,12 @@ async def test_fetch_rejects_actual_response_over_five_mib(
     tmp_path: Path,
     local_http_server: str,
 ):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path, include_legacy_aliases=True))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path, ))
 
     result = await runtime.execute(
         ToolCall(
             id="call-fetch-actual-large",
-            tool_id="fetch",
+            tool_id="webfetch",
             args={"url": f"{local_http_server}/actual-too-large"},
         )
     )
@@ -314,7 +314,7 @@ async def test_webfetch_max_chars_truncates_visible_content(
     tmp_path: Path,
     local_http_server: str,
 ):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path, include_legacy_aliases=True))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path, ))
 
     result = await runtime.execute(
         ToolCall(
@@ -337,12 +337,12 @@ async def test_fetch_caller_headers_override_defaults(
     tmp_path: Path,
     local_http_server: str,
 ):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path, include_legacy_aliases=True))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path, ))
 
     result = await runtime.execute(
         ToolCall(
             id="call-fetch-headers",
-            tool_id="fetch",
+            tool_id="webfetch",
             args={
                 "url": f"{local_http_server}/echo-headers",
                 "headers": {
@@ -368,12 +368,12 @@ async def test_fetch_and_webfetch_keep_called_tool_names(
     local_http_server: str,
 ):
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+        create_core_tool_registry(tmp_path, )
     )
     url = f"{local_http_server}/plain"
 
     fetch_result = await runtime.execute(
-        ToolCall(id="call-fetch-name", tool_id="fetch", args={"url": url})
+        ToolCall(id="call-fetch-name", tool_id="webfetch", args={"url": url})
     )
     webfetch_result = await runtime.execute(
         ToolCall(id="call-webfetch-name", tool_id="webfetch", args={"url": url})
@@ -381,7 +381,7 @@ async def test_fetch_and_webfetch_keep_called_tool_names(
 
     assert fetch_result.status == "success"
     assert webfetch_result.status == "success"
-    assert fetch_result.tool_name == "fetch"
+    assert fetch_result.tool_name == "webfetch"
     assert webfetch_result.tool_name == "webfetch"
     assert fetch_result.content == FetchFormatHandler.plain_body
     assert webfetch_result.content == FetchFormatHandler.plain_body
