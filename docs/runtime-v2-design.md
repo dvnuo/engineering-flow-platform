@@ -240,6 +240,10 @@ The loader maps the following opencode-style and snake_case keys into
 - `commandDirectories` / `command_directories`.
 - `toolDirectories` / `tool_directories`.
 - `runtime.mode` or `runtime_mode`.
+- `compaction.prune`, `compaction.toolOutputMaxChars` /
+  `compaction.tool_output_max_chars`, `compaction.pruneMinChars` /
+  `compaction.prune_min_chars`, and `compaction.pruneProtectChars` /
+  `compaction.prune_protect_chars`.
 
 Configured path fields are resolved as workspace-local `Path` objects without
 requiring those files or directories to already exist. With
@@ -1307,3 +1311,16 @@ request-local compaction remains a safety net for provider-only context
 overflow. The overflow retry is single-shot to avoid infinite loops, and the
 retried request records `overflow_retry` metadata on the request and compaction
 metadata while the loop publishes a `provider.context_overflow_retry` event.
+
+`AgentRuntime.prune_session_tool_outputs(session_id, ...)` is a separate
+persistent maintenance step for old tool result content. It runs after outputs
+have already been normalized and possibly truncated at execution time. Instead
+of changing a single provider request, it rewrites stored history with bounded
+previews for older completed tool results, marks both the `ToolResult` and
+`MessagePart` metadata with `compaction_pruned`, and publishes a
+`session_tool_outputs_pruned` event when it persists changes. The latest two
+user turns are always preserved before pruning is considered, protected tools
+such as `skill` are skipped, and already-pruned results are ignored.
+`RuntimeConfig.compaction_prune`, `compaction_tool_output_max_chars`,
+`compaction_prune_min_chars`, and `compaction_prune_protect_chars` provide the
+default maintenance settings.

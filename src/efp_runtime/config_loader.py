@@ -79,6 +79,8 @@ _RUNTIME_CONFIG_KEYS = {
     "compaction_preserve_recent_chars",
     "compaction_reserved_chars",
     "compaction_tool_output_max_chars",
+    "compaction_prune_min_chars",
+    "compaction_prune_protect_chars",
     "instructions",
     "systemPrompt",
     "system_prompt",
@@ -717,6 +719,10 @@ _COMPACTION_NESTED_ALIASES = {
     "reserved": "compaction_reserved_chars",
     "tool_output_max_chars": "compaction_tool_output_max_chars",
     "toolOutputMaxChars": "compaction_tool_output_max_chars",
+    "prune_min_chars": "compaction_prune_min_chars",
+    "pruneMinChars": "compaction_prune_min_chars",
+    "prune_protect_chars": "compaction_prune_protect_chars",
+    "pruneProtectChars": "compaction_prune_protect_chars",
 }
 
 _COMPACTION_TOP_LEVEL_FIELDS = {
@@ -726,6 +732,8 @@ _COMPACTION_TOP_LEVEL_FIELDS = {
     "compaction_preserve_recent_chars",
     "compaction_reserved_chars",
     "compaction_tool_output_max_chars",
+    "compaction_prune_min_chars",
+    "compaction_prune_protect_chars",
 }
 
 

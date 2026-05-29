@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
 from ..compaction.controller import CompactionController, CompactionSummarizer
+from ..compaction.prune import prune_old_tool_outputs
 from ..compaction.strategy import (
     BudgetCompactionStrategy,
     CompactionResult,
@@ -857,6 +858,35 @@ class AgentRuntime:
                 message_id=message_id,
                 part_id=part_id,
                 payload=dict(compaction_metadata),
+            )
+        )
+        return updated_session
+
+    def prune_session_tool_outputs(self, session_id: str, **options: Any) -> Session:
+        """Persistently clear old completed tool result content from a session."""
+
+        current_session = self.store.get_session(session_id)
+        if not self.config.compaction_prune:
+            return current_session
+
+        history = self.store.read_history(session_id)
+        prune_options = {
+            "protect_recent_chars": self.config.compaction_prune_protect_chars,
+            "min_pruned_chars": self.config.compaction_prune_min_chars,
+            "output_max_chars": self.config.compaction_tool_output_max_chars,
+        }
+        prune_options.update(options)
+        result = prune_old_tool_outputs(history, **prune_options)
+        if result.pruned_result_count == 0:
+            return current_session
+
+        updated_session = self._replace_history(session_id, result.messages)
+        self.event_bus.publish(
+            RuntimeEvent(
+                type="session_tool_outputs_pruned",
+                message="Old tool result content pruned.",
+                session_id=session_id,
+                payload=dict(result.metadata),
             )
         )
         return updated_session
@@ -2275,6 +2305,8 @@ def _resolve_config(
             else config.compaction_reserved_chars
         ),
         compaction_tool_output_max_chars=config.compaction_tool_output_max_chars,
+        compaction_prune_min_chars=config.compaction_prune_min_chars,
+        compaction_prune_protect_chars=config.compaction_prune_protect_chars,
         provider_max_retries=config.provider_max_retries,
         provider_retry_backoff_seconds=config.provider_retry_backoff_seconds,
         provider_retry_backoff_multiplier=config.provider_retry_backoff_multiplier,

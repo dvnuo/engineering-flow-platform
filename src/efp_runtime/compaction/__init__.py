@@ -22,6 +22,7 @@ from .strategy import (
     PartAwareCompactionStrategy,
     TailTurnCompactionStrategy,
 )
+from .prune import ToolOutputPruneResult, prune_old_tool_outputs
 
 __all__ = [
     "BudgetCompactionStrategy",
@@ -36,8 +37,10 @@ __all__ = [
     "DeterministicCompactionSummarizer",
     "PartAwareCompactionStrategy",
     "TailTurnCompactionStrategy",
+    "ToolOutputPruneResult",
     "build_compaction_prompt",
     "latest_compaction_summary",
     "maybe_summarize_compaction",
+    "prune_old_tool_outputs",
     "render_anchored_compaction_summary",
 ]
