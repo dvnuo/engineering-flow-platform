@@ -13,18 +13,28 @@ from efp_runtime.runtime import RuntimeConfig
 
 def test_runtime_config_validates_compaction_policy_defaults():
     config = RuntimeConfig(
+        default_provider_id=" github-copilot ",
+        default_model=" gpt-5 ",
+        max_context_tokens=1000,
+        context_reserve_tokens=100,
         compaction_auto=False,
         compaction_prune=False,
         compaction_tail_turns=3,
         compaction_preserve_recent_chars=1200,
+        compaction_preserve_recent_tokens=800,
         compaction_reserved_chars=4000,
         compaction_tool_output_max_chars=1500,
     )
 
+    assert config.default_provider_id == "github-copilot"
+    assert config.default_model == "gpt-5"
+    assert config.max_context_tokens == 1000
+    assert config.context_reserve_tokens == 100
     assert config.compaction_auto is False
     assert config.compaction_prune is False
     assert config.compaction_tail_turns == 3
     assert config.compaction_preserve_recent_chars == 1200
+    assert config.compaction_preserve_recent_tokens == 800
     assert config.compaction_reserved_chars == 4000
     assert config.compaction_tool_output_max_chars == 1500
 
@@ -34,13 +44,22 @@ def test_runtime_config_validates_compaction_policy_defaults():
     [
         "compaction_tail_turns",
         "compaction_preserve_recent_chars",
+        "compaction_preserve_recent_tokens",
         "compaction_reserved_chars",
         "compaction_tool_output_max_chars",
+        "max_context_tokens",
+        "context_reserve_tokens",
     ],
 )
 def test_runtime_config_rejects_negative_compaction_policy_ints(field: str):
     with pytest.raises(ValueError, match=field):
         RuntimeConfig(**{field: -1})
+
+
+@pytest.mark.parametrize("field", ["default_provider_id", "default_model"])
+def test_runtime_config_rejects_blank_model_context_strings(field: str):
+    with pytest.raises(ValueError, match=field):
+        RuntimeConfig(**{field: "   "})
 
 
 @pytest.mark.parametrize(

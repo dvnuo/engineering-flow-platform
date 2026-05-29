@@ -8,6 +8,11 @@ from .errors import (
     ProviderTransientError,
 )
 from .events import LLMEvent, LLMEventType
+from .models import (
+    ModelContextProfile,
+    resolve_model_context_profile,
+    tokens_to_chars,
+)
 from .openai import (
     provider_request_to_openai_chat,
     provider_request_to_openai_responses,
@@ -19,7 +24,12 @@ from .openai import (
     request_tool_schema_to_openai_responses_tool,
     request_tool_schema_to_openai_tool,
 )
-from .provider import OpenAICompatibleProvider, ProviderTransport, RecordingTransport
+from .provider import (
+    GitHubCopilotProvider,
+    OpenAICompatibleProvider,
+    ProviderTransport,
+    RecordingTransport,
+)
 
 __all__ = [
     "DefaultLLMEventAdapter",
@@ -29,6 +39,8 @@ __all__ = [
     "ProviderError",
     "ProviderFatalError",
     "LLMEventType",
+    "ModelContextProfile",
+    "GitHubCopilotProvider",
     "OpenAICompatibleProvider",
     "ProviderTransientError",
     "ProviderTransport",
@@ -42,4 +54,6 @@ __all__ = [
     "request_tool_result_to_openai_chat_message",
     "request_tool_schema_to_openai_responses_tool",
     "request_tool_schema_to_openai_tool",
+    "resolve_model_context_profile",
+    "tokens_to_chars",
 ]

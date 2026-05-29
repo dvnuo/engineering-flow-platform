@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from efp_runtime.llm.provider import OpenAICompatibleProvider, RecordingTransport
+from efp_runtime.llm.provider import (
+    GitHubCopilotProvider,
+    OpenAICompatibleProvider,
+    RecordingTransport,
+)
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner
 from efp_runtime.session.models import MessagePartType, MessageRole
 from efp_runtime.session.store import InMemorySessionStore
@@ -174,6 +178,55 @@ async def test_responses_provider_uses_requested_model_payload_hint_without_swit
     assert provider.model == "gpt-test"
     assert transport.payloads[0]["model"] == "gpt-override"
     assert transport.payloads[0]["metadata"]["requested_model"] == "gpt-override"
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_provider_defaults_metadata_and_model_payload():
+    transport = RecordingTransport([_chat_response("Copilot answer.")])
+    provider = GitHubCopilotProvider(
+        transport=transport,
+        metadata={"trace_id": "trace-copilot"},
+    )
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(
+        session_id="session-copilot-provider",
+        user_text="Answer with Copilot default.",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert provider.model == "gpt-5-mini"
+    payload = transport.payloads[0]
+    assert payload["model"] == "gpt-5-mini"
+    assert payload["metadata"]["provider"] == "github-copilot"
+    assert payload["metadata"]["provider_id"] == "github-copilot"
+    assert payload["metadata"]["trace_id"] == "trace-copilot"
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_provider_requested_model_only_changes_payload_model():
+    transport = RecordingTransport([_chat_response("Copilot override.")])
+    provider = GitHubCopilotProvider(transport=transport)
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(
+        session_id="session-copilot-model-hint",
+        user_text="Answer with requested model.",
+        metadata={"requested_model": "gpt-5"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert provider.model == "gpt-5-mini"
+    assert transport.payloads[0]["model"] == "gpt-5"
+    assert transport.payloads[0]["metadata"]["provider_id"] == "github-copilot"
 
 
 @pytest.mark.asyncio

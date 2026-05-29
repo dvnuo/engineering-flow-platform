@@ -70,6 +70,16 @@ _RUNTIME_CONFIG_KEYS = {
     "disabled_tools",
     "enabledTools",
     "enabled_tools",
+    "provider_id",
+    "defaultProvider",
+    "default_provider_id",
+    "model",
+    "defaultModel",
+    "default_model",
+    "maxContextTokens",
+    "max_context_tokens",
+    "contextReserveTokens",
+    "context_reserve_tokens",
     "modelAwareToolSelection",
     "model_aware_tool_selection",
     "compaction",
@@ -77,6 +87,7 @@ _RUNTIME_CONFIG_KEYS = {
     "compaction_prune",
     "compaction_tail_turns",
     "compaction_preserve_recent_chars",
+    "compaction_preserve_recent_tokens",
     "compaction_reserved_chars",
     "compaction_tool_output_max_chars",
     "compaction_prune_min_chars",
@@ -487,6 +498,7 @@ def _runtime_config_from_raw(
     if model_aware_tool_selection is not None:
         kwargs["model_aware_tool_selection"] = model_aware_tool_selection
 
+    kwargs.update(_model_context_fields(raw))
     kwargs.update(_compaction_policy_fields(raw))
 
     instruction_paths, instruction_texts = _instruction_sources(
@@ -716,6 +728,8 @@ _COMPACTION_NESTED_ALIASES = {
     "tailTurns": "compaction_tail_turns",
     "preserve_recent_chars": "compaction_preserve_recent_chars",
     "preserveRecentChars": "compaction_preserve_recent_chars",
+    "preserve_recent_tokens": "compaction_preserve_recent_tokens",
+    "preserveRecentTokens": "compaction_preserve_recent_tokens",
     "reserved": "compaction_reserved_chars",
     "tool_output_max_chars": "compaction_tool_output_max_chars",
     "toolOutputMaxChars": "compaction_tool_output_max_chars",
@@ -730,11 +744,38 @@ _COMPACTION_TOP_LEVEL_FIELDS = {
     "compaction_prune",
     "compaction_tail_turns",
     "compaction_preserve_recent_chars",
+    "compaction_preserve_recent_tokens",
     "compaction_reserved_chars",
     "compaction_tool_output_max_chars",
     "compaction_prune_min_chars",
     "compaction_prune_protect_chars",
 }
+
+
+def _model_context_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    provider = _first_runtime_context_alias_value(
+        raw,
+        ("provider", "provider_id", "defaultProvider", "default_provider_id"),
+    )
+    if provider is not None:
+        fields["default_provider_id"] = provider
+    model = _first_alias_value(raw, ("model", "defaultModel", "default_model"))
+    if model is not None:
+        fields["default_model"] = model
+    max_context_tokens = _first_alias_value(
+        raw,
+        ("max_context_tokens", "maxContextTokens"),
+    )
+    if max_context_tokens is not None:
+        fields["max_context_tokens"] = max_context_tokens
+    context_reserve_tokens = _first_alias_value(
+        raw,
+        ("context_reserve_tokens", "contextReserveTokens"),
+    )
+    if context_reserve_tokens is not None:
+        fields["context_reserve_tokens"] = context_reserve_tokens
+    return fields
 
 
 def _compaction_policy_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -877,6 +918,8 @@ def _unconsumed_config(raw: Mapping[str, Any]) -> dict[str, Any]:
             if compaction_extra:
                 unconsumed[key_text] = compaction_extra
             continue
+        if key_text == "provider" and _provider_value_is_consumed(value):
+            continue
         if key_text == "skills":
             skills_extra = _unconsumed_skills_config(value)
             if skills_extra:
@@ -1012,6 +1055,25 @@ def _first_alias_value(raw: Mapping[str, Any], aliases: Iterable[str]) -> Any:
         if alias in alias_set and alias_value is not None:
             value = alias_value
     return value
+
+
+def _first_runtime_context_alias_value(
+    raw: Mapping[str, Any],
+    aliases: Iterable[str],
+) -> Any:
+    alias_set = set(aliases)
+    value = None
+    for alias, alias_value in raw.items():
+        if alias not in alias_set or alias_value is None:
+            continue
+        if alias == "provider" and not _provider_value_is_consumed(alias_value):
+            continue
+        value = alias_value
+    return value
+
+
+def _provider_value_is_consumed(value: Any) -> bool:
+    return value is None or isinstance(value, str)
 
 
 def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:

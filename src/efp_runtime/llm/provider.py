@@ -13,6 +13,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, List, Optional, Protocol, Union
 
 from .adapter import DefaultLLMEventAdapter, LLMEventAdapter
+from .models import DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID
 from .openai import (
     provider_request_to_openai_chat,
     provider_request_to_openai_responses,
@@ -120,6 +121,46 @@ class OpenAICompatibleProvider:
         }
 
 
+class GitHubCopilotProvider(OpenAICompatibleProvider):
+    """Thin OpenAI-compatible facade for GitHub Copilot payload tests."""
+
+    def __init__(
+        self,
+        *,
+        transport: ProviderTransport,
+        model: str = DEFAULT_MODEL_ID,
+        endpoint: str = "chat",
+        instructions: Optional[str] = None,
+        stream: bool = False,
+        metadata: Optional[Mapping[str, Any]] = None,
+        adapter: Optional[LLMEventAdapter] = None,
+    ) -> None:
+        provider_metadata = dict(metadata or {})
+        provider_metadata.update(
+            {
+                "provider": DEFAULT_PROVIDER_ID,
+                "provider_id": DEFAULT_PROVIDER_ID,
+            }
+        )
+        super().__init__(
+            model=model,
+            transport=transport,
+            endpoint=endpoint,
+            instructions=instructions,
+            stream=stream,
+            metadata=provider_metadata,
+            adapter=adapter,
+        )
+
+    def _transport_error_response(self, exc: BaseException) -> dict[str, Any]:
+        response = super()._transport_error_response(exc)
+        metadata = response.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["provider"] = DEFAULT_PROVIDER_ID
+            metadata["provider_id"] = DEFAULT_PROVIDER_ID
+        return response
+
+
 class RecordingTransport:
     """Small deterministic transport for tests and local prototypes."""
 
@@ -156,6 +197,7 @@ def _requested_model(request: RuntimeRequest) -> Optional[str]:
 
 
 __all__ = [
+    "GitHubCopilotProvider",
     "OpenAICompatibleProvider",
     "ProviderTransport",
     "ProviderTransportError",

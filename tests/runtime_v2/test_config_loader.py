@@ -306,8 +306,8 @@ def test_config_variable_substitutes_env_in_json_string(
 
     expected = 'prefix-local/"model"\nnext'
     assert result.raw["model"] == expected
+    assert result.config.default_model == expected
     assert result.metadata["raw_config"]["model"] == expected
-    assert result.metadata["unconsumed_config"]["model"] == expected
 
 
 def test_config_variable_missing_env_becomes_empty_string(
@@ -317,10 +317,8 @@ def test_config_variable_missing_env_becomes_empty_string(
     monkeypatch.delenv("EFP_TEST_MISSING_MODEL", raising=False)
     _write_json(tmp_path / "opencode.json", {"model": "{env:EFP_TEST_MISSING_MODEL}"})
 
-    result = load_runtime_config(tmp_path)
-
-    assert result.raw["model"] == ""
-    assert result.metadata["raw_config"]["model"] == ""
+    with pytest.raises(ValueError, match="default_model"):
+        load_runtime_config(tmp_path)
 
 
 def test_config_variable_reads_file_relative_to_config_directory(tmp_path: Path):
@@ -511,6 +509,79 @@ def test_model_aware_tool_selection_config_aliases(tmp_path: Path):
     assert snake.config.model_aware_tool_selection is False
     assert camel.metadata["unconsumed_config"] == {}
     assert snake.metadata["unconsumed_config"] == {}
+
+
+def test_model_context_budget_config_aliases_are_consumed(tmp_path: Path):
+    _write_json(
+        tmp_path / "copilot.json",
+        {
+            "provider": "github-copilot",
+            "defaultModel": "gpt-5",
+            "maxContextTokens": 1200,
+            "contextReserveTokens": 100,
+            "compaction": {"preserveRecentTokens": 200},
+        },
+    )
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=["copilot.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.default_provider_id == "github-copilot"
+    assert result.config.default_model == "gpt-5"
+    assert result.config.max_context_tokens == 1200
+    assert result.config.context_reserve_tokens == 100
+    assert result.config.compaction_preserve_recent_tokens == 200
+    assert result.metadata["unconsumed_config"] == {}
+
+
+def test_model_context_budget_snake_case_aliases_are_consumed(tmp_path: Path):
+    _write_json(
+        tmp_path / "copilot.json",
+        {
+            "default_provider_id": "github-copilot",
+            "default_model": "gpt-5-mini",
+            "max_context_tokens": 900,
+            "context_reserve_tokens": 90,
+            "compaction": {"preserve_recent_tokens": 180},
+        },
+    )
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=["copilot.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.default_provider_id == "github-copilot"
+    assert result.config.default_model == "gpt-5-mini"
+    assert result.config.max_context_tokens == 900
+    assert result.config.context_reserve_tokens == 90
+    assert result.config.compaction_preserve_recent_tokens == 180
+    assert result.metadata["unconsumed_config"] == {}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"provider_id": " "},
+        {"defaultModel": ""},
+        {"max_context_tokens": -1},
+        {"contextReserveTokens": -1},
+        {"compaction": {"preserve_recent_tokens": -1}},
+    ],
+)
+def test_model_context_budget_config_validation(tmp_path: Path, payload: dict):
+    _write_json(tmp_path / "invalid.json", payload)
+
+    with pytest.raises(ValueError):
+        load_runtime_config(
+            tmp_path,
+            paths=["invalid.json"],
+            include_defaults=False,
+        )
 
 
 def test_default_skill_directories_precede_configured_directories(
@@ -1424,7 +1495,8 @@ def test_agent_loader_keys_are_not_unconsumed_config(tmp_path: Path):
     )
 
     assert result.agent_registry is None
-    assert result.metadata["unconsumed_config"] == {"model": "example-model"}
+    assert result.config.default_model == "example-model"
+    assert result.metadata["unconsumed_config"] == {}
 
 
 def test_unconsumed_config_is_preserved_in_metadata(tmp_path: Path):
@@ -1441,8 +1513,8 @@ def test_unconsumed_config_is_preserved_in_metadata(tmp_path: Path):
 
     assert result.raw == raw
     assert result.metadata["raw_config"] == raw
+    assert result.config.default_model == "example-model"
     assert result.metadata["unconsumed_config"] == {
-        "model": "example-model",
         "experimental": {"future": {"enabled": True}},
         "plugins": ["local-plugin"],
         "runtime": {"future": True},

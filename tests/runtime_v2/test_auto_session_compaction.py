@@ -156,6 +156,114 @@ async def test_auto_compaction_persists_before_provider_and_request_includes_lat
 
 
 @pytest.mark.asyncio
+async def test_token_budget_converts_to_char_budget_for_auto_compaction():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-token-budget")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        max_context_tokens=20,
+        context_reserve_tokens=5,
+        compaction_preserve_recent_tokens=20,
+        compaction_tail_turns=1,
+    )
+
+    result = await runner.run(
+        session_id="session-token-budget",
+        user_text="latest request",
+        metadata={"run_id": "run-token-budget"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request_metadata = provider.requests[0].provider_request.metadata
+    assert request_metadata["provider_id"] == "github-copilot"
+    assert request_metadata["model_id"] == "gpt-5-mini"
+    assert request_metadata["context_window_tokens"] == 128_000
+    assert request_metadata["max_context_tokens"] == 20
+    assert request_metadata["max_context_chars"] == 80
+    assert request_metadata["context_reserve_tokens"] == 5
+    assert request_metadata["context_reserve_chars"] == 20
+    assert request_metadata["compaction_preserve_recent_tokens"] == 20
+    assert request_metadata["compaction_preserve_recent_chars"] == 80
+    assert request_metadata["context_budget"]["max_context_chars_source"] == (
+        "max_context_tokens"
+    )
+    stored_compactions = _compaction_parts(store.read_history("session-token-budget"))
+    assert len(stored_compactions) == 1
+    compaction_metadata = stored_compactions[0].compaction.metadata
+    assert compaction_metadata["max_context_tokens"] == 20
+    assert compaction_metadata["max_context_chars"] == 80
+    assert compaction_metadata["context_reserve_tokens"] == 5
+    assert compaction_metadata["context_reserve_chars"] == 20
+    assert compaction_metadata["compaction_preserve_recent_tokens"] == 20
+    assert compaction_metadata["compaction_preserve_recent_chars"] == 80
+
+
+@pytest.mark.asyncio
+async def test_requested_model_changes_profile_metadata_for_token_budget():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-requested-model")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        max_context_tokens=120,
+        context_reserve_tokens=0,
+        compaction_preserve_recent_tokens=20,
+        compaction_tail_turns=1,
+    )
+
+    result = await runner.run(
+        session_id="session-requested-model",
+        user_text="latest request",
+        metadata={"requested_model": "github-copilot/gpt-5"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request_metadata = provider.requests[0].provider_request.metadata
+    assert request_metadata["provider_id"] == "github-copilot"
+    assert request_metadata["model_id"] == "gpt-5"
+    assert request_metadata["max_context_chars"] == 480
+    assert request_metadata["context_reserve_chars"] == 0
+    assert request_metadata["compaction_preserve_recent_chars"] == 80
+
+
+@pytest.mark.asyncio
+async def test_max_context_chars_takes_priority_over_token_budget():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-char-priority")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        max_context_chars=60,
+        max_context_tokens=10,
+        context_reserve_tokens=5,
+        compaction_preserve_recent_tokens=20,
+        compaction_tail_turns=1,
+    )
+
+    result = await runner.run(
+        session_id="session-char-priority",
+        user_text="latest request",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request_metadata = provider.requests[0].provider_request.metadata
+    assert request_metadata["max_context_tokens"] == 10
+    assert request_metadata["max_context_chars"] == 60
+    assert request_metadata["context_reserve_tokens"] == 5
+    assert request_metadata["context_reserve_chars"] == 20
+    assert request_metadata["context_budget"]["max_context_chars_source"] == (
+        "max_context_chars"
+    )
+    stored_compactions = _compaction_parts(store.read_history("session-char-priority"))
+    assert stored_compactions[0].compaction.metadata["max_chars"] == 60
+    assert stored_compactions[0].compaction.metadata["max_context_chars"] == 60
+
+
+@pytest.mark.asyncio
 async def test_compaction_auto_false_leaves_stored_session_unchanged():
     store = InMemorySessionStore()
     _seed_history(store, "session-disabled")

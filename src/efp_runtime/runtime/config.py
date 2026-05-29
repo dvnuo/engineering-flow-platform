@@ -19,13 +19,18 @@ class RuntimeConfig:
     workspace_root: str | Path | None = None
     max_iterations: int = 4
     doom_loop_threshold: int | None = 3
+    default_provider_id: str = "github-copilot"
+    default_model: str = "gpt-5-mini"
     max_context_parts: int | None = None
     max_context_chars: int | None = None
+    max_context_tokens: int | None = None
     context_reserve_chars: int = 0
+    context_reserve_tokens: int | None = None
     compaction_auto: bool = True
     compaction_prune: bool = True
     compaction_tail_turns: int = 2
     compaction_preserve_recent_chars: int | None = None
+    compaction_preserve_recent_tokens: int | None = None
     compaction_reserved_chars: int | None = None
     compaction_tool_output_max_chars: int = 2000
     compaction_prune_min_chars: int = 20000
@@ -89,8 +94,24 @@ class RuntimeConfig:
             raise ValueError("max_context_parts must be at least 1")
         if self.max_context_chars is not None and self.max_context_chars < 1:
             raise ValueError("max_context_chars must be at least 1")
+        self.default_provider_id = _validate_non_empty_string(
+            self.default_provider_id,
+            "default_provider_id",
+        )
+        self.default_model = _validate_non_empty_string(
+            self.default_model,
+            "default_model",
+        )
+        self.max_context_tokens = _validate_optional_non_negative_int(
+            self.max_context_tokens,
+            "max_context_tokens",
+        )
         if self.context_reserve_chars < 0:
             raise ValueError("context_reserve_chars must be at least 0")
+        self.context_reserve_tokens = _validate_optional_non_negative_int(
+            self.context_reserve_tokens,
+            "context_reserve_tokens",
+        )
         self.compaction_tail_turns = _validate_non_negative_int(
             self.compaction_tail_turns,
             "compaction_tail_turns",
@@ -98,6 +119,10 @@ class RuntimeConfig:
         self.compaction_preserve_recent_chars = _validate_optional_non_negative_int(
             self.compaction_preserve_recent_chars,
             "compaction_preserve_recent_chars",
+        )
+        self.compaction_preserve_recent_tokens = _validate_optional_non_negative_int(
+            self.compaction_preserve_recent_tokens,
+            "compaction_preserve_recent_tokens",
         )
         self.compaction_reserved_chars = _validate_optional_non_negative_int(
             self.compaction_reserved_chars,
@@ -215,6 +240,15 @@ def _validate_optional_non_negative_int(value: Any, field_name: str) -> int | No
     if value is None:
         return None
     return _validate_non_negative_int(value, field_name)
+
+
+def _validate_non_empty_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a non-empty string")
+    text = value.strip()
+    if not text:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return text
 
 
 __all__ = ["RuntimeConfig"]

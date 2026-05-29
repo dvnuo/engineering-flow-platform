@@ -144,10 +144,13 @@ class AgentRuntime:
         max_iterations: int | None = None,
         max_context_parts: int | None = None,
         max_context_chars: int | None = None,
+        max_context_tokens: int | None = None,
         context_reserve_chars: int | None = None,
+        context_reserve_tokens: int | None = None,
         compaction_auto: bool | None = None,
         compaction_tail_turns: int | None = None,
         compaction_preserve_recent_chars: int | None = None,
+        compaction_preserve_recent_tokens: int | None = None,
         compaction_reserved_chars: int | None = None,
         metadata: Mapping[str, Any] | None = None,
         store: SessionStore | None = None,
@@ -176,10 +179,13 @@ class AgentRuntime:
             max_iterations=max_iterations,
             max_context_parts=max_context_parts,
             max_context_chars=max_context_chars,
+            max_context_tokens=max_context_tokens,
             context_reserve_chars=context_reserve_chars,
+            context_reserve_tokens=context_reserve_tokens,
             compaction_auto=compaction_auto,
             compaction_tail_turns=compaction_tail_turns,
             compaction_preserve_recent_chars=compaction_preserve_recent_chars,
+            compaction_preserve_recent_tokens=compaction_preserve_recent_tokens,
             compaction_reserved_chars=compaction_reserved_chars,
             metadata=metadata,
         )
@@ -532,9 +538,13 @@ class AgentRuntime:
                 tool_runtime=run_tool_runtime,
                 max_iterations=iteration_limit,
                 doom_loop_threshold=self.config.doom_loop_threshold,
+                default_provider_id=self.config.default_provider_id,
+                default_model=self.config.default_model,
                 max_context_parts=self.config.max_context_parts,
                 max_context_chars=self.config.max_context_chars,
+                max_context_tokens=self.config.max_context_tokens,
                 context_reserve_chars=self.config.context_reserve_chars,
+                context_reserve_tokens=self.config.context_reserve_tokens,
                 provider_max_retries=self.config.provider_max_retries,
                 provider_retry_backoff_seconds=(
                     self.config.provider_retry_backoff_seconds
@@ -567,6 +577,9 @@ class AgentRuntime:
                 compaction_tail_turns=self.config.compaction_tail_turns,
                 compaction_preserve_recent_chars=(
                     self.config.compaction_preserve_recent_chars
+                ),
+                compaction_preserve_recent_tokens=(
+                    self.config.compaction_preserve_recent_tokens
                 ),
                 compaction_reserved_chars=self.config.compaction_reserved_chars,
             )
@@ -731,9 +744,13 @@ class AgentRuntime:
                 tool_runtime=run_tool_runtime,
                 max_iterations=iteration_limit,
                 doom_loop_threshold=self.config.doom_loop_threshold,
+                default_provider_id=self.config.default_provider_id,
+                default_model=self.config.default_model,
                 max_context_parts=self.config.max_context_parts,
                 max_context_chars=self.config.max_context_chars,
+                max_context_tokens=self.config.max_context_tokens,
                 context_reserve_chars=self.config.context_reserve_chars,
+                context_reserve_tokens=self.config.context_reserve_tokens,
                 provider_max_retries=self.config.provider_max_retries,
                 provider_retry_backoff_seconds=(
                     self.config.provider_retry_backoff_seconds
@@ -766,6 +783,9 @@ class AgentRuntime:
                 compaction_tail_turns=self.config.compaction_tail_turns,
                 compaction_preserve_recent_chars=(
                     self.config.compaction_preserve_recent_chars
+                ),
+                compaction_preserve_recent_tokens=(
+                    self.config.compaction_preserve_recent_tokens
                 ),
                 compaction_reserved_chars=self.config.compaction_reserved_chars,
             )
@@ -2241,11 +2261,14 @@ def _resolve_config(
     max_iterations: int | None,
     max_context_parts: int | None,
     max_context_chars: int | None,
+    max_context_tokens: int | None = None,
     context_reserve_chars: int | None,
+    context_reserve_tokens: int | None = None,
     metadata: Mapping[str, Any] | None,
     compaction_auto: bool | None = None,
     compaction_tail_turns: int | None = None,
     compaction_preserve_recent_chars: int | None = None,
+    compaction_preserve_recent_tokens: int | None = None,
     compaction_reserved_chars: int | None = None,
 ) -> RuntimeConfig:
     if config is None:
@@ -2255,14 +2278,17 @@ def _resolve_config(
             doom_loop_threshold=3,
             max_context_parts=max_context_parts,
             max_context_chars=max_context_chars,
+            max_context_tokens=max_context_tokens,
             context_reserve_chars=(
                 context_reserve_chars if context_reserve_chars is not None else 0
             ),
+            context_reserve_tokens=context_reserve_tokens,
             compaction_auto=True if compaction_auto is None else compaction_auto,
             compaction_tail_turns=(
                 2 if compaction_tail_turns is None else compaction_tail_turns
             ),
             compaction_preserve_recent_chars=compaction_preserve_recent_chars,
+            compaction_preserve_recent_tokens=compaction_preserve_recent_tokens,
             compaction_reserved_chars=compaction_reserved_chars,
             metadata=dict(metadata or {}),
         )
@@ -2279,11 +2305,23 @@ def _resolve_config(
         max_context_chars=(
             max_context_chars if max_context_chars is not None else config.max_context_chars
         ),
+        max_context_tokens=(
+            max_context_tokens
+            if max_context_tokens is not None
+            else config.max_context_tokens
+        ),
         context_reserve_chars=(
             context_reserve_chars
             if context_reserve_chars is not None
             else config.context_reserve_chars
         ),
+        context_reserve_tokens=(
+            context_reserve_tokens
+            if context_reserve_tokens is not None
+            else config.context_reserve_tokens
+        ),
+        default_provider_id=config.default_provider_id,
+        default_model=config.default_model,
         enable_compaction_summarizer=config.enable_compaction_summarizer,
         compaction_auto=(
             compaction_auto if compaction_auto is not None else config.compaction_auto
@@ -2298,6 +2336,11 @@ def _resolve_config(
             compaction_preserve_recent_chars
             if compaction_preserve_recent_chars is not None
             else config.compaction_preserve_recent_chars
+        ),
+        compaction_preserve_recent_tokens=(
+            compaction_preserve_recent_tokens
+            if compaction_preserve_recent_tokens is not None
+            else config.compaction_preserve_recent_tokens
         ),
         compaction_reserved_chars=(
             compaction_reserved_chars

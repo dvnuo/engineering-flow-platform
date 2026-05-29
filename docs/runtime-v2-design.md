@@ -231,6 +231,11 @@ The loader maps the following opencode-style and snake_case keys into
 - `permission` / `permissions` to `tool_permissions`.
 - `enabledTools` / `enabled_tools`.
 - `disabledTools` / `disabled_tools`.
+- `provider`, `provider_id`, `defaultProvider`, or `default_provider_id` to
+  `default_provider_id`.
+- `model`, `defaultModel`, or `default_model` to `default_model`.
+- `maxContextTokens` / `max_context_tokens` and `contextReserveTokens` /
+  `context_reserve_tokens` for Copilot context budgeting.
 - `instructions`, as string paths or `{"path": ...}` / `{"text": ...}` entries,
   to `instruction_paths` and `instruction_texts`.
 - `systemPrompt` / `system_prompt`, as a string or list, to
@@ -244,6 +249,9 @@ The loader maps the following opencode-style and snake_case keys into
   `compaction.tool_output_max_chars`, `compaction.pruneMinChars` /
   `compaction.prune_min_chars`, and `compaction.pruneProtectChars` /
   `compaction.prune_protect_chars`.
+- `compaction.preserveRecentTokens` /
+  `compaction.preserve_recent_tokens` to
+  `compaction_preserve_recent_tokens`.
 
 Configured path fields are resolved as workspace-local `Path` objects without
 requiring those files or directories to already exist. With
@@ -410,6 +418,12 @@ returning either the raw non-stream response for loop normalization or a stream
 of normalized `LLMEvent` values through `DefaultLLMEventAdapter`. Transport
 failures are mapped to provider error responses so the loop can finish with an
 error status without depending on SDK exception types.
+
+`GitHubCopilotProvider` is a thin Copilot-first helper on top of the same
+OpenAI-compatible projection. It defaults to `gpt-5-mini`, marks payload
+metadata with `provider_id="github-copilot"`, and still relies on an injected
+transport; Runtime v2 does not perform Copilot authentication or network I/O
+inside the provider facade.
 
 When `RuntimeRequest.metadata["requested_model"]` is a non-empty string,
 `OpenAICompatibleProvider` uses it as the outgoing payload `model` for Chat
@@ -1245,14 +1259,34 @@ retained, pending tool calls and the latest non-system block are protected, and
 provider request metadata records the configured budget plus compacted/kept
 part, message, pair, and character counts.
 
+Runtime v2 is Copilot-first for model context sizing. `RuntimeConfig` defaults
+to `default_provider_id="github-copilot"` and `default_model="gpt-5-mini"`.
+When `max_context_chars` is unset, `max_context_tokens` is converted through
+the resolved Copilot model profile into `ContextBudget.max_chars` using a
+deterministic chars-per-token multiplier. `requested_model` metadata wins over
+the default model for profile resolution, so `github-copilot/gpt-5`, `gpt-5`,
+`github-copilot/gpt-5-mini`, and `gpt-5-mini` all resolve to explicit Copilot
+profiles; unknown models use a conservative Copilot fallback.
+
+The same profile converts token reserve and recent-history settings into the
+existing character controls. `context_reserve_tokens` becomes
+`reserve_chars` and takes priority over `context_reserve_chars`;
+`compaction_preserve_recent_tokens` becomes
+`TailTurnCompactionStrategy.preserve_recent_chars` and takes priority over
+`compaction_preserve_recent_chars`. With token budgeting enabled and no explicit
+reserve or preserve override, the model profile supplies conservative defaults.
+Request and compaction metadata record `provider_id`, `model_id`,
+`context_window_tokens`, the token budgets, and the effective character budgets
+so budget decisions remain inspectable.
+
 Request-local budget compaction still exists: it only rewrites the provider
 request for the current turn and does not mutate stored session history.
 Runtime v2 also exposes opencode-style compaction policy fields on
 `RuntimeConfig`: `compaction_auto`, `compaction_prune`,
 `compaction_tail_turns`, `compaction_preserve_recent_chars`,
-`compaction_reserved_chars`, and `compaction_tool_output_max_chars`. Workspace
-config can load these from a nested `compaction` object or matching top-level
-snake_case keys.
+`compaction_preserve_recent_tokens`, `compaction_reserved_chars`, and
+`compaction_tool_output_max_chars`. Workspace config can load these from a
+nested `compaction` object or matching top-level snake_case keys.
 
 The tail-turn selection policy keeps a recent suffix of user turns. By default
 it considers the latest two user turns, bounds them with a recent-context
@@ -1264,7 +1298,8 @@ history begins.
 
 Automatic session compaction runs inside the Runtime v2 loop before each
 provider request when `RuntimeConfig.compaction_auto` is true and a context
-budget is configured with `max_context_parts` or `max_context_chars`. The loop
+budget is configured with `max_context_parts`, `max_context_chars`, or
+`max_context_tokens`. The loop
 compacts only persisted session history, writes the compacted history back
 through the session store, and then builds the provider request from the
 provider-only context messages plus the newly stored session history. System
@@ -1276,7 +1311,9 @@ leaving request-local rendering safeguards available.
 Automatic compaction uses tail-turn retention for stored session history, with
 `compaction_tail_turns` controlling how many recent user turns stay intact and
 `compaction_preserve_recent_chars` optionally preserving a recent character
-suffix. `compaction_reserved_chars`, when set, overrides
+suffix. `compaction_preserve_recent_tokens` supplies the same setting as a
+Copilot token budget. `context_reserve_tokens`, when set, overrides character
+reserve settings; otherwise `compaction_reserved_chars`, when set, overrides
 `context_reserve_chars` for loop context budgets. If
 `enable_compaction_summarizer` is enabled and a summarizer is configured, the
 same `CompactionController` path used by manual compaction supplies the

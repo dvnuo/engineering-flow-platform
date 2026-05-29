@@ -364,8 +364,22 @@ def _child_config(
         max_context_chars=(
             base_config.max_context_chars if base_config is not None else None
         ),
+        max_context_tokens=(
+            base_config.max_context_tokens if base_config is not None else None
+        ),
         context_reserve_chars=(
             base_config.context_reserve_chars if base_config is not None else 0
+        ),
+        context_reserve_tokens=(
+            base_config.context_reserve_tokens if base_config is not None else None
+        ),
+        default_provider_id=(
+            "github-copilot"
+            if base_config is None
+            else base_config.default_provider_id
+        ),
+        default_model=(
+            "gpt-5-mini" if base_config is None else base_config.default_model
         ),
         compaction_auto=(
             True if base_config is None else base_config.compaction_auto
@@ -380,6 +394,11 @@ def _child_config(
             None
             if base_config is None
             else base_config.compaction_preserve_recent_chars
+        ),
+        compaction_preserve_recent_tokens=(
+            None
+            if base_config is None
+            else base_config.compaction_preserve_recent_tokens
         ),
         compaction_reserved_chars=(
             None if base_config is None else base_config.compaction_reserved_chars

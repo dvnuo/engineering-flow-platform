@@ -73,7 +73,7 @@ async def test_max_context_chars_compacts_provider_request_metadata():
     compaction = request.provider_request.metadata["compaction"]
     assert request.prepared_request.compaction_applied is True
     assert request.prepared_request.compaction_metadata == compaction
-    assert set(compaction) == {
+    assert {
         "max_parts",
         "max_chars",
         "reserve_chars",
@@ -82,7 +82,17 @@ async def test_max_context_chars_compacts_provider_request_metadata():
         "compacted_tool_pair_count",
         "compacted_chars",
         "kept_chars",
-    }
+        "provider_id",
+        "model_id",
+        "context_window_tokens",
+        "max_context_tokens",
+        "context_reserve_tokens",
+        "compaction_preserve_recent_tokens",
+        "max_context_chars",
+        "context_reserve_chars",
+        "compaction_preserve_recent_chars",
+        "context_budget",
+    }.issubset(compaction)
     assert compaction["max_parts"] is None
     assert compaction["max_chars"] == 420
     assert compaction["reserve_chars"] == 20

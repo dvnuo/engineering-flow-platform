@@ -27,6 +27,12 @@ from ..llm.errors import (
     ProviderTransientError,
 )
 from ..llm.events import LLMEvent
+from ..llm.models import (
+    DEFAULT_MODEL_ID,
+    DEFAULT_PROVIDER_ID,
+    ModelContextProfile,
+    resolve_model_context_profile,
+)
 from ..permissions import ASK, DENY, PermissionMetadata
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.processor import RuntimeSession, SessionProcessor
@@ -115,9 +121,13 @@ class RuntimeLoopRunner:
         tool_runtime: ToolRuntime,
         max_iterations: int = 4,
         doom_loop_threshold: Optional[int] = 3,
+        default_provider_id: str = DEFAULT_PROVIDER_ID,
+        default_model: str = DEFAULT_MODEL_ID,
         max_context_parts: Optional[int] = None,
         max_context_chars: Optional[int] = None,
+        max_context_tokens: int | None = None,
         context_reserve_chars: int = 0,
+        context_reserve_tokens: int | None = None,
         event_bus: Optional[RuntimeEventBus] = None,
         is_cancelled: Optional[CancelCallback] = None,
         tool_selection: Optional[ToolSelection] = None,
@@ -125,6 +135,7 @@ class RuntimeLoopRunner:
         compaction_auto: bool = True,
         compaction_tail_turns: int = 2,
         compaction_preserve_recent_chars: int | None = None,
+        compaction_preserve_recent_tokens: int | None = None,
         compaction_reserved_chars: int | None = None,
         provider_max_retries: int = 2,
         provider_retry_backoff_seconds: float = 0.0,
@@ -142,8 +153,24 @@ class RuntimeLoopRunner:
             raise ValueError("max_context_parts must be at least 1")
         if max_context_chars is not None and max_context_chars < 1:
             raise ValueError("max_context_chars must be at least 1")
+        default_provider_id = _validate_non_empty_string(
+            default_provider_id,
+            field_name="default_provider_id",
+        )
+        default_model = _validate_non_empty_string(
+            default_model,
+            field_name="default_model",
+        )
+        _validate_optional_non_negative_int(
+            max_context_tokens,
+            field_name="max_context_tokens",
+        )
         if context_reserve_chars < 0:
             raise ValueError("context_reserve_chars must be at least 0")
+        _validate_optional_non_negative_int(
+            context_reserve_tokens,
+            field_name="context_reserve_tokens",
+        )
         _validate_non_negative_int(
             compaction_tail_turns,
             field_name="compaction_tail_turns",
@@ -151,6 +178,10 @@ class RuntimeLoopRunner:
         _validate_optional_non_negative_int(
             compaction_preserve_recent_chars,
             field_name="compaction_preserve_recent_chars",
+        )
+        _validate_optional_non_negative_int(
+            compaction_preserve_recent_tokens,
+            field_name="compaction_preserve_recent_tokens",
         )
         _validate_optional_non_negative_int(
             compaction_reserved_chars,
@@ -172,9 +203,13 @@ class RuntimeLoopRunner:
         self.tool_runtime = tool_runtime
         self.max_iterations = max_iterations
         self.doom_loop_threshold = doom_loop_threshold
+        self.default_provider_id = default_provider_id
+        self.default_model = default_model
         self.max_context_parts = max_context_parts
         self.max_context_chars = max_context_chars
+        self.max_context_tokens = max_context_tokens
         self.context_reserve_chars = context_reserve_chars
+        self.context_reserve_tokens = context_reserve_tokens
         self.event_bus = event_bus
         self.is_cancelled = is_cancelled
         self.tool_selection = _copy_tool_selection(tool_selection)
@@ -182,6 +217,7 @@ class RuntimeLoopRunner:
         self.compaction_auto = bool(compaction_auto)
         self.compaction_tail_turns = compaction_tail_turns
         self.compaction_preserve_recent_chars = compaction_preserve_recent_chars
+        self.compaction_preserve_recent_tokens = compaction_preserve_recent_tokens
         self.compaction_reserved_chars = compaction_reserved_chars
         self.provider_max_retries = provider_max_retries
         self.provider_retry_backoff_seconds = provider_retry_backoff_seconds
@@ -281,6 +317,7 @@ class RuntimeLoopRunner:
             enabled_tool_ids=enabled_tool_ids,
             disabled_tool_ids=disabled_tool_ids,
         )
+        run_metadata.update(self._model_context_budget_metadata(run_metadata))
         run_usage = _summary_with_estimated_cost(
             UsageSummary(),
             self.usage_pricing,
@@ -377,7 +414,8 @@ class RuntimeLoopRunner:
                 iteration=iteration,
                 trigger="context_budget",
                 overflow=False,
-                budget=self._context_budget(),
+                budget=self._context_budget(run_metadata),
+                metadata=run_metadata,
             )
             request_history = [*(context_messages or []), *history]
             request_metadata = _request_metadata(
@@ -394,7 +432,7 @@ class RuntimeLoopRunner:
                 max_iterations=iteration_limit,
                 metadata=request_metadata,
                 tools=enabled_tools,
-                budget=self._context_budget(),
+                budget=self._context_budget(request_metadata),
             )
             runtime_events.append(
                 RuntimeEvent(
@@ -655,20 +693,25 @@ class RuntimeLoopRunner:
             structured_output=structured_output,
         )
 
-    def _context_budget(self) -> ContextBudget:
+    def _context_budget(self, metadata: Mapping[str, Any] | None = None) -> ContextBudget:
+        profile = self._model_context_profile(metadata)
         return ContextBudget(
             max_parts=self.max_context_parts,
-            max_chars=self.max_context_chars,
-            reserve_chars=self._context_budget_reserve_chars(),
+            max_chars=self._context_budget_max_chars(profile),
+            reserve_chars=self._context_budget_reserve_chars(profile),
         )
 
     def _context_budget_enabled(self, budget: Optional[ContextBudget] = None) -> bool:
         resolved = budget or self._context_budget()
         return resolved.max_parts is not None or resolved.max_chars is not None
 
-    def _overflow_retry_budget(self) -> ContextBudget:
+    def _overflow_retry_budget(
+        self,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ContextBudget:
+        current_budget = self._context_budget(metadata)
         max_parts = self.max_context_parts
-        max_chars = self.max_context_chars
+        max_chars = current_budget.max_chars
         if max_parts is not None:
             max_parts = max(1, min(max_parts, 2))
         if max_chars is not None:
@@ -678,13 +721,133 @@ class RuntimeLoopRunner:
         return ContextBudget(
             max_parts=max_parts,
             max_chars=max_chars,
-            reserve_chars=self._context_budget_reserve_chars(),
+            reserve_chars=current_budget.reserve_chars,
         )
 
-    def _context_budget_reserve_chars(self) -> int:
+    def _context_budget_max_chars(self, profile: ModelContextProfile) -> int | None:
+        if self.max_context_chars is not None:
+            return self.max_context_chars
+        if self.max_context_tokens is None:
+            return None
+        return max(1, profile.tokens_to_chars(self.max_context_tokens))
+
+    def _context_budget_reserve_chars(self, profile: ModelContextProfile) -> int:
+        if self.context_reserve_tokens is not None:
+            return profile.tokens_to_chars(self.context_reserve_tokens)
         if self.compaction_reserved_chars is not None:
             return self.compaction_reserved_chars
+        if (
+            self.max_context_chars is None
+            and self.max_context_tokens is not None
+            and self.context_reserve_chars == 0
+        ):
+            return profile.tokens_to_chars(profile.default_reserve_tokens)
         return self.context_reserve_chars
+
+    def _model_context_profile(
+        self,
+        metadata: Mapping[str, Any] | None,
+    ) -> ModelContextProfile:
+        requested_model = None
+        if metadata is not None:
+            requested_model = metadata.get("requested_model")
+        if not isinstance(requested_model, str) or not requested_model.strip():
+            requested_model = self.default_model
+        return resolve_model_context_profile(
+            requested_model,
+            provider_id=self.default_provider_id,
+        )
+
+    def _compaction_preserve_recent_chars(
+        self,
+        profile: ModelContextProfile,
+    ) -> int | None:
+        if self.compaction_preserve_recent_tokens is not None:
+            return profile.tokens_to_chars(self.compaction_preserve_recent_tokens)
+        if self.compaction_preserve_recent_chars is not None:
+            return self.compaction_preserve_recent_chars
+        if self.max_context_chars is None and self.max_context_tokens is not None:
+            return profile.tokens_to_chars(profile.default_preserve_recent_tokens)
+        return None
+
+    def _model_context_budget_metadata(
+        self,
+        metadata: Mapping[str, Any] | None = None,
+        *,
+        budget: ContextBudget | None = None,
+    ) -> dict[str, Any]:
+        profile = self._model_context_profile(metadata)
+        resolved_budget = budget or self._context_budget(metadata)
+        preserve_recent_chars = self._compaction_preserve_recent_chars(profile)
+        reserve_tokens = self.context_reserve_tokens
+        if (
+            reserve_tokens is None
+            and self.max_context_chars is None
+            and self.max_context_tokens is not None
+            and self.compaction_reserved_chars is None
+            and self.context_reserve_chars == 0
+        ):
+            reserve_tokens = profile.default_reserve_tokens
+        preserve_recent_tokens = self.compaction_preserve_recent_tokens
+        if (
+            preserve_recent_tokens is None
+            and preserve_recent_chars is not None
+            and self.compaction_preserve_recent_chars is None
+            and self.max_context_chars is None
+            and self.max_context_tokens is not None
+        ):
+            preserve_recent_tokens = profile.default_preserve_recent_tokens
+        max_context_chars_source = (
+            "max_context_chars"
+            if self.max_context_chars is not None
+            else "max_context_tokens"
+            if self.max_context_tokens is not None
+            else None
+        )
+        reserve_chars_source = (
+            "context_reserve_tokens"
+            if self.context_reserve_tokens is not None
+            else "compaction_reserved_chars"
+            if self.compaction_reserved_chars is not None
+            else "profile_default_reserve_tokens"
+            if reserve_tokens == profile.default_reserve_tokens
+            and self.max_context_chars is None
+            and self.max_context_tokens is not None
+            else "context_reserve_chars"
+        )
+        preserve_recent_chars_source = (
+            "compaction_preserve_recent_tokens"
+            if self.compaction_preserve_recent_tokens is not None
+            else "compaction_preserve_recent_chars"
+            if self.compaction_preserve_recent_chars is not None
+            else "profile_default_preserve_recent_tokens"
+            if preserve_recent_tokens == profile.default_preserve_recent_tokens
+            and self.max_context_chars is None
+            and self.max_context_tokens is not None
+            else None
+        )
+        payload = {
+            "provider_id": profile.provider_id,
+            "model_id": profile.model_id,
+            "context_window_tokens": profile.context_window_tokens,
+            "max_context_tokens": self.max_context_tokens,
+            "context_reserve_tokens": reserve_tokens,
+            "compaction_preserve_recent_tokens": preserve_recent_tokens,
+            "chars_per_token": profile.chars_per_token,
+            "max_context_chars": resolved_budget.max_chars,
+            "context_reserve_chars": resolved_budget.reserve_chars,
+            "compaction_preserve_recent_chars": preserve_recent_chars,
+        }
+        payload["context_budget"] = {
+            **payload,
+            "max_context_chars_source": max_context_chars_source,
+            "context_reserve_chars_source": reserve_chars_source,
+            "compaction_preserve_recent_chars_source": preserve_recent_chars_source,
+            "max_parts": resolved_budget.max_parts,
+            "max_chars": resolved_budget.max_chars,
+            "reserve_chars": resolved_budget.reserve_chars,
+        }
+        return payload
 
     async def _maybe_compact_stored_session_history(
         self,
@@ -697,6 +860,7 @@ class RuntimeLoopRunner:
         trigger: str,
         overflow: bool,
         budget: ContextBudget,
+        metadata: Mapping[str, Any] | None = None,
         overflow_retry: bool = False,
     ) -> list[Message]:
         if not self.compaction_auto:
@@ -706,7 +870,16 @@ class RuntimeLoopRunner:
         if not history:
             return history
 
-        strategy = self._stored_session_compaction_strategy(budget)
+        model_context_metadata = self._model_context_budget_metadata(
+            metadata,
+            budget=budget,
+        )
+        profile = self._model_context_profile(metadata)
+        preserve_recent_chars = self._compaction_preserve_recent_chars(profile)
+        strategy = self._stored_session_compaction_strategy(
+            budget,
+            preserve_recent_chars=preserve_recent_chars,
+        )
         tail_start_message_id = _tail_start_message_id(
             history,
             tail_turns=self.compaction_tail_turns,
@@ -717,9 +890,10 @@ class RuntimeLoopRunner:
             overflow=overflow,
             overflow_retry=overflow_retry,
             tail_turns=self.compaction_tail_turns,
-            preserve_recent_chars=self.compaction_preserve_recent_chars,
+            preserve_recent_chars=preserve_recent_chars,
             tail_start_message_id=tail_start_message_id,
         )
+        operation_metadata.update(model_context_metadata)
         summary: str | None = None
         if self.compaction_summarizer is not None:
             preparation = await CompactionController(self.compaction_summarizer).prepare(
@@ -790,6 +964,8 @@ class RuntimeLoopRunner:
     def _stored_session_compaction_strategy(
         self,
         budget: ContextBudget,
+        *,
+        preserve_recent_chars: int | None,
     ) -> BudgetCompactionStrategy:
         strategy_cls = globals().get("TailTurnCompactionStrategy")
         if strategy_cls is None:
@@ -797,7 +973,7 @@ class RuntimeLoopRunner:
         return strategy_cls(
             budget=budget,
             tail_turns=self.compaction_tail_turns,
-            preserve_recent_chars=self.compaction_preserve_recent_chars,
+            preserve_recent_chars=preserve_recent_chars,
         )
 
     async def _prepare_runtime_request(
@@ -838,6 +1014,10 @@ class RuntimeLoopRunner:
             reserve_chars=budget.reserve_chars,
             compaction_summary=compaction_summary,
             compaction_summary_metadata=compaction_summary_metadata,
+        )
+        prepared_request = _with_model_context_compaction_metadata(
+            prepared_request,
+            self._model_context_budget_metadata(request_metadata, budget=budget),
         )
         return RuntimeRequest(
             session_id=session_id,
@@ -931,11 +1111,17 @@ class RuntimeLoopRunner:
                 ):
                     raise
                 overflow_retry_count += 1
-                overflow_budget = self._overflow_retry_budget()
+                overflow_budget = self._overflow_retry_budget(current_request.metadata)
                 overflow_metadata = _overflow_retry_metadata(
                     current_request.metadata,
                     attempt=overflow_retry_count,
                     budget=overflow_budget,
+                )
+                overflow_metadata.update(
+                    self._model_context_budget_metadata(
+                        current_request.metadata,
+                        budget=overflow_budget,
+                    )
                 )
                 provider_context_messages = request_history[
                     : max(0, len(request_history) - len(history))
@@ -952,6 +1138,7 @@ class RuntimeLoopRunner:
                         overflow=True,
                         overflow_retry=True,
                         budget=overflow_budget,
+                        metadata=overflow_metadata,
                     )
                 retry_request_history = [
                     *provider_context_messages,
@@ -1486,9 +1673,13 @@ async def run_runtime_loop(
     tool_runtime: ToolRuntime,
     max_iterations: int = 4,
     doom_loop_threshold: Optional[int] = 3,
+    default_provider_id: str = DEFAULT_PROVIDER_ID,
+    default_model: str = DEFAULT_MODEL_ID,
     max_context_parts: Optional[int] = None,
     max_context_chars: Optional[int] = None,
+    max_context_tokens: int | None = None,
     context_reserve_chars: int = 0,
+    context_reserve_tokens: int | None = None,
     metadata: Optional[dict[str, Any]] = None,
     context_messages: Optional[list[Message]] = None,
     append_user_message: bool = True,
@@ -1503,6 +1694,7 @@ async def run_runtime_loop(
     compaction_auto: bool = True,
     compaction_tail_turns: int = 2,
     compaction_preserve_recent_chars: int | None = None,
+    compaction_preserve_recent_tokens: int | None = None,
     compaction_reserved_chars: int | None = None,
     provider_max_retries: int = 2,
     provider_retry_backoff_seconds: float = 0.0,
@@ -1519,9 +1711,13 @@ async def run_runtime_loop(
         tool_runtime=tool_runtime,
         max_iterations=max_iterations,
         doom_loop_threshold=doom_loop_threshold,
+        default_provider_id=default_provider_id,
+        default_model=default_model,
         max_context_parts=max_context_parts,
         max_context_chars=max_context_chars,
+        max_context_tokens=max_context_tokens,
         context_reserve_chars=context_reserve_chars,
+        context_reserve_tokens=context_reserve_tokens,
         event_bus=event_bus,
         is_cancelled=is_cancelled,
         tool_selection=tool_selection,
@@ -1529,6 +1725,7 @@ async def run_runtime_loop(
         compaction_auto=compaction_auto,
         compaction_tail_turns=compaction_tail_turns,
         compaction_preserve_recent_chars=compaction_preserve_recent_chars,
+        compaction_preserve_recent_tokens=compaction_preserve_recent_tokens,
         compaction_reserved_chars=compaction_reserved_chars,
         provider_max_retries=provider_max_retries,
         provider_retry_backoff_seconds=provider_retry_backoff_seconds,
@@ -1637,6 +1834,15 @@ def _validate_optional_non_negative_int(value: Any, *, field_name: str) -> None:
     if value is None:
         return
     _validate_non_negative_int(value, field_name=field_name)
+
+
+def _validate_non_empty_string(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a non-empty string")
+    text = value.strip()
+    if not text:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return text
 
 
 def _disabled_tool_ids(
@@ -1987,6 +2193,34 @@ def _request_metadata(
     )
     request_metadata["loop"] = merged_loop_metadata
     return request_metadata
+
+
+def _with_model_context_compaction_metadata(
+    prepared_request: Any,
+    model_context_metadata: Mapping[str, Any],
+):
+    if not prepared_request.compaction_applied:
+        return prepared_request
+    request_metadata = dict(prepared_request.request.metadata)
+    existing_compaction = request_metadata.get("compaction")
+    if isinstance(existing_compaction, Mapping):
+        compaction_metadata = dict(existing_compaction)
+    else:
+        compaction_metadata = {}
+    compaction_metadata.update(dict(model_context_metadata))
+    request_metadata["compaction"] = dict(compaction_metadata)
+    provider_request = replace(
+        prepared_request.request,
+        metadata=request_metadata,
+    )
+    return replace(
+        prepared_request,
+        request=provider_request,
+        compaction_metadata={
+            **dict(prepared_request.compaction_metadata),
+            **dict(model_context_metadata),
+        },
+    )
 
 
 def _auto_compaction_operation_metadata(
