@@ -286,6 +286,7 @@ class ToolRuntime:
                 content=content,
                 output=raw_output.output if policy.include_raw_output else None,
                 error=raw_output.error,
+                attachments=raw_output.attachments,
                 metadata={
                     **metadata,
                     **context_metadata,

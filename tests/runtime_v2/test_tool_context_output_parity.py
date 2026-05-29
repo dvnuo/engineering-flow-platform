@@ -62,6 +62,23 @@ def test_tool_context_opencode_aliases_and_message_metadata():
 
 
 @pytest.mark.asyncio
+async def test_tool_context_abort_alias_uses_sync_signal_without_breaking_async_cancel():
+    assert ToolContext(cancel_requested=lambda: True).abort.aborted is True
+    assert ToolContext(cancel_requested=lambda: False).abort.aborted is False
+
+    async def async_cancel() -> bool:
+        return True
+
+    async_context = ToolContext(cancel_requested=async_cancel)
+    assert async_context.abort.aborted is False
+    assert (await async_context.is_cancelled()) is True
+
+    awaitable_context = ToolContext(cancel_requested=lambda: async_cancel())
+    assert awaitable_context.abort.aborted is False
+    assert (await awaitable_context.is_cancelled()) is True
+
+
+@pytest.mark.asyncio
 async def test_tool_runtime_injects_tool_call_context_fields_and_metadata():
     captured: dict[str, ToolContext] = {}
 

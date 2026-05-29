@@ -142,16 +142,26 @@ def _question_request_metadata(
     args: Mapping[str, Any],
     context: ToolContext,
 ) -> dict[str, Any]:
-    metadata: dict[str, Any] = {
+    metadata: dict[str, Any] = {}
+    caller_metadata = args.get("metadata")
+    if isinstance(caller_metadata, Mapping):
+        metadata.update(dict(caller_metadata))
+
+    message_id = context.messageID
+    call_id = context.callID
+    core_metadata: dict[str, Any] = {
         "tool_name": context.tool_name,
         "tool_call_id": context.tool_call_id,
         "run_id": context.run_id,
     }
     if context.iteration is not None:
-        metadata["iteration"] = context.iteration
-    caller_metadata = args.get("metadata")
-    if isinstance(caller_metadata, Mapping):
-        metadata.update(dict(caller_metadata))
+        core_metadata["iteration"] = context.iteration
+    if message_id is not None and message_id != "":
+        core_metadata["message_id"] = message_id
+    if call_id is not None and call_id != "":
+        core_metadata["tool"] = {"message_id": message_id, "call_id": call_id}
+
+    metadata.update(core_metadata)
     return {key: value for key, value in metadata.items() if value is not None}
 
 

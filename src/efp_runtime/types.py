@@ -35,6 +35,17 @@ class Attachment:
     def __post_init__(self) -> None:
         self.metadata = dict(self.metadata)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "attachment_id": self.attachment_id,
+            "mime_type": self.mime_type,
+            "filename": self.filename,
+            "url": self.url,
+            "text_ref": self.text_ref,
+            "metadata": dict(self.metadata),
+            "created_at": self.created_at,
+        }
+
 
 @dataclass(init=False)
 class ToolCall:
@@ -202,6 +213,8 @@ class ToolResult:
             "events": [
                 event.to_dict() if hasattr(event, "to_dict") else event for event in self.events
             ],
+            "attachments": [attachment.to_dict() for attachment in self.attachments],
+            "created_at": self.created_at,
         }
 
 

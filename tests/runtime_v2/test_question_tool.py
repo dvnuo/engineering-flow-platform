@@ -145,6 +145,49 @@ async def test_question_tool_requests_then_consumes_answer():
 
 
 @pytest.mark.asyncio
+async def test_question_tool_request_metadata_includes_message_and_tool_linkage():
+    broker = QuestionBroker()
+    runtime = ToolRuntime(ToolRegistry([create_question_tool(broker)]))
+    args = _question_args()
+    args["metadata"] = {
+        "caller": "kept",
+        "message_id": "caller-message",
+        "tool": {"message_id": "caller-message", "call_id": "caller-call"},
+    }
+    call = ToolCall(id="call_question_link", tool_id="question", args=args)
+    context = ToolContext(
+        session_id="session-tool-link",
+        tool_call_id="call_question_link",
+        message_id="message-assistant",
+        run_id="run-link",
+        iteration=4,
+    )
+
+    first = await runtime.execute(call, context=context)
+
+    assert first.status == "question_requested"
+    metadata = first.metadata["question_request"]["metadata"]
+    assert metadata["caller"] == "kept"
+    assert metadata["tool_name"] == "question"
+    assert metadata["tool_call_id"] == "call_question_link"
+    assert metadata["run_id"] == "run-link"
+    assert metadata["iteration"] == 4
+    assert metadata["message_id"] == "message-assistant"
+    assert metadata["tool"] == {
+        "message_id": "message-assistant",
+        "call_id": "call_question_link",
+    }
+    assert broker.pending()[0].to_dict()["metadata"] == metadata
+
+    broker.answer(first.metadata["question_request"]["request_id"], ["Python"])
+    second = await runtime.execute(call, context=context)
+
+    assert second.status == "success"
+    assert second.output["answers"] == [["Python"]]
+    assert broker.pending() == []
+
+
+@pytest.mark.asyncio
 async def test_loop_waits_for_question_without_appending_tool_result():
     broker = QuestionBroker()
     bus = RuntimeEventBus()

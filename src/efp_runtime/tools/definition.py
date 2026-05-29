@@ -14,6 +14,30 @@ class ValidationError(ValueError):
     """Raised when tool arguments do not match a tool schema."""
 
 
+class ToolAbortSignal:
+    """Synchronous opencode-style view of a tool cancellation signal."""
+
+    def __init__(
+        self,
+        cancel_requested: Callable[[], bool | Awaitable[bool]] | None = None,
+    ) -> None:
+        self._cancel_requested = cancel_requested
+
+    @property
+    def aborted(self) -> bool:
+        if self._cancel_requested is None:
+            return False
+        if _is_async_callable(self._cancel_requested):
+            return False
+
+        result = self._cancel_requested()
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()
+            return False
+        return bool(result)
+
+
 @dataclass(frozen=True)
 class OutputPolicy:
     """Controls how tool output is serialized for model-visible context."""
@@ -95,6 +119,12 @@ class ToolContext:
         """opencode-style alias for ``tool_call_id``."""
 
         return self.tool_call_id
+
+    @property
+    def abort(self) -> ToolAbortSignal:
+        """opencode-style synchronous cancellation alias."""
+
+        return ToolAbortSignal(self.cancel_requested)
 
     async def is_cancelled(self) -> bool:
         """Return whether the surrounding runtime has requested cancellation."""
@@ -200,6 +230,13 @@ def _set_missing_metadata(metadata: dict[str, Any], key: str, value: Any) -> Non
     existing = metadata.get(key)
     if existing is None or existing == "":
         metadata[key] = value
+
+
+def _is_async_callable(callback: Callable[..., Any]) -> bool:
+    if inspect.iscoroutinefunction(callback):
+        return True
+    call = getattr(callback, "__call__", None)
+    return inspect.iscoroutinefunction(call)
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,7 @@
 import pytest
 
 from efp_runtime.events import RuntimeEvent
-from efp_runtime.models import ToolCall, ToolResult
+from efp_runtime.models import Attachment, ToolCall, ToolResult
 from efp_runtime.permissions import ASK, DENY, PermissionMetadata
 from efp_runtime.tools.definition import OutputPolicy, ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
@@ -236,6 +236,90 @@ async def test_tool_supplied_events_are_preserved_between_started_and_completed(
     assert result.events[1] is supplied_event
     assert result.events[-1].payload["status"] == "success"
     assert result.events[-1].payload["success"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("max_chars", "expected_truncated"),
+    [(None, False), (12, True)],
+)
+async def test_tool_result_attachments_survive_normalization_with_and_without_truncation(
+    max_chars,
+    expected_truncated,
+):
+    attachment = Attachment(
+        attachment_id="att-runtime",
+        mime_type="text/plain",
+        filename="notes.txt",
+        url="https://example.test/notes.txt",
+        text_ref="blob:notes",
+        metadata={"source": "tool"},
+        created_at="2026-05-29T00:00:00Z",
+    )
+
+    async def execute(args, context):
+        return ToolResult(
+            call_id=context.tool_call_id or "call-attachments",
+            tool_name=context.tool_name or "attachments",
+            content="abcdefghijklmnopqrstuvwxyz",
+            attachments=[attachment],
+        )
+
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                ToolDef(
+                    id="attachments",
+                    description="Return attachment result",
+                    input_schema={"type": "object", "properties": {}},
+                    execute=execute,
+                    output_policy=OutputPolicy(max_chars=max_chars),
+                )
+            ]
+        )
+    )
+
+    result = await runtime.execute(
+        ToolCall(id="call-attachments", tool_id="attachments", args={})
+    )
+
+    assert result.truncated is expected_truncated
+    assert result.attachments == [attachment]
+    assert result.attachments[0].attachment_id == "att-runtime"
+    assert isinstance(result.metadata["duration_ms"], int)
+    assert result.events[-1].type == "tool.completed"
+
+
+def test_tool_result_to_dict_includes_attachments_and_created_at():
+    attachment = Attachment(
+        attachment_id="att-dict",
+        mime_type="text/plain",
+        filename="notes.txt",
+        url="https://example.test/notes.txt",
+        text_ref="blob:notes",
+        metadata={"source": "tool"},
+        created_at="2026-05-29T00:00:00Z",
+    )
+    result = ToolResult(
+        call_id="call-dict",
+        tool_name="dict_tool",
+        content="ok",
+        attachments=[attachment],
+        created_at="2026-05-29T00:00:01Z",
+    )
+
+    payload = result.to_dict()
+
+    assert payload["created_at"] == "2026-05-29T00:00:01Z"
+    assert payload["attachments"][0] == {
+        "attachment_id": "att-dict",
+        "mime_type": "text/plain",
+        "filename": "notes.txt",
+        "url": "https://example.test/notes.txt",
+        "text_ref": "blob:notes",
+        "metadata": {"source": "tool"},
+        "created_at": "2026-05-29T00:00:00Z",
+    }
 
 
 @pytest.mark.asyncio
