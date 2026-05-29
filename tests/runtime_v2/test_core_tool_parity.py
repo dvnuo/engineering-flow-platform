@@ -270,7 +270,7 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
     result = await runtime.execute(
         ToolCall(
             id="call-todo",
-            tool_id="todo_write",
+            tool_id="todowrite",
             args={
                 "todos": [
                     {"content": "Inspect tools", "status": "completed"},
@@ -310,7 +310,7 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
     todo_event = next(event for event in result.events if event.type == "todo.updated")
     assert todo_event.session_id == "session-1"
     assert todo_event.payload == {
-        "tool_id": "todo_write",
+        "tool_id": "todowrite",
         "tool_call_id": "call-todo",
         "todos": todos,
         "todo_count": 3,
@@ -322,7 +322,7 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
     invalid = await runtime.execute(
         ToolCall(
             id="call-todo-invalid",
-            tool_id="todo_write",
+            tool_id="todowrite",
             args={"todos": [{"content": "Bad status", "status": "blocked"}]},
         )
     )
@@ -333,7 +333,7 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
     invalid_priority = await runtime.execute(
         ToolCall(
             id="call-todo-invalid-priority",
-            tool_id="todo_write",
+            tool_id="todowrite",
             args={
                 "todos": [
                     {
@@ -357,58 +357,52 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
         "apply_patch",
         "bash",
         "edit",
-        "fetch",
         "glob",
         "grep",
         "invalid",
-        "list_dir",
         "read",
-        "read_file",
         "repo_clone",
         "repo_overview",
-        "shell_exec",
-        "shell_kill",
-        "shell_status",
-        "todo_write",
         "todowrite",
         "webfetch",
         "write",
-        "write_file",
     ]
     assert registry.require("glob").permission.action == ALLOW
-    assert registry.require("fetch").permission.action == ALLOW
-    assert registry.require("fetch").permission.category == "network"
-    assert registry.require("fetch").permission.risk == "medium"
     assert registry.require("webfetch").permission.action == ALLOW
     assert registry.require("webfetch").permission.category == "network"
     assert registry.require("webfetch").permission.risk == "medium"
     assert registry.require("invalid").permission.action == ALLOW
     assert registry.require("invalid").permission.category == "validation"
-    assert registry.require("todo_write").permission.action == ALLOW
-    assert registry.require("todo_write").permission.category == "planning"
-    assert registry.require("todo_write").permission.resource == "session"
-    assert registry.require("todo_write").permission.risk == "low"
     assert registry.require("todowrite").permission.action == ALLOW
     assert registry.require("todowrite").permission.category == "planning"
     assert registry.require("todowrite").permission.resource == "session"
     assert registry.require("todowrite").permission.risk == "low"
-    assert registry.require("shell_status").permission.action == ALLOW
-    assert registry.require("shell_status").permission.risk == "low"
     assert registry.require("edit").permission.action == ASK
     assert registry.require("apply_patch").permission.action == ASK
     assert registry.require("bash").permission.action == ASK
     assert registry.require("bash").permission.category == "shell"
     assert registry.require("bash").permission.resource == "workspace"
     assert registry.require("bash").permission.risk == "high"
-    assert registry.require("shell_exec").permission.action == ASK
-    assert registry.require("shell_kill").permission.action == ASK
-    assert registry.require("shell_kill").permission.risk == "medium"
     assert registry.require("repo_clone").permission.action == ASK
     assert registry.require("repo_clone").permission.category == "repository"
     assert registry.require("repo_clone").permission.risk == "medium"
     assert registry.require("repo_overview").permission.action == ASK
     assert registry.require("repo_overview").permission.category == "repository"
     assert registry.require("repo_overview").permission.risk == "low"
+
+    legacy_registry = create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+    assert legacy_registry.require("fetch").permission.action == ALLOW
+    assert legacy_registry.require("fetch").permission.category == "network"
+    assert legacy_registry.require("fetch").permission.risk == "medium"
+    assert legacy_registry.require("todo_write").permission.action == ALLOW
+    assert legacy_registry.require("todo_write").permission.category == "planning"
+    assert legacy_registry.require("todo_write").permission.resource == "session"
+    assert legacy_registry.require("todo_write").permission.risk == "low"
+    assert legacy_registry.require("shell_status").permission.action == ALLOW
+    assert legacy_registry.require("shell_status").permission.risk == "low"
+    assert legacy_registry.require("shell_exec").permission.action == ASK
+    assert legacy_registry.require("shell_kill").permission.action == ASK
+    assert legacy_registry.require("shell_kill").permission.risk == "medium"
 
     target = tmp_path / "notes.txt"
     target.write_text("alpha\n", encoding="utf-8")

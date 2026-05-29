@@ -110,6 +110,7 @@ async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
+            include_legacy_tool_aliases=True,
             tool_permissions={"bash": "allow"},
         ),
     )
@@ -130,6 +131,7 @@ async def test_edit_deny_config_rejects_write_edit_and_apply_patch(tmp_path: Pat
         provider=ScriptedLLMProvider([]),
         config=RuntimeConfig(
             workspace_root=tmp_path,
+            include_legacy_tool_aliases=True,
             tool_permissions={"edit": "deny"},
         ),
     )
@@ -165,6 +167,7 @@ async def test_exact_tool_permission_precedes_category_alias(tmp_path: Path):
         provider=ScriptedLLMProvider([]),
         config=RuntimeConfig(
             workspace_root=tmp_path,
+            include_legacy_tool_aliases=True,
             tool_permissions={"edit": "deny", "write_file": "allow"},
         ),
     )
@@ -467,6 +470,7 @@ async def test_configured_ask_approve_once_then_resume_executes_pending_call(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
+            include_legacy_tool_aliases=True,
             tool_permissions={
                 "edit": {
                     "action": "ask",
@@ -558,7 +562,7 @@ async def test_permission_config_does_not_control_tool_schema_visibility(
         schema.id for schema in visible_provider.requests[0].provider_request.tools
     ]
     assert visible_result.status == LoopStatus.COMPLETED
-    assert {"apply_patch", "edit", "write_file"}.issubset(visible_tool_ids)
+    assert {"apply_patch", "edit", "write"}.issubset(visible_tool_ids)
     assert denied.status == "permission_denied"
 
     disabled_provider = ScriptedLLMProvider([{"content": "done"}])
@@ -582,7 +586,7 @@ async def test_permission_config_does_not_control_tool_schema_visibility(
 
     assert disabled_result.status == LoopStatus.COMPLETED
     assert "edit" not in disabled_tool_ids
-    assert "write_file" in disabled_tool_ids
+    assert "write" in disabled_tool_ids
 
 
 def test_permission_config_import_boundary():

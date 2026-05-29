@@ -49,8 +49,17 @@ def local_http_server():
 
 
 @pytest.mark.asyncio
-async def test_core_registry_includes_remaining_opencode_aliases(tmp_path: Path):
+async def test_core_registry_defaults_to_remaining_opencode_ids(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path)
+
+    assert {"webfetch", "todowrite"}.issubset(set(registry.ids()))
+    assert {"fetch", "todo_write"}.isdisjoint(set(registry.ids()))
+    assert registry.require("webfetch").permission.data["subject_arg"] == "url"
+
+
+@pytest.mark.asyncio
+async def test_core_registry_can_include_remaining_legacy_aliases(tmp_path: Path):
+    registry = create_core_tool_registry(tmp_path, include_legacy_aliases=True)
 
     assert {"fetch", "webfetch", "todo_write", "todowrite"}.issubset(
         set(registry.ids())
@@ -70,7 +79,7 @@ async def test_webfetch_uses_fetch_execution_and_metadata(
     tmp_path: Path,
     local_http_server: str,
 ):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path, include_legacy_aliases=True))
     url = f"{local_http_server}/ok"
 
     fetch_result = await runtime.execute(
@@ -168,7 +177,7 @@ async def test_todowrite_uses_todo_write_schema_and_normalizes_todos(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_todo_write_and_todowrite_share_registry_store(tmp_path: Path):
-    registry = create_core_tool_registry(tmp_path)
+    registry = create_core_tool_registry(tmp_path, include_legacy_aliases=True)
     runtime = ToolRuntime(registry)
     todo_store = registry.require("todo_write").runtime_metadata["todos_by_session"]
     alias_store = registry.require("todowrite").runtime_metadata["todos_by_session"]
@@ -211,7 +220,7 @@ async def test_todo_write_and_todowrite_share_registry_store(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_webfetch_category_permission_denies_fetch_ids(tmp_path: Path):
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path),
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
         permission_evaluator=ConfiguredPermissionBroker({"webfetch": "deny"}),
     )
 
@@ -250,7 +259,7 @@ async def test_webfetch_nested_permission_matches_url_for_fetch_ids(
     blocked_url = f"{local_http_server}/blocked"
     allowed_url = f"{local_http_server}/ok"
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path),
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
         permission_evaluator=ConfiguredPermissionBroker(
             {
                 "webfetch": {
@@ -282,7 +291,7 @@ async def test_webfetch_nested_permission_matches_url_for_fetch_ids(
 @pytest.mark.asyncio
 async def test_todowrite_category_permission_denies_todo_ids(tmp_path: Path):
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path),
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
         permission_evaluator=ConfiguredPermissionBroker({"todowrite": "deny"}),
     )
     args = {"todos": [{"content": "Blocked", "status": "pending"}]}
@@ -307,13 +316,16 @@ async def test_todowrite_category_permission_denies_todo_ids(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_plan_mode_allows_remaining_aliases_unless_disabled(tmp_path: Path):
+async def test_plan_mode_allows_remaining_legacy_aliases_when_enabled(
+    tmp_path: Path,
+):
     provider = ScriptedLLMProvider([{"content": "planned"}])
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
             runtime_mode="plan",
+            include_legacy_tool_aliases=True,
             max_iterations=1,
         ),
     )
@@ -332,6 +344,7 @@ async def test_plan_mode_allows_remaining_aliases_unless_disabled(tmp_path: Path
         config=RuntimeConfig(
             workspace_root=tmp_path,
             runtime_mode="plan",
+            include_legacy_tool_aliases=True,
             disabled_tools=["webfetch", "todowrite"],
             max_iterations=1,
         ),

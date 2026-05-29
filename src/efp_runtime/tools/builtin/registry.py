@@ -22,7 +22,14 @@ from .background_shell import (
 )
 from .edit import create_edit_tool
 from .fetch import create_fetch_tool, create_webfetch_tool
-from .filesystem import create_filesystem_tools, normalize_workspace_root
+from .filesystem import (
+    create_list_dir_tool,
+    create_read_file_tool,
+    create_read_tool,
+    create_write_file_tool,
+    create_write_tool,
+    normalize_workspace_root,
+)
 from .invalid import create_invalid_tool
 from .lsp import create_lsp_tool
 from .plan import create_plan_exit_tool
@@ -45,6 +52,8 @@ if TYPE_CHECKING:
 def create_core_tool_registry(
     workspace_root: str | Path,
     *,
+    tool_surface: str = "opencode",
+    include_legacy_aliases: bool = False,
     write_permission: PermissionMetadata | None = None,
     shell_permission: PermissionMetadata | None = None,
     fetch_permission: PermissionMetadata | None = None,
@@ -74,6 +83,10 @@ def create_core_tool_registry(
     """Create a registry containing Runtime v2 core built-in tools."""
 
     root = normalize_workspace_root(workspace_root)
+    resolved_surface = _normalize_tool_surface(tool_surface)
+    expose_legacy_aliases = (
+        bool(include_legacy_aliases) or resolved_surface == "legacy"
+    )
     shell_background_manager = (
         shell_job_manager
         if enable_background_shell
@@ -91,20 +104,28 @@ def create_core_tool_registry(
     skill_list_discovery = _resolve_skill_list_discovery(
         skill_discovery=skill_discovery,
         skill_directories=skill_directories,
-        include_skill_list_tool=include_skill_list_tool,
+        include_skill_list_tool=(
+            include_skill_list_tool if expose_legacy_aliases else False
+        ),
         resolved_skill_discovery=resolved_skill_discovery,
     )
     registry = ToolRegistry()
     registry.register(create_apply_patch_tool(root, permission=write_permission))
     registry.register(create_edit_tool(root, permission=write_permission))
-    registry.register(create_fetch_tool(permission=fetch_permission))
+    if expose_legacy_aliases:
+        registry.register(create_fetch_tool(permission=fetch_permission))
     registry.register(create_webfetch_tool(permission=fetch_permission))
-    for tool in create_filesystem_tools(
-        root,
-        write_permission=write_permission,
-        instruction_resolver=instruction_resolver,
-    ):
-        registry.register(tool)
+    registry.register(
+        create_read_tool(root, instruction_resolver=instruction_resolver)
+    )
+    if expose_legacy_aliases:
+        registry.register(
+            create_read_file_tool(root, instruction_resolver=instruction_resolver)
+        )
+        registry.register(create_list_dir_tool(root))
+    registry.register(create_write_tool(root, permission=write_permission))
+    if expose_legacy_aliases:
+        registry.register(create_write_file_tool(root, permission=write_permission))
     registry.register(create_glob_tool(root))
     registry.register(create_grep_tool(root))
     registry.register(create_invalid_tool())
@@ -114,14 +135,15 @@ def create_core_tool_registry(
         registry.register(
             create_lsp_tool(root, client=lsp_client, permission=lsp_permission)
         )
-    registry.register(
-        create_shell_exec_tool(
-            root,
-            permission=shell_permission,
-            shell_job_manager=shell_background_manager,
-            enable_background=enable_background_shell,
+    if expose_legacy_aliases:
+        registry.register(
+            create_shell_exec_tool(
+                root,
+                permission=shell_permission,
+                shell_job_manager=shell_background_manager,
+                enable_background=enable_background_shell,
+            )
         )
-    )
     registry.register(
         create_bash_tool(
             root,
@@ -130,7 +152,7 @@ def create_core_tool_registry(
             enable_background=enable_background_shell,
         )
     )
-    if shell_background_manager is not None:
+    if expose_legacy_aliases and shell_background_manager is not None:
         registry.register(create_shell_status_tool(shell_background_manager, root))
         registry.register(create_shell_kill_tool(shell_background_manager, root))
     if task_runner is not None or include_task_tool:
@@ -148,13 +170,14 @@ def create_core_tool_registry(
                 background_manager=task_manager,
             )
         )
-        if allow_background_task and task_manager is not None:
+        if expose_legacy_aliases and allow_background_task and task_manager is not None:
             registry.register(create_task_status_tool(task_manager))
             registry.register(create_task_cancel_tool(task_manager))
     if include_question_tool:
         registry.register(create_question_tool(question_broker))
     todo_store: TodoStore = {}
-    registry.register(create_todo_write_tool(todos_by_session=todo_store))
+    if expose_legacy_aliases:
+        registry.register(create_todo_write_tool(todos_by_session=todo_store))
     registry.register(create_todowrite_tool(todos_by_session=todo_store))
     if include_plan_tool:
         registry.register(create_plan_exit_tool())
@@ -178,6 +201,13 @@ def create_core_tool_registry(
             )
         )
     return registry
+
+
+def _normalize_tool_surface(tool_surface: str) -> str:
+    surface = str(tool_surface).strip()
+    if surface not in {"opencode", "legacy"}:
+        raise ValueError("tool_surface must be 'opencode' or 'legacy'")
+    return surface
 
 
 def _resolve_skill_discovery(

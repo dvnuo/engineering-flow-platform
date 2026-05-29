@@ -146,7 +146,9 @@ async def test_skill_list_marks_text_and_binary_sidecars_without_content(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_provider_schema_includes_skill_and_skill_list(tmp_path: Path):
+async def test_agent_runtime_provider_schema_hides_skill_list_by_default(
+    tmp_path: Path,
+):
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
     _write_skill(skills_dir, "review")
@@ -161,6 +163,30 @@ async def test_agent_runtime_provider_schema_includes_skill_and_skill_list(tmp_p
     )
 
     result = await runtime.run("List tools.", session_id="session-skill-list-schema")
+
+    assert result.status == LoopStatus.COMPLETED
+    schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
+    assert "skill" in schema_ids
+    assert "skill_list" not in schema_ids
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_legacy_aliases_include_skill_list(tmp_path: Path):
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    _write_skill(skills_dir, "review")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            skill_directories=[skills_dir],
+            include_legacy_tool_aliases=True,
+            max_iterations=1,
+        ),
+    )
+
+    result = await runtime.run("List tools.", session_id="session-skill-list-legacy")
 
     assert result.status == LoopStatus.COMPLETED
     schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
@@ -193,13 +219,16 @@ async def test_enable_skill_list_tool_false_hides_skill_list(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_enable_skill_list_tool_true_exposes_empty_skill_list(tmp_path: Path):
+async def test_enable_skill_list_tool_true_exposes_empty_skill_list_with_legacy_aliases(
+    tmp_path: Path,
+):
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
             enable_skill_list_tool=True,
+            include_legacy_tool_aliases=True,
             max_iterations=1,
         ),
     )
@@ -230,6 +259,7 @@ async def test_active_skills_are_visible_to_metadata_and_skill_list(tmp_path: Pa
             workspace_root=tmp_path,
             skill_directories=[skills_dir],
             max_iterations=2,
+            include_legacy_tool_aliases=True,
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),

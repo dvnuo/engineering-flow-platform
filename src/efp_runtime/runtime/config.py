@@ -46,6 +46,8 @@ class RuntimeConfig:
     enabled_tools: list[str] | None = None
     disabled_tools: list[str] = field(default_factory=list)
     model_aware_tool_selection: bool = True
+    tool_surface: str = "opencode"
+    include_legacy_tool_aliases: bool = False
     tool_permissions: dict[str, Any] = field(default_factory=dict)
     runtime_mode: str = "build"
     enable_plan_tool: bool | None = None
@@ -188,6 +190,12 @@ class RuntimeConfig:
             None if self.enable_plan_tool is None else bool(self.enable_plan_tool)
         )
         self.model_aware_tool_selection = bool(self.model_aware_tool_selection)
+        self.tool_surface = str(self.tool_surface).strip()
+        if self.tool_surface not in ("opencode", "legacy"):
+            raise ValueError("tool_surface must be 'opencode' or 'legacy'")
+        self.include_legacy_tool_aliases = bool(self.include_legacy_tool_aliases)
+        if self.tool_surface == "legacy":
+            self.include_legacy_tool_aliases = True
         self.plan_mode_read_only = bool(self.plan_mode_read_only)
         self.enable_question_tool = bool(self.enable_question_tool)
         self.enable_lsp_tool = bool(self.enable_lsp_tool)

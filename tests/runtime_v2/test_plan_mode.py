@@ -24,23 +24,15 @@ DEFAULT_TOOL_IDS = [
     "apply_patch",
     "bash",
     "edit",
-    "fetch",
     "glob",
     "grep",
     "invalid",
-    "list_dir",
     "read",
-    "read_file",
     "repo_clone",
     "repo_overview",
-    "shell_exec",
-    "shell_kill",
-    "shell_status",
-    "todo_write",
     "todowrite",
     "webfetch",
     "write",
-    "write_file",
 ]
 MUTATING_TOOL_IDS = {
     "apply_patch",
@@ -48,9 +40,6 @@ MUTATING_TOOL_IDS = {
     "edit",
     "repo_clone",
     "write",
-    "write_file",
-    "shell_exec",
-    "shell_kill",
 }
 
 
@@ -327,8 +316,8 @@ async def test_plan_mode_enabled_tools_cannot_bypass_read_only_policy(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             runtime_mode="plan",
-            enabled_tools=["apply_patch", "plan_exit", "read_file"],
-            disabled_tools=["read_file"],
+            enabled_tools=["apply_patch", "plan_exit", "read"],
+            disabled_tools=["read"],
             max_iterations=1,
         ),
     )
@@ -342,23 +331,15 @@ async def test_plan_mode_enabled_tools_cannot_bypass_read_only_policy(
         "apply_patch",
         "bash",
         "edit",
-        "fetch",
         "glob",
         "grep",
         "invalid",
-        "list_dir",
         "read",
-        "read_file",
         "repo_clone",
         "repo_overview",
-        "shell_exec",
-        "shell_kill",
-        "shell_status",
-        "todo_write",
         "todowrite",
         "webfetch",
         "write",
-        "write_file",
     ]
 
 

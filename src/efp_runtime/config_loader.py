@@ -82,6 +82,10 @@ _RUNTIME_CONFIG_KEYS = {
     "context_reserve_tokens",
     "modelAwareToolSelection",
     "model_aware_tool_selection",
+    "toolSurface",
+    "tool_surface",
+    "includeLegacyToolAliases",
+    "include_legacy_tool_aliases",
     "compaction",
     "compaction_auto",
     "compaction_prune",
@@ -499,6 +503,15 @@ def _runtime_config_from_raw(
         kwargs["model_aware_tool_selection"] = model_aware_tool_selection
 
     kwargs.update(_model_context_fields(raw))
+
+    tool_surface = _tool_surface(raw)
+    if tool_surface is not None:
+        kwargs["tool_surface"] = tool_surface
+
+    include_legacy_tool_aliases = _include_legacy_tool_aliases(raw)
+    if include_legacy_tool_aliases is not None:
+        kwargs["include_legacy_tool_aliases"] = include_legacy_tool_aliases
+
     kwargs.update(_compaction_policy_fields(raw))
 
     instruction_paths, instruction_texts = _instruction_sources(
@@ -721,6 +734,30 @@ def _model_aware_tool_selection(raw: Mapping[str, Any]) -> Any:
     return selection
 
 
+def _tool_surface(raw: Mapping[str, Any]) -> Any:
+    return _runtime_alias_value(raw, ("toolSurface", "tool_surface"))
+
+
+def _include_legacy_tool_aliases(raw: Mapping[str, Any]) -> Any:
+    return _runtime_alias_value(
+        raw,
+        ("includeLegacyToolAliases", "include_legacy_tool_aliases"),
+    )
+
+
+def _runtime_alias_value(raw: Mapping[str, Any], aliases: Iterable[str]) -> Any:
+    alias_set = set(aliases)
+    value = None
+    for key, item in raw.items():
+        if key == "runtime" and isinstance(item, Mapping):
+            for nested_key, nested_value in item.items():
+                if nested_key in alias_set and nested_value is not None:
+                    value = nested_value
+        elif key in alias_set and item is not None:
+            value = item
+    return value
+
+
 _COMPACTION_NESTED_ALIASES = {
     "auto": "compaction_auto",
     "prune": "compaction_prune",
@@ -906,6 +943,10 @@ def _unconsumed_config(raw: Mapping[str, Any]) -> dict[str, Any]:
                         "mode",
                         "modelAwareToolSelection",
                         "model_aware_tool_selection",
+                        "toolSurface",
+                        "tool_surface",
+                        "includeLegacyToolAliases",
+                        "include_legacy_tool_aliases",
                     }
                 }
                 if runtime_extra:

@@ -106,7 +106,7 @@ async def test_run_output_schema_exposes_tool_and_provider_only_reminder(tmp_pat
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
-            enabled_tools=["read_file"],
+            enabled_tools=["read"],
         ),
     )
 

@@ -423,6 +423,8 @@ def test_runtime_config_field_mapping(tmp_path: Path):
             "activeSkills": ["review", "review"],
             "commandDirectories": ["commands", "commands"],
             "toolDirectories": ["tools", "more-tools"],
+            "toolSurface": "opencode",
+            "includeLegacyToolAliases": True,
             "runtime": {"mode": "plan"},
         },
     )
@@ -452,7 +454,57 @@ def test_runtime_config_field_mapping(tmp_path: Path):
         (tmp_path / "tools").resolve(),
         (tmp_path / "more-tools").resolve(),
     ]
+    assert config.tool_surface == "opencode"
+    assert config.include_legacy_tool_aliases is True
     assert config.runtime_mode == "plan"
+
+
+def test_tool_surface_config_aliases(tmp_path: Path):
+    _write_json(
+        tmp_path / "camel.json",
+        {
+            "toolSurface": "legacy",
+            "includeLegacyToolAliases": False,
+        },
+    )
+    _write_json(
+        tmp_path / "snake.json",
+        {
+            "runtime": {
+                "tool_surface": "opencode",
+                "include_legacy_tool_aliases": True,
+            },
+        },
+    )
+
+    camel = load_runtime_config(
+        tmp_path,
+        paths=["camel.json"],
+        include_defaults=False,
+    )
+    snake = load_runtime_config(
+        tmp_path,
+        paths=["snake.json"],
+        include_defaults=False,
+    )
+
+    assert camel.config.tool_surface == "legacy"
+    assert camel.config.include_legacy_tool_aliases is True
+    assert camel.metadata["unconsumed_config"] == {}
+    assert snake.config.tool_surface == "opencode"
+    assert snake.config.include_legacy_tool_aliases is True
+    assert snake.metadata["unconsumed_config"] == {}
+
+
+def test_invalid_tool_surface_config_raises(tmp_path: Path):
+    _write_json(tmp_path / "custom.json", {"tool_surface": "expanded"})
+
+    with pytest.raises(ValueError, match="tool_surface must be 'opencode' or 'legacy'"):
+        load_runtime_config(
+            tmp_path,
+            paths=["custom.json"],
+            include_defaults=False,
+        )
 
 
 def test_configured_local_tool_directories_append_after_defaults(tmp_path: Path):

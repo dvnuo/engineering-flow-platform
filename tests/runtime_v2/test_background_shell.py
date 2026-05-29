@@ -42,6 +42,7 @@ def _runtime(
         create_core_tool_registry(
             tmp_path,
             enable_background_shell=enable_background_shell,
+            include_legacy_aliases=True,
         ),
         permission_evaluator=AllowEvaluator(),
     )
@@ -235,6 +236,7 @@ def test_agent_runtime_config_can_disable_background_shell(tmp_path: Path):
             workspace_root=tmp_path,
             enable_background_shell=False,
             background_shell_max_buffer_bytes=4096,
+            include_legacy_tool_aliases=True,
             max_iterations=1,
         ),
     )
@@ -255,6 +257,7 @@ async def test_plan_mode_hides_shell_entrypoints_but_build_mode_exposes_them(tmp
         config=RuntimeConfig(
             workspace_root=tmp_path,
             runtime_mode="plan",
+            include_legacy_tool_aliases=True,
             max_iterations=1,
         ),
     )
@@ -270,7 +273,11 @@ async def test_plan_mode_hides_shell_entrypoints_but_build_mode_exposes_them(tmp
     build_provider = ScriptedLLMProvider([{"content": "built"}])
     build_runtime = AgentRuntime(
         provider=build_provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            include_legacy_tool_aliases=True,
+            max_iterations=1,
+        ),
     )
 
     build_result = await build_runtime.run("Build.", session_id="session-background-build")

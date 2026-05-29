@@ -797,6 +797,7 @@ async def test_command_executed_event_emits_on_pause_and_not_resume(tmp_path: Pa
             workspace_root=tmp_path,
             command_directories=[command_dir],
             max_iterations=3,
+            include_legacy_tool_aliases=True,
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),
@@ -1982,6 +1983,7 @@ async def test_command_shell_interpolation_renders_tool_results(tmp_path: Path):
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
+            include_legacy_tool_aliases=True,
             tool_permissions={"shell_exec": "allow"},
             include_default_system_prompt=False,
             include_runtime_reminders=False,
@@ -2030,6 +2032,7 @@ async def test_command_shell_interpolation_permission_denial_is_visible(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
+            include_legacy_tool_aliases=True,
             tool_permissions={"shell_exec": "deny"},
             include_default_system_prompt=False,
             include_runtime_reminders=False,

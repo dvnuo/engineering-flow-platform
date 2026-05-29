@@ -236,6 +236,8 @@ The loader maps the following opencode-style and snake_case keys into
 - `model`, `defaultModel`, or `default_model` to `default_model`.
 - `maxContextTokens` / `max_context_tokens` and `contextReserveTokens` /
   `context_reserve_tokens` for Copilot context budgeting.
+- `toolSurface` / `tool_surface`, either `opencode` or `legacy`.
+- `includeLegacyToolAliases` / `include_legacy_tool_aliases`.
 - `instructions`, as string paths or `{"path": ...}` / `{"text": ...}` entries,
   to `instruction_paths` and `instruction_texts`.
 - `systemPrompt` / `system_prompt`, as a string or list, to
@@ -269,6 +271,26 @@ Missing default local tool directories are ignored. Configured
 root and appended after defaults with stable de-duplication. Config loading only
 records these paths; Python tool files are imported later when an
 `AgentRuntime` builds and registers its tool registry.
+
+## Tool Surface
+
+Runtime v2 defaults to an opencode-style built-in tool surface. With a
+workspace root and no explicit tool registry, the default model-visible core
+tool ids are `apply_patch`, `bash`, `edit`, `glob`, `grep`, `invalid`, `read`,
+`repo_clone`, `repo_overview`, `todowrite`, `webfetch`, and `write`. Optional
+opencode-style tools such as `task`, `question`, `lsp`, `plan_exit`, and
+`skill` are still registered only when their existing feature gates are enabled.
+
+EFP legacy aliases are not registered by default: `fetch`, `shell_exec`,
+`shell_status`, `shell_kill`, `read_file`, `write_file`, `list_dir`,
+`todo_write`, `task_status`, `task_cancel`, and `skill_list` stay hidden from
+the default model-visible registry. Callers that need a migration window can set
+`RuntimeConfig(include_legacy_tool_aliases=True)`, pass
+`include_legacy_aliases=True` to `create_core_tool_registry(...)`, or configure
+`includeLegacyToolAliases` / `include_legacy_tool_aliases`. Setting
+`toolSurface` / `tool_surface` to `legacy` is equivalent to enabling those
+aliases; it is intended only as a temporary compatibility mode. The default and
+recommended value is `opencode`.
 
 With `include_defaults=True`, existing user-level skill directories are added
 in discovery load order: external compatibility roots `~/.claude/skills`, then
@@ -612,8 +634,9 @@ provide a model hint in run metadata. The lookup checks `model`, `model_id`,
 `requested_model` when a command declares a model. With
 `RuntimeConfig.model_aware_tool_selection=True` (the default), GPT-style ids
 containing `gpt-` but not `gpt-4` or `oss` expose `apply_patch` and hide
-`edit`, `write`, and `write_file`. Any other non-empty hint exposes the direct
-file tools and hides `apply_patch`. Without a hint, selection is unchanged.
+`edit` and `write`; `write_file` is included in that policy only when legacy
+aliases are enabled. Any other non-empty hint exposes the direct file tools and
+hides `apply_patch`. Without a hint, selection is unchanged.
 The provider request metadata records the model hint, selected mode
 (`patch`, `direct`, or `none`), and tool ids forced disabled by this policy.
 
@@ -671,16 +694,17 @@ event records the run id, structured-output tool id, iteration count, and prior
 loop status before conversion.
 
 The core built-in registry is workspace-contained and intentionally independent
-from the legacy runtime. It preserves EFP ids while exposing opencode-style
-aliases: `read_file` / `read`, `write_file` / `write`, `fetch` / `webfetch`,
-and `todo_write` / `todowrite`. The legacy ids and their behavior remain
-available. The registry also includes grep/glob, shell execution, single-file
-edit, unified-diff apply_patch, session-local todo planning, invalid-argument
-feedback, repository clone/overview tools, and HTTP(S) fetch tools. Mutating
-filesystem tools and repository tools default to ask permission; read/search,
-todo planning, invalid feedback, and fetch tools default to allow. Fetch tools
-are categorized as medium-risk network access so callers can override them to
-ask permission when needed. `fetch` and `webfetch` support opencode-style
+from the legacy runtime. Its default ids follow the opencode-style surface:
+`read`, `write`, `bash`, `webfetch`, and `todowrite` are visible while older EFP
+ids such as `read_file`, `write_file`, `shell_exec`, `fetch`, and `todo_write`
+require the legacy alias switch. The registry also includes grep/glob, shell
+execution, single-file edit, unified-diff apply_patch, session-local todo
+planning, invalid-argument feedback, repository clone/overview tools, and
+HTTP(S) fetch tools. Mutating filesystem tools and repository tools default to
+ask permission; read/search, todo planning, invalid feedback, and fetch tools
+default to allow. Fetch tools are categorized as medium-risk network access so
+callers can override them to ask permission when needed. `webfetch`, and
+`fetch` when legacy aliases are enabled, support opencode-style
 `format` values of `markdown` (default), `text`, and `html`: HTML responses are
 rendered to readable text or lightweight Markdown unless raw HTML is requested,
 while non-HTML text is returned as decoded text. Responses are rejected when the
@@ -703,14 +727,15 @@ identifies one, common entrypoints, and git branch/head metadata when available.
 Large dependency directories such as `.git`, `node_modules`, `.venv`, `dist`,
 `build`, and language build caches are skipped from the visible structure.
 
-The `todo_write` and `todowrite` ids share one session-local in-memory todo
-store. Todo items normalize to `content`, `status`, and `priority`; `status`
-accepts `pending`, `in_progress`, `completed`, and `cancelled`, while
-`priority` accepts `high`, `medium`, and `low` and defaults to `medium` when
-callers omit it. Successful writes return the normalized todos in output and
-metadata, include active/completed/cancelled count metadata, and attach a
-`todo.updated` runtime event with the current session id, tool id, tool call id,
-normalized todos, and the same count fields.
+The default `todowrite` id stores one session-local in-memory todo list. When
+legacy aliases are enabled, `todo_write` is registered against the same store.
+Todo items normalize to `content`, `status`, and `priority`; `status` accepts
+`pending`, `in_progress`, `completed`, and `cancelled`, while `priority` accepts
+`high`, `medium`, and `low` and defaults to `medium` when callers omit it.
+Successful writes return the normalized todos in output and metadata, include
+active/completed/cancelled count metadata, and attach a `todo.updated` runtime
+event with the current session id, tool id, tool call id, normalized todos, and
+the same count fields.
 
 The legacy `read_file` id keeps its original raw text output. The `read` alias
 keeps raw selected text in `ToolResult.output["content"]` for callers, while its
@@ -731,19 +756,21 @@ Foreground `shell_exec` keeps the existing timeout behavior: the runtime waits
 for `communicate()`, kills the process on timeout, and returns the collected
 stdout, stderr, exit code, timeout flag, and saved full output path. Runtime v2
 also exposes the opencode-style `bash` tool id as an alias over the same shell
-execution path; `shell_exec` remains registered and unchanged. Long-running
-foreground shell commands also receive the run cancellation callback through
-their tool context. When cancellation is requested, the shell tool kills the
+execution path. When legacy aliases are enabled, `shell_exec` remains available
+with the same execution behavior. Long-running foreground shell commands also
+receive the run cancellation callback through their tool context. When
+cancellation is requested, the shell tool kills the
 subprocess, preserves collected stdout/stderr, marks the result as cancelled,
 and adds shell metadata noting the user abort. Background
-shell commands can be started with either `shell_exec(background=true)` or
-`bash(background=true)`. That call still uses the normal shell permission
-boundary, starts the process, and immediately returns a `job_id`. Callers read
-retained stdout/stderr and exit state with
-`shell_status(job_id, offset?, limit?)`, and stop a running job with
-`shell_kill(job_id)`. Background shell jobs are intentionally process-local to
-one `AgentRuntime` / `ToolRuntime` lifecycle; Runtime v2 does not run a
-cross-process daemon and does not restore jobs after VM or process restart.
+shell commands can be started with `bash(background=true)`. When legacy aliases
+are enabled, `shell_exec(background=true)` is also available, and callers can
+read retained stdout/stderr and exit state with
+`shell_status(job_id, offset?, limit?)`, or stop a running job with
+`shell_kill(job_id)`. These legacy shell management aliases are not part of the
+default opencode-style surface. Background shell jobs are intentionally
+process-local to one `AgentRuntime` / `ToolRuntime` lifecycle; Runtime v2 does
+not run a cross-process daemon and does not restore jobs after VM or process
+restart.
 
 The `lsp` tool is an optional code-navigation boundary modeled after
 opencode-style LSP operations: definitions, references, hover, document and
@@ -764,13 +791,14 @@ tool create, a `BackgroundTaskManager`, `task(background=true)` starts the same
 injected runner with `asyncio.create_task`, immediately returns a process-local
 `task_id`, and lets the primary agent continue its loop.
 
-Background task state is observed explicitly with `task_status(task_id?)`.
-Without a `task_id`, `task_status` lists known tasks for a session or for the
-current runtime process; with `drain=true`, it returns completed/error/cancelled
-records that have not already been drained and marks them drained. Running
-tasks can be cancelled with `task_cancel(task_id)`, which defaults to ask
-permission because it mutates a running background operation. `AgentRuntime`
-also auto-injects completed/error/cancelled background task results as
+When legacy aliases are enabled, background task state can be observed
+explicitly with `task_status(task_id?)`. Without a `task_id`, `task_status`
+lists known tasks for a session or for the current runtime process; with
+`drain=true`, it returns completed/error/cancelled records that have not already
+been drained and marks them drained. Running tasks can be cancelled with
+`task_cancel(task_id)`, which defaults to ask permission because it mutates a
+running background operation. `AgentRuntime` also auto-injects
+completed/error/cancelled background task results as
 synthetic user messages on the next `run(..., session_id=...)` or
 `resume(session_id)` for the parent session, before preparing the next provider
 request. This lets the primary agent continue with finished subagent results
@@ -943,9 +971,10 @@ any active skill full context, so the model sees the registry before loaded
 skill content. Run metadata reports `available_skill_context_count` separately;
 `skill_context_count` remains the count of active full skill context messages.
 
-Runtime v2 exposes `skill_list` and `skill` tools when skill discovery is
-configured for the default core tool registry. `skill_list` is the lightweight
-registry view: it lists available skill names, descriptions, active skills, and
+Runtime v2 exposes the `skill` tool when skill discovery is configured for the
+default core tool registry. The legacy `skill_list` alias can still be enabled
+with `include_legacy_tool_aliases` during migration; it is a lightweight
+registry view that lists available skill names, descriptions, active skills, and
 sidecar path/size/content-type inventory without loading full skill context.
 Structured `skill_list` entries include the parsed skill metadata dictionary.
 The `skill` tool is the full context loader. Its provider description exposes
@@ -957,11 +986,12 @@ output keeps the skill name, description, skill file, raw skill markdown,
 sidecar inventory, and metadata for programmatic consumers.
 
 These tools complement, rather than replace, `/skill`: `/skill` explicitly
-activates provider-only system context before the provider call, while
-`skill_list` lets the model discover candidate skills during the loop and
-`skill` lets it load one discovered skill by name on demand. Active skills are
-reported in run metadata and `skill_list` output, but active skill context
-remains transient provider-only system context and is not persisted.
+activates provider-only system context before the provider call, while `skill`
+lets the model load one discovered skill by name on demand. When legacy aliases
+are enabled, `skill_list` also lets the model discover candidate skills during
+the loop. Active skills are reported in run metadata and, when available,
+`skill_list` output, but active skill context remains transient provider-only
+system context and is not persisted.
 
 Discovered local skills are also exposed through the command registry as
 skill-backed slash commands when their normalized name is not already used by a
@@ -1167,10 +1197,10 @@ argument rendering and command-content truncation. A template line whose first
 non-space character is `!` runs the rest of that line, and inline
 ``!`cmd` `` spans run the command between the backticks. Shell-looking text in
 slash command arguments or the remaining user body stays ordinary text in the
-`<command_arguments>` and `<command_input>` blocks. Interpolation executes
-through the normal `shell_exec` tool path, so validation, permissions,
-cancellation, output normalization, and tool lifecycle events use the same
-runtime path as model-requested shell calls.
+`<command_arguments>` and `<command_input>` blocks. When legacy aliases are
+enabled, interpolation executes through the normal `shell_exec` tool path, so
+validation, permissions, cancellation, output normalization, and tool lifecycle
+events use the same runtime path as model-requested shell calls.
 
 `/skill` remains the independent skill activation command. It is parsed before
 custom command expansion and continues to control active skill context rendered

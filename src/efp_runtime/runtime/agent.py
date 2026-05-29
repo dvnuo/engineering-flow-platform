@@ -2362,6 +2362,8 @@ def _resolve_config(
         ),
         disabled_tools=list(config.disabled_tools),
         model_aware_tool_selection=config.model_aware_tool_selection,
+        tool_surface=config.tool_surface,
+        include_legacy_tool_aliases=config.include_legacy_tool_aliases,
         tool_permissions=dict(config.tool_permissions),
         runtime_mode=config.runtime_mode,
         enable_plan_tool=config.enable_plan_tool,
@@ -2440,6 +2442,8 @@ def _resolve_tool_runtime(
             )
             registry = create_core_tool_registry(
                 workspace_root,
+                tool_surface=config.tool_surface,
+                include_legacy_aliases=config.include_legacy_tool_aliases,
                 skill_discovery=skill_discovery,
                 include_skill_list_tool=config.enable_skill_list_tool,
                 tool_permissions=config.tool_permissions,
@@ -2471,7 +2475,10 @@ def _resolve_tool_runtime(
                         tool_permissions=config.tool_permissions,
                     )
                 )
-            if _skill_list_tool_enabled(config, skill_discovery=skill_discovery):
+            if (
+                config.include_legacy_tool_aliases
+                and _skill_list_tool_enabled(config, skill_discovery=skill_discovery)
+            ):
                 registry.register(
                     build_skill_list_tool(
                         skill_discovery or SkillDiscovery([]),

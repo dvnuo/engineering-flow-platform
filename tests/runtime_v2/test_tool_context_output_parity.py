@@ -229,7 +229,7 @@ async def test_resume_pending_tool_call_has_context_and_does_not_append_user_mes
 @pytest.mark.asyncio
 async def test_shell_exec_saves_full_output_when_not_truncated(tmp_path: Path):
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path),
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
         permission_evaluator=AllowEvaluator(),
     )
 
@@ -263,7 +263,7 @@ async def test_shell_exec_truncates_visible_content_but_saves_complete_output(
     tmp_path: Path,
 ):
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path),
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
         permission_evaluator=AllowEvaluator(),
     )
 

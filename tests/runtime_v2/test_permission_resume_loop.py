@@ -8,7 +8,7 @@ import pytest
 
 from efp_runtime.event_bus import RuntimeEventBus
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, ScriptedLLMProvider
-from efp_runtime.runtime import AgentRuntime
+from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.models import MessagePart, MessagePartType, MessageRole
 from efp_runtime.session.store import InMemorySessionStore
 from efp_runtime.tools.builtin import create_core_tool_registry
@@ -38,8 +38,11 @@ async def test_permission_request_waits_without_appending_tool_result(tmp_path: 
     provider = ScriptedLLMProvider([{"tool_calls": [_write_file_call()]}])
     runtime = AgentRuntime(
         provider=provider,
-        workspace_root=tmp_path,
-        max_iterations=3,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=3,
+            include_legacy_tool_aliases=True,
+        ),
         event_bus=bus,
     )
 
@@ -89,8 +92,11 @@ async def test_approve_then_resume_executes_pending_tool_call_without_empty_user
     )
     runtime = AgentRuntime(
         provider=provider,
-        workspace_root=tmp_path,
-        max_iterations=3,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=3,
+            include_legacy_tool_aliases=True,
+        ),
     )
 
     first = await runtime.run("Write the file.", session_id="session-approve")
@@ -135,8 +141,11 @@ async def test_deny_then_resume_appends_denial_tool_result_for_provider(tmp_path
     )
     runtime = AgentRuntime(
         provider=provider,
-        workspace_root=tmp_path,
-        max_iterations=3,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=3,
+            include_legacy_tool_aliases=True,
+        ),
     )
 
     first = await runtime.run("Write the file.", session_id="session-deny")
@@ -263,7 +272,9 @@ def test_permission_resume_sources_stay_inside_runtime_v2_boundary():
 async def test_default_core_tool_registry_is_used_for_permission_resume(tmp_path: Path):
     runtime = AgentRuntime(
         provider=ScriptedLLMProvider([{"tool_calls": [_write_file_call()]}]),
-        tool_runtime=ToolRuntime(create_core_tool_registry(tmp_path)),
+        tool_runtime=ToolRuntime(
+            create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+        ),
     )
 
     result = await runtime.run("Write through injected core runtime.", session_id="session-core")

@@ -455,6 +455,14 @@ def _child_config(
             if base_config is None
             else base_config.model_aware_tool_selection
         ),
+        tool_surface=(
+            "opencode" if base_config is None else base_config.tool_surface
+        ),
+        include_legacy_tool_aliases=(
+            False
+            if base_config is None
+            else base_config.include_legacy_tool_aliases
+        ),
         tool_permissions=merge_tool_permission_configs(
             base_tool_permissions,
             profile_permission_overlay,

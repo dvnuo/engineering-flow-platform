@@ -32,7 +32,7 @@ class AllowEvaluator:
 
 def _runtime(tmp_path: Path) -> ToolRuntime:
     return ToolRuntime(
-        create_core_tool_registry(tmp_path),
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
         permission_evaluator=AllowEvaluator(),
     )
 
@@ -225,7 +225,9 @@ async def test_workdir_cannot_escape_workspace(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_shell_permission_request_includes_usable_metadata(tmp_path: Path):
     (tmp_path / "src").mkdir()
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+    runtime = ToolRuntime(
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+    )
 
     result = await runtime.execute(
         ToolCall(

@@ -40,8 +40,24 @@ def _python_command(script: str) -> str:
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
 
-def test_core_registry_includes_bash_and_shell_tools(tmp_path: Path):
+def test_core_registry_defaults_to_bash_without_legacy_shell_tools(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path, enable_background_shell=True)
+    ids = registry.ids()
+
+    assert "bash" in ids
+    assert {"shell_exec", "shell_status", "shell_kill"}.isdisjoint(ids)
+    assert registry.require("bash").input_schema["additionalProperties"] is False
+    assert registry.require("bash").permission.category == "shell"
+    assert registry.require("bash").permission.resource == "workspace"
+    assert registry.require("bash").permission.risk == "high"
+
+
+def test_core_registry_can_include_legacy_shell_tools(tmp_path: Path):
+    registry = create_core_tool_registry(
+        tmp_path,
+        enable_background_shell=True,
+        include_legacy_aliases=True,
+    )
     ids = registry.ids()
 
     assert {"bash", "shell_exec", "shell_status", "shell_kill"}.issubset(ids)
@@ -125,7 +141,10 @@ async def test_bash_honors_cwd_workdir_and_rejects_conflict(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_bash_timeout_matches_shell_exec(tmp_path: Path):
-    runtime = _runtime(tmp_path)
+    runtime = ToolRuntime(
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
+        permission_evaluator=AllowEvaluator(),
+    )
     args = {
         "command": _python_command("import time; time.sleep(1)"),
         "timeout": 5,
@@ -155,7 +174,10 @@ async def test_bash_timeout_matches_shell_exec(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_bash_background_starts_job_readable_by_shell_status(tmp_path: Path):
-    runtime = _runtime(tmp_path)
+    runtime = ToolRuntime(
+        create_core_tool_registry(tmp_path, include_legacy_aliases=True),
+        permission_evaluator=AllowEvaluator(),
+    )
 
     start = await runtime.execute(
         ToolCall(
@@ -191,6 +213,7 @@ async def test_permission_config_can_deny_bash_without_hiding_shell_exec(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=1,
+            include_legacy_tool_aliases=True,
             tool_permissions={"bash": "deny", "shell_exec": "allow"},
         ),
     )
@@ -224,6 +247,28 @@ async def test_agent_runtime_provider_schemas_include_bash_for_workspace(
     )
 
     result = await runtime.run("Use tools.", session_id="session-bash-schema")
+    schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
+
+    assert result.status == LoopStatus.COMPLETED
+    assert "bash" in schema_ids
+    assert "shell_exec" not in schema_ids
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_provider_schemas_can_include_legacy_shell_exec(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_legacy_tool_aliases=True,
+        ),
+    )
+
+    result = await runtime.run("Use tools.", session_id="session-bash-legacy-schema")
     schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
 
     assert result.status == LoopStatus.COMPLETED

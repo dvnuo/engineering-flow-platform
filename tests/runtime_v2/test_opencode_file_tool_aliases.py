@@ -27,12 +27,11 @@ class AllowEvaluator:
 
 
 @pytest.mark.asyncio
-async def test_core_registry_includes_file_aliases_and_legacy_ids(tmp_path: Path):
+async def test_core_registry_defaults_to_opencode_file_ids(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path)
 
-    assert {"read", "write", "read_file", "list_dir", "write_file"}.issubset(
-        set(registry.ids())
-    )
+    assert {"read", "write"}.issubset(set(registry.ids()))
+    assert {"read_file", "list_dir", "write_file"}.isdisjoint(set(registry.ids()))
     assert registry.require("read").input_schema == {
         "type": "object",
         "required": ["filePath"],
@@ -57,6 +56,13 @@ async def test_core_registry_includes_file_aliases_and_legacy_ids(tmp_path: Path
         "additionalProperties": False,
     }
     assert registry.require("write").permission.action == ASK
+
+
+@pytest.mark.asyncio
+async def test_core_registry_can_include_legacy_file_ids(tmp_path: Path):
+    registry = create_core_tool_registry(tmp_path, include_legacy_aliases=True)
+
+    assert {"read_file", "list_dir", "write_file"}.issubset(set(registry.ids()))
     assert registry.require("write_file").permission.action == ASK
 
 
@@ -495,7 +501,7 @@ async def test_write_alias_rejects_path_traversal(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_provider_request_schemas_include_aliases(
+async def test_agent_runtime_provider_request_schemas_use_opencode_file_ids_by_default(
     tmp_path: Path,
 ):
     provider = ScriptedLLMProvider([{"content": "done"}])
@@ -510,6 +516,29 @@ async def test_agent_runtime_provider_request_schemas_include_aliases(
     schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
     assert "read" in schema_ids
     assert "write" in schema_ids
-    assert "read_file" in schema_ids
-    assert "list_dir" in schema_ids
-    assert "write_file" in schema_ids
+    assert "read_file" not in schema_ids
+    assert "list_dir" not in schema_ids
+    assert "write_file" not in schema_ids
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_provider_request_schemas_can_include_legacy_file_ids(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_legacy_tool_aliases=True,
+        ),
+    )
+
+    result = await runtime.run("List available tools.", session_id="session-file-legacy")
+
+    assert result.status == LoopStatus.COMPLETED
+    schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
+    assert {"read", "write", "read_file", "list_dir", "write_file"}.issubset(
+        set(schema_ids)
+    )

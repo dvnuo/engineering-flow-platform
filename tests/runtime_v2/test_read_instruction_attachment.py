@@ -122,7 +122,11 @@ async def test_agent_runtime_default_registry_attaches_read_instructions(tmp_pat
     (tmp_path / "AGENTS.md").write_text("Workspace agents.", encoding="utf-8")
     runtime = AgentRuntime(
         provider=ScriptedLLMProvider([{"content": "unused"}]),
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            include_legacy_tool_aliases=True,
+        ),
     )
 
     result = await runtime.tool_runtime.execute(
@@ -143,6 +147,7 @@ async def test_agent_runtime_can_disable_read_instruction_attachment(tmp_path: P
             workspace_root=tmp_path,
             max_iterations=1,
             attach_read_instructions=False,
+            include_legacy_tool_aliases=True,
         ),
     )
 
@@ -221,5 +226,6 @@ def _runtime_with_resolver(
         create_core_tool_registry(
             workspace_root,
             instruction_resolver=resolver,
+            include_legacy_aliases=True,
         )
     )

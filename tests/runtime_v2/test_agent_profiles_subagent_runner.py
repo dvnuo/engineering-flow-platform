@@ -616,6 +616,7 @@ async def test_child_profile_permission_overlay_denies_base_allowed_tool(
     base_config = RuntimeConfig(
         workspace_root=tmp_path,
         max_iterations=2,
+        include_legacy_tool_aliases=True,
         tool_permissions={"write_file": "allow"},
     )
     runner = create_subagent_task_runner(

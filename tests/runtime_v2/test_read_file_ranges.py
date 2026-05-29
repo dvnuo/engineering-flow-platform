@@ -244,7 +244,9 @@ print(json.dumps([name for name in blocked if name in sys.modules]))
 
 
 def _runtime(workspace_root: Path) -> ToolRuntime:
-    return ToolRuntime(create_core_tool_registry(workspace_root))
+    return ToolRuntime(
+        create_core_tool_registry(workspace_root, include_legacy_aliases=True)
+    )
 
 
 def _runtime_with_resolver(workspace_root: Path) -> ToolRuntime:
@@ -253,5 +255,6 @@ def _runtime_with_resolver(workspace_root: Path) -> ToolRuntime:
         create_core_tool_registry(
             workspace_root,
             instruction_resolver=resolver,
+            include_legacy_aliases=True,
         )
     )
