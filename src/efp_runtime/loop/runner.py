@@ -11,7 +11,12 @@ import json
 from typing import Any, Callable, List, Optional, Union
 
 from ..compaction.controller import CompactionController, CompactionSummarizer
-from ..compaction.strategy import ContextBudget
+from ..compaction.strategy import (
+    BudgetCompactionStrategy,
+    CompactionResult,
+    ContextBudget,
+    TailTurnCompactionStrategy,
+)
 from ..context.render import prepare_history_for_request
 from ..event_bus import RuntimeEventBus
 from ..events import RuntimeEvent
@@ -117,6 +122,10 @@ class RuntimeLoopRunner:
         is_cancelled: Optional[CancelCallback] = None,
         tool_selection: Optional[ToolSelection] = None,
         compaction_summarizer: Optional[CompactionSummarizer] = None,
+        compaction_auto: bool = True,
+        compaction_tail_turns: int = 2,
+        compaction_preserve_recent_chars: int | None = None,
+        compaction_reserved_chars: int | None = None,
         provider_max_retries: int = 2,
         provider_retry_backoff_seconds: float = 0.0,
         provider_retry_backoff_multiplier: float = 2.0,
@@ -135,6 +144,18 @@ class RuntimeLoopRunner:
             raise ValueError("max_context_chars must be at least 1")
         if context_reserve_chars < 0:
             raise ValueError("context_reserve_chars must be at least 0")
+        _validate_non_negative_int(
+            compaction_tail_turns,
+            field_name="compaction_tail_turns",
+        )
+        _validate_optional_non_negative_int(
+            compaction_preserve_recent_chars,
+            field_name="compaction_preserve_recent_chars",
+        )
+        _validate_optional_non_negative_int(
+            compaction_reserved_chars,
+            field_name="compaction_reserved_chars",
+        )
         if provider_max_retries < 0:
             raise ValueError("provider_max_retries must be greater than or equal to 0")
         if provider_retry_backoff_seconds < 0:
@@ -158,6 +179,10 @@ class RuntimeLoopRunner:
         self.is_cancelled = is_cancelled
         self.tool_selection = _copy_tool_selection(tool_selection)
         self.compaction_summarizer = compaction_summarizer
+        self.compaction_auto = bool(compaction_auto)
+        self.compaction_tail_turns = compaction_tail_turns
+        self.compaction_preserve_recent_chars = compaction_preserve_recent_chars
+        self.compaction_reserved_chars = compaction_reserved_chars
         self.provider_max_retries = provider_max_retries
         self.provider_retry_backoff_seconds = provider_retry_backoff_seconds
         self.provider_retry_backoff_multiplier = provider_retry_backoff_multiplier
@@ -344,6 +369,16 @@ class RuntimeLoopRunner:
 
             iteration = iterations + 1
             history = self.store.read_history(resolved_session_id)
+            history = await self._maybe_compact_stored_session_history(
+                session_id=resolved_session_id,
+                history=history,
+                runtime_events=runtime_events,
+                run_id=run_id,
+                iteration=iteration,
+                trigger="context_budget",
+                overflow=False,
+                budget=self._context_budget(),
+            )
             request_history = [*(context_messages or []), *history]
             request_metadata = _request_metadata(
                 run_metadata,
@@ -624,7 +659,7 @@ class RuntimeLoopRunner:
         return ContextBudget(
             max_parts=self.max_context_parts,
             max_chars=self.max_context_chars,
-            reserve_chars=self.context_reserve_chars,
+            reserve_chars=self._context_budget_reserve_chars(),
         )
 
     def _context_budget_enabled(self, budget: Optional[ContextBudget] = None) -> bool:
@@ -643,7 +678,126 @@ class RuntimeLoopRunner:
         return ContextBudget(
             max_parts=max_parts,
             max_chars=max_chars,
-            reserve_chars=self.context_reserve_chars,
+            reserve_chars=self._context_budget_reserve_chars(),
+        )
+
+    def _context_budget_reserve_chars(self) -> int:
+        if self.compaction_reserved_chars is not None:
+            return self.compaction_reserved_chars
+        return self.context_reserve_chars
+
+    async def _maybe_compact_stored_session_history(
+        self,
+        *,
+        session_id: str,
+        history: list[Message],
+        runtime_events: List[RuntimeEvent],
+        run_id: str,
+        iteration: int,
+        trigger: str,
+        overflow: bool,
+        budget: ContextBudget,
+        overflow_retry: bool = False,
+    ) -> list[Message]:
+        if not self.compaction_auto:
+            return history
+        if not self._context_budget_enabled(budget):
+            return history
+        if not history:
+            return history
+
+        strategy = self._stored_session_compaction_strategy(budget)
+        tail_start_message_id = _tail_start_message_id(
+            history,
+            tail_turns=self.compaction_tail_turns,
+        )
+        operation_metadata = _auto_compaction_operation_metadata(
+            budget=budget,
+            trigger=trigger,
+            overflow=overflow,
+            overflow_retry=overflow_retry,
+            tail_turns=self.compaction_tail_turns,
+            preserve_recent_chars=self.compaction_preserve_recent_chars,
+            tail_start_message_id=tail_start_message_id,
+        )
+        summary: str | None = None
+        if self.compaction_summarizer is not None:
+            preparation = await CompactionController(self.compaction_summarizer).prepare(
+                history,
+                session_id=session_id,
+                metadata=operation_metadata,
+                compaction_strategy=strategy,
+            )
+            result = preparation.result
+            summary = preparation.summary
+            compaction_metadata = dict(preparation.compaction_metadata)
+        else:
+            result = strategy.compact(history)
+            compaction_metadata = (
+                _compaction_result_metadata(budget, result)
+                if result.compacted
+                else {}
+            )
+
+        if not result.compacted:
+            return history
+
+        compaction_metadata.update(operation_metadata)
+        compacted_messages = _apply_auto_compaction_metadata(
+            result.messages,
+            source_messages=history,
+            summary=summary,
+            metadata=compaction_metadata,
+            overflow=overflow,
+            tail_start_message_id=tail_start_message_id,
+        )
+        message_id, part_id = _first_new_compaction_identifiers(
+            compacted_messages,
+            source_messages=history,
+        )
+        event_payload = {
+            "run_id": run_id,
+            "iteration": iteration,
+            **compaction_metadata,
+        }
+        runtime_events.append(
+            RuntimeEvent(
+                type="session_compaction_started",
+                message="Automatic session compaction started.",
+                session_id=session_id,
+                message_id=message_id,
+                part_id=part_id,
+                payload=dict(event_payload),
+            )
+        )
+        updated_session = self.store.replace_history(session_id, compacted_messages)
+        updated_history = list(updated_session.messages)
+        runtime_events.append(
+            RuntimeEvent(
+                type="session_compacted",
+                message="Session history compacted.",
+                session_id=session_id,
+                message_id=message_id,
+                part_id=part_id,
+                payload={
+                    **event_payload,
+                    "stored_message_count": len(updated_history),
+                },
+            )
+        )
+        return updated_history
+
+    def _stored_session_compaction_strategy(
+        self,
+        budget: ContextBudget,
+    ) -> BudgetCompactionStrategy:
+        strategy_cls = globals().get("TailTurnCompactionStrategy")
+        if strategy_cls is None:
+            return BudgetCompactionStrategy(budget=budget)
+        return strategy_cls(
+            budget=budget,
+            tail_turns=self.compaction_tail_turns,
+            preserve_recent_chars=self.compaction_preserve_recent_chars,
         )
 
     async def _prepare_runtime_request(
@@ -783,10 +937,30 @@ class RuntimeLoopRunner:
                     attempt=overflow_retry_count,
                     budget=overflow_budget,
                 )
+                provider_context_messages = request_history[
+                    : max(0, len(request_history) - len(history))
+                ]
+                retry_history = history
+                if self.compaction_auto:
+                    retry_history = await self._maybe_compact_stored_session_history(
+                        session_id=current_request.session_id,
+                        history=self.store.read_history(current_request.session_id),
+                        runtime_events=runtime_events,
+                        run_id=run_id,
+                        iteration=iteration,
+                        trigger="provider_context_overflow",
+                        overflow=True,
+                        overflow_retry=True,
+                        budget=overflow_budget,
+                    )
+                retry_request_history = [
+                    *provider_context_messages,
+                    *retry_history,
+                ]
                 overflow_request = await self._prepare_runtime_request(
                     session_id=current_request.session_id,
-                    history=history,
-                    request_history=request_history,
+                    history=retry_history,
+                    request_history=retry_request_history,
                     iteration=iteration,
                     max_iterations=max_iterations,
                     metadata=overflow_metadata,
@@ -1326,6 +1500,10 @@ async def run_runtime_loop(
     structured_output_required: bool = False,
     structured_output_tool_id: str = "StructuredOutput",
     compaction_summarizer: Optional[CompactionSummarizer] = None,
+    compaction_auto: bool = True,
+    compaction_tail_turns: int = 2,
+    compaction_preserve_recent_chars: int | None = None,
+    compaction_reserved_chars: int | None = None,
     provider_max_retries: int = 2,
     provider_retry_backoff_seconds: float = 0.0,
     provider_retry_backoff_multiplier: float = 2.0,
@@ -1348,6 +1526,10 @@ async def run_runtime_loop(
         is_cancelled=is_cancelled,
         tool_selection=tool_selection,
         compaction_summarizer=compaction_summarizer,
+        compaction_auto=compaction_auto,
+        compaction_tail_turns=compaction_tail_turns,
+        compaction_preserve_recent_chars=compaction_preserve_recent_chars,
+        compaction_reserved_chars=compaction_reserved_chars,
         provider_max_retries=provider_max_retries,
         provider_retry_backoff_seconds=provider_retry_backoff_seconds,
         provider_retry_backoff_multiplier=provider_retry_backoff_multiplier,
@@ -1444,6 +1626,17 @@ def _copy_tool_selection(selection: Optional[ToolSelection]) -> ToolSelection:
         disabled=set(selection.disabled),
         forced_disabled=set(selection.forced_disabled),
     )
+
+
+def _validate_non_negative_int(value: Any, *, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+
+
+def _validate_optional_non_negative_int(value: Any, *, field_name: str) -> None:
+    if value is None:
+        return
+    _validate_non_negative_int(value, field_name=field_name)
 
 
 def _disabled_tool_ids(
@@ -1796,6 +1989,120 @@ def _request_metadata(
     return request_metadata
 
 
+def _auto_compaction_operation_metadata(
+    *,
+    budget: ContextBudget,
+    trigger: str,
+    overflow: bool,
+    overflow_retry: bool,
+    tail_turns: int,
+    preserve_recent_chars: int | None,
+    tail_start_message_id: str | None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "trigger": trigger,
+        "compaction_trigger": trigger,
+        "auto": True,
+        "overflow": overflow,
+        "overflow_retry": overflow_retry,
+        "max_parts": budget.max_parts,
+        "max_chars": budget.max_chars,
+        "reserve_chars": budget.reserve_chars,
+        "tail_turns": tail_turns,
+    }
+    if preserve_recent_chars is not None:
+        metadata["preserve_recent_chars"] = preserve_recent_chars
+    if tail_start_message_id is not None:
+        metadata["tail_start_message_id"] = tail_start_message_id
+    return metadata
+
+
+def _compaction_result_metadata(
+    budget: ContextBudget,
+    result: CompactionResult,
+) -> dict[str, Any]:
+    return {
+        "max_parts": budget.max_parts,
+        "max_chars": budget.max_chars,
+        "reserve_chars": budget.reserve_chars,
+        "compacted_part_count": result.compacted_part_count,
+        "compacted_message_count": result.compacted_message_count,
+        "compacted_tool_pair_count": result.compacted_tool_pair_count,
+        "compacted_chars": result.compacted_chars,
+        "kept_chars": result.kept_chars,
+    }
+
+
+def _apply_auto_compaction_metadata(
+    messages: Iterable[Message],
+    *,
+    source_messages: Iterable[Message],
+    summary: str | None,
+    metadata: Mapping[str, Any],
+    overflow: bool,
+    tail_start_message_id: str | None,
+) -> list[Message]:
+    source_message_ids = {message.message_id for message in source_messages}
+    marker = {
+        "auto": True,
+        "compaction_trigger": metadata.get("trigger", "context_budget"),
+        "overflow": overflow,
+    }
+    updated_messages: list[Message] = []
+    for message in messages:
+        updated_message = deepcopy(message)
+        if updated_message.message_id in source_message_ids:
+            updated_messages.append(updated_message)
+            continue
+
+        updated_message.metadata.update(marker)
+        for part in updated_message.parts:
+            if part.type is not MessagePartType.COMPACTION or part.compaction is None:
+                continue
+            part.metadata.update(marker)
+            if summary is not None:
+                part.compaction.summary = summary
+                part.text = summary
+            part.compaction.auto = True
+            part.compaction.overflow = overflow
+            part.compaction.tail_start_message_id = tail_start_message_id
+            part.compaction.metadata.update(dict(metadata))
+        updated_messages.append(updated_message)
+    return updated_messages
+
+
+def _first_new_compaction_identifiers(
+    messages: Iterable[Message],
+    *,
+    source_messages: Iterable[Message],
+) -> tuple[str | None, str | None]:
+    source_message_ids = {message.message_id for message in source_messages}
+    for message in messages:
+        if message.message_id in source_message_ids:
+            continue
+        for part in message.parts:
+            if part.type is MessagePartType.COMPACTION:
+                return message.message_id, part.part_id
+    return None, None
+
+
+def _tail_start_message_id(
+    messages: Iterable[Message],
+    *,
+    tail_turns: int,
+) -> str | None:
+    if tail_turns <= 0:
+        return None
+    user_messages = [
+        message
+        for message in messages
+        if message.role is MessageRole.USER
+    ]
+    if not user_messages:
+        return None
+    return user_messages[max(0, len(user_messages) - tail_turns)].message_id
+
+
 def _provider_retry_event(
     *,
     session_id: str,
@@ -1935,6 +2242,9 @@ def _overflow_retry_info(
 ) -> dict[str, Any]:
     return {
         "overflow_retry": True,
+        "overflow": True,
+        "trigger": "provider_context_overflow",
+        "compaction_trigger": "provider_context_overflow",
         "overflow_attempt": attempt,
         "max_parts": budget.max_parts,
         "max_chars": budget.max_chars,

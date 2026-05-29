@@ -144,6 +144,10 @@ class AgentRuntime:
         max_context_parts: int | None = None,
         max_context_chars: int | None = None,
         context_reserve_chars: int | None = None,
+        compaction_auto: bool | None = None,
+        compaction_tail_turns: int | None = None,
+        compaction_preserve_recent_chars: int | None = None,
+        compaction_reserved_chars: int | None = None,
         metadata: Mapping[str, Any] | None = None,
         store: SessionStore | None = None,
         tool_registry: ToolRegistry | None = None,
@@ -172,6 +176,10 @@ class AgentRuntime:
             max_context_parts=max_context_parts,
             max_context_chars=max_context_chars,
             context_reserve_chars=context_reserve_chars,
+            compaction_auto=compaction_auto,
+            compaction_tail_turns=compaction_tail_turns,
+            compaction_preserve_recent_chars=compaction_preserve_recent_chars,
+            compaction_reserved_chars=compaction_reserved_chars,
             metadata=metadata,
         )
         self.provider = provider
@@ -554,6 +562,12 @@ class AgentRuntime:
                     if self.config.enable_compaction_summarizer
                     else None
                 ),
+                compaction_auto=self.config.compaction_auto,
+                compaction_tail_turns=self.config.compaction_tail_turns,
+                compaction_preserve_recent_chars=(
+                    self.config.compaction_preserve_recent_chars
+                ),
+                compaction_reserved_chars=self.config.compaction_reserved_chars,
             )
             result = await runner.run(
                 user_text=user_text_for_request,
@@ -747,6 +761,12 @@ class AgentRuntime:
                     if self.config.enable_compaction_summarizer
                     else None
                 ),
+                compaction_auto=self.config.compaction_auto,
+                compaction_tail_turns=self.config.compaction_tail_turns,
+                compaction_preserve_recent_chars=(
+                    self.config.compaction_preserve_recent_chars
+                ),
+                compaction_reserved_chars=self.config.compaction_reserved_chars,
             )
             result = await runner.run(
                 user_text="",
@@ -2193,6 +2213,10 @@ def _resolve_config(
     max_context_chars: int | None,
     context_reserve_chars: int | None,
     metadata: Mapping[str, Any] | None,
+    compaction_auto: bool | None = None,
+    compaction_tail_turns: int | None = None,
+    compaction_preserve_recent_chars: int | None = None,
+    compaction_reserved_chars: int | None = None,
 ) -> RuntimeConfig:
     if config is None:
         return RuntimeConfig(
@@ -2204,6 +2228,12 @@ def _resolve_config(
             context_reserve_chars=(
                 context_reserve_chars if context_reserve_chars is not None else 0
             ),
+            compaction_auto=True if compaction_auto is None else compaction_auto,
+            compaction_tail_turns=(
+                2 if compaction_tail_turns is None else compaction_tail_turns
+            ),
+            compaction_preserve_recent_chars=compaction_preserve_recent_chars,
+            compaction_reserved_chars=compaction_reserved_chars,
             metadata=dict(metadata or {}),
         )
 
@@ -2224,13 +2254,27 @@ def _resolve_config(
             if context_reserve_chars is not None
             else config.context_reserve_chars
         ),
-        compaction_auto=config.compaction_auto,
-        compaction_prune=config.compaction_prune,
-        compaction_tail_turns=config.compaction_tail_turns,
-        compaction_preserve_recent_chars=config.compaction_preserve_recent_chars,
-        compaction_reserved_chars=config.compaction_reserved_chars,
-        compaction_tool_output_max_chars=config.compaction_tool_output_max_chars,
         enable_compaction_summarizer=config.enable_compaction_summarizer,
+        compaction_auto=(
+            compaction_auto if compaction_auto is not None else config.compaction_auto
+        ),
+        compaction_prune=config.compaction_prune,
+        compaction_tail_turns=(
+            compaction_tail_turns
+            if compaction_tail_turns is not None
+            else config.compaction_tail_turns
+        ),
+        compaction_preserve_recent_chars=(
+            compaction_preserve_recent_chars
+            if compaction_preserve_recent_chars is not None
+            else config.compaction_preserve_recent_chars
+        ),
+        compaction_reserved_chars=(
+            compaction_reserved_chars
+            if compaction_reserved_chars is not None
+            else config.compaction_reserved_chars
+        ),
+        compaction_tool_output_max_chars=config.compaction_tool_output_max_chars,
         provider_max_retries=config.provider_max_retries,
         provider_retry_backoff_seconds=config.provider_retry_backoff_seconds,
         provider_retry_backoff_multiplier=config.provider_retry_backoff_multiplier,

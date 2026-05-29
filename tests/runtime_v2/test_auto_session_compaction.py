@@ -1,0 +1,293 @@
+from __future__ import annotations
+
+from copy import deepcopy
+
+import pytest
+
+from efp_runtime.event_bus import RuntimeEventBus
+from efp_runtime.llm.errors import ProviderContextOverflowError
+from efp_runtime.loop import (
+    LoopStatus,
+    RuntimeLoopRunner,
+    RuntimeRequest,
+    ScriptedLLMProvider,
+)
+from efp_runtime.models import Message, MessagePart, MessagePartType, MessageRole
+from efp_runtime.runtime import AgentRuntime, RuntimeConfig
+from efp_runtime.session.store import InMemorySessionStore
+from efp_runtime.tools.registry import ToolRegistry
+from efp_runtime.tools.runtime import ToolRuntime
+
+
+class SequenceProvider:
+    def __init__(self, steps):
+        self.steps = list(steps)
+        self.requests: list[RuntimeRequest] = []
+        self.metadata_snapshots: list[dict] = []
+
+    async def invoke(self, request: RuntimeRequest):
+        self.requests.append(request)
+        self.metadata_snapshots.append(deepcopy(request.provider_request.metadata))
+        if not self.steps:
+            raise AssertionError("SequenceProvider has no step left")
+        step = self.steps.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step
+
+
+def _runner(store, provider, **kwargs) -> RuntimeLoopRunner:
+    return RuntimeLoopRunner(
+        store=store,
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+        **kwargs,
+    )
+
+
+def _seed_history(store, session_id: str, *, latest: str | None = None) -> None:
+    store.create_session(session_id=session_id)
+    for index, (role, text) in enumerate(
+        [
+            (MessageRole.USER, "old request one"),
+            (MessageRole.ASSISTANT, "old answer one"),
+            (MessageRole.USER, "old request two"),
+            (MessageRole.ASSISTANT, "old answer two"),
+        ]
+    ):
+        store.append_message(
+            session_id,
+            role=role,
+            parts=[MessagePart.text_part(text)],
+            message_id=f"msg-old-{index}",
+            status="complete",
+        )
+    if latest is not None:
+        store.append_message(
+            session_id,
+            role=MessageRole.USER,
+            parts=[MessagePart.text_part(latest)],
+            message_id="msg-latest-user",
+            status="complete",
+        )
+
+
+def _compaction_parts(messages):
+    return [
+        part
+        for message in messages
+        for part in message.parts
+        if part.type is MessagePartType.COMPACTION
+    ]
+
+
+def _events(result, event_type: str):
+    return [event for event in result.runtime_events if event.type == event_type]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"compaction_tail_turns": -1},
+        {"compaction_preserve_recent_chars": -1},
+        {"compaction_reserved_chars": -1},
+    ],
+)
+def test_runtime_config_validates_auto_compaction_integers(kwargs):
+    with pytest.raises(ValueError):
+        RuntimeConfig(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_auto_compaction_persists_before_provider_and_request_includes_latest():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-auto")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    bus = RuntimeEventBus()
+    runner = _runner(
+        store,
+        provider,
+        max_context_parts=3,
+        compaction_tail_turns=1,
+        event_bus=bus,
+    )
+
+    result = await runner.run(
+        session_id="session-auto",
+        user_text="latest request",
+        metadata={"run_id": "run-auto"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    request_compactions = _compaction_parts(request.messages)
+    assert len(request_compactions) == 1
+    assert request_compactions[0].compaction is not None
+    assert request_compactions[0].compaction.auto is True
+    assert request_compactions[0].compaction.overflow is False
+    assert request_compactions[0].compaction.metadata["trigger"] == "context_budget"
+    assert request.provider_request.messages[0].context[0].type == "compaction_summary"
+    assert request.provider_request.messages[-1].role == "user"
+    assert request.provider_request.messages[-1].text == "latest request"
+
+    stored_compactions = _compaction_parts(store.read_history("session-auto"))
+    assert len(stored_compactions) == 1
+    assert stored_compactions[0].compaction.metadata["auto"] is True
+
+    started = _events(result, "session_compaction_started")
+    compacted = _events(result, "session_compacted")
+    assert len(started) == 1
+    assert len(compacted) == 1
+    for event in [started[0], compacted[0]]:
+        assert event.payload["run_id"] == "run-auto"
+        assert event.payload["iteration"] == 1
+        assert event.payload["trigger"] == "context_budget"
+        assert event.payload["auto"] is True
+        assert event.payload["overflow"] is False
+        assert event.payload["max_parts"] == 3
+        assert event.payload["max_chars"] is None
+        assert event.payload["reserve_chars"] == 0
+        assert event.payload["compacted_part_count"] > 0
+        assert event.payload["compacted_message_count"] > 0
+    assert [event.type for event in bus.history("session-auto")[:2]] == [
+        "run_start",
+        "session_compaction_started",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_compaction_auto_false_leaves_stored_session_unchanged():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-disabled")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        max_context_parts=3,
+        compaction_auto=False,
+    )
+
+    result = await runner.run(
+        session_id="session-disabled",
+        user_text="latest request",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    stored = store.read_history("session-disabled")
+    assert [message.message_id for message in stored[:4]] == [
+        "msg-old-0",
+        "msg-old-1",
+        "msg-old-2",
+        "msg-old-3",
+    ]
+    assert stored[4].parts[0].text == "latest request"
+    assert _compaction_parts(stored) == []
+    assert _events(result, "session_compaction_started") == []
+
+
+@pytest.mark.asyncio
+async def test_provider_only_context_messages_are_not_persisted():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-provider-only")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        max_context_parts=3,
+        compaction_tail_turns=1,
+    )
+    provider_only = Message.from_text(
+        "system",
+        "provider-only instruction",
+        message_id="msg-provider-only",
+    )
+
+    result = await runner.run(
+        session_id="session-provider-only",
+        user_text="latest request",
+        context_messages=[provider_only],
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert provider.requests[0].provider_request.messages[0].text == (
+        "provider-only instruction"
+    )
+    stored = store.read_history("session-provider-only")
+    assert all(message.message_id != "msg-provider-only" for message in stored)
+    assert all(
+        part.text != "provider-only instruction"
+        for message in stored
+        for part in message.parts
+    )
+
+
+@pytest.mark.asyncio
+async def test_overflow_retry_persists_overflow_compaction_and_retries_once():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-overflow")
+    provider = SequenceProvider(
+        [
+            ProviderContextOverflowError("context too long"),
+            {"content": "Recovered."},
+        ]
+    )
+    runner = _runner(
+        store,
+        provider,
+        max_context_parts=10,
+        compaction_tail_turns=1,
+    )
+
+    result = await runner.run(
+        session_id="session-overflow",
+        user_text="latest request",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(provider.requests) == 2
+    retry_metadata = provider.metadata_snapshots[1]
+    assert retry_metadata["overflow_retry"] is True
+    assert retry_metadata["compaction"]["overflow"] is True
+    assert retry_metadata["compaction"]["trigger"] == "provider_context_overflow"
+    assert retry_metadata["compaction"]["overflow_retry"] is True
+    assert provider.requests[1].provider_request.messages[-1].text == "latest request"
+
+    stored_compactions = _compaction_parts(store.read_history("session-overflow"))
+    assert len(stored_compactions) == 1
+    compaction = stored_compactions[0].compaction
+    assert compaction is not None
+    assert compaction.overflow is True
+    assert compaction.metadata["overflow_retry"] is True
+    assert compaction.metadata["trigger"] == "provider_context_overflow"
+    assert len(_events(result, "provider.context_overflow_retry")) == 1
+    assert len(_events(result, "session_compaction_started")) == 1
+    assert len(_events(result, "session_compacted")) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_path_uses_auto_session_compaction():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-resume", latest="resume latest request")
+    provider = ScriptedLLMProvider([{"content": "Resumed."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        store=store,
+        config=RuntimeConfig(
+            max_iterations=1,
+            max_context_parts=3,
+            compaction_tail_turns=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    result = await runtime.resume("session-resume", metadata={"run_id": "run-resume"})
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    assert _compaction_parts(request.messages)
+    assert request.provider_request.messages[-1].role == "user"
+    assert request.provider_request.messages[-1].text == "resume latest request"
+    stored_compactions = _compaction_parts(store.read_history("session-resume"))
+    assert len(stored_compactions) == 1
+    assert stored_compactions[0].compaction.metadata["trigger"] == "context_budget"

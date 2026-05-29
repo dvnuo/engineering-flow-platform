@@ -221,7 +221,10 @@ class TailTurnCompactionStrategy(BudgetCompactionStrategy):
     def __init__(
         self,
         *,
-        budget: ContextBudget,
+        budget: ContextBudget | None = None,
+        max_parts: int | None = None,
+        max_chars: int | None = None,
+        reserve_chars: int = 0,
         tail_turns: int = 2,
         preserve_recent_chars: int | None = None,
     ):
@@ -231,7 +234,12 @@ class TailTurnCompactionStrategy(BudgetCompactionStrategy):
                 preserve_recent_chars,
                 "preserve_recent_chars",
             )
-        super().__init__(budget=budget)
+        super().__init__(
+            budget=budget,
+            max_parts=max_parts,
+            max_chars=max_chars,
+            reserve_chars=reserve_chars,
+        )
         self.tail_turns = tail_turns
         self.preserve_recent_chars = preserve_recent_chars
 
@@ -521,6 +529,49 @@ def _latest_unprotected_block_index(
         if index not in protected_indices:
             return index
     return None
+
+
+def _tail_turn_block_indices(blocks: list[_Block], *, tail_turns: int) -> set[int]:
+    if tail_turns <= 0:
+        return set()
+
+    user_message_indices = sorted(
+        {
+            ref.message_index
+            for block in blocks
+            for ref in block.refs
+            if ref.message.role is MessageRole.USER
+        }
+    )
+    if not user_message_indices:
+        return set()
+
+    tail_start_index = user_message_indices[
+        max(0, len(user_message_indices) - tail_turns)
+    ]
+    return {
+        index
+        for index, block in enumerate(blocks)
+        if any(ref.message_index >= tail_start_index for ref in block.refs)
+    }
+
+
+def _recent_char_block_indices(
+    blocks: list[_Block],
+    *,
+    preserve_recent_chars: int | None,
+) -> set[int]:
+    if preserve_recent_chars is None or preserve_recent_chars <= 0:
+        return set()
+
+    selected: set[int] = set()
+    chars = 0
+    for index in reversed(range(len(blocks))):
+        selected.add(index)
+        chars += blocks[index].char_count
+        if chars >= preserve_recent_chars:
+            break
+    return selected
 
 
 def _selection_usage(blocks: list[_Block], kept_indices: set[int]) -> tuple[int, int]:

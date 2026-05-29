@@ -1256,8 +1256,28 @@ character budget, can split an older recent turn by keeping only the suffix that
 fits, and still preserves protected system context plus pending tool calls.
 Generated compaction parts set `tail_start_message_id` to the first retained
 tail message so later compaction-aware flows can identify where verbatim recent
-history begins. This branch only adds the policy fields and selector; automatic
-persistent compaction is intentionally left for a later integration.
+history begins.
+
+Automatic session compaction runs inside the Runtime v2 loop before each
+provider request when `RuntimeConfig.compaction_auto` is true and a context
+budget is configured with `max_context_parts` or `max_context_chars`. The loop
+compacts only persisted session history, writes the compacted history back
+through the session store, and then builds the provider request from the
+provider-only context messages plus the newly stored session history. System
+prompt, instruction, and skill context messages remain provider-only; automatic
+session compaction never writes those messages into the stored session. Set
+`compaction_auto=False` to disable this automatic persistent compaction while
+leaving request-local rendering safeguards available.
+
+Automatic compaction uses tail-turn retention for stored session history, with
+`compaction_tail_turns` controlling how many recent user turns stay intact and
+`compaction_preserve_recent_chars` optionally preserving a recent character
+suffix. `compaction_reserved_chars`, when set, overrides
+`context_reserve_chars` for loop context budgets. If
+`enable_compaction_summarizer` is enabled and a summarizer is configured, the
+same `CompactionController` path used by manual compaction supplies the
+persisted summary; otherwise deterministic compaction creates the stored
+summary.
 
 `AgentRuntime.compact_session(...)` provides manual persistent compaction for
 stored session history. Unlike request-local budget compaction, which only
@@ -1277,9 +1297,13 @@ empty note.
 
 If provider invocation raises `ProviderContextOverflowError` and
 `RuntimeConfig.enable_context_overflow_retry` is enabled, the same loop
-iteration is rendered once more with a stricter budget and retried. Existing
-part-aware compaction rules still protect pending tool calls and the latest
-non-system block. The overflow retry is single-shot to avoid infinite loops, and
-the retried request records `overflow_retry` metadata on the request and
-compaction metadata while the loop publishes a
-`provider.context_overflow_retry` event.
+iteration is rendered once more with a stricter budget and retried. When
+automatic compaction is enabled, the loop first persists that stricter overflow
+compaction to stored session history with `overflow_retry=true`,
+`overflow=true`, and `trigger="provider_context_overflow"` metadata. The retry
+request is then rebuilt from provider-only context messages plus the compacted
+stored history, keeping the latest user request visible. Existing part-aware
+request-local compaction remains a safety net for provider-only context
+overflow. The overflow retry is single-shot to avoid infinite loops, and the
+retried request records `overflow_retry` metadata on the request and compaction
+metadata while the loop publishes a `provider.context_overflow_retry` event.
