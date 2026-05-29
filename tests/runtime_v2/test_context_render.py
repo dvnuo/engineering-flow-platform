@@ -269,4 +269,3 @@ def test_context_renderer_source_stays_inside_v2_import_boundary():
     ]
     for token in forbidden_tokens:
         assert token not in combined
-

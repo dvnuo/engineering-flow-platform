@@ -156,4 +156,3 @@ class PreparedProviderRequest:
     request: ProviderRequest
     compaction_applied: bool = False
     compaction_metadata: JsonObject = field(default_factory=dict)
-
