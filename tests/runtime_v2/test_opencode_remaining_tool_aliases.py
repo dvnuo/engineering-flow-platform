@@ -181,8 +181,12 @@ async def test_todo_write_and_todowrite_share_registry_store(tmp_path: Path):
     runtime = ToolRuntime(registry)
     todo_store = registry.require("todo_write").runtime_metadata["todos_by_session"]
     alias_store = registry.require("todowrite").runtime_metadata["todos_by_session"]
+    session_store = registry.require("todo_write").runtime_metadata["todo_store"]
+    alias_session_store = registry.require("todowrite").runtime_metadata["todo_store"]
 
     assert alias_store is todo_store
+    assert alias_session_store is session_store
+    assert session_store.todos_by_session is todo_store
 
     await runtime.execute(
         ToolCall(

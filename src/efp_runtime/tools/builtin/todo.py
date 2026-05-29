@@ -7,6 +7,7 @@ from typing import Any
 
 from ...events import RuntimeEvent
 from ...permissions import ALLOW, PermissionMetadata
+from ...session.todo import SessionTodoStore
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 
@@ -18,20 +19,24 @@ TodoStore = dict[str, list[dict[str, str]]]
 
 def create_todo_write_tool(
     *,
+    todo_store: SessionTodoStore | None = None,
     todos_by_session: TodoStore | None = None,
 ) -> ToolDef:
     return _create_todo_tool(
         tool_id="todo_write",
+        todo_store=todo_store,
         todos_by_session=todos_by_session,
     )
 
 
 def create_todowrite_tool(
     *,
+    todo_store: SessionTodoStore | None = None,
     todos_by_session: TodoStore | None = None,
 ) -> ToolDef:
     return _create_todo_tool(
         tool_id="todowrite",
+        todo_store=todo_store,
         todos_by_session=todos_by_session,
     )
 
@@ -39,9 +44,13 @@ def create_todowrite_tool(
 def _create_todo_tool(
     *,
     tool_id: str,
+    todo_store: SessionTodoStore | None,
     todos_by_session: TodoStore | None,
 ) -> ToolDef:
-    store = todos_by_session if todos_by_session is not None else {}
+    store = _resolve_todo_store(
+        todo_store=todo_store,
+        todos_by_session=todos_by_session,
+    )
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         normalized = [
@@ -52,15 +61,14 @@ def _create_todo_tool(
             }
             for todo in args["todos"]
         ]
-        session_key = context.session_id or "default"
-        store[session_key] = normalized
-        counts = _todo_counts(normalized)
+        todos = store.set(context.session_id, normalized)
+        counts = _todo_counts(todos)
         output = {
-            "todos": normalized,
+            "todos": todos,
             **counts,
         }
         metadata = {
-            "todos": normalized,
+            "todos": todos,
             **counts,
         }
         return ToolResult(
@@ -78,7 +86,7 @@ def _create_todo_tool(
                     payload={
                         "tool_id": tool_id,
                         "tool_call_id": context.tool_call_id,
-                        "todos": normalized,
+                        "todos": todos,
                         **counts,
                     },
                 )
@@ -118,8 +126,21 @@ def _create_todo_tool(
             resource="session",
             risk="low",
         ),
-        runtime_metadata={"todos_by_session": store},
+        runtime_metadata={
+            "todo_store": store,
+            "todos_by_session": store.todos_by_session,
+        },
     )
+
+
+def _resolve_todo_store(
+    *,
+    todo_store: SessionTodoStore | None,
+    todos_by_session: TodoStore | None,
+) -> SessionTodoStore:
+    if todo_store is not None:
+        return todo_store
+    return SessionTodoStore(todos_by_session)
 
 
 def _todo_counts(todos: list[dict[str, str]]) -> dict[str, int]:

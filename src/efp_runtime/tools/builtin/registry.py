@@ -10,6 +10,7 @@ from ...instructions import ReadInstructionResolver
 from ...lsp import LSPClient
 from ...permissions import ALLOW, PermissionMetadata
 from ...questions import QuestionBroker
+from ...session.todo import SessionTodoStore
 from ...skills.discovery import SkillDiscovery
 from ...skills.tool import build_skill_list_tool, build_skill_tool
 from ..registry import ToolRegistry
@@ -43,7 +44,7 @@ from .task import (
     create_task_status_tool,
     create_task_tool,
 )
-from .todo import TodoStore, create_todo_write_tool, create_todowrite_tool
+from .todo import create_todo_write_tool, create_todowrite_tool
 
 if TYPE_CHECKING:
     from ...agents.background_tasks import BackgroundTaskManager
@@ -175,10 +176,10 @@ def create_core_tool_registry(
             registry.register(create_task_cancel_tool(task_manager))
     if include_question_tool:
         registry.register(create_question_tool(question_broker))
-    todo_store: TodoStore = {}
+    todo_store = SessionTodoStore()
     if expose_legacy_aliases:
-        registry.register(create_todo_write_tool(todos_by_session=todo_store))
-    registry.register(create_todowrite_tool(todos_by_session=todo_store))
+        registry.register(create_todo_write_tool(todo_store=todo_store))
+    registry.register(create_todowrite_tool(todo_store=todo_store))
     if include_plan_tool:
         registry.register(create_plan_exit_tool())
     if resolved_skill_discovery is not None:

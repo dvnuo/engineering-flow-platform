@@ -124,6 +124,11 @@ The facade also exposes direct session management helpers:
 `session_children(...)`, and `session_messages(...)`. These methods proxy the
 configured session store. `session_children(parent_session_id)` filters listed
 sessions whose metadata records that parent, preserving the store list order.
+The facade also exposes opencode-style session todo helpers:
+`get_todos(session_id=None)`, `set_todos(session_id, todos)`, and
+`clear_todos(session_id=None)`. Todo state is process-local Runtime v2 session
+state; it is not injected into provider-visible history apart from normal tool
+outputs and runtime events.
 
 `switch_agent(session_id, agent)` and `switch_model(session_id, model)` persist
 future defaults in `Session.metadata`. The selected agent is stored as
@@ -737,15 +742,21 @@ identifies one, common entrypoints, and git branch/head metadata when available.
 Large dependency directories such as `.git`, `node_modules`, `.venv`, `dist`,
 `build`, and language build caches are skipped from the visible structure.
 
-The default `todowrite` id stores one session-local in-memory todo list. When
-legacy aliases are enabled, `todo_write` is registered against the same store.
-Todo items normalize to `content`, `status`, and `priority`; `status` accepts
-`pending`, `in_progress`, `completed`, and `cancelled`, while `priority` accepts
-`high`, `medium`, and `low` and defaults to `medium` when callers omit it.
-Successful writes return the normalized todos in output and metadata, include
-active/completed/cancelled count metadata, and attach a `todo.updated` runtime
-event with the current session id, tool id, tool call id, normalized todos, and
-the same count fields.
+The default `todowrite` id writes opencode-style session todo state through a
+Runtime v2 `SessionTodoStore`. State is keyed by `session_id` with the historical
+`session_id or "default"` fallback, so repeated runs in one `AgentRuntime` see
+the same todo list for the same session while child sessions with different ids
+start with their own list. When legacy aliases are enabled, `todo_write` is only
+a compatibility alias registered against the same store. Todo items normalize to
+`content`, `status`, and `priority`; `status` accepts `pending`, `in_progress`,
+`completed`, and `cancelled`, while `priority` accepts `high`, `medium`, and
+`low` and defaults to `medium` when callers omit it. Successful writes return
+the normalized todos in output and metadata, include active/completed/cancelled
+count metadata, and attach a `todo.updated` runtime event with the current
+session id, tool id, tool call id, normalized todos, and the same count fields.
+Callers that need direct access use `AgentRuntime.get_todos(...)`,
+`set_todos(...)`, and `clear_todos(...)`; no database or provider tool surface is
+added for this state.
 
 The legacy `read_file` id keeps its original raw text output. The `read` alias
 keeps raw selected text in `ToolResult.output["content"]` for callers, while its

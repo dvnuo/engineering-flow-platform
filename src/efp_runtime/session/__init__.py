@@ -16,6 +16,7 @@ from .protocol import SessionStore
 from .query import query_messages, query_sessions, session_context_messages
 from .status import RuntimeStatus
 from .store import InMemorySessionStore
+from .todo import SessionTodoStore
 
 __all__ = [
     "CompactionPart",
@@ -31,6 +32,7 @@ __all__ = [
     "SessionCheckpoint",
     "SessionProcessor",
     "SessionStore",
+    "SessionTodoStore",
     "TaskPart",
     "query_messages",
     "query_sessions",

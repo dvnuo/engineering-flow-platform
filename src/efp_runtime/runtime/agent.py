@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, MutableMapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from html import escape
@@ -55,6 +55,7 @@ from ..session.query import (
     session_context_messages as _session_context_messages,
 )
 from ..session.store import InMemorySessionStore
+from ..session.todo import SessionTodoStore
 from ..skills.commands import (
     SkillCommandResult,
     parse_skill_commands,
@@ -214,6 +215,9 @@ class AgentRuntime:
             skill_discovery=self.skill_discovery,
             question_broker=self.question_broker,
             lsp_client=lsp_client,
+        )
+        self._todo_store = (
+            _find_session_todo_store(self.tool_runtime.registry) or SessionTodoStore()
         )
         self.skill_context_builder = _resolve_skill_context_builder(
             config=self.config,
@@ -393,6 +397,19 @@ class AgentRuntime:
 
     def session_context(self, session_id: str) -> list[Message]:
         return _session_context_messages(self.session_messages(session_id))
+
+    def get_todos(self, session_id: str | None = None) -> list[dict[str, str]]:
+        return self._session_todo_store().get(session_id)
+
+    def set_todos(
+        self,
+        session_id: str | None,
+        todos: Iterable[Mapping[str, Any]],
+    ) -> list[dict[str, str]]:
+        return self._session_todo_store().set(session_id, todos)
+
+    def clear_todos(self, session_id: str | None = None) -> None:
+        self._session_todo_store().clear(session_id)
 
     async def run(
         self,
@@ -1577,6 +1594,29 @@ class AgentRuntime:
         if not callable(method):
             raise TypeError("session store does not support history replacement")
         return method(session_id, messages)
+
+    def _session_todo_store(self) -> SessionTodoStore:
+        registry_store = _find_session_todo_store(self.tool_runtime.registry)
+        if registry_store is not None:
+            self._todo_store = registry_store
+        return self._todo_store
+
+
+def _find_session_todo_store(registry: ToolRegistry) -> SessionTodoStore | None:
+    for tool_id in ("todowrite", "todo_write"):
+        tool = registry.get(tool_id)
+        if tool is None:
+            continue
+        store = tool.runtime_metadata.get("todo_store")
+        if isinstance(store, SessionTodoStore):
+            return store
+        todos_by_session = tool.runtime_metadata.get("todos_by_session")
+        if isinstance(todos_by_session, MutableMapping):
+            store = SessionTodoStore(todos_by_session)
+            tool.runtime_metadata["todo_store"] = store
+            tool.runtime_metadata["todos_by_session"] = store.todos_by_session
+            return store
+    return None
 
 
 def _manual_compaction_budget(
