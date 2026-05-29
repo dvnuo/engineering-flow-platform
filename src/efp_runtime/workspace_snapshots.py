@@ -1,4 +1,4 @@
-"""In-memory workspace file snapshots for Runtime v2."""
+"""Persistent workspace file snapshots for Runtime v2."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import difflib
 import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -22,6 +23,11 @@ _EXCLUDED_NAMES = {
     ".pytest_cache",
     "__pycache__",
 }
+_RUNTIME_DIR_NAME = ".efp_runtime"
+_SNAPSHOT_DIR_NAME = "workspace_snapshots"
+_SNAPSHOT_FILES_DIR_NAME = "files"
+_SNAPSHOT_MANIFEST_NAME = "manifest.json"
+_SNAPSHOT_ID_PREFIX = "workspace_snapshot_"
 
 
 @dataclass
@@ -67,13 +73,17 @@ class _SnapshotRecord:
 
 
 class WorkspaceSnapshotStore:
-    """Capture, diff, and restore regular workspace files in memory."""
+    """Capture, diff, and restore regular workspace files with disk backing."""
 
     def __init__(self, workspace_root: str | Path) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
+        self.storage_root = (
+            self.workspace_root / _RUNTIME_DIR_NAME / _SNAPSHOT_DIR_NAME
+        )
         self._snapshots: dict[str, _SnapshotRecord] = {}
         self._next_snapshot_index = 1
         self._lock = RLock()
+        self._load_existing_snapshots()
 
     def create_snapshot(
         self,
@@ -82,8 +92,7 @@ class WorkspaceSnapshotStore:
     ) -> WorkspaceSnapshot:
         with self._lock:
             files = self._scan_workspace()
-            snapshot_id = f"workspace_snapshot_{self._next_snapshot_index}"
-            self._next_snapshot_index += 1
+            snapshot_id = self._allocate_snapshot_id()
             snapshot = WorkspaceSnapshot(
                 snapshot_id=snapshot_id,
                 workspace_root=self.workspace_root,
@@ -93,10 +102,12 @@ class WorkspaceSnapshotStore:
                 file_count=len(files),
                 total_bytes=sum(item.size for item in files.values()),
             )
-            self._snapshots[snapshot.snapshot_id] = _SnapshotRecord(
+            record = _SnapshotRecord(
                 snapshot=deepcopy(snapshot),
                 files=dict(files),
             )
+            self._persist_record(record)
+            self._snapshots[snapshot.snapshot_id] = record
             return deepcopy(snapshot)
 
     def list_snapshots(self) -> list[WorkspaceSnapshot]:
@@ -131,7 +142,11 @@ class WorkspaceSnapshotStore:
 
     def delete_snapshot(self, snapshot_id: str) -> bool:
         with self._lock:
-            self._require_snapshot(snapshot_id)
+            record = self._require_snapshot(snapshot_id)
+            shutil.rmtree(
+                self._snapshot_dir(record.snapshot.snapshot_id),
+                ignore_errors=True,
+            )
             del self._snapshots[snapshot_id]
             return True
 
@@ -140,6 +155,170 @@ class WorkspaceSnapshotStore:
             return self._snapshots[snapshot_id]
         except KeyError as exc:
             raise KeyError(f"unknown workspace snapshot: {snapshot_id}") from exc
+
+    def _allocate_snapshot_id(self) -> str:
+        while True:
+            snapshot_id = f"{_SNAPSHOT_ID_PREFIX}{self._next_snapshot_index}"
+            self._next_snapshot_index += 1
+            if snapshot_id in self._snapshots:
+                continue
+            if self._snapshot_dir(snapshot_id).exists():
+                continue
+            return snapshot_id
+
+    def _load_existing_snapshots(self) -> None:
+        if not self.storage_root.is_dir():
+            return
+
+        highest_index = 0
+        for snapshot_dir in sorted(
+            (
+                path
+                for path in self.storage_root.iterdir()
+                if not path.is_symlink() and path.is_dir()
+            ),
+            key=lambda path: _snapshot_sort_key(path.name),
+        ):
+            record = self._load_snapshot_record(snapshot_dir)
+            if record is None:
+                continue
+            self._snapshots[record.snapshot.snapshot_id] = record
+            index = _snapshot_index(record.snapshot.snapshot_id)
+            if index is not None:
+                highest_index = max(highest_index, index)
+
+        self._next_snapshot_index = max(self._next_snapshot_index, highest_index + 1)
+
+    def _load_snapshot_record(self, snapshot_dir: Path) -> _SnapshotRecord | None:
+        manifest_path = snapshot_dir / _SNAPSHOT_MANIFEST_NAME
+        if not manifest_path.is_file():
+            return None
+
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        snapshot_id = payload.get("snapshot_id")
+        if not isinstance(snapshot_id, str) or snapshot_id != snapshot_dir.name:
+            return None
+        try:
+            self._snapshot_dir(snapshot_id)
+        except ValueError:
+            return None
+
+        manifest_root = payload.get("workspace_root")
+        if isinstance(manifest_root, str):
+            try:
+                if Path(manifest_root).expanduser().resolve() != self.workspace_root:
+                    return None
+            except OSError:
+                return None
+
+        files = self._load_snapshot_files(snapshot_dir)
+        file_count = _safe_nonnegative_int(payload.get("file_count"))
+        total_bytes = _safe_nonnegative_int(payload.get("total_bytes"))
+        if file_count is not None and file_count != len(files):
+            return None
+        calculated_total_bytes = sum(item.size for item in files.values())
+        if total_bytes is not None and total_bytes != calculated_total_bytes:
+            return None
+
+        metadata = payload.get("metadata")
+        label = payload.get("label")
+        snapshot = WorkspaceSnapshot(
+            snapshot_id=snapshot_id,
+            workspace_root=self.workspace_root,
+            created_at=payload.get("created_at")
+            if isinstance(payload.get("created_at"), str)
+            else utc_now_iso(),
+            label=label if isinstance(label, str) else None,
+            metadata=dict(metadata) if isinstance(metadata, dict) else {},
+            file_count=len(files),
+            total_bytes=calculated_total_bytes,
+        )
+        return _SnapshotRecord(snapshot=snapshot, files=files)
+
+    def _load_snapshot_files(self, snapshot_dir: Path) -> dict[str, _CapturedFile]:
+        files_dir = snapshot_dir / _SNAPSHOT_FILES_DIR_NAME
+        files: dict[str, _CapturedFile] = {}
+        if not files_dir.is_dir():
+            return files
+        self._load_snapshot_files_directory(files_dir, (), files)
+        return files
+
+    def _load_snapshot_files_directory(
+        self,
+        directory: Path,
+        relative_parts: tuple[str, ...],
+        files: dict[str, _CapturedFile],
+    ) -> None:
+        with os.scandir(directory) as entries:
+            sorted_entries = sorted(entries, key=lambda entry: entry.name)
+
+            for entry in sorted_entries:
+                if entry.is_symlink():
+                    continue
+
+                path = Path(entry.path)
+                child_parts = (*relative_parts, entry.name)
+                if entry.is_dir(follow_symlinks=False):
+                    self._load_snapshot_files_directory(path, child_parts, files)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+
+                relative_path = "/".join(child_parts)
+                self._validate_relative_path(relative_path)
+                content = path.read_bytes()
+                files[relative_path] = _CapturedFile(
+                    path=relative_path,
+                    content=content,
+                    sha256=hashlib.sha256(content).hexdigest(),
+                    size=len(content),
+                )
+
+    def _persist_record(self, record: _SnapshotRecord) -> None:
+        snapshot_dir = self._snapshot_dir(record.snapshot.snapshot_id)
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir)
+        files_dir = snapshot_dir / _SNAPSHOT_FILES_DIR_NAME
+        files_dir.mkdir(parents=True, exist_ok=False)
+
+        for relative_path, captured in sorted(record.files.items()):
+            path = self._snapshot_file_path(files_dir, relative_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(captured.content)
+
+        manifest = {
+            "snapshot_id": record.snapshot.snapshot_id,
+            "workspace_root": str(record.snapshot.workspace_root),
+            "created_at": record.snapshot.created_at,
+            "label": record.snapshot.label,
+            "metadata": record.snapshot.metadata,
+            "file_count": record.snapshot.file_count,
+            "total_bytes": record.snapshot.total_bytes,
+        }
+        (snapshot_dir / _SNAPSHOT_MANIFEST_NAME).write_text(
+            json.dumps(manifest, default=str, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def _snapshot_dir(self, snapshot_id: str) -> Path:
+        if (
+            not snapshot_id
+            or snapshot_id in {".", ".."}
+            or "/" in snapshot_id
+            or "\\" in snapshot_id
+        ):
+            raise ValueError(f"invalid workspace snapshot id: {snapshot_id}")
+        return self.storage_root / snapshot_id
+
+    def _snapshot_file_path(self, files_dir: Path, relative_path: str) -> Path:
+        posix_path = self._validate_relative_path(relative_path)
+        return files_dir.joinpath(*posix_path.parts)
 
     def _scan_workspace(self) -> dict[str, _CapturedFile]:
         files: dict[str, _CapturedFile] = {}
@@ -180,13 +359,17 @@ class WorkspaceSnapshotStore:
                 )
 
     def _workspace_path(self, relative_path: str) -> Path:
+        posix_path = self._validate_relative_path(relative_path)
+        return self.workspace_root.joinpath(*posix_path.parts)
+
+    def _validate_relative_path(self, relative_path: str) -> PurePosixPath:
         posix_path = PurePosixPath(relative_path)
         if posix_path.is_absolute():
             raise ValueError(f"workspace-relative path is absolute: {relative_path}")
         parts = posix_path.parts
         if not parts or any(part in ("", ".", "..") for part in parts):
             raise ValueError(f"invalid workspace-relative path: {relative_path}")
-        return self.workspace_root.joinpath(*parts)
+        return posix_path
 
     def _write_file(self, relative_path: str, content: bytes) -> None:
         path = self._workspace_path(relative_path)
@@ -220,6 +403,34 @@ class WorkspaceSnapshotStore:
         if path.is_symlink() or not path.exists() or not path.is_file():
             return
         path.unlink()
+
+
+def _snapshot_index(snapshot_id: str) -> int | None:
+    if not snapshot_id.startswith(_SNAPSHOT_ID_PREFIX):
+        return None
+    suffix = snapshot_id.removeprefix(_SNAPSHOT_ID_PREFIX)
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def _snapshot_sort_key(snapshot_id: str) -> tuple[int, int | str]:
+    index = _snapshot_index(snapshot_id)
+    if index is not None:
+        return (0, index)
+    return (1, snapshot_id)
+
+
+def _safe_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed
 
 
 def _diff_files(

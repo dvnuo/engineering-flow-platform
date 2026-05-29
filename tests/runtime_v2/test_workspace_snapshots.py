@@ -94,6 +94,31 @@ def test_restore_delete_added_false_preserves_added_files(tmp_path: Path):
     assert (tmp_path / "added.txt").read_text(encoding="utf-8") == "keep\n"
 
 
+def test_restore_snapshot_survives_new_store_instance(tmp_path: Path):
+    _write_text(tmp_path / "app.py", "before\n")
+    _write_text(tmp_path / "nested" / "data.txt", "data\n")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot(label="persisted", metadata={"turn": 1})
+
+    _write_text(tmp_path / "app.py", "after\n")
+    (tmp_path / "nested" / "data.txt").unlink()
+    _write_text(tmp_path / "added.txt", "delete\n")
+
+    restarted = WorkspaceSnapshotStore(tmp_path)
+    loaded = restarted.list_snapshots()
+    restored = restarted.restore_snapshot(snapshot.snapshot_id)
+    next_snapshot = restarted.create_snapshot()
+
+    assert [item.snapshot_id for item in loaded] == [snapshot.snapshot_id]
+    assert loaded[0].label == "persisted"
+    assert loaded[0].metadata == {"turn": 1}
+    assert restored.snapshot_id == snapshot.snapshot_id
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "before\n"
+    assert (tmp_path / "nested" / "data.txt").read_text(encoding="utf-8") == "data\n"
+    assert not (tmp_path / "added.txt").exists()
+    assert next_snapshot.snapshot_id != snapshot.snapshot_id
+
+
 def test_delete_returns_true_and_unknown_snapshot_raises(tmp_path: Path):
     _write_text(tmp_path / "tracked.txt", "tracked\n")
     store = WorkspaceSnapshotStore(tmp_path)
@@ -103,6 +128,27 @@ def test_delete_returns_true_and_unknown_snapshot_raises(tmp_path: Path):
     assert store.list_snapshots() == []
     with pytest.raises(KeyError, match=snapshot.snapshot_id):
         store.delete_snapshot(snapshot.snapshot_id)
+
+
+def test_delete_snapshot_removes_persisted_snapshot_data(tmp_path: Path):
+    _write_text(tmp_path / "tracked.txt", "tracked\n")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+    snapshot_dir = (
+        tmp_path
+        / ".efp_runtime"
+        / "workspace_snapshots"
+        / snapshot.snapshot_id
+    )
+
+    assert snapshot_dir.is_dir()
+    assert store.delete_snapshot(snapshot.snapshot_id) is True
+    assert not snapshot_dir.exists()
+
+    restarted = WorkspaceSnapshotStore(tmp_path)
+    assert restarted.list_snapshots() == []
+    with pytest.raises(KeyError, match=snapshot.snapshot_id):
+        restarted.restore_snapshot(snapshot.snapshot_id)
 
 
 def test_restore_ignores_excluded_directories_and_does_not_delete_them(

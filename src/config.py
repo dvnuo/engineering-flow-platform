@@ -1,5 +1,7 @@
 """Configuration loader for Engineering Flow Platform."""
 
+from __future__ import annotations
+
 import logging
 import math
 import os

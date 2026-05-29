@@ -224,6 +224,33 @@ async def test_pending_question_state_is_recorded_on_runtime_v2_session(tmp_path
     assert facade["metadata"]["pending_question_request"]["id"] == "question-1"
 
 
+@pytest.mark.asyncio
+async def test_delete_session_uses_injected_file_context_cleanup(tmp_path: Path):
+    store = FileSessionStore(tmp_path / "store")
+    calls: list[str] = []
+
+    def delete_file_context(session_id: str) -> int:
+        calls.append(session_id)
+        return 2
+
+    manager = RuntimeV2SessionManager(
+        store=store,
+        delete_file_context=delete_file_context,
+    )
+
+    assert await manager.delete_session("file-context-only") is True
+    assert calls == ["file-context-only"]
+
+
+@pytest.mark.asyncio
+async def test_delete_session_without_file_context_cleanup_returns_false_for_missing_session(
+    tmp_path: Path,
+):
+    manager = RuntimeV2SessionManager(store=FileSessionStore(tmp_path / "store"))
+
+    assert await manager.delete_session("missing-session") is False
+
+
 def test_gateway_facade_import_does_not_load_legacy_runtime():
     code = """
 import importlib

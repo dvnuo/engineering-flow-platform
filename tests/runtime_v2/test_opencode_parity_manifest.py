@@ -86,6 +86,14 @@ def test_session_state_manifest_mentions_summary_and_revert():
     assert "revert/unrevert" in summary
 
 
+def test_legacy_boundary_manifest_separates_import_independence_from_tree_removal():
+    summary = CAPABILITY_GROUPS["legacy boundary"].summary
+
+    assert "independent from legacy core imports" in summary
+    assert "repository-level deletion" in summary
+    assert "separate migration item" in summary
+
+
 def test_remaining_manifest_items_have_concrete_next_actions():
     vague_actions = {"", "todo", "tbd", "follow up", "investigate", "later"}
 

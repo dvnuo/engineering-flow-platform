@@ -119,7 +119,12 @@ CAPABILITY_GROUPS: dict[str, CapabilityEntry] = {
     ),
     "legacy boundary": CapabilityEntry(
         status="done",
-        summary="Runtime v2 default tool surfaces exclude legacy Python tool aliases and keep opencode-style built-ins on the main path.",
+        summary=(
+            "Runtime v2 is independent from legacy core imports, default tool "
+            "surfaces exclude legacy Python tool aliases, and repository-level "
+            "deletion of old src/agents, src/runtime, src/sessions, and "
+            "src/skills trees remains a separate migration item."
+        ),
     ),
 }
 

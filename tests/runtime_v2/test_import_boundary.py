@@ -41,6 +41,19 @@ def test_runtime_v2_source_does_not_import_through_src_package():
     assert "import src.efp_runtime" not in combined
 
 
+def test_runtime_v2_source_has_no_direct_src_imports():
+    offenders: list[str] = []
+    for path in sorted((ROOT / "src/efp_runtime").rglob("*.py")):
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith(("from src.", "import src.")):
+                offenders.append(
+                    f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}"
+                )
+
+    assert offenders == []
+
+
 def test_runtime_v2_source_does_not_import_legacy_runtime_modules():
     combined = _combined_v2_source()
     forbidden_imports = [

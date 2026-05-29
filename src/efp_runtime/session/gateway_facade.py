@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from threading import RLock
 import uuid
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from ..types import ToolCall, ToolResult
 from .file_store import FileSessionStore
@@ -122,6 +122,7 @@ class RuntimeV2SessionManager:
         root: str | Path | None = None,
         max_history: int | None = None,
         auto_save: bool | None = None,
+        delete_file_context: Callable[[str], int | bool] | None = None,
     ) -> None:
         self.store = store or get_runtime_v2_session_store(root)
         self.root = self.store.root
@@ -130,6 +131,7 @@ class RuntimeV2SessionManager:
         self.persistence_enabled = True
         self._initialized = False
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._delete_file_context = delete_file_context
         self.artifacts = RuntimeV2SessionArtifacts(self.root)
 
     @property
@@ -542,10 +544,13 @@ class RuntimeV2SessionManager:
         return False
 
     def _delete_session_file_context(self, session_id: str) -> bool:
+        if self._delete_file_context is None:
+            return False
         try:
-            from src.hooks.file_context.storage import storage as file_context_storage
-
-            return file_context_storage.delete_session(session_id) > 0
+            deleted = self._delete_file_context(session_id)
+            if isinstance(deleted, bool):
+                return deleted
+            return deleted > 0
         except Exception:
             logger.debug("Failed to delete file context for runtime v2 session", exc_info=True)
             return False
