@@ -13,6 +13,7 @@ from efp_runtime.loop import ScriptedLLMProvider
 from efp_runtime.models import ToolCall
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.tools.builtin import create_core_tool_registry
+from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.runtime import ToolRuntime
 
 
@@ -133,6 +134,27 @@ async def test_agent_runtime_default_registry_attaches_read_instructions(tmp_pat
 
     assert result.status == "success"
     assert result.output["loaded_instruction_paths"] == ["AGENTS.md"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_does_not_attach_system_loaded_instruction_again(
+    tmp_path: Path,
+):
+    (tmp_path / "app.py").write_text("print('app')\n", encoding="utf-8")
+    instruction = tmp_path / "AGENTS.md"
+    instruction.write_text("Workspace agents.", encoding="utf-8")
+    runtime = _runtime_with_resolver(tmp_path)
+
+    result = await runtime.execute(
+        ToolCall(id="call-read", tool_id="read", args={"filePath": "app.py"}),
+        context=ToolContext(
+            metadata={"system_instruction_paths": [str(instruction.resolve())]},
+        ),
+    )
+
+    assert result.status == "success"
+    assert "loaded_instruction_paths" not in result.output
+    assert "instructions" not in result.output
 
 
 @pytest.mark.asyncio

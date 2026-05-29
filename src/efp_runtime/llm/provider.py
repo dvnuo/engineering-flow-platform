@@ -248,6 +248,13 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             adapter=adapter,
         )
 
+    def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
+        """Project a request and apply GitHub Copilot request quirks."""
+
+        payload = super().build_payload(request)
+        _inject_copilot_noop_tool_fallback(payload, request)
+        return payload
+
     def _transport_error_response(self, exc: BaseException) -> dict[str, Any]:
         response = super()._transport_error_response(exc)
         metadata = response.setdefault("metadata", {})
@@ -333,6 +340,57 @@ def _requested_model(request: RuntimeRequest) -> Optional[str]:
     if not requested_model:
         return None
     return requested_model
+
+
+def _inject_copilot_noop_tool_fallback(
+    payload: dict[str, Any],
+    request: RuntimeRequest,
+) -> None:
+    if request.provider_request.tools:
+        return
+    tools = payload.get("tools")
+    if tools:
+        return
+    if not _provider_request_has_tool_call(request):
+        return
+    payload["tools"] = [_copilot_noop_tool_payload(payload)]
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["copilot_noop_tool_fallback"] = True
+
+
+def _provider_request_has_tool_call(request: RuntimeRequest) -> bool:
+    for message in request.provider_request.messages:
+        for part in message.parts:
+            if part.tool_call is not None:
+                return True
+    return False
+
+
+def _copilot_noop_tool_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if "input" in payload:
+        return {
+            "type": "function",
+            "name": "_noop",
+            "description": "No-op fallback for GitHub Copilot tool-call history.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        }
+    return {
+        "type": "function",
+        "function": {
+            "name": "_noop",
+            "description": "No-op fallback for GitHub Copilot tool-call history.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    }
 
 
 def _env_string(environ: Mapping[str, str], name: str) -> Optional[str]:

@@ -18,28 +18,20 @@ from efp_runtime.session.store import InMemorySessionStore
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_builder_loads_workspace_default_files_in_stable_order(tmp_path: Path):
+def test_builder_loads_first_workspace_default_file(tmp_path: Path):
     (tmp_path / "CONTEXT.md").write_text("Context instructions.", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("Agent instructions.", encoding="utf-8")
     (tmp_path / "CLAUDE.md").write_text("Claude instructions.", encoding="utf-8")
 
     messages = InstructionContextBuilder(workspace_root=tmp_path).build_messages()
 
-    assert [message.role for message in messages] == [
-        MessageRole.SYSTEM,
-        MessageRole.SYSTEM,
-        MessageRole.SYSTEM,
-    ]
+    assert [message.role for message in messages] == [MessageRole.SYSTEM]
     assert [message.metadata["path"] for message in messages] == [
-        str((tmp_path / "AGENTS.md").resolve()),
-        str((tmp_path / "CLAUDE.md").resolve()),
-        str((tmp_path / "CONTEXT.md").resolve()),
+        str((tmp_path / "AGENTS.md").resolve())
     ]
-    assert [message.parts[0].text.splitlines()[0] for message in messages] == [
-        f"Instructions from: {(tmp_path / 'AGENTS.md').resolve()}",
-        f"Instructions from: {(tmp_path / 'CLAUDE.md').resolve()}",
-        f"Instructions from: {(tmp_path / 'CONTEXT.md').resolve()}",
-    ]
+    assert messages[0].parts[0].text.splitlines()[0] == (
+        f"Instructions from: {(tmp_path / 'AGENTS.md').resolve()}"
+    )
     assert messages[0].metadata == {
         "kind": "instruction_context",
         "source": "file",
@@ -48,6 +40,25 @@ def test_builder_loads_workspace_default_files_in_stable_order(tmp_path: Path):
         "original_chars": len("Agent instructions."),
     }
     assert messages[0].parts[0].metadata == messages[0].metadata
+
+
+def test_nested_cwd_loads_only_nearest_default_instruction(tmp_path: Path):
+    nested = tmp_path / "src" / "pkg"
+    nested.mkdir(parents=True)
+    (tmp_path / "AGENTS.md").write_text("Workspace agents.", encoding="utf-8")
+    (tmp_path / "src" / "CLAUDE.md").write_text("Source claude.", encoding="utf-8")
+    (nested / "CONTEXT.md").write_text("Package context.", encoding="utf-8")
+
+    messages = InstructionContextBuilder(workspace_root=tmp_path).build_messages(
+        metadata={"cwd": nested}
+    )
+
+    assert len(messages) == 1
+    assert messages[0].metadata["path"] == str((nested / "CONTEXT.md").resolve())
+    text = messages[0].parts[0].text
+    assert "Package context." in text
+    assert "Source claude." not in text
+    assert "Workspace agents." not in text
 
 
 def test_explicit_instruction_paths_support_relative_absolute_and_home(

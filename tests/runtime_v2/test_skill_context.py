@@ -9,7 +9,11 @@ import pytest
 from efp_runtime.context import render_messages
 from efp_runtime.models import MessageRole
 from efp_runtime.skills.commands import SkillCommandResult, parse_skill_commands
-from efp_runtime.skills.context import SkillContextBuilder, skill_package_to_system_message
+from efp_runtime.skills.context import (
+    SkillContextBuilder,
+    available_skills_system_message,
+    skill_package_to_system_message,
+)
 from efp_runtime.skills.discovery import SkillDiscovery
 
 
@@ -91,6 +95,21 @@ def test_skill_context_unknown_skill_reports_available_names(tmp_path):
     error_text = str(error.value)
     assert "Unknown skill: missing" in error_text
     assert "Available skills: known-skill" in error_text
+
+
+def test_available_skills_context_includes_location_and_path(tmp_path):
+    skill_dir = _write_skill(
+        tmp_path,
+        "known-skill",
+        description="Known skill",
+    )
+
+    message = available_skills_system_message(SkillDiscovery([tmp_path]).discover())
+
+    assert message is not None
+    text = message.parts[0].text
+    assert f"<location>{skill_dir.resolve()}</location>" in text
+    assert f"<path>{(skill_dir / 'SKILL.md').resolve()}</path>" in text
 
 
 def test_parse_skill_name_command_removes_command_line():

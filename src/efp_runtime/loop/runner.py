@@ -1410,6 +1410,27 @@ class RuntimeLoopRunner:
                     ),
                 )
             )
+            if tool_call.tool_name == "_noop":
+                result = _noop_tool_result(tool_call)
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="tool.ignored",
+                        message=result.error,
+                        session_id=session_id,
+                        payload=_tool_event_context_payload(
+                            run_id=run_id,
+                            tool_call=tool_call,
+                            iteration=iteration,
+                        ),
+                    )
+                )
+                self._append_tool_result(
+                    session_id=session_id,
+                    result=result,
+                    runtime_events=runtime_events,
+                    run_id=run_id,
+                )
+                continue
             if tool_call.tool_name not in enabled_tool_ids:
                 result = _disabled_tool_result(tool_call)
                 runtime_events.append(
@@ -2070,6 +2091,19 @@ def _disabled_tool_result(tool_call: ToolCall) -> ToolResult:
         error=message,
         content=message,
         metadata={"disabled": True},
+    )
+
+
+def _noop_tool_result(tool_call: ToolCall) -> ToolResult:
+    message = "Ignored provider no-op fallback tool call."
+    return ToolResult(
+        call_id=tool_call.call_id,
+        tool_name=tool_call.tool_name,
+        status="ignored",
+        success=False,
+        error=message,
+        content=message,
+        metadata={"ignored": True, "noop_fallback": True},
     )
 
 

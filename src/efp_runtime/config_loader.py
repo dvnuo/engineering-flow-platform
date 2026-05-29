@@ -187,6 +187,7 @@ def load_runtime_config(
         workspace_root,
         include_defaults=include_defaults,
     )
+    discovery_cwd = _workspace_root_path(workspace_root)
     candidates = _candidate_config_paths(
         root,
         paths=paths,
@@ -208,6 +209,7 @@ def load_runtime_config(
         root,
         metadata,
         include_defaults=include_defaults,
+        discovery_cwd=discovery_cwd,
     )
     agent_registry = _agent_registry_from_raw(
         raw,
@@ -473,6 +475,7 @@ def _runtime_config_from_raw(
     metadata: Mapping[str, Any],
     *,
     include_defaults: bool,
+    discovery_cwd: Path | None = None,
 ) -> RuntimeConfig:
     kwargs: dict[str, Any] = {
         "workspace_root": workspace_root,
@@ -521,6 +524,7 @@ def _runtime_config_from_raw(
 
     default_skill_dirs = default_skill_directories(
         workspace_root,
+        cwd=discovery_cwd,
         include_defaults=include_defaults,
     )
     configured_skill_directories = _merged_alias_paths(

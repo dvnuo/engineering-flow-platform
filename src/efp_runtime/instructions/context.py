@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -35,11 +35,16 @@ class InstructionContextBuilder:
         self.default_file_names = [str(name) for name in default_file_names]
         self.max_instruction_chars = max_instruction_chars
 
-    def build_messages(self) -> list[Message]:
+    def build_messages(
+        self,
+        metadata: Mapping[str, Any] | None = None,
+        *,
+        cwd: str | Path | None = None,
+    ) -> list[Message]:
         messages: list[Message] = []
         seen_paths: set[Path] = set()
 
-        for path in self._candidate_paths():
+        for path in self._candidate_paths(metadata=metadata, cwd=cwd):
             resolved_path = _resolved_file_path(path)
             if resolved_path is None or resolved_path in seen_paths:
                 continue
@@ -57,13 +62,22 @@ class InstructionContextBuilder:
 
         return messages
 
-    def _candidate_paths(self) -> list[Path]:
+    def _candidate_paths(
+        self,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        cwd: str | Path | None = None,
+    ) -> list[Path]:
         paths: list[Path] = []
-        root = self.workspace_root
-        if self.include_default_files and root is not None and root.exists():
-            for name in self.default_file_names:
-                if name:
-                    paths.append(root / name)
+        root = _resolved_directory_path(self.workspace_root)
+        if self.include_default_files and root is not None:
+            default_path = _first_ancestor_instruction_path(
+                root,
+                cwd=_metadata_cwd(metadata) if cwd is None else cwd,
+                default_file_names=self.default_file_names,
+            )
+            if default_path is not None:
+                paths.append(default_path)
 
         for raw_path in self.instruction_paths:
             path = _resolve_configured_path(raw_path, workspace_root=root)
@@ -122,13 +136,21 @@ class ReadInstructionResolver:
         self.default_file_names = [str(name) for name in default_file_names if str(name)]
         self.max_instruction_chars = max_instruction_chars
 
-    def resolve_for_path(self, path: str | Path) -> list[dict[str, Any]]:
+    def resolve_for_path(
+        self,
+        path: str | Path,
+        *,
+        exclude_paths: Iterable[str | Path] = (),
+    ) -> list[dict[str, Any]]:
         target = self._resolve_workspace_path(path)
         if target is None:
             return []
 
         entries: list[dict[str, Any]] = []
-        seen_paths: set[Path] = set()
+        seen_paths = _normalized_excluded_instruction_paths(
+            exclude_paths,
+            workspace_root=self.workspace_root,
+        )
         current = target.parent if target != self.workspace_root else target
 
         while _is_relative_to(current, self.workspace_root):
@@ -198,6 +220,60 @@ def _coerce_optional_path(path: str | Path | None) -> Path | None:
     return Path(path).expanduser()
 
 
+def _resolved_directory_path(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    try:
+        resolved = path.expanduser().resolve(strict=False)
+    except OSError:
+        return None
+    if not resolved.exists() or not resolved.is_dir():
+        return None
+    return resolved
+
+
+def _metadata_cwd(metadata: Mapping[str, Any] | None) -> Any:
+    if metadata is None:
+        return None
+    return metadata.get("cwd")
+
+
+def _first_ancestor_instruction_path(
+    workspace_root: Path,
+    *,
+    cwd: str | Path | None,
+    default_file_names: Iterable[str],
+) -> Path | None:
+    current = _ancestor_search_start(workspace_root, cwd)
+    while _is_relative_to(current, workspace_root):
+        for name in default_file_names:
+            if not name:
+                continue
+            candidate = current / name
+            if candidate.is_file():
+                return candidate
+        if current == workspace_root:
+            break
+        current = current.parent
+    return None
+
+
+def _ancestor_search_start(workspace_root: Path, cwd: str | Path | None) -> Path:
+    if cwd is None or (isinstance(cwd, str) and not cwd.strip()):
+        return workspace_root
+    raw_path = Path(cwd).expanduser()
+    candidate = raw_path if raw_path.is_absolute() else workspace_root / raw_path
+    try:
+        resolved = candidate.resolve(strict=False)
+    except OSError:
+        return workspace_root
+    if resolved.is_file():
+        resolved = resolved.parent
+    if not _is_relative_to(resolved, workspace_root):
+        return workspace_root
+    return resolved
+
+
 def _resolve_configured_path(
     path: str | Path,
     *,
@@ -241,6 +317,25 @@ def _read_instruction_text_file(path: Path) -> str | None:
         return data.decode("utf-8")
     except UnicodeDecodeError:
         return None
+
+
+def _normalized_excluded_instruction_paths(
+    paths: Iterable[str | Path],
+    *,
+    workspace_root: Path,
+) -> set[Path]:
+    excluded: set[Path] = set()
+    for raw_path in paths:
+        if isinstance(raw_path, str) and not raw_path.strip():
+            continue
+        path = Path(raw_path).expanduser()
+        candidate = path if path.is_absolute() else workspace_root / path
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            continue
+        excluded.add(resolved)
+    return excluded
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:

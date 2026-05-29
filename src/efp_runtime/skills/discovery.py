@@ -73,6 +73,7 @@ def discover_skills(directories: Iterable[str | Path]) -> list[SkillPackage]:
 def default_skill_directories(
     workspace_root: str | Path,
     *,
+    cwd: str | Path | None = None,
     include_defaults: bool = True,
 ) -> list[Path]:
     """Return existing default skill directories in load order."""
@@ -80,16 +81,18 @@ def default_skill_directories(
     if not include_defaults:
         return []
     root = Path(workspace_root).expanduser().resolve(strict=False)
+    start = _ancestor_search_start(root, cwd)
     directories: list[Path] = []
     for directory in DEFAULT_GLOBAL_SKILL_DIRECTORIES:
         path = Path(directory).expanduser().resolve(strict=False)
         if path.is_dir():
             directories.append(path)
-    for directory in DEFAULT_PROJECT_SKILL_DIRECTORIES:
-        path = (root / directory).resolve(strict=False)
-        if path.is_dir():
-            directories.append(path)
-    return directories
+    for ancestor in _project_skill_ancestors(root, start):
+        for directory in DEFAULT_PROJECT_SKILL_DIRECTORIES:
+            path = (ancestor / directory).resolve(strict=False)
+            if path.is_dir():
+                directories.append(path)
+    return _dedupe_paths(directories)
 
 
 def _iter_skill_files(directory: Path) -> list[Path]:
@@ -228,6 +231,50 @@ def _collect_sidecars(root: Path, skill_file: Path) -> list[Path]:
 
 def _is_hidden(path: Path) -> bool:
     return any(part.startswith(".") for part in path.parts)
+
+
+def _ancestor_search_start(root: Path, cwd: str | Path | None) -> Path:
+    if cwd is None or (isinstance(cwd, str) and not cwd.strip()):
+        return root
+    raw_path = Path(cwd).expanduser()
+    candidate = raw_path if raw_path.is_absolute() else root / raw_path
+    resolved = candidate.resolve(strict=False)
+    if resolved.is_file():
+        resolved = resolved.parent
+    if not _is_relative_to(resolved, root):
+        return root
+    return resolved
+
+
+def _project_skill_ancestors(root: Path, start: Path) -> list[Path]:
+    ancestors: list[Path] = []
+    current = start
+    while _is_relative_to(current, root):
+        ancestors.append(current)
+        if current == root:
+            break
+        current = current.parent
+    return list(reversed(ancestors))
+
+
+def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(resolved)
+    return deduped
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _normalize_skill_name(name: str) -> str:

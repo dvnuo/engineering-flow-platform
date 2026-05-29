@@ -131,6 +131,12 @@ def _render_available_skills_text(skills: Iterable[SkillPackage]) -> str:
                 "    <description>"
                 f"{escape(str(skill.description or ''), quote=False)}"
                 "</description>",
+                "    <location>"
+                f"{escape(str(skill.root.resolve()), quote=False)}"
+                "</location>",
+                "    <path>"
+                f"{escape(str(skill.skill_file.resolve()), quote=False)}"
+                "</path>",
                 "  </skill>",
             ]
         )

@@ -112,6 +112,29 @@ def test_default_skill_directories_include_opencode_skill_before_plural(
     assert default_skill_directories(tmp_path, include_defaults=False) == []
 
 
+def test_default_skill_directories_discover_cwd_ancestors(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    workspace = tmp_path / "workspace"
+    nested = workspace / "src" / "pkg"
+    nested.mkdir(parents=True)
+    source_skills = workspace / "src" / ".agents" / "skills"
+    source_skills.mkdir(parents=True)
+    source_skill = _write_skill(
+        source_skills,
+        "source-skill",
+        content="# Source ancestor skill",
+    )
+
+    directories = default_skill_directories(workspace, cwd=nested)
+    skill = SkillDiscovery(directories).get("source-skill")
+
+    assert source_skills.resolve() in directories
+    assert skill is not None
+    assert skill.root == source_skill
+
+
 def test_default_skill_directories_include_global_before_project_defaults(
     tmp_path,
     monkeypatch,
@@ -260,6 +283,44 @@ def test_duplicate_skill_names_within_directory_use_stable_path_order(tmp_path):
     assert [item.name for item in skills] == ["shared-skill"]
     assert skills[0].root == winner
     assert skills[0].content == "# New"
+
+
+def test_duplicate_skill_names_across_ancestors_use_nearest_cwd_directory(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    workspace = tmp_path / "workspace"
+    nested = workspace / "src" / "pkg"
+    nested.mkdir(parents=True)
+    (workspace / ".opencode" / "skill").mkdir(parents=True)
+    (workspace / "src" / ".opencode" / "skill").mkdir(parents=True)
+    (nested / ".opencode" / "skills").mkdir(parents=True)
+    _write_skill(
+        workspace / ".opencode" / "skill",
+        "shared-skill",
+        content="# Workspace",
+    )
+    _write_skill(
+        workspace / "src" / ".opencode" / "skill",
+        "shared-skill",
+        content="# Source",
+    )
+    winner = _write_skill(
+        nested / ".opencode" / "skills",
+        "shared-skill",
+        content="# Nested",
+    )
+
+    skill = SkillDiscovery(default_skill_directories(workspace, cwd=nested)).get(
+        "shared-skill"
+    )
+
+    assert skill is not None
+    assert skill.root == winner
+    assert skill.content == "# Nested"
 
 
 def test_skill_tool_description_lists_available_skill_names_and_descriptions(tmp_path):

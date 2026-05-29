@@ -19,7 +19,14 @@ from efp_runtime.llm.provider import (
     RecordingTransport,
     github_copilot_provider_from_env,
 )
-from efp_runtime.loop import LoopStatus, RuntimeLoopRunner
+from efp_runtime.llm.request import (
+    ProviderRequest,
+    RequestMessage,
+    RequestMessagePart,
+    RequestToolCall,
+    RequestToolSchema,
+)
+from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest
 from efp_runtime.session.models import MessagePartType, MessageRole
 from efp_runtime.session.store import InMemorySessionStore
 from efp_runtime.tools.definition import ToolDef
@@ -234,6 +241,95 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     assert provider.model == "gpt-5-mini"
     assert transport.payloads[0]["model"] == "gpt-5"
     assert transport.payloads[0]["metadata"]["provider_id"] == "github-copilot"
+
+
+def test_github_copilot_injects_noop_when_tool_history_exists_without_tools():
+    provider = GitHubCopilotProvider(transport=RecordingTransport([]))
+
+    payload = provider.build_payload(_runtime_request_with_tool_history())
+
+    assert [tool["function"]["name"] for tool in payload["tools"]] == ["_noop"]
+    assert payload["metadata"]["copilot_noop_tool_fallback"] is True
+
+
+def test_openai_provider_does_not_inject_noop_for_tool_history_without_tools():
+    provider = OpenAICompatibleProvider(
+        model="gpt-test",
+        transport=RecordingTransport([]),
+    )
+
+    payload = provider.build_payload(_runtime_request_with_tool_history())
+
+    assert payload["tools"] == []
+    assert "copilot_noop_tool_fallback" not in payload["metadata"]
+
+
+def test_github_copilot_does_not_inject_noop_when_real_tools_exist():
+    provider = GitHubCopilotProvider(transport=RecordingTransport([]))
+    schema = RequestToolSchema(
+        id="lookup",
+        name="lookup",
+        description="Look up project facts.",
+        json_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        },
+    )
+
+    payload = provider.build_payload(_runtime_request_with_tool_history(tools=[schema]))
+
+    assert [tool["function"]["name"] for tool in payload["tools"]] == ["lookup"]
+    assert "copilot_noop_tool_fallback" not in payload["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_provider_returned_noop_tool_call_is_ignored_without_execution():
+    executions = []
+
+    async def execute(args, context):
+        executions.append(args)
+        return "side effect"
+
+    transport = RecordingTransport(
+        [
+            _chat_tool_call_response(
+                call_id="call_noop",
+                tool_name="_noop",
+                arguments="{}",
+            ),
+            _chat_response("Done."),
+        ]
+    )
+    provider = GitHubCopilotProvider(transport=transport)
+    store = InMemorySessionStore()
+    runner = RuntimeLoopRunner(
+        store=store,
+        provider=provider,
+        tool_runtime=ToolRuntime(
+            ToolRegistry(
+                [
+                    ToolDef(
+                        id="side_effect",
+                        description="Records execution.",
+                        input_schema={"type": "object", "properties": {}},
+                        execute=execute,
+                    )
+                ]
+            )
+        ),
+        max_iterations=2,
+    )
+
+    result = await runner.run(session_id="session-noop", user_text="Continue.")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert executions == []
+    assert "_noop" not in runner.tool_runtime.registry.ids()
+    history = store.read_history("session-noop")
+    noop_result = history[2].parts[0].tool_result
+    assert noop_result.tool_name == "_noop"
+    assert noop_result.status == "ignored"
+    assert noop_result.metadata["noop_fallback"] is True
 
 
 @pytest.mark.asyncio
@@ -625,6 +721,36 @@ def _lookup_tool() -> ToolDef:
     )
 
 
+def _runtime_request_with_tool_history(
+    *,
+    tools: list[RequestToolSchema] | None = None,
+) -> RuntimeRequest:
+    return RuntimeRequest(
+        session_id="session-history",
+        messages=[],
+        iteration=1,
+        max_iterations=1,
+        provider_request=ProviderRequest(
+            messages=[
+                RequestMessage(
+                    role="assistant",
+                    parts=[
+                        RequestMessagePart(
+                            type="tool_call",
+                            tool_call=RequestToolCall(
+                                call_id="call_lookup",
+                                tool_name="lookup",
+                                arguments={"query": "runtime"},
+                            ),
+                        )
+                    ],
+                )
+            ],
+            tools=list(tools or []),
+        ),
+    )
+
+
 def _chat_response(text):
     return {
         "choices": [
@@ -634,6 +760,30 @@ def _chat_response(text):
                     "content": text,
                 },
                 "finish_reason": "stop",
+            }
+        ]
+    }
+
+
+def _chat_tool_call_response(*, call_id: str, tool_name: str, arguments: str):
+    return {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": arguments,
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
             }
         ]
     }

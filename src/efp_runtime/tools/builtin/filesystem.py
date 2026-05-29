@@ -197,7 +197,7 @@ def _read_workspace_file(
         "bytes": len(data),
     }
     output.update(range_metadata)
-    _attach_read_instructions(output, instruction_resolver, path)
+    _attach_read_instructions(output, instruction_resolver, path, context)
     content_truncated = range_metadata["range_truncated"] or bool(
         range_metadata["truncated_by"]
     )
@@ -600,16 +600,29 @@ def _attach_read_instructions(
     output: dict[str, Any],
     instruction_resolver: ReadInstructionResolver | None,
     path: Path,
+    context: ToolContext,
 ) -> None:
     if instruction_resolver is None:
         return
-    instructions = instruction_resolver.resolve_for_path(path)
+    instructions = instruction_resolver.resolve_for_path(
+        path,
+        exclude_paths=_system_instruction_paths(context),
+    )
     if not instructions:
         return
     output["instructions"] = instructions
     output["loaded_instruction_paths"] = [
         str(entry["path"]) for entry in instructions
     ]
+
+
+def _system_instruction_paths(context: ToolContext) -> list[str]:
+    value = context.metadata.get("system_instruction_paths")
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item) for item in value if str(item).strip()]
+    return []
 
 
 def _directory_display_name(entry: dict[str, Any]) -> str:
