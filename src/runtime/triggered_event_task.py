@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from src.agents.core import agent, run_chat_execution
 from src.channels.confluence import confluence_channel
 from src.channels.github import github_channel
 from src.channels.jira import jira_channel
+from src.gateway.runtime_v2_chat import run_runtime_v2_chat
 
 
 def _require(payload: Dict[str, Any], key: str) -> Any:
@@ -22,11 +22,11 @@ async def _run_agent_response(
     session_id: str,
     execution_metadata: Dict[str, Any] | None = None,
 ) -> str:
-    result = await run_chat_execution(
-        agent=agent,
+    result = await run_runtime_v2_chat(
         message=message,
         session_id=session_id,
         user_name="triggered-event",
+        request_path="triggered_event",
         track_usage=False,
         execution_metadata=execution_metadata if isinstance(execution_metadata, dict) else None,
     )

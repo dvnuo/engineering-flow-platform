@@ -303,9 +303,9 @@ class _CapabilityBuilder:
                     "tool_name": tool_name,
                     "description": _extract_tool_description(tool_schema),
                     "declaration_only": True,
-                    "tool_source": "legacy_builtin",
-                    "schema_source": "legacy_builtin",
-                    "execution_source": "legacy_builtin",
+                    "tool_source": "efp_runtime",
+                    "schema_source": "efp_runtime",
+                    "execution_source": "efp_runtime",
                     **dict(tool_schema.get("metadata") or {}),
                 }
                 source_ref = "src.__init__.get_tools_schema"

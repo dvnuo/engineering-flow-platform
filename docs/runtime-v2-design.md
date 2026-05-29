@@ -296,6 +296,13 @@ and does not register the tool unless the caller explicitly supplies a runner.
 The default opencode surface exposes built-in tools only; it does not scan or
 import workspace-local Python files from `.opencode/tool` or `.opencode/tools`.
 
+In the production EFP native gateway, `/api/chat`, `/api/chat/stream`, Jira
+chat, and triggered-event chat use `efp_runtime.runtime.AgentRuntime` with
+`tool_surface="opencode"`, `include_legacy_tool_aliases=False`, and
+`enable_local_python_tools=False`. The compatibility surface in `src.__init__`
+is generated from `create_core_tool_registry(Path.cwd())`; it does not aggregate
+the legacy Jira, GitHub, Confluence, Git, Bash, or context Python tools.
+
 EFP legacy aliases are not registered by default: `fetch`, `shell_exec`,
 `shell_status`, `shell_kill`, `read_file`, `write_file`, `list_dir`,
 `todo_write`, `task_status`, `task_cancel`, and `skill_list` stay hidden from
@@ -461,6 +468,12 @@ OpenAI-compatible projection. It defaults to `gpt-5-mini`, marks payload
 metadata with `provider_id="github-copilot"`, and still relies on an injected
 transport.
 
+Phase42 production native mode supports GitHub Copilot only. Gateway adapter
+configuration reads `llm.provider`, `llm.api_key`, `llm.api_base`, and
+`llm.model`, with `EFP_GITHUB_COPILOT_TOKEN` / `GITHUB_COPILOT_TOKEN` and
+`EFP_GITHUB_COPILOT_BASE_URL` as environment overrides. Unsupported provider
+keys fail explicitly instead of falling back to OpenAI, Anthropic, or Ollama.
+
 `GitHubCopilotHTTPTransport` provides a standard-library JSON HTTP transport
 for Copilot Chat Completions at
 `https://api.githubcopilot.com/chat/completions` by default, or
@@ -527,19 +540,11 @@ runtime returns the existing error result shape with `tool.started` followed by
 between `tool.started` and `tool.completed`. Lifecycle payloads avoid raw
 argument values; `tool.started` may include only sorted `arg_keys`.
 
-Runtime v2 also supports a transport-independent external tool provider bridge
-under `efp_runtime.tools.external`. A provider declares `ExternalToolSpec`
-records and implements `execute(tool_name, args, context)`. The bridge converts
-those specs into ordinary `ToolDef` entries and registers them in the same
-`ToolRegistry` used by built-in tools. Once registered, external tools are
-rendered in the same provider request schema and use the same argument
-validation, permission broker, enabled/disabled selection, output policy, and
-`ToolResult` normalization path as built-ins.
-
-`ExternalToolContext` carries the session id, message/tool call ids, workspace
-root, copied runtime metadata, provider name, and provider-local tool name so
-providers can receive session and worktree context without mutating the original
-`ToolContext`.
+The production EFP native gateway does not register external tool providers.
+The library bridge under `efp_runtime.tools.external` remains an injectable test
+and extension boundary for callers that explicitly construct a custom
+`AgentRuntime`, but it is not part of the default or gateway model-visible tool
+surface.
 
 Workspace-local custom tools use the Python-native loader under
 `efp_runtime.tools.local`. This loader is retained as a legacy compatibility
@@ -574,6 +579,8 @@ the same `ToolRuntime` validation, permission evaluation, enabled/disabled
 selection, output normalization, truncation, and lifecycle events used by
 built-ins and injected external providers. JavaScript and TypeScript tool
 loading and subprocess tool hosts are not part of this phase.
+
+The production EFP native gateway never enables the local Python tool loader.
 
 Runtime v2 applies a unified model-visible output policy during normalization.
 Large tool outputs are truncated by line and UTF-8 byte limits before they are

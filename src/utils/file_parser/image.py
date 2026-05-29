@@ -114,7 +114,7 @@ async def parse_image_with_vision(file_path: str, options: Dict) -> ParseResult:
     Returns:
         ParseResult with vision-generated description
     """
-    from src.agents.core import Agent
+    from src.gateway.runtime_v2_chat import run_runtime_v2_chat
     import uuid
     
     file_id = Path(file_path).stem.split("_")[0]
@@ -139,16 +139,10 @@ async def parse_image_with_vision(file_path: str, options: Dict) -> ParseResult:
     session_id = f"vision_{uuid.uuid4().hex[:8]}"
     
     try:
-        # Create agent and run with image
-        agent = Agent(
-            session_id=session_id,
-            system_prompt="You are an expert at analyzing images. Provide detailed, accurate descriptions of images and extract any text visible in them."
-        )
-        
-        # Run with the image
-        response = await agent.process(
+        response = await run_runtime_v2_chat(
             message=prompt,
             session_id=session_id,
+            user_name="image-parser",
             attached_images=[image_data_url]
         )
         

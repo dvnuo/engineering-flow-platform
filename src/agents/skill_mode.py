@@ -20,7 +20,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from src.agents.llm import _normalize_provider_key, llm_client
+llm_client = None
+
+
+def _normalize_provider_key(provider: str) -> str:
+    return str(provider or "").strip().lower().replace("_", "-")
 from src.runtime.output_controller import call_llm_with_output_control
 from src.config import config
 from src.runtime.response_flow_policy import decide_response_flow

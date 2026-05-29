@@ -17,9 +17,9 @@ import re
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.truncate import truncate
-from src.agents.core import agent, run_chat_execution
 from src.channels.jira import jira_channel
 from src.config import config
+from src.gateway.runtime_v2_chat import run_runtime_v2_chat
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.sessions.manager import JIRA_SESSION_PREFIX
 
@@ -73,12 +73,12 @@ async def handle_jira_message(
             await jira_channel.send_message(issue_key, "Test case generation feature is temporarily unavailable.")
             return ""
 
-        # Normal conversation
-        result = await run_chat_execution(
-            agent=agent,
+        result = await run_runtime_v2_chat(
             message=message,
             session_id=session_id,
             user_name=user_name,
+            request_path="jira",
+            execution_metadata={"issue_key": issue_key, "source": "jira"},
         )
         response = result["response"]
         logger.info(f"Jira message processed successfully | issue_key={issue_key}")
@@ -608,9 +608,16 @@ class Gateway:
         GET /api/settings/providers
         Returns: {provider: {name, default_model, models: [...]}}
         """
-        from src.agents.llm import llm_client
-
-        return web.json_response(llm_client.get_provider_info())
+        return web.json_response(
+            {
+                "github_copilot": {
+                    "name": "GitHub Copilot",
+                    "default_model": config.llm.get("model", "gpt-5-mini"),
+                    "models": [config.llm.get("model", "gpt-5-mini")],
+                    "runtime": "efp_runtime_v2",
+                }
+            }
+        )
 
     async def handle_ollama_models(self, request: Request) -> web.Response:
         """Get Ollama models.
@@ -618,9 +625,14 @@ class Gateway:
         GET /api/settings/ollama/models
         Returns: {"status": "healthy", "models": [...]}
         """
-        from src.agents.llm import llm_client
-
-        return web.json_response(await llm_client.check_provider_health("ollama"))
+        return web.json_response(
+            {
+                "status": "unsupported",
+                "message": "Runtime v2 native mode only supports GitHub Copilot.",
+                "models": [],
+            },
+            status=400,
+        )
 
     async def handle_ollama_pull(self, request: Request) -> web.Response:
         """Pull an Ollama model.
@@ -634,13 +646,14 @@ class Gateway:
             if not model:
                 return web.json_response({"status": "error", "message": "model required"}, status=400)
 
-            from src.agents.llm import llm_client
-
-            if "ollama" not in llm_client.providers:
-                return web.json_response({"status": "error", "message": "Ollama not configured"}, status=400)
-
-            result = await llm_client.providers["ollama"].pull_model(model)
-            return web.json_response({"status": "success", "result": result})
+            return web.json_response(
+                {
+                    "status": "unsupported",
+                    "message": "Runtime v2 native mode only supports GitHub Copilot.",
+                    "model": model,
+                },
+                status=400,
+            )
 
         except asyncio.CancelledError:
             logger.info("[Memory] Periodic check cancelled")
@@ -705,13 +718,12 @@ class Gateway:
             if not message:
                 return web.json_response({"status": "error", "message": "message required"}, status=400)
 
-            # Process message through agent
-            result = await run_chat_execution(
-                agent=agent,
+            result = await run_runtime_v2_chat(
                 message=message,
                 session_id=session_id,
                 user_name="http-tester",
                 reasoning_replay=reasoning_replay,
+                request_path="/api/test",
             )
 
             if result is None:
@@ -822,15 +834,8 @@ class Gateway:
 
             # Generate long-term memory from recent dailies
             try:
-                from src.agents.llm import llm_client as runtime_llm_client
-                if runtime_llm_client and created_daily:
-                    logger.info("[Memory] Generating long-term memory from daily files...")
-                    await update_long_term_memory_from_daily(
-                        workspace=workspace,
-                        llm_client=runtime_llm_client,
-                        daily_paths=created_daily,
-                    )
-                    logger.info("[Memory] Long-term memory updated")
+                if created_daily:
+                    logger.info("[Memory] Long-term memory update skipped in Runtime v2 native mode")
             except Exception as e:
                 logger.warning(f"[Memory] Long-term memory update skipped: {e}")
 
@@ -883,15 +888,7 @@ class Gateway:
 
                     # Also update long-term memory
                     try:
-                        from src.agents.llm import llm_client as runtime_llm_client
-                        if runtime_llm_client:
-                            logger.info("[Memory] Updating long-term memory...")
-                            await update_long_term_memory_from_daily(
-                                workspace=workspace,
-                                llm_client=runtime_llm_client,
-                                daily_paths=created_daily,
-                            )
-                            logger.info("[Memory] Long-term memory updated")
+                        logger.info("[Memory] Long-term memory update skipped in Runtime v2 native mode")
                     except Exception as e:
                         logger.warning(f"[Memory] Long-term update skipped: {e}")
 

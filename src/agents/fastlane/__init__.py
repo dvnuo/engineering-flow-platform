@@ -45,8 +45,7 @@ class FastLaneCommands:
     def agent(self):
         """Get agent instance (lazy initialization)."""
         if self._agent is None:
-            from src.agents.core import Agent
-            self._agent = Agent()
+            raise RuntimeError("Legacy Agent is not available in Runtime v2 native mode")
         return self._agent
     
     def is_command(self, message: str) -> bool:

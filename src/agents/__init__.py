@@ -1,6 +1,8 @@
-"""Agent package for Engineering Flow Platform."""
+"""Compatibility package for non-loop agent support modules.
 
-from .core import agent, Agent
-from .llm import llm_client, LLMClient
+The legacy chat agent loop has been removed from production entrypoints. Import
+specific support modules directly, such as ``src.agents.errors`` or
+``src.agents.tasks``.
+"""
 
-__all__ = ["agent", "Agent", "llm_client", "LLMClient"]
+__all__: list[str] = []

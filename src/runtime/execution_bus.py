@@ -7,8 +7,7 @@ import logging
 import os
 from datetime import datetime
 
-from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
-from src.agents.subagent import run_subagent_execution
+from src import ToolResult, execute_tool
 from src.agents.tasks import task_manager
 from src.runtime.adapter_executor import execute_adapter_action
 from src.runtime.capability_registry import get_capability_registry
@@ -40,6 +39,55 @@ from src.utils.logger import reset_log_context, set_log_context
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
 logger = logging.getLogger(__name__)
+
+
+class SkillResult:
+    """Small compatibility result for disabled legacy skill execution paths."""
+
+    def __init__(
+        self,
+        success: bool,
+        output: str = "",
+        error: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ):
+        self.success = success
+        self.output = output
+        self.error = error
+        self.data = data or {}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "success": self.success,
+            "output": self.output,
+            "error": self.error,
+            "data": self.data,
+        }
+
+
+async def execute_tool_by_name(tool_name: str, **kwargs: Any) -> ToolResult:
+    """Execute through the Runtime v2 builtin tool compatibility surface."""
+    return await execute_tool(tool_name, **kwargs)
+
+
+async def run_skill_execution(skill_name: str, **kwargs: Any) -> SkillResult:
+    return SkillResult(
+        success=False,
+        error=(
+            "Legacy Python skill execution is not available in Runtime v2 native mode. "
+            f"Requested skill: {skill_name}"
+        ),
+        data={"runtime": "efp_runtime_v2", "kwargs": dict(kwargs or {})},
+    )
+
+
+async def run_subagent_execution(**kwargs: Any) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "error": "Legacy subagent execution is not available in Runtime v2 native mode.",
+        "runtime": "efp_runtime_v2",
+        "kwargs": dict(kwargs or {}),
+    }
 
 def _first_non_empty(*values: Any) -> Optional[str]:
     for value in values:

@@ -16,7 +16,8 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 ### Core Capabilities
 
 - **AI Chat Interface** - Natural language interaction with the agent
-- **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash
+- **Runtime v2 Chat** - WebChat and Jira chat use Runtime v2 with GitHub Copilot
+- **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash outside the model-visible tool surface
 - **Session Persistence** - Conversations persist across restarts
 - **File Attachments** - Support for images in chat (documents via file-parse)
 - **Settings Panel** - Web-based configuration for LLM and integrations
@@ -28,7 +29,7 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 ### Prerequisites
 
 - Python 3.11+
-- API keys for LLM provider (OpenAI, GitHub Copilot, or Anthropic)
+- GitHub Copilot token for Runtime v2 native chat
 
 ### Setup
 
@@ -73,10 +74,15 @@ Access the web UI at `http://localhost:8000/`
 
 ```yaml
 llm:
-  provider: "openai"  # openai (default), github_copilot
-  api_key: "sk-..."
-  model: "gpt-5.4-mini"
+  provider: "github_copilot"
+  api_key: "ghu_..."
+  model: "gpt-5-mini"
 ```
+
+Runtime v2 native mode does not fall back to OpenAI or Anthropic providers.
+`EFP_GITHUB_COPILOT_TOKEN` or `GITHUB_COPILOT_TOKEN` may be used instead of
+`llm.api_key`; `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
+Copilot transport base URL.
 
 ### Control-Plane Runtime Settings
 
@@ -151,11 +157,8 @@ engineering-flow-platform/
 ├── config.yaml.example     # Configuration template
 ├── requirements.txt        # Python dependencies
 ├── src/
-│   ├── agents/             # Agent core logic
-│   │   ├── core.py          # Main agent loop
-│   │   ├── llm.py          # LLM client
-│   │   ├── executor.py     # Tool execution
-│   │   └── memory.py       # Agent memory
+│   ├── efp_runtime/         # Runtime v2 AgentRuntime, provider, session, and tools
+│   ├── agents/              # Compatibility support modules only; legacy loop removed
 │   ├── gateway/            # HTTP server & WebChat
 │   │   ├── server.py        # aiohttp server
 │   │   ├── webchat.py       # Chat API & UI
@@ -165,10 +168,10 @@ engineering-flow-platform/
 │   ├── jira/               # Jira integration
 │   ├── confluence/         # Confluence integration
 │   ├── github/             # GitHub integration
-│   ├── git/                # Git tools
+│   ├── git/                # Git integration helpers
 │   ├── memory/             # Memory system
 │   ├── sessions/           # Session persistence
-│   ├── tools/              # Built-in tools
+│   ├── runtime/            # Runtime task/control-plane orchestration
 │   ├── hooks/              # Lifecycle hooks
 │   └── utils/              # Utilities
 │       └── file_parser/     # File upload & storage
@@ -182,7 +185,10 @@ engineering-flow-platform/
 
 Business skill assets are maintained in **engineering-flow-platform-skills**. Portal/K8s typically checks out/mounts that skills repository at `/app/skills` (or another path via `EFP_SKILLS_DIR`) for runtime discovery.
 
-EFP native runtime no longer supports the External tools subsystem. Runtime tool surface is built-in/native only; Portal provisions skills assets (for example via `/app/skills` or `EFP_SKILLS_DIR`).
+EFP native runtime exposes only Runtime v2 opencode-style builtin LLM tools
+(`bash`, `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `todowrite`,
+`apply_patch`, plus other Runtime v2 built-ins). Legacy Python tool packages,
+including `src/bash_tools`, are not part of the production LLM tool surface.
 
 ## API Endpoints
 
@@ -379,7 +385,7 @@ Create test files in `tests/` following `test_*.py` pattern.
 1. Create module in `src/{integration}/`
 2. Implement API client
 3. Add config schema to `config.py`
-4. Add tools in `src/tools/`
+4. Add model-visible tools through `src/efp_runtime/tools/builtin/`
 5. Document in README
 
 ---

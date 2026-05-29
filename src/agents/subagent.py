@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
-from src.agents.core import run_chat_execution
+from src.gateway.runtime_v2_chat import run_runtime_v2_chat
 
 # Import Agent lazily to avoid circular imports
 _subagent_sessions: Dict[str, Dict[str, Any]] = {}
@@ -47,18 +47,8 @@ class SubAgent:
     
     @property
     def agent(self):
-        """Get the agent instance (lazy initialization)."""
-        if self._agent is None:
-            from src.agents.core import Agent
-            self._agent = Agent(
-                session_id=self.session_key,
-                think_level=self.thinking,
-                model=self.model,
-            )
-            # Disable tools if requested
-            if self.disable_tools:
-                self._agent.tools = []
-        return self._agent
+        """Legacy agent object is no longer created in Runtime v2 native mode."""
+        return None
     
     async def start(self):
         """Start the sub-agent task."""
@@ -70,12 +60,13 @@ class SubAgent:
             logger.info(f"Sub-agent {self.session_key} started - think_level={self.thinking}, model={self.model}")
             logger.debug(f"Task: {truncate(self.task, 200)}")
             
-            result = await run_chat_execution(
-                agent=self.agent,
+            result = await run_runtime_v2_chat(
                 message=self.task,
                 session_id=self.session_key,
                 user_name=self.session_key,
                 track_usage=False,
+                model=self.model,
+                request_path="subagent",
             )
             
             self.result = result.get("response", "")

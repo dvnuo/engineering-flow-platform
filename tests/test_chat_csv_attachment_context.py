@@ -97,20 +97,13 @@ def test_prepare_transient_model_message_fallback_on_inject_exception(monkeypatc
 @pytest.mark.asyncio
 async def test_run_chat_via_execution_bus_retains_attachments(monkeypatch):
     captured = {}
-    async def fake_run_chat_execution(*args, **kwargs):
-        captured["attachments_run"] = kwargs.get("attachments")
+    async def fake_runtime_v2_chat(**kwargs):
+        captured.update(kwargs)
         return {"response": "ok"}
-    async def fake_execute_chat_orchestration(**kwargs):
-        captured["payload"] = kwargs["input_payload"]
-        req = SimpleNamespace(input_payload=kwargs["input_payload"], metadata=kwargs.get("metadata", {}), session_id="s1", request_id="r1")
-        await kwargs["chat_handler"](req)
-        return SimpleNamespace(output_payload={"response": "ok"}, request_id="r1", runtime_events=[], status="ok")
-    monkeypatch.setattr(webchat, "run_chat_execution", fake_run_chat_execution)
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", fake_execute_chat_orchestration)
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", fake_runtime_v2_chat)
 
-    await webchat._run_chat_via_execution_bus(agent=object(), session_id="s1", message="m", user_name="u", portal_user_id=None, portal_user_name=None, attachments=["f1"])
-    assert captured["payload"]["attachments"] == ["f1"]
-    assert captured["attachments_run"] == ["f1"]
+    await webchat._run_chat_via_execution_bus(session_id="s1", message="m", user_name="u", portal_user_id=None, portal_user_name=None, attachments=["f1"])
+    assert captured["attachments"] == ["f1"]
 
 class _FakeRequest:
     def __init__(self, payload):
@@ -175,7 +168,6 @@ async def test_api_chat_empty_message_csv_attachment_builds_transient_context(mo
     monkeypatch.setattr(webchat, "_ensure_chat_attachment_context", _fake_ensure)
     monkeypatch.setattr(webchat, "_prepare_attachment_transient_model_message", _fake_prepare)
     monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _r: (None, None))
-    monkeypatch.setattr(webchat, "AgentCore", lambda **kwargs: object())
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_bus)
     monkeypatch.setattr(webchat, "build_webchat_response_payload", lambda _result, session_id: {"response": "ok", "session_id": session_id})
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
@@ -237,7 +229,6 @@ async def test_api_chat_image_plus_failed_csv_allows_image_and_warns_model(monke
     monkeypatch.setattr(webchat, "_collect_attached_images", _fake_images)
     monkeypatch.setattr(webchat, "_ensure_chat_attachment_context", _fake_ensure)
     monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _r: (None, None))
-    monkeypatch.setattr(webchat, "AgentCore", lambda **kwargs: object())
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_bus)
     monkeypatch.setattr(webchat, "build_webchat_response_payload", lambda _result, session_id: {"response": "ok", "session_id": session_id})
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
@@ -267,7 +258,6 @@ async def test_api_chat_good_csv_plus_failed_csv_warns_model(monkeypatch):
     monkeypatch.setattr(webchat, "_ensure_chat_attachment_context", _fake_ensure)
     monkeypatch.setattr(webchat, "_prepare_attachment_transient_model_message", _fake_prepare)
     monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _r: (None, None))
-    monkeypatch.setattr(webchat, "AgentCore", lambda **kwargs: object())
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_bus)
     monkeypatch.setattr(webchat, "build_webchat_response_payload", lambda _result, session_id: {"response": "ok", "session_id": session_id})
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
@@ -294,7 +284,6 @@ async def test_api_chat_stream_image_plus_failed_csv_warns_model(monkeypatch):
     monkeypatch.setattr(webchat, "_collect_attached_images", _fake_images)
     monkeypatch.setattr(webchat, "_ensure_chat_attachment_context", _fake_ensure)
     monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _r: (None, None))
-    monkeypatch.setattr(webchat, "AgentCore", lambda **kwargs: object())
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_bus)
     monkeypatch.setattr(webchat, "build_webchat_response_payload", lambda _result, session_id: {"response": "ok", "session_id": session_id})
 

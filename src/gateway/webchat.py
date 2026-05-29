@@ -31,8 +31,6 @@ from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception
 from src.utils.logger import clear_log_context, set_log_context
 
 
-from src.agents.core import Agent as AgentCore
-from src.agents.core import run_chat_execution
 from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
@@ -41,7 +39,7 @@ from src.hooks.file_context.retrieval import retrieval_engine
 from src.hooks.file_context.storage import storage as file_context_storage
 from src.config import config as global_config, DEFAULT_LLM_MODEL
 from src.github.url_utils import normalize_github_api_base_url
-from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
+from src.runtime.chat_orchestration_adapter import execute_runtime_task_request
 from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 from src.runtime.portal_session_metadata_client import (
     extract_session_metadata_publish_fields,
@@ -52,6 +50,7 @@ from src.gateway.chat_payloads import (
     build_webchat_response_payload,
     normalize_assistant_history_message,
 )
+from src.gateway.runtime_v2_chat import RuntimeV2ChatError, run_runtime_v2_chat
 from src.gateway.webchat_request_contracts import (
     build_stream_start_event_payload,
     extract_trusted_client_request_id,
@@ -662,7 +661,6 @@ def _json_compatible(value: Any) -> Any:
 
 async def _run_chat_via_execution_bus(
     *,
-    agent: AgentCore,
     session_id: str,
     message: str,
     user_name: str,
@@ -676,109 +674,29 @@ async def _run_chat_via_execution_bus(
     request_path: str = "/api/chat",
     execution_metadata: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    agent_name: Optional[str] = None,
     request_id: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolved_request_id = request_id or f"chat-{uuid.uuid4()}"
-
-    async def _chat_handler(execution_request):
-        payload = execution_request.input_payload
-        handler_metadata = dict(getattr(execution_request, "metadata", {}) or {})
-        effective_request_id = getattr(execution_request, "request_id", None) or resolved_request_id
-        return await run_chat_execution(
-            agent,
-            message=payload.get("message", ""),
-            session_id=execution_request.session_id or session_id,
-            user_name=payload.get("user_name"),
-            portal_user_id=payload.get("portal_user_id"),
-            portal_user_name=payload.get("portal_user_name"),
-            attached_images=attached_images,
-            attachments=attachments,
-            transient_model_message=transient_model_message,
-            track_usage=bool(payload.get("track_usage", True)),
-            reasoning_replay=payload.get("reasoning_replay"),
-            stream_callback=payload.get("stream_callback"),
-            request_id=effective_request_id,
-            execution_metadata=handler_metadata,
-        )
-
-    merged_metadata = dict(execution_metadata or {})
-    merged_metadata.pop("path", None)
-    execution_result = await execute_chat_orchestration(
+    return await run_runtime_v2_chat(
         request_id=resolved_request_id,
         session_id=session_id,
-        source_ref="webchat",
+        message=message,
+        user_name=user_name,
+        portal_user_id=portal_user_id,
+        portal_user_name=portal_user_name,
+        attached_images=attached_images,
+        attachments=attachments,
+        transient_model_message=transient_model_message,
+        reasoning_replay=reasoning_replay,
+        stream_callback=stream_callback,
+        request_path=request_path,
+        execution_metadata=execution_metadata,
         agent_id=agent_id,
-        input_payload={
-            "message": message,
-            "user_name": user_name,
-            "portal_user_id": portal_user_id,
-            "portal_user_name": portal_user_name,
-            "attached_image_count": len(attached_images or []),
-            "attachments": list(attachments or []),
-            "track_usage": True,
-            "reasoning_replay": reasoning_replay,
-            "stream_callback": stream_callback,
-            "request_id": resolved_request_id,
-        },
-        metadata={
-            "path": request_path,
-            "persist_last_execution_id": True,
-            **merged_metadata,
-        },
-        chat_handler=_chat_handler,
+        agent_name=agent_name,
+        model=model,
     )
-    original_output_payload = execution_result.output_payload
-    output_payload = dict(original_output_payload) if isinstance(original_output_payload, dict) else {}
-    output_payload["request_id"] = getattr(execution_result, "request_id", resolved_request_id)
-    if "runtime_events" not in output_payload and isinstance(execution_result.runtime_events, list):
-        output_payload["runtime_events"] = execution_result.runtime_events
-    output_payload["_execution_result"] = execution_result
-    if execution_result.status == "error" or output_payload.get("error"):
-        error_value = output_payload.get("error", "Execution bus error")
-        structured_error = error_value if isinstance(error_value, dict) else {}
-        status_code = None
-
-        if structured_error:
-            error_message = (
-                structured_error.get("message")
-                or structured_error.get("error")
-                or json.dumps(structured_error, ensure_ascii=False)
-            )
-            error_type = structured_error.get("type")
-            code = structured_error.get("code")
-            details = structured_error.get("details")
-            status_code = structured_error.get("status_code")
-        else:
-            error_message = str(error_value)
-            error_type = output_payload.get("error_type")
-            code = output_payload.get("code")
-            details = output_payload.get("details")
-            status_code = output_payload.get("status_code")
-
-        response_body = {
-            "error": error_message,
-            "detail": error_message,
-            "error_type": error_type if isinstance(error_type, str) else "",
-            "code": code if isinstance(code, str) else "",
-            "details": details if isinstance(details, dict) else {},
-            "request_id": output_payload.get("request_id"),
-        }
-        resolved_status_code = status_code if isinstance(status_code, int) and 400 <= status_code <= 599 else 500
-
-        if resolved_status_code == 500:
-            raise web.HTTPInternalServerError(
-                text=json.dumps(response_body, ensure_ascii=False),
-                content_type="application/json",
-            )
-
-        class _StructuredHTTPError(web.HTTPException):
-            status_code = resolved_status_code
-
-        raise _StructuredHTTPError(
-            text=json.dumps(response_body, ensure_ascii=False),
-            content_type="application/json",
-        )
-    return output_payload
 
 
 def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str], Optional[str]]:
@@ -1107,23 +1025,13 @@ async def api_chat(request: web.Request) -> web.Response:
         if not session_manager._initialized:
             await session_manager.initialize()
         
-        # All requests go through LLM - LLM decides when to use tools based on user input
-        # Tools are registered via src/__init__.py and available to LLM via tool_calls
-        # This is the Claude Code style - no separate skill matching/execution needed
-        
         # Get request-scoped model (trusted portal override only)
         model_override = _extract_trusted_model_override(request, data)
         model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
         
-        # Run agent (history is managed internally by session_manager)
+        # Run Runtime v2; session_manager remains the gateway-side history mirror.
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         set_log_context(agent_id=runtime_agent_id)
-        agent = AgentCore(
-            model=model,
-            session_id=session_id,
-            agent_id=runtime_agent_id,
-            agent_name=runtime_agent_name,
-        )
         if runtime_agent_id and session_id:
             try:
                 await publish_session_metadata(
@@ -1139,7 +1047,6 @@ async def api_chat(request: web.Request) -> web.Response:
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for chat.started", exc_info=True)
         result = await _run_chat_via_execution_bus(
-                agent=agent,
                 message=history_message,
                 session_id=session_id,
                 user_name=effective_user_name,
@@ -1151,7 +1058,9 @@ async def api_chat(request: web.Request) -> web.Response:
                 request_path="/api/chat",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
+                agent_name=runtime_agent_name,
                 request_id=request_id,
+                model=model,
                 transient_model_message=transient_model_message,
             )
         execution_result = result.get("_execution_result")
@@ -1293,6 +1202,11 @@ async def api_chat(request: web.Request) -> web.Response:
             # Use the error's message
             user_message = e.message
             status_code = e.status_code or status_code
+        elif isinstance(e, RuntimeV2ChatError):
+            user_message = e.message
+            error_type = e.error_type
+            status_code = e.status_code
+            error_details["details"] = e.details
 
         await _persist_chat_failure_state(
             agent_id=runtime_agent_id,
@@ -1446,15 +1360,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         model_override = _extract_trusted_model_override(request, data)
         model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
 
-        # Run agent and stream response
+        # Run Runtime v2 and stream runtime events where available.
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         set_log_context(agent_id=runtime_agent_id)
-        agent = AgentCore(
-            model=model,
-            session_id=session_id,
-            agent_id=runtime_agent_id,
-            agent_name=runtime_agent_name,
-        )
         if runtime_agent_id and session_id:
             try:
                 await publish_session_metadata(
@@ -1472,7 +1380,6 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
         run_task = asyncio.create_task(
             _run_chat_via_execution_bus(
-                agent=agent,
                 message=history_message,
                 session_id=session_id,
                 user_name=effective_user_name,
@@ -1484,7 +1391,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 request_path="/api/chat/stream",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
+                agent_name=runtime_agent_name,
                 request_id=request_id,
+                model=model,
                 transient_model_message=transient_model_message,
             )
         )
@@ -1571,23 +1480,35 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         raise
     except Exception as e:
         logger.error(f"Stream error: {e}")
+        stream_status_code = 500
+        stream_error_type = type(e).__name__
+        stream_details: Dict[str, Any] = {}
+        if isinstance(e, RuntimeV2ChatError):
+            stream_status_code = e.status_code
+            stream_error_type = e.error_type
+            stream_details = e.details
         await _persist_chat_failure_state(
             agent_id=runtime_agent_id,
             session_id=session_id,
             request_id=request_id,
             user_message=str(e),
-            error_type=type(e).__name__,
+            error_type=stream_error_type,
             metadata=execution_metadata,
         )
         if response is not None and response_prepared:
-            error_data = json.dumps({'error': str(e)})
+            error_data = json.dumps(
+                {'error': str(e), "error_type": stream_error_type, "details": stream_details}
+            )
             try:
                 await response.write(f"event: error\ndata: {error_data}\n\n".encode())
                 await response.write(_sse_event_bytes("done", {"ok": False, "session_id": session_id, "request_id": request_id}))
             except Exception:
                 pass
             return response
-        return web.Response(status=500, text=str(e))
+        return web.json_response(
+            {'error': str(e), "error_type": stream_error_type, "details": stream_details},
+            status=stream_status_code,
+        )
     finally:
         try:
             if run_task is not None and not run_task.done():

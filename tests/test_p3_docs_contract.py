@@ -25,8 +25,9 @@ def test_runtime_contract_doc_mentions_current_native_contract_surfaces():
         "/api/internal/runtime-profile/apply",
         "EFP_SKILLS_DIR",
         "/app/skills",
-        "does not support External tools subsystem",
-        "built-in/native tools",
+        "Runtime v2 native mode supports GitHub Copilot only",
+        "opencode-style Runtime v2 built-in registry",
+        "Legacy Python tool packages",
         "tests/fixtures/runtime_contract",
     ]:
         assert needle in text

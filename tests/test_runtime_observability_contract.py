@@ -33,7 +33,7 @@ async def test_execution_bus_binds_and_resets_log_context(monkeypatch):
             "portal_dispatch_id": "dispatch-obs",
             "path": "/api/chat",
             "runtime_type": "native",
-            "tool_source": "external_tools_repo",
+            "tool_source": "efp_runtime",
             "skill_name": "smoke-skill",
             "profile_version": "profile-obs",
         },
@@ -53,7 +53,7 @@ async def test_execution_bus_binds_and_resets_log_context(monkeypatch):
     assert seen_context["execution_type"] == "tool"
     assert seen_context["source_type"] == "chat"
     assert seen_context["tool_name"] == "contract_echo"
-    assert seen_context["tool_source"] == "external_tools_repo"
+    assert seen_context["tool_source"] == "efp_runtime"
     assert seen_context["skill_name"] == "smoke-skill"
     assert seen_context["profile_version"] == "profile-obs"
     assert seen_context["path"] == "/api/chat"
