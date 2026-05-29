@@ -1481,6 +1481,7 @@ class RuntimeLoopRunner:
                     run_metadata=run_metadata,
                     iteration=iteration,
                     resume_pending=resume_pending,
+                    messages=self.store.read_history(session_id),
                     cancel_requested=tool_cancel_requested,
                 ),
             )
@@ -1646,6 +1647,7 @@ class RuntimeLoopRunner:
             run_metadata=run_metadata,
             iteration=iteration,
             resume_pending=resume_pending,
+            messages=self.store.read_history(session_id),
             cancel_requested=cancel_requested,
         )
         decision = await self.tool_runtime.permission_evaluator.evaluate(
@@ -1724,6 +1726,7 @@ class RuntimeLoopRunner:
         runtime_events: List[RuntimeEvent],
         run_id: str,
     ) -> None:
+        self._update_tool_call_state_for_result(session_id, result)
         self.store.append_message(
             session_id,
             role=MessageRole.TOOL,
@@ -1748,6 +1751,16 @@ class RuntimeLoopRunner:
                 payload=payload,
             )
         )
+
+    def _update_tool_call_state_for_result(
+        self,
+        session_id: str,
+        result: ToolResult,
+    ) -> None:
+        history = self.store.read_history(session_id)
+        if not _apply_tool_result_state(history, result):
+            return
+        self.store.replace_history(session_id, history)
 
 
 async def run_runtime_loop(
@@ -2107,6 +2120,49 @@ def _noop_tool_result(tool_call: ToolCall) -> ToolResult:
     )
 
 
+def _apply_tool_result_state(history: list[Message], result: ToolResult) -> bool:
+    for message in reversed(history):
+        if message.role is not MessageRole.ASSISTANT:
+            continue
+        for part in message.parts:
+            if (
+                part.type is MessagePartType.TOOL_CALL
+                and part.tool_call is not None
+                and part.tool_call.call_id == result.call_id
+            ):
+                _set_completed_tool_part_state(part, result)
+                return True
+    return False
+
+
+def _set_completed_tool_part_state(part: MessagePart, result: ToolResult) -> None:
+    previous_state = part.metadata.get("tool_state")
+    previous_state = dict(previous_state) if isinstance(previous_state, Mapping) else {}
+    previous_time = previous_state.get("time")
+    previous_time = dict(previous_time) if isinstance(previous_time, Mapping) else {}
+    status = "completed" if result.success else "error"
+    part.tool_call.status = status
+    state: dict[str, Any] = {
+        "status": status,
+        "input": previous_state.get("input", dict(part.tool_call.arguments)),
+        "raw": previous_state.get("raw", part.tool_call.arguments_text),
+        "input_ended": previous_state.get("input_ended", True),
+        "metadata": dict(result.metadata),
+        "time": {
+            "start": previous_time.get("start") or part.created_at,
+            "end": result.created_at,
+        },
+    }
+    if result.success:
+        state["output"] = result.output if result.output is not None else result.content
+    else:
+        state["error"] = result.error or result.content
+    title = result.metadata.get("title")
+    if title is not None:
+        state["title"] = str(title)
+    part.metadata["tool_state"] = state
+
+
 def _is_terminal_tool_result(result: ToolResult) -> bool:
     return result.metadata.get("terminal") is True
 
@@ -2137,9 +2193,14 @@ def _tool_context(
     run_metadata: Mapping[str, Any] | None,
     iteration: Optional[int],
     resume_pending: bool,
+    messages: Iterable[Message] | None = None,
     cancel_requested: Callable[[], Any] | None = None,
 ) -> ToolContext:
+    message_list = list(messages or [])
+    message_id = _message_id_for_tool_call(message_list, tool_call)
     metadata: dict[str, Any] = dict(run_metadata or {})
+    if message_id is not None:
+        metadata["message_id"] = message_id
     metadata["tool_call_id"] = tool_call.call_id
     metadata["tool_name"] = tool_call.tool_name
     metadata["run_id"] = run_id
@@ -2152,13 +2213,44 @@ def _tool_context(
     return ToolContext(
         session_id=session_id,
         request_id=run_id,
+        message_id=message_id,
         metadata=metadata,
         tool_call_id=tool_call.call_id,
         tool_name=tool_call.tool_name,
         run_id=run_id,
         iteration=iteration,
+        extra=dict(run_metadata or {}),
+        messages=message_list,
+        agent=_metadata_agent(run_metadata),
         cancel_requested=cancel_requested,
     )
+
+
+def _message_id_for_tool_call(
+    messages: Iterable[Message],
+    tool_call: ToolCall,
+) -> str | None:
+    for message in reversed(list(messages)):
+        if message.role is not MessageRole.ASSISTANT:
+            continue
+        for part in message.parts:
+            if (
+                part.type is MessagePartType.TOOL_CALL
+                and part.tool_call is not None
+                and part.tool_call.call_id == tool_call.call_id
+            ):
+                return message.message_id
+    return None
+
+
+def _metadata_agent(metadata: Mapping[str, Any] | None) -> str | None:
+    if metadata is None:
+        return None
+    for key in ("agent_name", "agent", "command_agent"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _tool_event_context_payload(

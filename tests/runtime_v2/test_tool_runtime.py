@@ -239,6 +239,78 @@ async def test_tool_supplied_events_are_preserved_between_started_and_completed(
 
 
 @pytest.mark.asyncio
+async def test_context_metadata_callable_merges_updates_without_breaking_dict_access():
+    async def execute(args, context):
+        assert context.metadata.get("seed") == "keep"
+        context.metadata(
+            {"title": "Lookup", "metadata": {"phase": "scan", "source": "context"}}
+        )
+        await context.metadata({"metadata": {"awaited": True}})
+        return ToolResult(
+            call_id=context.tool_call_id or "call-metadata",
+            tool_name=context.tool_name or "metadata_tool",
+            content="ok",
+            metadata={"source": "tool"},
+        )
+
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                ToolDef(
+                    id="metadata_tool",
+                    description="Metadata hook tool",
+                    input_schema={"type": "object", "properties": {}},
+                    execute=execute,
+                )
+            ]
+        )
+    )
+
+    result = await runtime.execute(
+        ToolCall(id="call-metadata", tool_id="metadata_tool", args={}),
+        context=ToolContext(metadata={"seed": "keep"}),
+    )
+
+    assert result.status == "success"
+    assert result.metadata["title"] == "Lookup"
+    assert result.metadata["phase"] == "scan"
+    assert result.metadata["awaited"] is True
+    assert result.metadata["source"] == "tool"
+
+
+@pytest.mark.asyncio
+async def test_context_ask_without_requester_records_request_and_continues():
+    async def execute(args, context):
+        response = await context.ask({"prompt": "Continue?", "kind": "confirm"})
+        return {"ask_status": response["status"]}
+
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                ToolDef(
+                    id="ask_tool",
+                    description="Ask hook tool",
+                    input_schema={"type": "object", "properties": {}},
+                    execute=execute,
+                )
+            ]
+        )
+    )
+
+    result = await runtime.execute(ToolCall(id="call-ask", tool_id="ask_tool", args={}))
+
+    assert result.status == "success"
+    assert result.output == {"ask_status": "recorded"}
+    assert result.metadata["permission_request"] == {
+        "prompt": "Continue?",
+        "kind": "confirm",
+    }
+    assert result.metadata["ask_requests"] == [
+        {"prompt": "Continue?", "kind": "confirm"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_cancelled_context_stops_after_permission_before_execution():
     called = False
 

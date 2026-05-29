@@ -64,6 +64,7 @@ def create_core_tool_registry(
     lsp_permission: PermissionMetadata | None = None,
     include_plan_tool: bool = False,
     include_repository_tools: bool = False,
+    todo_store: SessionTodoStore | None = None,
 ) -> ToolRegistry:
     """Create a registry containing Runtime v2 core built-in tools."""
 
@@ -119,8 +120,8 @@ def create_core_tool_registry(
         )
     if include_question_tool:
         registry.register(create_question_tool(question_broker))
-    todo_store = SessionTodoStore()
-    registry.register(create_todowrite_tool(todo_store=todo_store))
+    resolved_todo_store = todo_store or SessionTodoStore()
+    registry.register(create_todowrite_tool(todo_store=resolved_todo_store))
     if include_plan_tool:
         registry.register(create_plan_exit_tool())
     if resolved_skill_discovery is not None:

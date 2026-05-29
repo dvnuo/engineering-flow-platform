@@ -91,3 +91,108 @@ async def test_tool_result_then_step_finish_keeps_usage_on_assistant_message():
     assert tool_message.status == "complete"
     assert tool_message.usage == {}
     assert tool_message.parts[0].tool_result.call_id == "call-1"
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_input_updates_single_tool_part_state_to_completed():
+    processor = SessionProcessor(RuntimeSession(session_id="s-stream-tool"))
+    call = ToolCall(
+        tool_name="grep",
+        arguments={"pattern": "runtime"},
+        call_id="call-stream",
+        arguments_text='{"pattern": "runtime"}',
+    )
+    result = ToolResult(
+        call_id="call-stream",
+        tool_name="grep",
+        output={"matches": 2},
+        metadata={"title": "Grep", "phase": "done"},
+    )
+
+    message = await processor.consume(
+        [
+            LLMEvent(LLMEventType.STEP_START),
+            LLMEvent(LLMEventType.MESSAGE_START, message_id="assistant-stream"),
+            LLMEvent(
+                LLMEventType.TOOL_INPUT_START,
+                tool_call_id="call-stream",
+                tool_name="grep",
+            ),
+            LLMEvent(
+                LLMEventType.TOOL_INPUT_DELTA,
+                tool_call_id="call-stream",
+                tool_name="grep",
+                delta='{"pattern"',
+            ),
+            LLMEvent(
+                LLMEventType.TOOL_INPUT_DELTA,
+                tool_call_id="call-stream",
+                tool_name="grep",
+                delta=': "runtime"}',
+            ),
+            LLMEvent(
+                LLMEventType.TOOL_INPUT_END,
+                tool_call_id="call-stream",
+                tool_name="grep",
+            ),
+            LLMEvent(LLMEventType.TOOL_CALL_COMPLETE, tool_call=call),
+            LLMEvent(LLMEventType.TOOL_RESULT, tool_result=result),
+            LLMEvent(LLMEventType.STEP_FINISH),
+        ]
+    )
+
+    assert message is processor.session.messages[0]
+    assistant_message = processor.session.messages[0]
+    tool_parts = [
+        part for part in assistant_message.parts if part.type.value == "tool_call"
+    ]
+    assert len(tool_parts) == 1
+    part = tool_parts[0]
+    assert part.tool_call.call_id == "call-stream"
+    assert part.tool_call.status == "completed"
+    state = part.metadata["tool_state"]
+    assert state["status"] == "completed"
+    assert state["raw"] == '{"pattern": "runtime"}'
+    assert state["input"] == {"pattern": "runtime"}
+    assert state["output"] == {"matches": 2}
+    assert state["metadata"] == {"title": "Grep", "phase": "done"}
+    assert state["title"] == "Grep"
+    assert state["input_ended"] is True
+    assert set(state["time"]) == {"start", "end"}
+    assert processor.session.messages[1].role.value == "tool"
+    assert processor.session.messages[1].parts[0].tool_result.call_id == "call-stream"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_complete_without_input_start_creates_running_then_completed_part():
+    processor = SessionProcessor(RuntimeSession(session_id="s-direct-tool"))
+    call = ToolCall(
+        tool_name="read",
+        arguments={"path": "README.md"},
+        call_id="call-direct",
+    )
+    result = ToolResult(
+        call_id="call-direct",
+        tool_name="read",
+        output="contents",
+    )
+
+    await processor.consume(
+        [
+            LLMEvent(LLMEventType.STEP_START),
+            LLMEvent(LLMEventType.MESSAGE_START, message_id="assistant-direct"),
+            LLMEvent(LLMEventType.TOOL_CALL_COMPLETE, tool_call=call),
+            LLMEvent(LLMEventType.TOOL_RESULT, tool_result=result),
+            LLMEvent(LLMEventType.STEP_FINISH),
+        ]
+    )
+
+    assistant_message = processor.session.messages[0]
+    assert len(assistant_message.parts) == 1
+    part = assistant_message.parts[0]
+    assert part.tool_call.call_id == "call-direct"
+    assert part.tool_call.status == "completed"
+    state = part.metadata["tool_state"]
+    assert state["status"] == "completed"
+    assert state["input"] == {"path": "README.md"}
+    assert state["output"] == "contents"

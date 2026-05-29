@@ -234,6 +234,41 @@ def test_file_store_tool_pairs(tmp_path: Path):
     assert pairs["call-read"][1].part_id == result_part.part_id
 
 
+def test_file_store_todo_store_persists_outside_session_messages(tmp_path: Path):
+    store = FileSessionStore(tmp_path)
+    store.create_session(session_id="session-todos")
+    todos = [
+        {"content": "Persist separately", "status": "pending", "priority": "medium"}
+    ]
+
+    store.todo_store().set("session-todos", todos)
+
+    reloaded = FileSessionStore(tmp_path)
+    assert reloaded.todo_store().get("session-todos") == todos
+    assert reloaded.read_history("session-todos") == []
+    assert (tmp_path / "todos" / "session-todos.json").exists()
+
+    reloaded.todo_store().clear("session-todos")
+    assert reloaded.todo_store().get("session-todos") == []
+    assert not (tmp_path / "todos" / "session-todos.json").exists()
+
+
+def test_file_store_delete_session_clears_todo_file(tmp_path: Path):
+    store = FileSessionStore(tmp_path)
+    store.create_session(session_id="session-delete-todos")
+    todos = [
+        {"content": "Remove with session", "status": "pending", "priority": "high"}
+    ]
+    store.todo_store().set("session-delete-todos", todos)
+    todo_path = tmp_path / "todos" / "session-delete-todos.json"
+
+    assert todo_path.exists()
+    assert store.delete_session("session-delete-todos") is True
+
+    assert not todo_path.exists()
+    assert store.todo_store().get("session-delete-todos") == []
+
+
 def test_file_store_forks_session_through_message(tmp_path: Path):
     store = FileSessionStore(tmp_path)
     session = store.create_session(

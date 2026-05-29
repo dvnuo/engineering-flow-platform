@@ -11,7 +11,7 @@ from ..definition import ToolContext, ToolDef
 
 def create_plan_exit_tool() -> ToolDef:
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
-        plan = str(args["plan"])
+        plan = _optional_string(args.get("plan"))
         status = str(args.get("status") or "ready")
         summary = _optional_string(args.get("summary"))
         next_steps = _string_list(args.get("next_steps"))
@@ -42,7 +42,7 @@ def create_plan_exit_tool() -> ToolDef:
         description="Submit the final plan and end the current runtime loop.",
         input_schema={
             "type": "object",
-            "required": ["plan"],
+            "required": [],
             "properties": {
                 "plan": {"type": "string"},
                 "status": {"type": "string"},

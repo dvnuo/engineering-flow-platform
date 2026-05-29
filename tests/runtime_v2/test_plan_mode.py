@@ -241,6 +241,36 @@ async def test_plan_exit_is_terminal_and_does_not_invoke_provider_again(
 
 
 @pytest.mark.asyncio
+async def test_plan_exit_accepts_empty_arguments_and_terminates_loop(tmp_path: Path):
+    provider = ScriptedLLMProvider(
+        [{"tool_calls": [_tool_call("call-plan-empty", "plan_exit", {})]}]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            runtime_mode="plan",
+            max_iterations=4,
+        ),
+    )
+
+    result = await runtime.run("Exit plan mode.", session_id="session-plan-empty")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.iterations == 1
+    assert len(provider.requests) == 1
+    history = runtime.store.read_history("session-plan-empty")
+    tool_result = history[2].parts[0].tool_result
+    assert tool_result is not None
+    assert tool_result.status == "success"
+    assert tool_result.output["plan"] == ""
+    assert tool_result.output["status"] == "ready"
+    assert tool_result.metadata["terminal"] is True
+    assert tool_result.metadata["terminal_reason"] == "plan_exit"
+    assert result.runtime_events[-1].payload["terminal_reason"] == "plan_exit"
+
+
+@pytest.mark.asyncio
 async def test_enable_plan_tool_registers_plan_exit_in_build_mode(tmp_path: Path):
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(

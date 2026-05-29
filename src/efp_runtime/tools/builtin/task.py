@@ -333,10 +333,11 @@ def _format_task_running(*, task_id: str, description: str) -> str:
     return "\n".join(
         [
             f'<task id="{escape(task_id, quote=True)}" state="running">',
-            "<task_background>",
-            description,
-            "Background task started. You will be notified automatically when it finishes.",
-            "</task_background>",
+            "<summary>Background task started</summary>",
+            "<task_result>",
+            "Background task started. You will be notified automatically when it finishes; do not poll for progress.",
+            "Do not duplicate its work. Continue only with non-overlapping work, or stop if there is nothing else useful to do.",
+            "</task_result>",
             "</task>",
         ]
     )

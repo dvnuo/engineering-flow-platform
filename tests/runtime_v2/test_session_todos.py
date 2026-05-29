@@ -8,6 +8,7 @@ import pytest
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import ToolCall
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
+from efp_runtime.session.file_store import FileSessionStore
 from efp_runtime.session.todo import SessionTodoStore
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolContext
@@ -170,6 +171,50 @@ async def test_todowrite_uses_session_store(tmp_path: Path):
     assert store.get("session-shared") == [
         {"content": "From opencode", "status": "completed", "priority": "high"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_file_store_todos_persist_across_instances(tmp_path: Path):
+    session_id = "session-file-todos"
+    todos = [
+        {
+            "content": "Persist runtime todos",
+            "status": "in_progress",
+            "priority": "high",
+        }
+    ]
+    runtime1 = AgentRuntime(
+        provider=ScriptedLLMProvider(
+            [
+                {
+                    "tool_calls": [
+                        _provider_tool_call(
+                            "call-file-todo",
+                            "todowrite",
+                            {"todos": todos},
+                        )
+                    ]
+                },
+                {"content": "Todos persisted."},
+            ]
+        ),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
+        store=FileSessionStore(tmp_path / "store"),
+    )
+
+    result = await runtime1.run("Persist todos.", session_id=session_id)
+
+    assert result.status == LoopStatus.COMPLETED
+    assert runtime1.get_todos(session_id) == todos
+    assert (tmp_path / "store" / "todos" / f"{session_id}.json").exists()
+
+    runtime2 = AgentRuntime(
+        provider=ScriptedLLMProvider([]),
+        config=RuntimeConfig(workspace_root=tmp_path),
+        store=FileSessionStore(tmp_path / "store"),
+    )
+
+    assert runtime2.get_todos(session_id) == todos
 
 
 @pytest.mark.asyncio

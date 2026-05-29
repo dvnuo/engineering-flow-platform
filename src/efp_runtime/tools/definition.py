@@ -38,21 +38,63 @@ class ToolContext:
     tool_name: str | None = None
     run_id: str | None = None
     iteration: int | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+    messages: list[Any] = field(default_factory=list)
+    agent: str | None = None
+    metadata_updates: list[dict[str, Any]] = field(default_factory=list)
     cancel_requested: Callable[[], bool | Awaitable[bool]] | None = field(
         default=None,
         repr=False,
         compare=False,
     )
+    ask_requester: Callable[..., Any] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    message_id: str | None = None
+
+    def __post_init__(self) -> None:
+        updates = list(self.metadata_updates)
+        object.__setattr__(self, "metadata_updates", updates)
+        object.__setattr__(self, "metadata", ToolMetadata(self.metadata, updates))
+        object.__setattr__(self, "extra", dict(self.extra))
+        object.__setattr__(self, "messages", list(self.messages))
 
     def to_metadata(self) -> dict[str, Any]:
         """Return metadata with first-class execution context mirrored into it."""
 
         metadata = dict(self.metadata or {})
+        if self.message_id is not None and self.message_id != "":
+            metadata["message_id"] = str(self.message_id)
         _set_missing_metadata(metadata, "tool_call_id", self.tool_call_id)
         _set_missing_metadata(metadata, "tool_name", self.tool_name)
         _set_missing_metadata(metadata, "run_id", self.run_id)
         _set_missing_metadata(metadata, "iteration", self.iteration)
         return metadata
+
+    @property
+    def sessionID(self) -> str | None:
+        """opencode-style alias for ``session_id``."""
+
+        return self.session_id
+
+    @property
+    def messageID(self) -> str | None:
+        """opencode-style alias for the assistant message carrying this tool call."""
+
+        if self.message_id is not None and self.message_id != "":
+            return str(self.message_id)
+        metadata_message_id = self.metadata.get("message_id")
+        if metadata_message_id is not None and metadata_message_id != "":
+            return str(metadata_message_id)
+        return self.request_id
+
+    @property
+    def callID(self) -> str | None:
+        """opencode-style alias for ``tool_call_id``."""
+
+        return self.tool_call_id
 
     async def is_cancelled(self) -> bool:
         """Return whether the surrounding runtime has requested cancellation."""
@@ -64,8 +106,92 @@ class ToolContext:
             result = await result
         return bool(result)
 
+    async def ask(self, request: Mapping[str, Any] | None = None, **kwargs: Any) -> Any:
+        """Dispatch an opencode-style ask hook without bypassing runtime permissions."""
+
+        payload = dict(request or {})
+        payload.update(kwargs)
+        if self.ask_requester is not None:
+            result = _call_ask_requester(self.ask_requester, payload, self)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+
+        requests = self.metadata.setdefault("ask_requests", [])
+        if not isinstance(requests, list):
+            requests = []
+            self.metadata["ask_requests"] = requests
+        requests.append(dict(payload))
+        self.metadata["permission_request"] = dict(payload)
+        self.metadata_updates.append(
+            {
+                "metadata": {
+                    "permission_request": dict(payload),
+                    "ask_requests": [dict(item) for item in requests],
+                }
+            }
+        )
+        return {"status": "recorded", "request": dict(payload)}
+
 
 AsyncToolExecute = Callable[[dict[str, Any], ToolContext], Awaitable[Any]]
+
+
+class _NoOpAwaitable:
+    def __await__(self):
+        if False:
+            yield None
+        return None
+
+
+class ToolMetadata(dict[str, Any]):
+    """Dict-compatible metadata that also accepts opencode-style metadata updates."""
+
+    def __init__(
+        self,
+        initial: Mapping[str, Any] | None = None,
+        updates: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(dict(initial or {}))
+        self._updates = updates if updates is not None else []
+
+    def __call__(self, update: Mapping[str, Any] | None = None, **kwargs: Any) -> Any:
+        payload = dict(update or {})
+        payload.update(kwargs)
+        self._updates.append(payload)
+        return _NoOpAwaitable()
+
+
+def _call_ask_requester(
+    requester: Callable[..., Any],
+    payload: dict[str, Any],
+    context: ToolContext,
+) -> Any:
+    try:
+        signature = inspect.signature(requester)
+    except (TypeError, ValueError):
+        return requester(payload, context)
+
+    parameters = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        and parameter.default is inspect.Parameter.empty
+    ]
+    if any(
+        parameter.kind is inspect.Parameter.VAR_POSITIONAL
+        for parameter in signature.parameters.values()
+    ):
+        return requester(payload, context)
+    if len(parameters) >= 2:
+        return requester(payload, context)
+    if len(parameters) == 1:
+        return requester(payload)
+    return requester()
 
 
 def _set_missing_metadata(metadata: dict[str, Any], key: str, value: Any) -> None:

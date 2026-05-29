@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -9,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from efp_runtime.agents.background_tasks import BackgroundTaskManager
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest
 from efp_runtime.models import ToolCall
 from efp_runtime.session.models import MessagePartType, MessageRole
@@ -186,6 +188,56 @@ async def test_background_true_is_rejected_by_default_and_runner_is_not_called()
     assert "<task_error>" in result.content
     assert result.metadata["task_id"] == "task-background"
     assert result.metadata["background"] is True
+
+
+@pytest.mark.asyncio
+async def test_background_start_output_matches_opencode_running_task_tags():
+    async def runner(request: TaskToolRequest) -> str:
+        return "background complete"
+
+    manager = BackgroundTaskManager()
+    runtime = ToolRuntime(
+        ToolRegistry(
+            [
+                create_task_tool(
+                    runner,
+                    allow_background=True,
+                    background_manager=manager,
+                )
+            ]
+        )
+    )
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-background-start",
+            tool_id="task",
+            args={
+                "description": "Run in background",
+                "prompt": "Return later.",
+                "subagent_type": "general",
+                "task_id": "task-running",
+                "background": True,
+            },
+        ),
+        context=ToolContext(session_id="session-background-start"),
+    )
+    await asyncio.sleep(0)
+
+    assert result.status == "success"
+    assert result.output["state"] == "running"
+    assert result.content == "\n".join(
+        [
+            '<task id="task-running" state="running">',
+            "<summary>Background task started</summary>",
+            "<task_result>",
+            "Background task started. You will be notified automatically when it finishes; do not poll for progress.",
+            "Do not duplicate its work. Continue only with non-overlapping work, or stop if there is nothing else useful to do.",
+            "</task_result>",
+            "</task>",
+        ]
+    )
+    assert "<task_background>" not in result.content
 
 
 @pytest.mark.asyncio

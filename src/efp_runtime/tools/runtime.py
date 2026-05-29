@@ -262,6 +262,7 @@ class ToolRuntime:
         started_event: RuntimeEvent,
         duration_ms: int,
     ) -> ToolResult:
+        context_metadata = _context_metadata_updates(context)
         if isinstance(raw_output, ToolResult):
             if _has_tool_truncation_metadata(raw_output):
                 content = raw_output.content
@@ -285,7 +286,12 @@ class ToolRuntime:
                 content=content,
                 output=raw_output.output if policy.include_raw_output else None,
                 error=raw_output.error,
-                metadata={**metadata, **raw_output.metadata, "duration_ms": duration_ms},
+                metadata={
+                    **metadata,
+                    **context_metadata,
+                    **raw_output.metadata,
+                    "duration_ms": duration_ms,
+                },
                 truncated=raw_output.truncated or truncated,
                 events=[
                     started_event,
@@ -321,7 +327,7 @@ class ToolRuntime:
             success=True,
             content=content,
             output=raw_output if policy.include_raw_output else None,
-            metadata={**metadata, "duration_ms": duration_ms},
+            metadata={**metadata, **context_metadata, "duration_ms": duration_ms},
             truncated=truncated,
             events=[
                 started_event,
@@ -465,6 +471,19 @@ def _preserved_tool_result_metadata(
     return metadata
 
 
+def _context_metadata_updates(context: ToolContext) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for update in context.metadata_updates:
+        if not isinstance(update, Mapping):
+            continue
+        metadata = update.get("metadata")
+        if isinstance(metadata, Mapping):
+            merged.update(dict(metadata))
+        if "title" in update and update["title"] is not None:
+            merged["title"] = str(update["title"])
+    return merged
+
+
 def _output_size_metadata(content: str, *, truncated: bool) -> dict[str, Any]:
     return {
         "original_chars": len(content),
@@ -529,11 +548,21 @@ def _tool_execution_context(
     tool_name: str,
 ) -> ToolContext:
     metadata = context.to_metadata()
-    tool_call_id = _first_value(tool_call.call_id, context.tool_call_id, metadata.get("tool_call_id"))
-    resolved_tool_name = _first_value(tool_name, context.tool_name, metadata.get("tool_name"))
+    message_id = _first_value(context.message_id, metadata.get("message_id"))
+    tool_call_id = _first_value(
+        tool_call.call_id,
+        context.tool_call_id,
+        metadata.get("tool_call_id"),
+    )
+    resolved_tool_name = _first_value(
+        tool_name,
+        context.tool_name,
+        metadata.get("tool_name"),
+    )
     run_id = _first_value(context.run_id, metadata.get("run_id"))
     iteration = context.iteration
 
+    _put_metadata(metadata, "message_id", message_id)
     _put_metadata(metadata, "tool_call_id", tool_call_id)
     _put_metadata(metadata, "tool_name", resolved_tool_name)
     _put_metadata(metadata, "run_id", run_id)
@@ -542,12 +571,18 @@ def _tool_execution_context(
     return ToolContext(
         session_id=context.session_id,
         request_id=context.request_id,
+        message_id=str(message_id) if message_id is not None else None,
         metadata=metadata,
         tool_call_id=str(tool_call_id) if tool_call_id is not None else None,
         tool_name=str(resolved_tool_name) if resolved_tool_name is not None else None,
         run_id=str(run_id) if run_id is not None else None,
         iteration=iteration,
+        extra=context.extra,
+        messages=context.messages,
+        agent=context.agent,
+        metadata_updates=context.metadata_updates,
         cancel_requested=context.cancel_requested,
+        ask_requester=context.ask_requester,
     )
 
 

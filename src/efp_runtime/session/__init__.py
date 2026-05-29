@@ -24,11 +24,12 @@ from .protocol import SessionStore
 from .query import query_messages, query_sessions, session_context_messages
 from .status import RuntimeStatus
 from .store import InMemorySessionStore
-from .todo import SessionTodoStore
+from .todo import FileSessionTodoStore, SessionTodoStore
 
 __all__ = [
     "CompactionPart",
     "FileSessionStore",
+    "FileSessionTodoStore",
     "InMemorySessionStore",
     "Message",
     "MessagePart",

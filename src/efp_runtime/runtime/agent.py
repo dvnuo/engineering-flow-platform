@@ -218,7 +218,9 @@ class AgentRuntime:
             agent_registry=self.agent_registry,
         )
         self._todo_store = (
-            _find_session_todo_store(self.tool_runtime.registry) or SessionTodoStore()
+            _find_session_todo_store(self.tool_runtime.registry)
+            or _store_session_todo_store(self.store)
+            or SessionTodoStore()
         )
         self.skill_context_builder = _resolve_skill_context_builder(
             config=self.config,
@@ -1763,7 +1765,21 @@ class AgentRuntime:
         registry_store = _find_session_todo_store(self.tool_runtime.registry)
         if registry_store is not None:
             self._todo_store = registry_store
+        else:
+            store_todos = _store_session_todo_store(self.store)
+            if store_todos is not None:
+                self._todo_store = store_todos
         return self._todo_store
+
+
+def _store_session_todo_store(store: SessionStore) -> SessionTodoStore | None:
+    todo_store = getattr(store, "todo_store", None)
+    if not callable(todo_store):
+        return None
+    store_value = todo_store()
+    if isinstance(store_value, SessionTodoStore):
+        return store_value
+    return None
 
 
 def _find_session_todo_store(registry: ToolRegistry) -> SessionTodoStore | None:
@@ -2679,6 +2695,7 @@ def _resolve_tool_runtime(
                 lsp_client=lsp_client,
                 include_lsp_tool=config.enable_lsp_tool,
                 include_plan_tool=_plan_tool_enabled(config),
+                todo_store=_store_session_todo_store(store),
             )
         else:
             if config.enable_lsp_tool or lsp_client is not None:

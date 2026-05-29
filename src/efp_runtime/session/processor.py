@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterable, Iterable
 from dataclasses import dataclass, field
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from ..events import RuntimeEvent
 from ..llm.events import LLMEvent, LLMEventType, coerce_event_type
@@ -30,6 +30,7 @@ class _ToolInputDraft:
     name: str = ""
     chunks: List[str] = field(default_factory=list)
     raw: Dict[str, Any] = field(default_factory=dict)
+    input_ended: bool = False
 
     @property
     def arguments_text(self) -> str:
@@ -210,11 +211,12 @@ class SessionProcessor:
 
     def _start_tool_input(self, event: LLMEvent) -> None:
         call_id = event.tool_call_id or f"call_{len(self._tool_inputs)}"
-        self._tool_inputs[call_id] = _ToolInputDraft(
+        draft = self._tool_inputs[call_id] = _ToolInputDraft(
             call_id=call_id,
             name=event.tool_name or "",
             raw=dict(event.raw),
         )
+        self._ensure_pending_tool_call_part(event, draft)
 
     def _append_tool_input_delta(self, event: LLMEvent) -> None:
         call_id = event.tool_call_id or f"call_{len(self._tool_inputs)}"
@@ -227,6 +229,7 @@ class SessionProcessor:
         if event.delta or event.text:
             draft.chunks.append(event.delta or event.text)
         draft.raw.update(dict(event.raw))
+        self._update_pending_tool_input_state(event, draft)
 
     def _finish_tool_input(self, event: LLMEvent) -> None:
         call_id = event.tool_call_id or f"call_{len(self._tool_inputs)}"
@@ -239,13 +242,31 @@ class SessionProcessor:
         if event.text and not draft.chunks:
             draft.chunks.append(event.text)
         draft.raw.update(dict(event.raw))
+        draft.input_ended = True
+        self._update_pending_tool_input_state(event, draft)
 
     def _append_tool_call(self, event: LLMEvent) -> None:
         if self.current_message is None:
             return
         tool_call = event.tool_call or self._tool_call_from_draft(event)
-        self.current_message.append_part(
-            MessagePart.tool_call_part(tool_call, metadata=dict(event.metadata))
+        tool_call.status = "running"
+        part = self._find_current_tool_call_part(tool_call.call_id)
+        if part is None:
+            part = self.current_message.append_part(
+                MessagePart.tool_call_part(tool_call, metadata=dict(event.metadata))
+            )
+        else:
+            part.tool_call = tool_call
+            part.metadata.update(dict(event.metadata))
+        _set_tool_part_state(
+            part,
+            {
+                "status": "running",
+                "input": dict(tool_call.arguments),
+                "raw": self._tool_input_raw(tool_call),
+                "input_ended": self._tool_input_ended(tool_call),
+                "time": {"start": utc_now_iso()},
+            },
         )
         self._tool_inputs.pop(tool_call.call_id, None)
 
@@ -267,6 +288,7 @@ class SessionProcessor:
     def _append_tool_result(self, event: LLMEvent) -> None:
         if event.tool_result is None:
             return
+        self._update_tool_call_part_from_result(event.tool_result)
         message = Message(
             role=MessageRole.TOOL,
             session_id=self.session.session_id,
@@ -276,6 +298,127 @@ class SessionProcessor:
         )
         message.append_part(MessagePart.tool_result_part(event.tool_result))
         self.session.messages.append(message)
+
+    def _ensure_pending_tool_call_part(
+        self,
+        event: LLMEvent,
+        draft: _ToolInputDraft,
+    ) -> MessagePart | None:
+        if self.current_message is None:
+            return None
+        part = self._find_current_tool_call_part(draft.call_id)
+        if part is not None:
+            _set_tool_part_state(part, _pending_tool_state(draft))
+            return part
+
+        tool_call = ToolCall(
+            call_id=draft.call_id,
+            tool_name=draft.name or event.tool_name or "_pending",
+            arguments={},
+            arguments_text="",
+            status="pending",
+            raw=dict(draft.raw),
+        )
+        return self.current_message.append_part(
+            MessagePart.tool_call_part(
+                tool_call,
+                metadata={
+                    **dict(event.metadata),
+                    "tool_state": _pending_tool_state(draft),
+                },
+            )
+        )
+
+    def _update_pending_tool_input_state(
+        self,
+        event: LLMEvent,
+        draft: _ToolInputDraft,
+    ) -> None:
+        part = self._ensure_pending_tool_call_part(event, draft)
+        if part is None:
+            return
+        if part.tool_call is not None:
+            if draft.name and part.tool_call.tool_name == "_pending":
+                part.tool_call.tool_name = draft.name
+            part.tool_call.arguments_text = draft.arguments_text
+            part.tool_call.raw.update(dict(draft.raw))
+        _set_tool_part_state(part, _pending_tool_state(draft))
+
+    def _find_current_tool_call_part(self, call_id: str) -> MessagePart | None:
+        if self.current_message is None:
+            return None
+        for part in self.current_message.parts:
+            if (
+                part.type is MessagePartType.TOOL_CALL
+                and part.tool_call is not None
+                and part.tool_call.call_id == call_id
+            ):
+                return part
+        return None
+
+    def _find_tool_call_part(self, call_id: str) -> MessagePart | None:
+        for message in reversed(self.session.messages):
+            if message.role is not MessageRole.ASSISTANT:
+                continue
+            for part in message.parts:
+                if (
+                    part.type is MessagePartType.TOOL_CALL
+                    and part.tool_call is not None
+                    and part.tool_call.call_id == call_id
+                ):
+                    return part
+        return None
+
+    def _tool_input_raw(self, tool_call: ToolCall) -> str:
+        draft = self._tool_inputs.get(tool_call.call_id)
+        if draft is not None:
+            return draft.arguments_text
+        return tool_call.arguments_text
+
+    def _tool_input_ended(self, tool_call: ToolCall) -> bool:
+        draft = self._tool_inputs.get(tool_call.call_id)
+        if draft is not None:
+            return draft.input_ended
+        state = self._existing_tool_state(tool_call.call_id)
+        return bool(state.get("input_ended", False))
+
+    def _existing_tool_state(self, call_id: str) -> dict[str, Any]:
+        part = self._find_tool_call_part(call_id)
+        if part is None:
+            return {}
+        state = part.metadata.get("tool_state")
+        return dict(state) if isinstance(state, dict) else {}
+
+    def _update_tool_call_part_from_result(self, result) -> None:
+        part = self._find_tool_call_part(result.call_id)
+        if part is None or part.tool_call is None:
+            return
+        previous_state = part.metadata.get("tool_state")
+        previous_state = dict(previous_state) if isinstance(previous_state, dict) else {}
+        previous_time = previous_state.get("time")
+        previous_time = dict(previous_time) if isinstance(previous_time, dict) else {}
+        status = "completed" if result.success else "error"
+        part.tool_call.status = status
+        time_state = {
+            "start": previous_time.get("start") or part.created_at,
+            "end": utc_now_iso(),
+        }
+        state: dict[str, Any] = {
+            "status": status,
+            "input": previous_state.get("input", dict(part.tool_call.arguments)),
+            "raw": previous_state.get("raw", part.tool_call.arguments_text),
+            "input_ended": previous_state.get("input_ended", True),
+            "metadata": dict(result.metadata),
+            "time": time_state,
+        }
+        if result.success:
+            state["output"] = result.output if result.output is not None else result.content
+        else:
+            state["error"] = result.error or result.content
+        title = result.metadata.get("title")
+        if title is not None:
+            state["title"] = str(title)
+        _set_tool_part_state(part, state)
 
     def _record_runtime_event(self, event_type: str, event: LLMEvent) -> None:
         self.session.runtime_events.append(
@@ -311,3 +454,16 @@ def _parse_arguments(arguments_text: str) -> Any:
         return json.loads(arguments_text)
     except json.JSONDecodeError:
         return arguments_text
+
+
+def _pending_tool_state(draft: _ToolInputDraft) -> dict[str, Any]:
+    return {
+        "status": "pending",
+        "input": {},
+        "raw": draft.arguments_text,
+        "input_ended": draft.input_ended,
+    }
+
+
+def _set_tool_part_state(part: MessagePart, state: Mapping[str, Any]) -> None:
+    part.metadata["tool_state"] = dict(state)

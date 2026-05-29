@@ -21,6 +21,7 @@ from .serialization import (
     session_from_dict,
     session_to_dict,
 )
+from .todo import FileSessionTodoStore
 
 
 class FileSessionStore:
@@ -34,6 +35,10 @@ class FileSessionStore:
         checkpoints_dir = self.root / "checkpoints"
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoints_dir = checkpoints_dir.resolve()
+        todos_dir = self.root / "todos"
+        todos_dir.mkdir(parents=True, exist_ok=True)
+        self.todos_dir = todos_dir.resolve()
+        self._todo_store = FileSessionTodoStore(self.todos_dir)
         self._lock = RLock()
 
     def create_session(
@@ -153,6 +158,9 @@ class FileSessionStore:
                             pairs[part.tool_result.call_id] = (call_part, part)
             return deepcopy(pairs)
 
+    def todo_store(self) -> FileSessionTodoStore:
+        return self._todo_store
+
     def list_sessions(self) -> List[Session]:
         with self._lock:
             sessions = []
@@ -166,6 +174,7 @@ class FileSessionStore:
             if not path.exists():
                 return False
             path.unlink()
+            self._todo_store.clear(session_id)
             return True
 
     def fork_session(

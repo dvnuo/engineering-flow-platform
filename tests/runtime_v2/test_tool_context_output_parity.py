@@ -37,6 +37,30 @@ def _python_command(script: str) -> str:
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
 
 
+def test_tool_context_opencode_aliases_and_message_metadata():
+    context = ToolContext(
+        session_id="session-alias",
+        request_id="request-alias",
+        message_id="msg-alias",
+        tool_call_id="call-alias",
+    )
+
+    assert context.sessionID == "session-alias"
+    assert context.messageID == "msg-alias"
+    assert context.callID == "call-alias"
+    assert context.to_metadata()["message_id"] == "msg-alias"
+    assert ToolContext(
+        message_id="msg-field",
+        metadata={"message_id": "msg-metadata"},
+    ).to_metadata()["message_id"] == "msg-field"
+    assert "message_id" not in ToolContext(message_id="").to_metadata()
+    assert ToolContext(
+        request_id="request-fallback",
+        metadata={"message_id": 123},
+    ).messageID == "123"
+    assert ToolContext(request_id="request-fallback").messageID == "request-fallback"
+
+
 @pytest.mark.asyncio
 async def test_tool_runtime_injects_tool_call_context_fields_and_metadata():
     captured: dict[str, ToolContext] = {}
@@ -63,6 +87,7 @@ async def test_tool_runtime_injects_tool_call_context_fields_and_metadata():
         context=ToolContext(
             session_id="session-context",
             request_id="request-context",
+            metadata={"message_id": "msg-context"},
             run_id="run-context",
             iteration=7,
         ),
@@ -70,11 +95,16 @@ async def test_tool_runtime_injects_tool_call_context_fields_and_metadata():
 
     context = captured["context"]
     assert context.session_id == "session-context"
+    assert context.sessionID == "session-context"
     assert context.request_id == "request-context"
+    assert context.message_id == "msg-context"
+    assert context.messageID == "msg-context"
     assert context.tool_call_id == "call-context"
+    assert context.callID == "call-context"
     assert context.tool_name == "capture"
     assert context.run_id == "run-context"
     assert context.iteration == 7
+    assert context.metadata["message_id"] == "msg-context"
     assert context.metadata["tool_call_id"] == "call-context"
     assert context.metadata["tool_name"] == "capture"
     assert context.metadata["run_id"] == "run-context"
@@ -137,9 +167,24 @@ async def test_loop_runner_passes_run_tool_call_and_iteration_context():
     assert context.request_id == "run-loop"
     assert context.run_id == "run-loop"
     assert context.tool_call_id == "call-loop"
+    assert context.callID == "call-loop"
     assert context.tool_name == "echo"
     assert context.iteration == 1
+    assistant_message = next(
+        message
+        for message in store.read_history("session-loop")
+        if message.role is MessageRole.ASSISTANT
+        and any(
+            part.type is MessagePartType.TOOL_CALL
+            and part.tool_call is not None
+            and part.tool_call.call_id == "call-loop"
+            for part in message.parts
+        )
+    )
+    assert context.message_id == assistant_message.message_id
+    assert context.messageID == assistant_message.message_id
     assert context.metadata["run_id"] == "run-loop"
+    assert context.metadata["message_id"] == assistant_message.message_id
     assert context.metadata["tool_call_id"] == "call-loop"
     assert context.metadata["iteration"] == 1
 
