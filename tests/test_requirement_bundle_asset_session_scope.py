@@ -1,5 +1,6 @@
 import base64
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,23 @@ async def test_prepare_github_file_source_session_scope_without_unknown_session(
         return {"content": base64.b64encode(b"hello").decode(), "sha": "sha1", "size": 5}
 
     monkeypatch.setattr("src.github.source_service.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr(
+        "src.github.source_service.register_existing_file_as_artifact",
+        lambda file_id, **kwargs: SimpleNamespace(
+            artifact_id=file_id,
+            file_id=file_id,
+            filename="a.txt",
+            content_type="text/plain",
+            source_type=kwargs.get("source_type"),
+            source_kind=kwargs.get("source_kind"),
+            source_locator=kwargs.get("source_locator"),
+            projection_kind=None,
+            preview=None,
+            text_ref=None,
+            context_ref=None,
+            digest_ref=None,
+        ),
+    )
 
     captured = {}
 

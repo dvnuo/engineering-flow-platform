@@ -50,7 +50,12 @@ from src.gateway.chat_payloads import (
     build_webchat_response_payload,
     normalize_assistant_history_message,
 )
-from src.gateway.runtime_v2_chat import RuntimeV2ChatError, run_runtime_v2_chat
+from src.gateway.runtime_v2_chat import (
+    RUNTIME_V2_NATIVE_PROVIDER_ERROR,
+    RuntimeV2ChatError,
+    SUPPORTED_PROVIDER_KEYS,
+    run_runtime_v2_chat,
+)
 from src.gateway.webchat_request_contracts import (
     build_stream_start_event_payload,
     extract_trusted_client_request_id,
@@ -1101,7 +1106,7 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Record usage if available
         if usage:
-            provider = global_config.llm.get('provider', 'openai')
+            provider = global_config.llm.get('provider') or 'github_copilot'
             actual_model = (
                 ((response_data.get("_llm_debug") or {}).get("request") or {}).get("model")
                 or model
@@ -1427,7 +1432,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
         # Record usage
         if usage:
-            provider = global_config.llm.get('provider', 'openai')
+            provider = global_config.llm.get('provider') or 'github_copilot'
             actual_model = (
                 ((result.get("_llm_debug") or {}).get("request") or {}).get("model")
                 or model
@@ -2186,6 +2191,8 @@ def _server_file_language(path: Path) -> str:
 
 
 def _server_file_content_type(path: Path) -> str:
+    if path.suffix.lower() == ".md":
+        return "text/markdown"
     return mimetypes.guess_type(str(path))[0] or "application/octet-stream"
 
 
@@ -2715,6 +2722,23 @@ def _remove_legacy_ssh_config(config_data: Dict[str, Any]) -> None:
         config_data.pop("ssh", None)
 
 
+def _runtime_v2_provider_validation_error(config_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if "llm" not in config_data:
+        return None
+    llm = config_data.get("llm")
+    if not isinstance(llm, dict):
+        return {"error": "llm must be an object"}
+    if "provider" not in llm:
+        return None
+    provider = str(llm.get("provider") or "").strip().lower()
+    if provider in SUPPORTED_PROVIDER_KEYS:
+        return None
+    return {
+        "error": RUNTIME_V2_NATIVE_PROVIDER_ERROR,
+        "supported_providers": sorted(SUPPORTED_PROVIDER_KEYS),
+    }
+
+
 async def api_save_config(request: web.Request) -> web.Response:
     """Save configuration to config.yaml.
     
@@ -2729,6 +2753,12 @@ async def api_save_config(request: web.Request) -> web.Response:
         sections = ['llm', 'jira', 'confluence', 'github', 'git', 'debug', 'proxy']
         payload = dict(data) if isinstance(data, dict) else {}
         _remove_legacy_ssh_config(payload)
+        provider_error = _runtime_v2_provider_validation_error(payload)
+        if provider_error is not None:
+            return web.json_response(
+                {"success": False, "status": "error", **provider_error},
+                status=400,
+            )
         updated_sections = global_config.save_partial_sections(payload, sections)
         
         return web.json_response({
@@ -3143,6 +3173,7 @@ async def api_files_upload(request: web.Request) -> web.Response:
             filename=filename,
             max_size_mb=max_size_mb
         )
+        _file_metadata[metadata.file_id] = metadata
         logger.info(f"[api_files_upload] saved metadata.session_id={metadata.session_id}")
 
         return web.json_response({

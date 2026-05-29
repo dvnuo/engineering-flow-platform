@@ -626,7 +626,7 @@ async def test_api_chat_failure_persists_system_error_and_failed_metadata(monkey
 
     class _Request:
         app = {}
-        headers = {"X-Portal-Author-Source": "portal"}
+        headers = {}
 
         async def json(self):
             return {"message": "hello", "session_id": "s-failure"}
@@ -706,7 +706,7 @@ async def test_api_chat_stream_failure_persists_system_error_state(monkeypatch):
 
     class _Request:
         app = {}
-        headers = {"X-Portal-Author-Source": "portal"}
+        headers = {}
 
         async def json(self):
             return {"message": "hello stream", "session_id": "s-stream-failure"}
@@ -952,7 +952,7 @@ async def test_api_chat_uses_trusted_model_override_when_present(monkeypatch):
 
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
-    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
     monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
@@ -981,14 +981,14 @@ async def test_api_chat_ignores_model_override_for_untrusted_request(monkeypatch
 
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
-    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
     monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
-        headers = {"X-Portal-Author-Source": "portal"}
+        headers = {}
 
         async def json(self):
             return {"message": "hello", "session_id": "s-model-2", "model_override": "gpt-5-override"}
@@ -1021,7 +1021,7 @@ async def test_api_chat_stream_uses_trusted_model_override_when_present(monkeypa
             self.writes.append(data)
 
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
-    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model"}}, raising=False)
     monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
 
     class _Request:
@@ -1093,7 +1093,7 @@ async def test_api_chat_usage_tracker_records_actual_override_model(monkeypatch)
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat.usage_tracker, "record_usage", _fake_record_usage)
     monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
-    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
     monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
@@ -1108,6 +1108,7 @@ async def test_api_chat_usage_tracker_records_actual_override_model(monkeypatch)
     response = await webchat.api_chat(_Request())
     assert response.status == 200
     assert captured["model"] == "gpt-5-actual"
+    assert captured["provider"] == "github_copilot"
 
 
 @pytest.mark.asyncio
@@ -1140,7 +1141,7 @@ async def test_api_chat_stream_usage_tracker_records_actual_override_model(monke
 
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat.usage_tracker, "record_usage", _fake_record_usage)
-    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model"}}, raising=False)
     monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
 
     class _Request:
@@ -1153,6 +1154,7 @@ async def test_api_chat_stream_usage_tracker_records_actual_override_model(monke
     response = await webchat.api_chat_stream(_Request())
     assert response.status == 200
     assert captured["model"] == "gpt-5-actual"
+    assert captured["provider"] == "github_copilot"
 
 
 @pytest.mark.asyncio
@@ -3607,7 +3609,7 @@ def test_core_max_iterations_response_text_is_consistent():
     chunk = runner_py[start: start + 400]
 
     assert "LoopStatus.MAX_ITERATIONS" in runner_py
-    assert "event_type=\"runtime.max_iterations\"" in chunk
+    assert "type=\"loop.max_iterations\"" in runner_py
     assert "Task completed after maximum iterations." not in runner_py
     assert "Task completed (max iterations reached)" not in runner_py
 
@@ -3733,22 +3735,20 @@ console.log('ok');
     assert result.returncode == 0, result.stderr
 
 
-def test_webchat_js_provider_model_defaults_default_to_gpt_5_4_mini():
+def test_webchat_js_provider_model_defaults_are_github_copilot_only():
     repo_root = Path(__file__).parent.parent
     js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
 
     github_start = js.find("github_copilot: [")
-    openai_start = js.find("openai: [")
-    assert github_start >= 0 and openai_start >= 0
+    provider_map_end = js.find("};", github_start)
+    assert github_start >= 0 and provider_map_end >= 0
 
-    github_block = js[github_start:openai_start]
-    openai_end = js.find("],", openai_start)
-    openai_block = js[openai_start:openai_end]
+    provider_map = js[github_start:provider_map_end]
 
-    assert "{ value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' }" in github_block
-    assert "{ value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' }" in openai_block
-    assert "{ value: 'gpt-5-mini', label: 'GPT-5 mini' }" in github_block
-    assert "{ value: 'gpt-5-mini', label: 'GPT-5 mini' }" in openai_block
+    assert "{ value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' }" in provider_map
+    assert "{ value: 'gpt-5-mini', label: 'GPT-5 mini' }" in provider_map
+    assert "openai: [" not in provider_map
+    assert "anthropic: [" not in provider_map
 
 
 @pytest.mark.asyncio

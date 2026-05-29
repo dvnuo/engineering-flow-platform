@@ -23,7 +23,7 @@ async def test_recovery_snapshot_builds_from_in_memory_session(monkeypatch):
             }
         }
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
 
     pipeline = DefaultRecoveryPipeline()
     snapshot = await pipeline.build_snapshot("s1")
@@ -45,14 +45,10 @@ async def test_recovery_snapshot_builds_from_in_memory_session(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_recovery_snapshot_falls_back_to_persistence(monkeypatch):
+async def test_recovery_snapshot_loads_from_session_manager_snapshot(monkeypatch):
     class _StubSessionManager:
-        sessions = {}
-
-    class _StubPersistence:
-        @staticmethod
-        async def load_session(_session_id):
-            return {
+        sessions = {
+            "persisted-session": {
                 "messages": [{"role": "user", "content": "persisted"}],
                 "metadata": {
                     "active_skill_session": {"skill": "persisted-skill"},
@@ -61,9 +57,9 @@ async def test_recovery_snapshot_falls_back_to_persistence(monkeypatch):
                 "created_at": "2026-01-05T00:00:00Z",
                 "updated_at": "2026-01-05T00:05:00Z",
             }
+        }
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
-    monkeypatch.setattr("src.sessions.persistence.session_persistence", _StubPersistence)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
 
     pipeline = DefaultRecoveryPipeline()
     snapshot = await pipeline.build_snapshot("persisted-session")
@@ -72,7 +68,7 @@ async def test_recovery_snapshot_falls_back_to_persistence(monkeypatch):
     assert snapshot.message_count == 1
     assert snapshot.active_skill_session == {"skill": "persisted-skill"}
     assert snapshot.last_execution_id == "req-persisted"
-    assert snapshot.summary_flags["source"] == "persistence"
+    assert snapshot.summary_flags["source"] == "memory"
     assert any(evt.get("event_type") == "recovery.snapshot_built" for evt in snapshot.runtime_events)
 
 
@@ -88,7 +84,7 @@ async def test_recovery_snapshot_includes_task_and_subagent_summaries(monkeypatc
             }
         }
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr(
         "src.agents.tasks.task_manager.list_task_summaries",
         lambda session_id=None: [{"task_id": "t1", "session_id": "s-recovery", "tool_name": "run", "status": "running", "created_at": "now", "finished_at": None}],
@@ -125,7 +121,7 @@ async def test_recovery_snapshot_registry_failures_are_soft(monkeypatch):
     class _StubSessionManager:
         sessions = {"s-soft": {"history": [], "metadata": {}}}
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr(
         "src.agents.tasks.task_manager.list_task_summaries",
         lambda session_id=None: (_ for _ in ()).throw(RuntimeError("task registry down")),
@@ -154,7 +150,7 @@ async def test_recovery_snapshot_subagents_are_scoped_by_parent_session(monkeypa
         captured["parent_session_id"] = parent_session_id
         return [{"session_key": "only-this", "status": "started", "parent_session_id": parent_session_id}]
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
     monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", _fake_subagent_summaries)
 
@@ -182,7 +178,7 @@ async def test_recovery_snapshot_includes_shared_context_hints(monkeypatch):
             }
         }
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
     monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", lambda parent_session_id=None: [])
 
@@ -204,7 +200,7 @@ async def test_recovery_snapshot_includes_compaction_and_session_memory_hints(mo
             }
         }
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
     monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", lambda parent_session_id=None: [])
 
@@ -233,7 +229,7 @@ async def test_recovery_snapshot_includes_context_state_hints(monkeypatch):
             }
         }
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
     monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", lambda parent_session_id=None: [])
 
@@ -278,7 +274,7 @@ async def test_recovery_pipeline_hydrates_from_metadata_fallback(monkeypatch):
                 },
             }
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr("src.sessions.persistence.session_persistence", _StubPersistence)
 
     pipeline = DefaultRecoveryPipeline()
@@ -310,7 +306,7 @@ async def test_recovery_pipeline_handles_missing_session_safely(monkeypatch):
         async def load_session(_session_id):
             return None
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr("src.sessions.persistence.session_persistence", _StubPersistence)
 
     pipeline = DefaultRecoveryPipeline()
@@ -364,7 +360,7 @@ async def test_recovery_reconcile_returns_structured_result(monkeypatch):
         async def load_session(_session_id):
             return None
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr("src.sessions.persistence.session_persistence", _StubPersistence)
 
     pipeline = DefaultRecoveryPipeline()
@@ -398,7 +394,7 @@ async def test_recovery_reconcile_after_persisted_fallback_has_reconciled_event(
                 "metadata": {"last_execution_id": "req-500", "active_skill_session": {"skill": "persisted"}},
             }
 
-    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", _StubSessionManager)
     monkeypatch.setattr("src.sessions.persistence.session_persistence", _StubPersistence)
 
     pipeline = DefaultRecoveryPipeline()

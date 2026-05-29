@@ -19,7 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.truncate import truncate
 from src.channels.jira import jira_channel
 from src.config import config
-from src.gateway.runtime_v2_chat import run_runtime_v2_chat
+from src.gateway.runtime_v2_chat import (
+    RUNTIME_V2_NATIVE_PROVIDER_ERROR,
+    SUPPORTED_PROVIDER_KEYS,
+    run_runtime_v2_chat,
+)
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.efp_runtime.session.gateway_facade import (
     JIRA_SESSION_PREFIX,
@@ -593,8 +597,19 @@ class Gateway:
             # For now, just validate the settings
             if "llm" in data:
                 llm = data["llm"]
-                if "provider" in llm and llm["provider"] not in ["openai", "github_copilot", "claude", "ollama"]:
-                    return web.json_response({"status": "error", "message": "Invalid provider"}, status=400)
+                if not isinstance(llm, dict):
+                    return web.json_response({"status": "error", "message": "llm must be an object"}, status=400)
+                if "provider" in llm:
+                    provider = str(llm["provider"] or "").strip().lower()
+                    if provider not in SUPPORTED_PROVIDER_KEYS:
+                        return web.json_response(
+                            {
+                                "status": "error",
+                                "message": RUNTIME_V2_NATIVE_PROVIDER_ERROR,
+                                "supported_providers": sorted(SUPPORTED_PROVIDER_KEYS),
+                            },
+                            status=400,
+                        )
             return web.json_response({"status": "ok", "message": "Settings validated. Restart required to apply."})
 
         except asyncio.CancelledError:

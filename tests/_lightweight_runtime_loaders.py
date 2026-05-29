@@ -44,26 +44,8 @@ def _load_module_with_stubs(module_name: str, module_path: Path, modules: dict[s
 def load_jira_workflow_review_lightweight():
     src_pkg = types.ModuleType("src")
     src_pkg.__path__ = []
-    agents_pkg = types.ModuleType("src.agents")
-    agents_pkg.__path__ = []
     runtime_pkg = types.ModuleType("src.runtime")
     runtime_pkg.__path__ = []
-
-    executor_mod = types.ModuleType("src.agents.executor")
-
-    class SkillResult:
-        def __init__(self, success, output="", data=None, error=None):
-            self.success = success
-            self.output = output
-            self.data = data or {}
-            self.error = error
-
-    async def execute_skill(*args, **kwargs):
-        return SkillResult(success=True, output="ok", data={"approved": True})
-
-    executor_mod.SkillResult = SkillResult
-    executor_mod.execute_skill = execute_skill
-    executor_mod.run_skill_execution = lambda *args, **kwargs: None
 
     runtime_adapter_mod = types.ModuleType("src.runtime.runtime_adapter_execution")
 
@@ -86,9 +68,7 @@ def load_jira_workflow_review_lightweight():
 
     modules = {
         "src": src_pkg,
-        "src.agents": agents_pkg,
         "src.runtime": runtime_pkg,
-        "src.agents.executor": executor_mod,
         "src.runtime.runtime_adapter_execution": runtime_adapter_mod,
         "src.runtime.jira_workflow_contract": contract_mod,
         "src.runtime.events": events_mod,
@@ -96,9 +76,7 @@ def load_jira_workflow_review_lightweight():
     prev = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
 
-    src_pkg.agents = agents_pkg
     src_pkg.runtime = runtime_pkg
-    agents_pkg.executor = executor_mod
     runtime_pkg.runtime_adapter_execution = runtime_adapter_mod
     runtime_pkg.jira_workflow_contract = contract_mod
     runtime_pkg.events = events_mod
@@ -271,48 +249,3 @@ def load_jira_init_lightweight():
         source_cleanup()
 
     return module, _cleanup
-
-
-def load_root_execute_tool_lightweight():
-    src_pkg = types.ModuleType("src")
-    src_pkg.__path__ = []
-
-    github_mod = types.ModuleType("src.github")
-    github_mod.get_tools_schemas = lambda: []
-    git_mod = types.ModuleType("src.git")
-    git_mod.get_tools_schemas = lambda: []
-
-    bash_mod = types.ModuleType("src.bash_tools")
-    bash_mod.get_tools_schemas = lambda: []
-
-    context_mod = types.ModuleType("src.context_tools")
-    context_mod.get_tools_schemas = lambda: []
-    context_mod.context_read_ref = lambda *args, **kwargs: ""
-
-    async def _ok(*args, **kwargs):
-        return "ok"
-
-    jira_mod = types.ModuleType("src.jira")
-    jira_mod.get_tools_schemas = lambda: []
-    jira_mod.jira_get_issue_by_url = _ok
-    jira_mod.jira_get_comments = _ok
-    jira_mod.jira_export_issues_to_markdown = _ok
-
-    confluence_mod = types.ModuleType("src.confluence")
-    confluence_mod.get_tools_schemas = lambda: []
-    confluence_mod.confluence_get_page_by_url = _ok
-    confluence_mod.confluence_get_page_children = _ok
-    confluence_mod.confluence_prepare_page_context = _ok
-    confluence_mod.confluence_get_comments = _ok
-
-    modules = {
-        "src": src_pkg,
-        "src.github": github_mod,
-        "src.git": git_mod,
-        "src.bash_tools": bash_mod,
-        "src.context_tools": context_mod,
-        "src.jira": jira_mod,
-        "src.confluence": confluence_mod,
-    }
-    module, cleanup = _load_module_with_stubs("src", Path("src/__init__.py"), modules)
-    return module, cleanup

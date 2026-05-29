@@ -17,25 +17,12 @@
 # LLM Configuration (REQUIRED)
 # ============================================
 llm:
-  # Provider: openai, github_copilot, anthropic, custom
-  provider: "openai"
-  
-  # OpenAI Configuration
-  api_base: "https://api.openai.com/v1"
-  api_key: "YOUR_OPENAI_API_KEY"
+  # Runtime v2 native mode supports GitHub Copilot only.
+  # Accepted aliases: github_copilot, github-copilot, copilot
+  provider: "github_copilot"
+  api_base: "https://api.githubcopilot.com"
+  api_key: "ghp_YOUR_GITHUB_TOKEN"
   model: "gpt-5.4-mini"
-  
-  # Or GitHub Copilot Configuration
-  # provider: "github_copilot"
-  # api_base: "https://api.githubcopilot.com"
-  # api_key: "ghp_YOUR_GITHUB_TOKEN"
-  # model: "gpt-5.4-mini"
-  
-  # Or Anthropic Claude Configuration
-  # provider: "anthropic"
-  # api_base: "https://api.anthropic.com/v1"
-  # api_key: "${ANTHROPIC_API_KEY}"  # Set ANTHROPIC_API_KEY env var
-  # model: "claude-sonnet-4-20250514"  # or claude-haiku-4-20250514, claude-opus-4-20250514
   
   max_tokens: 128000
   allow_lower_max_tokens_than_model_limit: false
@@ -97,7 +84,7 @@ llm:
   tool_loop:
     # Keep agent actions sequential: action -> observation -> next action.
     one_tool_per_turn: true
-    # For OpenAI-compatible providers that support it.
+    # For provider transports that support it.
     parallel_tool_calls: false
     # Number of repeated identical tool/args/result patterns allowed before stopping.
     max_repeated_tool_signature: 2
@@ -208,11 +195,8 @@ cost_tracking:
 #   storage_dir: "~/.efp/usage"
 #   retention_days: 30
 
-# Supported providers and common models:
-# - openai: gpt-5.4-mini, gpt-5, gpt-5-mini, gpt-4.1, gpt-4o, gpt-4o-mini, gpt-4, gpt-3.5-turbo
-# - anthropic: claude-sonnet-4, claude-opus-4, claude-haiku-4
+# Runtime v2 native provider and common models:
 # - github_copilot: gpt-5.4-mini, gpt-5.4, gpt-5.3-codex, gpt-5-mini, gpt-4.1, gpt-4o, gemini-2.5-pro
-# - ollama: free (local)
 
 # ============================================
 # Workspace Configuration (OPTIONAL)

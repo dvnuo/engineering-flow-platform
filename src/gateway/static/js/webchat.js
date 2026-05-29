@@ -2118,7 +2118,7 @@
     const gitEmail = document.getElementById('gitEmail');
 
 
-    // Provider to Model mapping
+    // Runtime v2 native mode only supports GitHub Copilot.
     const providerModels = {
         github_copilot: [
             { value: 'gpt-4o', label: 'GPT-4o' },
@@ -2131,19 +2131,6 @@
             { value: 'gpt-5.3-codex-max', label: 'GPT-5.3-Codex-Max' },
             { value: 'gpt-5.4', label: 'GPT-5.4' },
             { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-        ],
-        openai: [
-            { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-            { value: 'gpt-4', label: 'GPT-4' },
-            { value: 'gpt-4o', label: 'GPT-4o' },
-            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-            { value: 'gpt-5-mini', label: 'GPT-5 mini' },
-            { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
-        ],
-        anthropic: [
-            { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-            { value: 'claude-haiku-4-20250514', label: 'Claude Haiku 4' },
-            { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
         ],
     };
 
@@ -2454,7 +2441,7 @@
 
                 // LLM settings
                 if (config.llm) {
-                    const provider = config.llm.provider || 'github_copilot';
+                    const provider = providerModels[config.llm.provider] ? config.llm.provider : 'github_copilot';
                     const model = config.llm.model || 'gpt-5.4-mini';
                     llmProvider.value = provider;
                     // Update model dropdown with current provider and model
@@ -2543,18 +2530,8 @@
 
     if (saveSettingsBtn) {
         saveSettingsBtn.addEventListener('click', async function() {
-            // Determine api_base based on selected provider
-            const provider = llmProvider.value;
-            let apiBase = '';
-            if (provider === 'github_copilot') {
-                apiBase = 'https://api.githubcopilot.com';
-            } else if (provider === 'anthropic') {
-                apiBase = 'https://api.anthropic.com/v1';
-            } else if (provider === 'ollama') {
-                apiBase = 'http://127.0.0.1:11434';
-            } else {
-                apiBase = 'https://api.openai.com/v1';
-            }
+            const provider = 'github_copilot';
+            const apiBase = 'https://api.githubcopilot.com';
 
             const config = {
                 llm: {

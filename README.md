@@ -76,7 +76,7 @@ Access the web UI at `http://localhost:8000/`
 llm:
   provider: "github_copilot"
   api_key: "ghu_..."
-  model: "gpt-5-mini"
+  model: "gpt-5.4-mini"
 ```
 
 Runtime v2 native mode does not fall back to OpenAI or Anthropic providers.

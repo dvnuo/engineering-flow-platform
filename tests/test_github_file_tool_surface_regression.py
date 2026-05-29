@@ -11,9 +11,7 @@ def test_github_tool_surface_has_no_legacy_base64_utf8_decode_path():
     assert "render_github_file_manifest" in github_api
 
 
-def test_tool_dispatch_passes_session_scope_to_github_get_file_content():
+def test_legacy_github_file_tool_is_not_exposed_from_runtime_v2_root_dispatch():
     dispatch_source = Path("src/__init__.py").read_text(encoding="utf-8")
 
-    assert "session_id = kwargs.get(\"_session_id\")" in dispatch_source
-    assert "_session_id=session_id" in dispatch_source
-    assert "preview=preview" in dispatch_source
+    assert "github_get_file_content" not in dispatch_source

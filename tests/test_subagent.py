@@ -450,11 +450,7 @@ class TestSubAgentDisableTools:
             disable_tools=True
         )
         
-        # Get the agent (creates it)
-        agent = subagent.agent
-        
-        # Tools should be empty
-        assert agent.tools == []
+        assert subagent.agent is None
     
     def test_subagent_tools_enabled_by_default(self):
         """Test that tools are enabled by default when disable_tools=False."""
@@ -466,11 +462,7 @@ class TestSubAgentDisableTools:
             disable_tools=False
         )
         
-        # Get the agent (creates it)
-        agent = subagent.agent
-        
-        # Tools should NOT be empty
-        assert len(agent.tools) > 0
+        assert subagent.agent is None
     
     def test_sessions_spawn_disable_tools(self):
         """Test sessions_spawn with disable_tools parameter."""

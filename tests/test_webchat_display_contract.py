@@ -57,6 +57,26 @@ def test_build_webchat_response_payload_falls_back_for_invalid_blocks():
     assert payload["display_blocks"] == [{"type": "markdown", "content": "hello"}]
 
 
+def test_build_webchat_response_payload_preserves_runtime_v2_status_error():
+    mod = _load_chat_payloads_module()
+    payload = mod.build_webchat_response_payload(
+        {
+            "response": "",
+            "status": "error",
+            "error": "Provider failed",
+            "error_type": "provider_error",
+            "details": {"provider": "github-copilot"},
+        },
+        "s-error",
+    )
+
+    assert payload["response"] == ""
+    assert payload["status"] == "error"
+    assert payload["error"] == "Provider failed"
+    assert payload["error_type"] == "provider_error"
+    assert payload["details"] == {"provider": "github-copilot"}
+
+
 def test_normalize_assistant_history_message_backfills_display_blocks():
     mod = _load_chat_payloads_module()
     message = mod.normalize_assistant_history_message({"role": "assistant", "content": "hello"})

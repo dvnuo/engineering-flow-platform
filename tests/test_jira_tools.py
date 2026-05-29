@@ -1,9 +1,6 @@
 import pytest
 
-from tests._lightweight_runtime_loaders import (
-    load_jira_init_lightweight,
-    load_root_execute_tool_lightweight,
-)
+from tests._lightweight_runtime_loaders import load_jira_init_lightweight
 
 
 def test_jira_tools_schemas_contract():
@@ -103,64 +100,5 @@ async def test_jira_get_comments_bounded_manifest(monkeypatch):
         assert "[jira comments bundle prepared]" in out
         assert "context_ref: ctx://context/s-jira-comments/" in out
         assert "comments_loaded: 1/1" in out
-    finally:
-        cleanup()
-
-
-@pytest.mark.asyncio
-async def test_execute_tool_jira_dispatch_and_export_defaults(monkeypatch):
-    root, cleanup = load_root_execute_tool_lightweight()
-    try:
-        captured = {}
-
-        async def _fake_get_issue_by_url(url, **kwargs):
-            captured["jira_session"] = kwargs.get("_session_id")
-            return "[jira source bundle prepared]\ncontext_ref: ctx://context/s1/k"
-
-        async def _fake_get_comments(issue_key, _session_id=None):
-            captured["comments_session"] = _session_id
-            return "[jira comments bundle prepared]\ncontext_ref: ctx://context/s1/comments"
-
-        async def _fake_export(**kwargs):
-            captured["export"] = kwargs
-            return {"success": True, "status": "success"}
-
-        monkeypatch.setattr(root.jira, "jira_get_issue_by_url", _fake_get_issue_by_url)
-        monkeypatch.setattr(root.jira, "jira_get_comments", _fake_get_comments)
-        monkeypatch.setattr(root.jira, "jira_export_issues_to_markdown", _fake_export)
-
-        by_url = await root.execute_tool("jira_get_issue_by_url", url="https://jira.local/browse/PROJ-1", _session_id="s1")
-        assert by_url.success is True
-        assert captured["jira_session"] == "s1"
-
-        comments = await root.execute_tool("jira_get_comments", issue_key="PROJ-1", _session_id="s1")
-        assert comments.success is True
-        assert captured["comments_session"] == "s1"
-
-        exported = await root.execute_tool(
-            "jira_export_issues_to_markdown",
-            input="MMGFX-14839",
-            page_size=None,
-            max_issues=None,
-            output_mode=None,
-            attachments_dir=None,
-            include_raw_snapshot=None,
-            include_coverage_ledger=None,
-            comments_order=None,
-            attachments_concurrency=None,
-            attachments_max_size=None,
-            attachments_inline_text_threshold=None,
-            attachments_retries=None,
-            attachments_backoff=None,
-            attachments_preserve_binary=None,
-        )
-        assert exported.success is True
-        assert captured["export"]["page_size"] == 50
-        assert captured["export"]["max_issues"] == 100
-        assert captured["export"]["output_mode"] == "auto"
-        assert captured["export"]["attachments_dir"] == "attachments"
-        assert captured["export"]["include_raw_snapshot"] is False
-        assert captured["export"]["include_coverage_ledger"] is True
-        assert captured["export"]["comments_order"] == "latest_first"
     finally:
         cleanup()

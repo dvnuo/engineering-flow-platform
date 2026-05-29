@@ -95,8 +95,7 @@ class SessionPruner:
             f"{len(history)} -> {len(pruned_history)} messages"
         )
         
-        # Update session with pruned history
-        session["history"] = pruned_history
+        await session_manager.replace_history(session_id, pruned_history)
         
         return {
             "pruned": True,
@@ -191,8 +190,7 @@ class SessionCompactor:
             },
         }
         
-        # Replace old messages with summary
-        session["history"] = [summary_msg] + recent_messages
+        await session_manager.replace_history(session_id, [summary_msg] + recent_messages)
         
         logger.info(
             f"Compacted session {session_id}: "

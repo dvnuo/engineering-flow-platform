@@ -15,7 +15,7 @@ from src.efp_runtime.llm.provider import (
     GitHubCopilotProvider,
     ProviderTransportError,
 )
-from src.efp_runtime.loop.runner import RuntimeLoopResult
+from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from src.efp_runtime.session.gateway_facade import (
     get_runtime_v2_session_manager,
@@ -23,6 +23,7 @@ from src.efp_runtime.session.gateway_facade import (
     runtime_v2_session_root,
 )
 from src.efp_runtime.session.models import MessagePartType
+from src.utils.redaction import sanitize_exception_message
 
 
 SUPPORTED_PROVIDER_KEYS = {"github_copilot", "github-copilot", "copilot"}
@@ -139,11 +140,23 @@ async def run_runtime_v2_chat(
         if forwarder is not None:
             await _await_forwarder_done(forwarder)
 
-    return _result_payload(
+    payload = _result_payload(
         result,
         request_id=request_id,
         model=runtime_model,
     )
+    if result.status == LoopStatus.ERROR:
+        raise RuntimeV2ChatError(
+            payload.get("error") or "Runtime v2 execution failed.",
+            status_code=_runtime_error_status_code(result),
+            error_type=payload.get("error_type") or "runtime_v2_execution_error",
+            details={
+                "provider": "github-copilot",
+                "runtime_status": result.status,
+                "request_id": request_id,
+            },
+        )
+    return payload
 
 
 def _runtime_session_root() -> Path:
@@ -336,6 +349,7 @@ def _result_payload(
 ) -> dict[str, Any]:
     response_text, reasoning_text = _assistant_text_and_reasoning(result)
     runtime_events = [_event_to_dict(event) for event in result.runtime_events]
+    error_message = _runtime_error_message(result, runtime_events)
     payload: dict[str, Any] = {
         "response": response_text,
         "content": response_text,
@@ -352,6 +366,9 @@ def _result_payload(
             }
         },
     }
+    if error_message:
+        payload["error"] = error_message
+        payload["error_type"] = _runtime_error_type(runtime_events)
     if reasoning_text:
         payload["reasoning"] = reasoning_text
     if result.pending_permission_request is not None:
@@ -377,6 +394,77 @@ def _assistant_text_and_reasoning(result: RuntimeLoopResult) -> tuple[str, str]:
     return "\n".join(text_parts).strip(), "\n".join(reasoning_parts).strip()
 
 
+def _runtime_error_message(
+    result: RuntimeLoopResult,
+    runtime_events: list[dict[str, Any]],
+) -> str:
+    if result.status != LoopStatus.ERROR:
+        return ""
+
+    for event_type in ("llm.error", "error"):
+        for event in reversed(runtime_events):
+            if event.get("type") == event_type:
+                message = _event_error_text(event)
+                if message:
+                    return message
+
+    for event in reversed(runtime_events):
+        message = _event_error_text(event)
+        if message:
+            return message
+
+    message = result.final_assistant_message
+    if message is not None:
+        for part in reversed(message.parts):
+            if part.type is MessagePartType.ERROR and part.text:
+                return _sanitize_error_message(part.text)
+
+    return "Runtime v2 execution failed."
+
+
+def _event_error_text(event: Mapping[str, Any]) -> str:
+    payload = event.get("payload")
+    payload_error = payload.get("error") if isinstance(payload, Mapping) else None
+    for value in (
+        payload_error,
+        event.get("error"),
+        event.get("message"),
+    ):
+        message = _sanitize_error_message(value)
+        if message:
+            return message
+    return ""
+
+
+def _sanitize_error_message(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return sanitize_exception_message(value).strip()
+
+
+def _runtime_error_type(runtime_events: list[dict[str, Any]]) -> str:
+    for event in reversed(runtime_events):
+        payload = event.get("payload")
+        if isinstance(payload, Mapping):
+            error_type = payload.get("error_type")
+            if isinstance(error_type, str) and error_type.strip():
+                return error_type.strip()
+        if event.get("type") == "llm.error":
+            return "provider_error"
+    return "runtime_v2_execution_error"
+
+
+def _runtime_error_status_code(result: RuntimeLoopResult) -> int:
+    for event in result.runtime_events:
+        event_type = getattr(event, "type", None)
+        payload = getattr(event, "payload", {})
+        if event_type == "llm.error":
+            return 502
+        if event_type == "error" and isinstance(payload, Mapping) and payload.get("phase") == "provider":
+            return 502
+    return 500
+
+
 def _event_to_dict(event: Any) -> dict[str, Any]:
     if isinstance(event, RuntimeEvent):
         return event.to_dict()
@@ -391,5 +479,6 @@ def _event_to_dict(event: Any) -> dict[str, Any]:
 __all__ = [
     "RUNTIME_V2_NATIVE_PROVIDER_ERROR",
     "RuntimeV2ChatError",
+    "SUPPORTED_PROVIDER_KEYS",
     "run_runtime_v2_chat",
 ]

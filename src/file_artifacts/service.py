@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from typing import Any, Dict, Optional
 
 from src.context_blob_store import put_text
@@ -19,7 +20,7 @@ def register_existing_file_as_artifact(
     session_id: Optional[str] = None,
     provider_metadata: Optional[Dict[str, Any]] = None,
 ) -> ArtifactRecord:
-    metadata = get_metadata(file_id)
+    metadata = _get_file_metadata(file_id)
     existing = storage.get_artifact(file_id)
     record = ArtifactRecord(
         artifact_id=file_id,
@@ -44,6 +45,17 @@ def register_existing_file_as_artifact(
         provider_metadata={**(existing.provider_metadata if existing else {}), **(provider_metadata or {})},
     )
     return storage.upsert_artifact(record)
+
+
+def _get_file_metadata(file_id: str):
+    try:
+        return get_metadata(file_id)
+    except Exception:
+        live_storage = importlib.import_module("src.utils.file_parser.storage")
+        live_get_metadata = getattr(live_storage, "get_metadata", None)
+        if callable(live_get_metadata) and live_get_metadata is not get_metadata:
+            return live_get_metadata(file_id)
+        raise
 
 
 def bind_artifact_to_session(artifact_id: str, session_id: str, role: str = "attachment") -> ArtifactBinding:

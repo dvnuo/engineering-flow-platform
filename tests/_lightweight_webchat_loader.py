@@ -48,9 +48,69 @@ def load_webchat_lightweight():
     async def _noop_async(*_args, **_kwargs):
         return None
 
+    file_context_pkg = _module("src.hooks.file_context", inject_context=lambda *_a, **_k: None)
+    file_context_pkg.__path__ = []
+
+    class _SessionFileMeta:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _Chunk:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _RuntimeV2ChatError(RuntimeError):
+        def __init__(self, message="", *, status_code=500, error_type="runtime_v2_chat_error", details=None):
+            super().__init__(message)
+            self.message = message
+            self.status_code = status_code
+            self.error_type = error_type
+            self.details = dict(details or {})
+
+    class _RuntimeV2SessionArtifacts:
+        def __init__(self):
+            self.storage_dir = Path("/tmp/efp-lightweight-webchat")
+
+        async def save_session(self, *_args, **_kwargs):
+            return True
+
+    class _RuntimeV2SessionManager:
+        _initialized = True
+
+        async def initialize(self):
+            self._initialized = True
+
+        async def get_context_state(self, *_args, **_kwargs):
+            return {}
+
+        async def get_active_skill_session(self, *_args, **_kwargs):
+            return None
+
+        async def get_session(self, *_args, **_kwargs):
+            return {"history": [], "metadata": {}}
+
+        async def merge_metadata(self, *_args, **_kwargs):
+            return None
+
+        async def add_message(self, *_args, **_kwargs):
+            return "msg"
+
+    efp_runtime_pkg = _module("src.efp_runtime")
+    efp_runtime_pkg.__path__ = []
+    efp_runtime_session_pkg = _module("src.efp_runtime.session")
+    efp_runtime_session_pkg.__path__ = []
+
     modules = {
         "src": src_pkg,
         "src.gateway": gateway_pkg,
+        "src.efp_runtime": efp_runtime_pkg,
+        "src.efp_runtime.session": efp_runtime_session_pkg,
+        "src.efp_runtime.session.gateway_facade": _module(
+            "src.efp_runtime.session.gateway_facade",
+            RuntimeV2SessionArtifacts=_RuntimeV2SessionArtifacts,
+            resolve_session_display_name=lambda *_a, **_k: "",
+            runtime_v2_session_manager=_RuntimeV2SessionManager(),
+        ),
         "src.utils.file_parser.storage": _module(
             "src.utils.file_parser.storage",
             init_storage=lambda: None,
@@ -73,10 +133,26 @@ def load_webchat_lightweight():
             sanitize_exception_message=lambda x, *_a, **_k: str(x),
         ),
         "src.utils.logger": _module("src.utils.logger", clear_log_context=lambda: None, set_log_context=lambda **_k: None),
-        "src.agents.core": _module("src.agents.core", Agent=object, run_chat_execution=_noop_async),
         "src.hooks.session_memory": _module("src.hooks.session_memory", save_session_summary=_noop_async),
         "src.agents.errors": _module("src.agents.errors", extract_error_details=lambda *_a, **_k: {}, LLMError=RuntimeError),
-        "src.hooks.file_context": _module("src.hooks.file_context", inject_context=lambda *_a, **_k: None),
+        "src.hooks.file_context": file_context_pkg,
+        "src.hooks.file_context.models": _module(
+            "src.hooks.file_context.models",
+            Chunk=_Chunk,
+            SessionFileMeta=_SessionFileMeta,
+        ),
+        "src.hooks.file_context.retrieval": _module(
+            "src.hooks.file_context.retrieval",
+            retrieval_engine=types.SimpleNamespace(),
+        ),
+        "src.hooks.file_context.storage": _module(
+            "src.hooks.file_context.storage",
+            storage=types.SimpleNamespace(
+                get_file_meta=lambda *_a, **_k: None,
+                add_file_to_session=lambda *_a, **_k: None,
+                get_file_chunks=lambda *_a, **_k: [],
+            ),
+        ),
         "src.config": _module("src.config", config=cfg, DEFAULT_LLM_MODEL="gpt-5.4-mini"),
         "src.runtime.chat_orchestration_adapter": _module(
             "src.runtime.chat_orchestration_adapter",
@@ -94,6 +170,13 @@ def load_webchat_lightweight():
             "src.gateway.chat_payloads",
             build_webchat_response_payload=lambda *_a, **_k: {},
             normalize_assistant_history_message=lambda x: x,
+        ),
+        "src.gateway.runtime_v2_chat": _module(
+            "src.gateway.runtime_v2_chat",
+            RUNTIME_V2_NATIVE_PROVIDER_ERROR="Runtime v2 native mode only supports GitHub Copilot.",
+            RuntimeV2ChatError=_RuntimeV2ChatError,
+            SUPPORTED_PROVIDER_KEYS={"github_copilot", "github-copilot", "copilot"},
+            run_runtime_v2_chat=_noop_async,
         ),
         "src.gateway.webchat_request_contracts": _module(
             "src.gateway.webchat_request_contracts",

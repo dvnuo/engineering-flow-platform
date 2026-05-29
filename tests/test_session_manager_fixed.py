@@ -106,6 +106,7 @@ class TestSessionManagerHistory:
         """Test history size limit."""
         import uuid
         session_id = f"limit_test_{uuid.uuid4().hex[:8]}"
+        fresh_session_manager.max_history = 5
         
         await fresh_session_manager.clear_history(session_id)
         for i in range(10):

@@ -3,14 +3,19 @@ import pytest
 from tests._lightweight_runtime_loaders import load_jira_workflow_review_lightweight
 
 
+class SkillResult:
+    def __init__(self, success, output="", data=None, error=None):
+        self.success = success
+        self.output = output
+        self.data = data or {}
+        self.error = error
+
+
 @pytest.fixture(autouse=True)
 def _lightweight_runtime_module():
-    import sys
-
     module, cleanup = load_jira_workflow_review_lightweight()
     try:
         globals()["run_jira_workflow_review"] = module.run_jira_workflow_review
-        globals()["SkillResult"] = sys.modules["src.agents.executor"].SkillResult
         yield
     finally:
         cleanup()
@@ -218,12 +223,8 @@ async def test_jira_workflow_review_skill_path_uses_bus_execute_skill(monkeypatc
     async def _fake_execute_skill(skill_name, **kwargs):
         return SkillResult(success=True, output="ok", data={"approved": True, "comment": "ok"})
 
-    async def _fail_direct(*_args, **_kwargs):
-        raise AssertionError("direct run_skill_execution bypass should not be used")
-
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.agents.executor.run_skill_execution", _fail_direct)
 
     result = await run_jira_workflow_review({"issue_key": "PROJ-12", "skill_name": "review_skill"})
     assert result["success"] is True

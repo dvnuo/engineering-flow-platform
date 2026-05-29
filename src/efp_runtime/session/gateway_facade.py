@@ -205,6 +205,10 @@ class RuntimeV2SessionManager:
         self._ensure_session(session_id)
         self.store.replace_history(session_id, [])
 
+    async def replace_history(self, session_id: str, history: Iterable[Mapping[str, Any]]) -> None:
+        self._ensure_session(session_id)
+        self.store.replace_history(session_id, legacy_messages_to_runtime(session_id, history))
+
     async def delete_session(self, session_id: str) -> bool:
         removed = self.store.delete_session(session_id)
         chatlog_removed = self._delete_session_chatlog(session_id)

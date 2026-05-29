@@ -1,58 +1,39 @@
 from pathlib import Path
 
 
-def test_attachment_rag_context_is_transient_not_history_message():
+def test_attachment_context_is_passed_as_runtime_v2_transient_prompt_input():
     webchat = Path("src/gateway/webchat.py").read_text(encoding="utf-8")
-    core = Path("src/agents/core.py").read_text(encoding="utf-8")
+    runtime_v2_chat = Path("src/gateway/runtime_v2_chat.py").read_text(encoding="utf-8")
 
     assert "transient_model_message" in webchat
-    assert "transient_model_message" in core
+    assert "transient_model_message" in runtime_v2_chat
 
     assert "message=history_message" in webchat
     assert "transient_model_message=transient_model_message" in webchat
 
-    run_section = webchat.split("execute_chat_orchestration(", 1)[1]
-    input_payload_section = run_section.split("metadata={", 1)[0]
-    assert "transient_model_message" not in input_payload_section
+    api_chat_section = webchat.split("async def api_chat(", 1)[1].split("async def api_chat_stream(", 1)[0]
+    run_call_section = api_chat_section.split("_run_chat_via_execution_bus(", 1)[1].split(")", 1)[0]
+    assert "message=history_message" in run_call_section
+    assert "transient_model_message=transient_model_message" in run_call_section
 
-    process_section = core.split("async def process(", 1)[1].split("def emit_early_runtime_event", 1)[0]
-    assert "session_manager.add_message(" in process_section
-    add_call = process_section.split("session_manager.add_message(", 1)[1].split(")", 1)[0]
-    assert "message" in add_call
-    assert "transient_model_message" not in add_call
-
-    assert "Applied transient model-only message" in core
-    assert 'replaced["content"] = transient_model_message' in core or "replaced['content'] = transient_model_message" in core
+    compose_section = runtime_v2_chat.split("def _compose_user_prompt(", 1)[1].split("async def _forward_runtime_events", 1)[0]
+    assert "transient_model_message" in compose_section
+    assert "parts.append(transient)" in compose_section
 
 
-def test_one_shot_attachment_context_is_not_saved_in_debug_runtime_or_thinking_events():
-    webchat = Path("src/gateway/webchat.py").read_text(encoding="utf-8")
-    core = Path("src/agents/core.py").read_text(encoding="utf-8")
+def test_one_shot_attachment_context_is_represented_by_metadata_not_raw_debug_payloads():
+    runtime_v2_chat = Path("src/gateway/runtime_v2_chat.py").read_text(encoding="utf-8")
 
-    assert "ONE_SHOT_ATTACHMENT_REDACTION" in core
-    assert "_redact_one_shot_runtime_event_data" in core
-    assert "_redact_one_shot_attachment_context_state" in core
-    assert "_redact_one_shot_attachment_llm_debug" in core
+    metadata_section = runtime_v2_chat.split("def _run_metadata(", 1)[1].split("def _compose_user_prompt(", 1)[0]
+    assert '"attached_image_count": len(attached_images or [])' in metadata_section
+    assert '"has_transient_model_message": bool(transient_model_message)' in metadata_section
+    assert '"attachments": list(attachments or [])' in metadata_section
 
-    send_event_section = core.split("def send_event(", 1)[1].split("def attach_runtime_events", 1)[0]
-    assert "_redact_one_shot_runtime_event_data" in send_event_section
-    assert "runtime_events_for_result.append" in send_event_section
-    assert send_event_section.index("_redact_one_shot_runtime_event_data") < send_event_section.index("runtime_events_for_result.append")
-
-    assert "tracer_instance.log_thinking(reasoning_content)" not in core
-
-    assert "if one_shot_attachment_context_active:" in core
-    assert "safe_preview(message, 200)" in core
-
-    assert 'llm_result["_llm_debug"] = _redact_one_shot_attachment_llm_debug' in core or "llm_result['_llm_debug'] = _redact_one_shot_attachment_llm_debug" in core
-
-    run_section = webchat.split("execute_chat_orchestration(", 1)[1]
-    input_payload_section = run_section.split("metadata={", 1)[0]
-
-    assert "transient_model_message" not in input_payload_section
-    assert '"attached_images": attached_images' not in input_payload_section
-    assert "'attached_images': attached_images" not in input_payload_section
-    assert "attached_image_count" in input_payload_section
+    debug_section = runtime_v2_chat.split('"_llm_debug": {', 1)[1].split("}", 2)[0]
+    assert '"provider": "github-copilot"' in debug_section
+    assert '"model": model' in debug_section
+    assert "transient_model_message" not in debug_section
+    assert "attached_images" not in debug_section
 
 
 def test_context_file_and_chunk_search_routes_do_not_expose_one_shot_upload_context():

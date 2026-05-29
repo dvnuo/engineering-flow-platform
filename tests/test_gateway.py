@@ -158,6 +158,13 @@ class TestGatewaySessionManagement:
 class TestGatewayRequestHandling:
     """Gateway request handling tests."""
 
+    class _JsonRequest:
+        def __init__(self, payload):
+            self.payload = payload
+
+        async def json(self):
+            return self.payload
+
     @pytest.mark.asyncio
     async def test_handle_health(self):
         """Test health check endpoint."""
@@ -177,6 +184,32 @@ class TestGatewayRequestHandling:
         assert data["status"] == "ok"
         assert data["service"] == "engineering-flow-platform"
 
+    @pytest.mark.asyncio
+    async def test_handle_settings_post_rejects_openai_provider(self):
+        gateway = object.__new__(Gateway)
+
+        response = await gateway.handle_settings_post(
+            self._JsonRequest({"llm": {"provider": "openai"}})
+        )
+        data = json.loads(response.body)
+
+        assert response.status == 400
+        assert data["status"] == "error"
+        assert "only supports GitHub Copilot" in data["message"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider", ["github_copilot", "github-copilot", "copilot"])
+    async def test_handle_settings_post_accepts_github_copilot_aliases(self, provider):
+        gateway = object.__new__(Gateway)
+
+        response = await gateway.handle_settings_post(
+            self._JsonRequest({"llm": {"provider": provider}})
+        )
+        data = json.loads(response.body)
+
+        assert response.status == 200
+        assert data["status"] == "ok"
+
 
 class TestGatewayIntegration:
     """Gateway integration tests."""
@@ -186,10 +219,10 @@ class TestGatewayIntegration:
         from src.gateway.server import JIRA_SESSION_PREFIX
         assert JIRA_SESSION_PREFIX == "jira:"
 
-    def test_gateway_has_agent(self):
-        """Test Gateway imports agent."""
-        from src.gateway.server import agent
-        assert agent is not None
+    def test_gateway_has_runtime_v2_chat_entrypoint(self):
+        """Test Gateway imports Runtime v2 chat entrypoint."""
+        from src.gateway.server import run_runtime_v2_chat
+        assert run_runtime_v2_chat is not None
 
     def test_gateway_has_jira_channel(self):
         """Test Gateway imports jira channel."""

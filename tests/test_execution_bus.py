@@ -1,16 +1,19 @@
 import pytest
 
 from src import ToolResult
-from src.agents.executor import SkillResult, run_skill_execution
 from src.agents.errors import LLMError
 from src.runtime.contracts import ExecutionResult, make_execution_request, make_execution_result
-from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
+from src.runtime.execution_bus import ExecutionBus, SkillResult, build_default_execution_bus, run_skill_execution
 from src.runtime.events import build_runtime_event
 from src.runtime.governance import GovernanceHooks
 from src.runtime.governance_bus import GovernanceDecision
 from src.runtime.task_template_registry import list_task_templates
 from src.runtime.governance_bus import GovernanceBus
 from src.runtime.capability_registry import CapabilityDescriptor
+
+
+async def _fake_triggered_event_agent_response(*_args, **_kwargs):
+    return "ok"
 
 
 @pytest.mark.asyncio
@@ -1008,7 +1011,7 @@ async def test_execution_bus_task_handler_delegation_task_success(monkeypatch):
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.sessions.manager.session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
     bus = build_default_execution_bus(event_emitter=lambda event_type, payload: events.append((event_type, payload)))
     req = make_execution_request(
         source_type="agent",
@@ -1253,7 +1256,7 @@ async def test_execution_bus_task_handler_delegation_task_resolves_shared_contex
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.sessions.manager.session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="agent",
@@ -1521,7 +1524,7 @@ async def test_execution_bus_task_handler_delegation_task_marks_failed_completio
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.sessions.manager.session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="agent",
@@ -1690,7 +1693,7 @@ async def test_execution_bus_task_handler_delegation_task_propagates_leader_sess
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.sessions.manager.session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="agent",
@@ -2021,7 +2024,7 @@ async def test_execution_bus_task_handler_valid_task_agent_context_propagates_me
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.sessions.manager.session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="agent",
@@ -2756,48 +2759,6 @@ def test_make_execution_result_defensive_copies_and_explicit_empty():
 
 
 @pytest.mark.asyncio
-async def test_execute_skill_entrypoint_routes_through_bus(monkeypatch):
-    from src.agents import executor
-
-    captured = {}
-
-    async def _fake_execute_skill_orchestration(*, source_ref, session_id, input_payload, metadata=None):
-        captured["source_ref"] = source_ref
-        captured["session_id"] = session_id
-        captured["input_payload"] = dict(input_payload)
-        captured["metadata"] = dict(metadata or {})
-        return make_execution_result(
-            request_id="req-skill",
-            status="success",
-            output_payload={"output": "skill-ok", "data": {"x": 1}},
-        )
-
-    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _fake_execute_skill_orchestration)
-    result = await executor.execute_skill("demo_skill", message="hello")
-
-    assert captured["input_payload"]["skill_name"] == "demo_skill"
-    assert result.success is True
-    assert result.output == "skill-ok"
-
-
-@pytest.mark.asyncio
-async def test_execute_skill_none_output_maps_to_empty_string(monkeypatch):
-    from src.agents import executor
-
-    class _FakeBus:
-        async def execute(self, request):
-            return make_execution_result(
-                request_id=request.request_id,
-                status="success",
-                output_payload={"output": None, "data": {}},
-            )
-
-    monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
-    result = await executor.execute_skill("demo_skill", message="hello")
-    assert result.output == ""
-
-
-@pytest.mark.asyncio
 async def test_event_forwarding_uses_distinct_request_id_and_parent_link():
     captured = {}
 
@@ -3352,42 +3313,13 @@ async def test_jira_workflow_review_task_portal_style_metadata_deny_transition(m
 
 
 @pytest.mark.asyncio
-async def test_run_skill_execution_routes_through_execution_bus_by_default(monkeypatch):
-    async def _fake_orchestration(**_kwargs):
-        return make_execution_result(
-            request_id="req-bus",
-            status="success",
-            output_payload={"output": "bus-path", "data": {"source": "bus"}},
-        )
-
-    async def _should_not_be_called(*_args, **_kwargs):
-        raise AssertionError("legacy direct execution should not be used by default")
-
-    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _fake_orchestration)
-    monkeypatch.setattr("src.agents.executor.skills_executor.execute_skill", _should_not_be_called)
-    monkeypatch.delenv("EFP_ALLOW_LEGACY_DIRECT_EXECUTION", raising=False)
-
+async def test_run_skill_execution_reports_legacy_python_skills_disabled():
     result = await run_skill_execution("demo_skill", input="hello")
-    assert result.success is True
-    assert result.output == "bus-path"
-    assert result.data.get("source") == "bus"
 
-
-@pytest.mark.asyncio
-async def test_run_skill_execution_legacy_direct_opt_in(monkeypatch):
-    async def _fake_direct(skill_name, **_kwargs):
-        return SkillResult(success=True, output=f"legacy:{skill_name}")
-
-    async def _should_not_be_called(**_kwargs):
-        raise AssertionError("execution bus path should not be used in legacy direct opt-in mode")
-
-    monkeypatch.setattr("src.agents.executor.skills_executor.execute_skill", _fake_direct)
-    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _should_not_be_called)
-    monkeypatch.setenv("EFP_ALLOW_LEGACY_DIRECT_EXECUTION", "true")
-
-    result = await run_skill_execution("demo_skill", input="hello")
-    assert result.success is True
-    assert result.output == "legacy:demo_skill"
+    assert result.success is False
+    assert "Legacy Python skill execution is not available" in (result.error or "")
+    assert result.data["runtime"] == "efp_runtime_v2"
+    assert result.data["kwargs"] == {"input": "hello"}
 
 
 @pytest.mark.asyncio
@@ -3792,7 +3724,7 @@ async def test_execution_bus_triggered_event_task_github_secondary_action_blocke
     async def _fake_add_comment(*args, **kwargs):
         raise AssertionError("writeback should be blocked by governance gate")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
@@ -3823,7 +3755,7 @@ async def test_execution_bus_triggered_event_task_jira_secondary_action_blocked(
     async def _fake_add_comment(*args, **kwargs):
         raise AssertionError("writeback should be blocked by governance gate")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.jira_channel.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
@@ -3854,7 +3786,7 @@ async def test_execution_bus_triggered_event_task_confluence_secondary_action_bl
     async def _fake_add_comment(*args, **kwargs):
         raise AssertionError("writeback should be blocked by governance gate")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.confluence_channel.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
@@ -3885,7 +3817,7 @@ async def test_execution_bus_triggered_event_task_success_includes_secondary_gov
     async def _fake_add_comment(owner, repo, issue_number, body):
         return {"ok": True}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
@@ -4135,7 +4067,7 @@ async def test_execution_bus_triggered_event_task_github_review_comment_secondar
     async def _fake_reply(*args, **kwargs):
         raise AssertionError("writeback should be blocked by governance gate")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
     req = make_execution_request(
         source_type="task",
@@ -4157,7 +4089,7 @@ async def test_execution_bus_triggered_event_task_github_unsupported_comment_kin
     async def _fake_add(*args, **kwargs):
         raise AssertionError("unsupported comment_kind must not fallback to add_comment")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add)
 
     req = make_execution_request(
@@ -4181,7 +4113,7 @@ async def test_execution_bus_triggered_event_task_github_unsupported_reply_mode_
     async def _fake_reply(*args, **kwargs):
         raise AssertionError("unsupported reply_mode must not use reply_review_comment")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
 
@@ -4203,7 +4135,7 @@ async def test_execution_bus_triggered_event_task_github_commit_comment_secondar
     async def _fake_commit_comment(*args, **kwargs):
         raise AssertionError("writeback should be blocked by governance gate")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_commit_comment", _fake_commit_comment)
 
     req = make_execution_request(source_type="task", execution_type="task", input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"commit_comment","reply_mode":"same_surface","owner":"acme","repo":"demo","commit_sha":"abc123","comment_id":2,"body":"@bot","session_id":"sess"}, metadata={"denied_adapter_actions":["adapter:github:add_commit_comment"]})
@@ -4221,7 +4153,7 @@ async def test_execution_bus_triggered_event_task_github_commit_comment_success(
     async def _fake_commit_comment(*args, **kwargs):
         return {"id": 123}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_commit_comment", _fake_commit_comment)
 
     req = make_execution_request(source_type="task", execution_type="task", input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"commit_comment","reply_mode":"same_surface","owner":"acme","repo":"demo","commit_sha":"abc123","comment_id":2,"body":"@bot","session_id":"sess"})
@@ -4237,7 +4169,7 @@ async def test_execution_bus_triggered_event_task_github_discussion_comment_seco
     async def _fake_discussion_comment(*args, **kwargs):
         raise AssertionError("writeback should be blocked by governance gate")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_discussion_comment)
     req = make_execution_request(
         source_type="task",
@@ -4257,7 +4189,7 @@ async def test_execution_bus_triggered_event_task_github_notification_metadata_d
     async def _fake_add_comment(*args, **kwargs):
         raise AssertionError("writeback should be blocked by governance gate")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",

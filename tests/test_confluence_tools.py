@@ -1,9 +1,6 @@
 import pytest
 
-from tests._lightweight_runtime_loaders import (
-    load_confluence_init_lightweight,
-    load_root_execute_tool_lightweight,
-)
+from tests._lightweight_runtime_loaders import load_confluence_init_lightweight
 
 
 def test_confluence_tools_schemas_contract():
@@ -114,54 +111,3 @@ async def test_confluence_get_comments_and_children_bounded_contract(monkeypatch
         assert "children_preview: omitted" in children
     finally:
         cleanup()
-
-
-@pytest.mark.asyncio
-async def test_execute_tool_confluence_dispatch_passes_session_id(monkeypatch):
-    root, cleanup = load_root_execute_tool_lightweight()
-    try:
-        captured = {}
-
-        async def _fake_get_page_by_url(url, **kwargs):
-            captured["url"] = url
-            captured.update(kwargs)
-            return "[confluence source bundle prepared]\ncontext_ref: ctx://context/s1/k"
-
-        async def _fake_get_children(page_id, limit=10, _session_id=None):
-            captured["children_session"] = _session_id
-            return "[confluence children prepared]\ncontext_ref: ctx://context/s1/children"
-
-        monkeypatch.setattr(root.confluence, "confluence_get_page_by_url", _fake_get_page_by_url)
-        monkeypatch.setattr(root.confluence, "confluence_get_page_children", _fake_get_children)
-
-        page_result = await root.execute_tool("confluence_get_page_by_url", url="https://wiki.local/pages/123/Title", _session_id="s1")
-        assert page_result.success is True
-        assert captured["_session_id"] == "s1"
-        assert captured["url"].startswith("https://wiki.local/pages/")
-
-        children_result = await root.execute_tool("confluence_get_page_children", page_id="123", _session_id="s1")
-        assert children_result.success is True
-        assert captured["children_session"] == "s1"
-    finally:
-        cleanup()
-
-
-def test_root_execute_tool_lightweight_cleanup_preserves_src_runtime_parent_attr():
-    import sys
-    import src
-    import src.runtime.execution_bus  # noqa: F401
-
-    assert hasattr(src, "runtime")
-    original_src = sys.modules.get("src")
-    original_runtime = sys.modules.get("src.runtime")
-
-    root, cleanup = load_root_execute_tool_lightweight()
-    try:
-        assert root is not original_src
-    finally:
-        cleanup()
-
-    restored_src = sys.modules.get("src")
-    assert restored_src is original_src
-    assert sys.modules.get("src.runtime") is original_runtime
-    assert getattr(restored_src, "runtime", None) is original_runtime

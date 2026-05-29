@@ -82,12 +82,9 @@ async def run_skill_execution(skill_name: str, **kwargs: Any) -> SkillResult:
 
 
 async def run_subagent_execution(**kwargs: Any) -> Dict[str, Any]:
-    return {
-        "success": False,
-        "error": "Legacy subagent execution is not available in Runtime v2 native mode.",
-        "runtime": "efp_runtime_v2",
-        "kwargs": dict(kwargs or {}),
-    }
+    from src.agents.subagent import run_subagent_execution as run_runtime_v2_subagent_execution
+
+    return await run_runtime_v2_subagent_execution(**kwargs)
 
 def _first_non_empty(*values: Any) -> Optional[str]:
     for value in values:

@@ -6,35 +6,6 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_executor_execute_skill_uses_execute_skill_orchestration(monkeypatch):
-    from src.agents import executor
-
-    called = {}
-
-    async def _fake_execute_skill_orchestration(**kwargs):
-        called.update(kwargs)
-        return type(
-            "R",
-            (),
-            {
-                "status": "success",
-                "output_payload": {"output": "ok", "error": None, "data": {"k": "v"}},
-            },
-        )()
-
-    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _fake_execute_skill_orchestration)
-
-    result = await executor.execute_skill("skill_x", session_id="s-1", foo="bar")
-
-    assert result.success is True
-    assert result.output == "ok"
-    assert called["source_ref"] == "executor.execute_skill"
-    assert called["session_id"] == "s-1"
-    assert called["input_payload"]["skill_name"] == "skill_x"
-    assert called["input_payload"]["kwargs"]["foo"] == "bar"
-
-
-@pytest.mark.asyncio
 async def test_skill_mode_generate_initial_skill_plan_uses_execute_skill_orchestration(monkeypatch):
     from src.agents import skill_mode
     from src.skills.registry import Skill
@@ -162,11 +133,10 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
 
 
 def test_entrypoints_do_not_reintroduce_direct_bus_construction():
-    from src.agents import executor, skill_mode, subagent
+    from src.agents import skill_mode, subagent
     from src.gateway import webchat
 
     sources = {
-        "executor": inspect.getsource(executor),
         "skill_mode": inspect.getsource(skill_mode),
         "subagent": inspect.getsource(subagent),
         "webchat": inspect.getsource(webchat),
@@ -188,12 +158,3 @@ def test_runtime_helper_modules_do_not_import_adapter_executor_directly():
     forbidden = "from src.runtime.adapter_executor import"
     for name, source in sources.items():
         assert forbidden not in source, f"{name} unexpectedly imports low-level adapter executor"
-
-
-def test_agent_core_no_longer_calls_apply_skill_hooks_directly():
-    from src.agents import core
-
-    source = inspect.getsource(core)
-    assert "apply_skill_hooks(" not in source
-    assert "_run_pre_tool_hooks_via_governance(" in source
-    assert "_run_post_tool_hooks_via_governance(" in source

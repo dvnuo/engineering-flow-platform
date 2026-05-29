@@ -176,13 +176,36 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
     async def _load_session_info(self, session_id: str, *, hydrate_via_manager: bool) -> Optional[Dict[str, Any]]:
         from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
 
-        session = await runtime_v2_session_manager.get_existing_session(session_id)
+        session_manager = runtime_v2_session_manager
+        session: Optional[Dict[str, Any]] = None
+        source = "runtime_v2_file"
+
+        get_existing_session = getattr(session_manager, "get_existing_session", None)
+        if callable(get_existing_session):
+            loaded = await get_existing_session(session_id)
+            if isinstance(loaded, dict):
+                session = loaded
+
+        if session is None:
+            sessions = getattr(session_manager, "sessions", None)
+            if isinstance(sessions, dict) and isinstance(sessions.get(session_id), dict):
+                session = sessions[session_id]
+                source = "memory"
+
+        if session is None and hydrate_via_manager:
+            get_session = getattr(session_manager, "get_session", None)
+            if callable(get_session):
+                loaded = await get_session(session_id)
+                if isinstance(loaded, dict) and any(key in loaded for key in ("history", "messages", "metadata")):
+                    session = loaded
+                    source = "persistence"
+
         if not isinstance(session, dict):
             return None
 
         return {
-            "source": "runtime_v2_file",
-            "session": _normalize_session_record(session, source="runtime_v2_file"),
+            "source": source,
+            "session": _normalize_session_record(session, source=source),
         }
 
     def _event(self, session_id: str, event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
