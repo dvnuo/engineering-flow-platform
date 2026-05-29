@@ -3,6 +3,68 @@ import os
 from src.config import Config
 
 
+RUNTIME_V2_OVERLAY_FIELDS = {
+    "enabled_tools": ["read"],
+    "disabled_tools": ["write"],
+    "tool_permissions": {"bash": "ask"},
+    "max_iterations": 12,
+    "doom_loop_threshold": 4,
+    "max_context_parts": 40,
+    "max_context_chars": 120000,
+    "max_context_tokens": 64000,
+    "context_reserve_chars": 2000,
+    "context_reserve_tokens": 1000,
+    "compaction_auto": False,
+    "compaction_prune": True,
+    "compaction_tail_turns": 3,
+    "compaction_preserve_recent_chars": 3000,
+    "compaction_preserve_recent_tokens": 1500,
+    "compaction_reserved_chars": 4000,
+    "compaction_tool_output_max_chars": 5000,
+    "compaction_prune_min_chars": 20000,
+    "compaction_prune_protect_chars": 40000,
+    "enable_compaction_summarizer": True,
+    "enable_context_overflow_retry": False,
+    "enable_session_revert_snapshots": False,
+    "skill_directories": ["/workspace/.efp/skills"],
+    "active_skills": ["review"],
+    "command_directories": ["/workspace/.efp/commands"],
+    "enable_command_expansion": False,
+    "system_prompt_texts": ["system"],
+    "system_prompt_paths": ["/workspace/system.md"],
+    "include_default_system_prompt": False,
+    "include_environment_context": False,
+    "max_system_prompt_chars": 10000,
+    "include_runtime_reminders": False,
+    "instruction_texts": ["instruction"],
+    "instruction_paths": ["/workspace/instructions.md"],
+    "include_default_instructions": False,
+    "attach_read_instructions": False,
+    "max_instruction_chars": 9000,
+    "include_skill_sidecar_content": True,
+    "max_skill_sidecar_chars": 8000,
+    "max_command_chars": 7000,
+    "resolve_prompt_references": False,
+    "max_prompt_reference_chars": 6000,
+    "max_prompt_directory_entries": 50,
+    "runtime_mode": "plan",
+    "enable_plan_tool": True,
+    "plan_mode_read_only": False,
+    "enable_question_tool": True,
+    "enable_lsp_tool": True,
+    "inject_background_task_results": False,
+    "model_aware_tool_selection": False,
+    "structured_output_schema": {"type": "object", "properties": {}},
+    "tool_output_max_lines": 100,
+    "tool_output_max_bytes": 4096,
+    "tool_output_truncation_direction": "tail",
+    "archive_truncated_tool_outputs": False,
+    "tool_output_dir": "/workspace/.efp/tool-output",
+    "emit_llm_stream_events": False,
+    "track_usage": False,
+}
+
+
 def _write_base_config(path):
     path.write_text(
         "llm:\n"
@@ -51,6 +113,44 @@ def test_runtime_profile_apply_writes_config_yaml_without_sidecar(tmp_path):
     assert meta["runtime_profile_id"] == "rp_1"
     assert meta["revision"] == 3
     assert meta["managed_sections"] == ["jira", "llm"]
+
+
+def test_runtime_profile_apply_preserves_and_clears_runtime_v2_top_level_fields(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write("workspace_root: /user/workspace\n")
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_runtime_v2",
+        4,
+        {
+            **RUNTIME_V2_OVERLAY_FIELDS,
+            "workspace_root": "/portal/workspace",
+            "default_provider_id": "openai",
+            "default_model": "gpt-other",
+            "compaction_preserve_recent_turns": 10,
+            "mcp_servers": {"filesystem": {}},
+        },
+    )
+
+    cfg.load()
+    effective = cfg.get_effective_config()
+    for field, expected in RUNTIME_V2_OVERLAY_FIELDS.items():
+        assert effective[field] == expected
+    assert effective["workspace_root"] == "/user/workspace"
+    assert "default_provider_id" not in effective
+    assert "default_model" not in effective
+    assert "compaction_preserve_recent_turns" not in effective
+    assert "mcp_servers" not in effective
+
+    cfg.clear_managed_overlay()
+    cfg.load()
+    cleared = cfg.get_effective_config()
+    for field in RUNTIME_V2_OVERLAY_FIELDS:
+        assert field not in cleared
+    assert cleared["workspace_root"] == "/user/workspace"
 
 
 def test_runtime_profile_apply_preserves_unmanaged_llm_subtree(tmp_path):

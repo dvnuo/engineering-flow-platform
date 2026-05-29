@@ -24,6 +24,69 @@ _yaml.indent(mapping=2, sequence=4, offset=2)
 DEFAULT_LLM_MODEL = "gpt-5.4-mini"
 DEFAULT_LLM_TEMPERATURE = 0.7
 
+PORTAL_MANAGED_RUNTIME_V2_FIELDS = frozenset(
+    {
+        "enabled_tools",
+        "disabled_tools",
+        "tool_permissions",
+        "max_iterations",
+        "doom_loop_threshold",
+        "max_context_parts",
+        "max_context_chars",
+        "max_context_tokens",
+        "context_reserve_chars",
+        "context_reserve_tokens",
+        "compaction_auto",
+        "compaction_prune",
+        "compaction_tail_turns",
+        "compaction_preserve_recent_chars",
+        "compaction_preserve_recent_tokens",
+        "compaction_reserved_chars",
+        "compaction_tool_output_max_chars",
+        "compaction_prune_min_chars",
+        "compaction_prune_protect_chars",
+        "enable_compaction_summarizer",
+        "enable_context_overflow_retry",
+        "enable_session_revert_snapshots",
+        "skill_directories",
+        "active_skills",
+        "command_directories",
+        "enable_command_expansion",
+        "system_prompt_texts",
+        "system_prompt_paths",
+        "include_default_system_prompt",
+        "include_environment_context",
+        "max_system_prompt_chars",
+        "include_runtime_reminders",
+        "instruction_texts",
+        "instruction_paths",
+        "include_default_instructions",
+        "attach_read_instructions",
+        "max_instruction_chars",
+        "include_skill_sidecar_content",
+        "max_skill_sidecar_chars",
+        "max_command_chars",
+        "resolve_prompt_references",
+        "max_prompt_reference_chars",
+        "max_prompt_directory_entries",
+        "runtime_mode",
+        "enable_plan_tool",
+        "plan_mode_read_only",
+        "enable_question_tool",
+        "enable_lsp_tool",
+        "inject_background_task_results",
+        "model_aware_tool_selection",
+        "structured_output_schema",
+        "tool_output_max_lines",
+        "tool_output_max_bytes",
+        "tool_output_truncation_direction",
+        "archive_truncated_tool_outputs",
+        "tool_output_dir",
+        "emit_llm_stream_events",
+        "track_usage",
+    }
+)
+
 
 class ServiceReloadManager:
     """Manager for services that need to be reinitialized when config changes."""
@@ -108,8 +171,11 @@ class Config:
         "github",
         "git",
         "debug",
+        *PORTAL_MANAGED_RUNTIME_V2_FIELDS,
     }
+    RUNTIME_V2_PORTAL_MANAGED_FIELDS = PORTAL_MANAGED_RUNTIME_V2_FIELDS
     PORTAL_MANAGED_FIELD_TREE = {
+        **{field: True for field in sorted(PORTAL_MANAGED_RUNTIME_V2_FIELDS)},
         # Keep hidden/deprecated Portal LLM fields in this field tree.
         # Portal may stop rendering temperature/tools/response_flow controls, but
         # set_managed_overlay() must still prune older Portal-managed values from

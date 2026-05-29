@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import os
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from src.config import DEFAULT_LLM_MODEL, config
+from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_V2_FIELDS, config
 from src.efp_runtime.event_bus import RuntimeEventBus
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.llm.provider import (
@@ -27,6 +28,7 @@ from src.utils.redaction import sanitize_exception_message
 
 
 SUPPORTED_PROVIDER_KEYS = {"github_copilot", "github-copilot", "copilot"}
+PORTAL_RUNTIME_PROFILE_SOURCE = "portal.runtime_profile"
 RUNTIME_V2_NATIVE_PROVIDER_ERROR = (
     "Runtime v2 native mode only supports GitHub Copilot. "
     "Set llm.provider to github_copilot, github-copilot, or copilot."
@@ -78,7 +80,11 @@ async def run_runtime_v2_chat(
     event_bus = RuntimeEventBus()
     runtime = AgentRuntime(
         provider=provider,
-        config=_runtime_config(runtime_model, track_usage=track_usage),
+        config=_runtime_config(
+            runtime_model,
+            track_usage=track_usage,
+            execution_metadata=execution_metadata,
+        ),
         store=get_runtime_v2_session_store(),
         event_bus=event_bus,
         metadata={
@@ -167,14 +173,113 @@ def _runtime_workspace_root() -> Path:
     return Path.home() / ".efp" / "workspace"
 
 
-def _runtime_config(model: str, *, track_usage: bool) -> RuntimeConfig:
-    return RuntimeConfig(
-        workspace_root=_runtime_workspace_root(),
-        default_provider_id="github-copilot",
-        default_model=model,
-        max_iterations=_resolve_max_iterations(),
-        track_usage=track_usage,
+def _runtime_config(
+    model: str,
+    *,
+    track_usage: bool,
+    execution_metadata: Mapping[str, Any] | None = None,
+    runtime_profile_config: Mapping[str, Any] | None = None,
+) -> RuntimeConfig:
+    managed_overlay_config = _active_managed_overlay_runtime_config()
+    profile_config = (
+        runtime_profile_config
+        if isinstance(runtime_profile_config, Mapping)
+        else _trusted_runtime_profile_config(execution_metadata)
     )
+    kwargs: dict[str, Any] = {
+        "workspace_root": _runtime_workspace_root(),
+        "default_provider_id": "github-copilot",
+        "default_model": model,
+        "max_iterations": _resolve_max_iterations(),
+        "track_usage": track_usage,
+    }
+    kwargs.update(_runtime_config_profile_kwargs(managed_overlay_config))
+    kwargs.update(_runtime_config_profile_kwargs(profile_config))
+    kwargs["workspace_root"] = _runtime_workspace_root()
+    kwargs["default_provider_id"] = "github-copilot"
+    kwargs["default_model"] = model
+    if not (
+        _mapping_has_key(managed_overlay_config, "track_usage")
+        or _mapping_has_key(profile_config, "track_usage")
+    ):
+        kwargs["track_usage"] = track_usage
+
+    try:
+        return RuntimeConfig(**kwargs)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeV2ChatError(
+            f"Invalid Runtime v2 profile config: {exc}",
+            status_code=400,
+            error_type="invalid_runtime_config",
+            details={"provider": "github-copilot"},
+        ) from exc
+
+
+def _active_managed_overlay_runtime_config() -> Mapping[str, Any] | None:
+    try:
+        effective_config = config.get_effective_config()
+    except Exception:
+        return None
+    if not isinstance(effective_config, Mapping):
+        return None
+    # set_managed_overlay persists Portal-managed fields directly into config.yaml.
+    # After a process restart the in-memory overlay metadata is empty, but those
+    # safe top-level Runtime v2 fields still need to drive RuntimeConfig.
+    if not any(field in effective_config for field in PORTAL_MANAGED_RUNTIME_V2_FIELDS):
+        return None
+    return effective_config
+
+
+def _trusted_runtime_profile_config(
+    execution_metadata: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if not isinstance(execution_metadata, Mapping):
+        return None
+    runtime_profile = execution_metadata.get("runtime_profile")
+    if not isinstance(runtime_profile, Mapping):
+        return None
+    if not _runtime_profile_metadata_is_trusted(runtime_profile, execution_metadata):
+        return None
+    profile_config = runtime_profile.get("config")
+    return profile_config if isinstance(profile_config, Mapping) else None
+
+
+def _runtime_profile_metadata_is_trusted(
+    runtime_profile: Mapping[str, Any],
+    execution_metadata: Mapping[str, Any],
+) -> bool:
+    if _source_value(runtime_profile.get("source")) == PORTAL_RUNTIME_PROFILE_SOURCE:
+        return True
+    if execution_metadata.get("trusted_control_plane") is True:
+        return True
+    if execution_metadata.get("_trusted_control_plane") is True:
+        return True
+    return _source_value(execution_metadata.get("source")) in {
+        PORTAL_RUNTIME_PROFILE_SOURCE,
+        "portal.control_plane",
+    }
+
+
+def _source_value(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower()
+
+
+def _mapping_has_key(value: Mapping[str, Any] | None, key: str) -> bool:
+    return isinstance(value, Mapping) and key in value
+
+
+def _runtime_config_profile_kwargs(
+    profile_config: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(profile_config, Mapping):
+        return {}
+    return {
+        key: deepcopy(value)
+        for key, value in profile_config.items()
+        if key in PORTAL_MANAGED_RUNTIME_V2_FIELDS
+    }
 
 
 def _resolve_max_iterations() -> int:
