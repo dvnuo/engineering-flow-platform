@@ -231,3 +231,13 @@ def _validate_numeric_bounds(name: str, value: Any, schema: Mapping[str, Any]) -
             raise ValidationError(
                 f"Argument '{name}' must be greater than or equal to {minimum}."
             )
+    maximum = schema.get("maximum")
+    if (
+        maximum is not None
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        if value > maximum:
+            raise ValidationError(
+                f"Argument '{name}' must be less than or equal to {maximum}."
+            )

@@ -38,11 +38,14 @@ from .task import (
     create_task_tool,
 )
 from .todo import create_todo_write_tool, create_todowrite_tool
+from .websearch import WebSearchRequest, WebSearchRunner, create_websearch_tool
 
 __all__ = [
     "TaskToolRequest",
     "TaskToolResult",
     "TaskToolRunner",
+    "WebSearchRequest",
+    "WebSearchRunner",
     "ShellJob",
     "ShellJobManager",
     "DEFAULT_STRUCTURED_OUTPUT_TOOL_ID",
@@ -73,6 +76,7 @@ __all__ = [
     "create_task_tool",
     "create_todo_write_tool",
     "create_todowrite_tool",
+    "create_websearch_tool",
     "create_write_tool",
     "create_write_file_tool",
 ]

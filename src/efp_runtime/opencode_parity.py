@@ -123,6 +123,10 @@ OPTIONAL_CONDITIONAL_TOOL_IDS: dict[str, SurfaceEntry] = {
         status="conditional",
         reason="Enabled by the legacy alias surface.",
     ),
+    "websearch": SurfaceEntry(
+        status="conditional",
+        reason="Registered only when callers inject a provider-neutral websearch runner; default core registry leaves it disabled.",
+    ),
     "write_file": SurfaceEntry(
         status="conditional",
         reason="Enabled by the legacy alias surface.",
@@ -133,14 +137,6 @@ EXCLUDED_TOOL_IDS: dict[str, SurfaceEntry] = {
     "external_protocol_tools": SurfaceEntry(
         status="excluded",
         reason="External protocol tool surfaces are outside the Runtime v2 parity scope.",
-    ),
-    "websearch": SurfaceEntry(
-        status="remaining",
-        reason="Upstream exposes a search-service-backed tool; Runtime v2 currently exposes direct URL fetch only.",
-        next_action=(
-            "Design a provider-neutral search service boundary, permission category, "
-            "and config gate before adding a Runtime v2 tool id."
-        ),
     ),
 }
 

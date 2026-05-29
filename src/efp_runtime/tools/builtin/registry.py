@@ -45,6 +45,7 @@ from .task import (
     create_task_tool,
 )
 from .todo import create_todo_write_tool, create_todowrite_tool
+from .websearch import WebSearchRunner, create_websearch_tool
 
 if TYPE_CHECKING:
     from ...agents.background_tasks import BackgroundTaskManager
@@ -58,6 +59,9 @@ def create_core_tool_registry(
     write_permission: PermissionMetadata | None = None,
     shell_permission: PermissionMetadata | None = None,
     fetch_permission: PermissionMetadata | None = None,
+    websearch_runner: WebSearchRunner | None = None,
+    include_websearch_tool: bool = False,
+    websearch_permission: PermissionMetadata | None = None,
     shell_job_manager: ShellJobManager | None = None,
     enable_background_shell: bool = True,
     background_shell_max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
@@ -116,6 +120,17 @@ def create_core_tool_registry(
     if expose_legacy_aliases:
         registry.register(create_fetch_tool(permission=fetch_permission))
     registry.register(create_webfetch_tool(permission=fetch_permission))
+    if websearch_runner is not None or include_websearch_tool:
+        if websearch_runner is None:
+            raise ValueError(
+                "websearch_runner is required when include_websearch_tool is true."
+            )
+        registry.register(
+            create_websearch_tool(
+                websearch_runner,
+                permission=websearch_permission,
+            )
+        )
     registry.register(
         create_read_tool(root, instruction_resolver=instruction_resolver)
     )

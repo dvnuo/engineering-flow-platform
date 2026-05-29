@@ -290,6 +290,9 @@ tool ids are `apply_patch`, `bash`, `edit`, `glob`, `grep`, `invalid`, `read`,
 `repo_clone`, `repo_overview`, `todowrite`, `webfetch`, and `write`. Optional
 opencode-style tools such as `task`, `question`, `lsp`, `plan_exit`, and
 `skill` are still registered only when their existing feature gates are enabled.
+`websearch` is also conditional: Runtime v2 provides only an injected
+provider-neutral runner boundary, does not connect to a concrete search service,
+and does not register the tool unless the caller explicitly supplies a runner.
 The default opencode surface exposes built-in tools only; it does not scan or
 import workspace-local Python files from `.opencode/tool` or `.opencode/tools`.
 
@@ -771,8 +774,9 @@ file read/write/edit/patch, shell, grep/glob, repository clone/overview,
 `webfetch`, `todowrite`, and invalid-call feedback. `question`, `lsp`,
 `plan_exit`, `task`, `skill`, and legacy aliases are conditional surface exposed
 only by explicit config, registry switches, or injected runtime collaborators.
-`websearch` remains a remaining item because it needs a search-service boundary,
-permission category, and config gate before Runtime v2 adds a tool id.
+`websearch` is a conditional tool exposed only when a caller injects a
+provider-neutral runner; Runtime v2 does not provide a concrete search provider
+and keeps `websearch` out of the default registry.
 
 `repo_clone` prepares a git repository under the workspace-local cache
 `.efp_runtime/repositories/` unless a workspace-relative `target_dir` is
