@@ -7,7 +7,7 @@ import pytest
 
 from efp_runtime.config_loader import load_runtime_config
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
-from efp_runtime.runtime import AgentRuntime
+from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.models import MessagePartType
 from efp_runtime.tools.local import local_tool_defs, register_local_tools
 from efp_runtime.tools.registry import ToolRegistry
@@ -16,7 +16,7 @@ from efp_runtime.types import ToolCall
 
 
 @pytest.mark.asyncio
-async def test_default_tool_file_is_loaded_exposed_and_executed(tmp_path: Path):
+async def test_opt_in_default_tool_file_is_loaded_exposed_and_executed(tmp_path: Path):
     tool_file = tmp_path / ".opencode" / "tool" / "hello.py"
     _write_tool(
         tool_file,
@@ -35,6 +35,10 @@ async def test_default_tool_file_is_loaded_exposed_and_executed(tmp_path: Path):
             "execute": run,
         }
         """,
+    )
+    _write_raw(
+        tmp_path / "opencode.json",
+        json.dumps({"enableLocalPythonTools": True}),
     )
 
     loaded = load_runtime_config(tmp_path)
@@ -60,11 +64,76 @@ async def test_default_tool_file_is_loaded_exposed_and_executed(tmp_path: Path):
     ]
     tool_result = _first_tool_result(runtime, "session-local-tool")
     assert tool_result.content == "hello Ada in session-local-tool"
+    assert loaded.config.enable_local_python_tools is True
 
     tool = runtime.tool_runtime.registry.require("hello")
     assert tool.metadata["local_tool"] is True
     assert tool.metadata["local_tool_file"] == str(tool_file.resolve())
     assert tool.metadata["local_tool_export"] == "TOOL"
+
+
+@pytest.mark.asyncio
+async def test_configured_local_tool_directories_are_not_registered_without_opt_in(
+    tmp_path: Path,
+):
+    tool_dir = tmp_path / "local-tools"
+    _write_tool(
+        tool_dir / "hello.py",
+        """
+        def run(args, context):
+            return "hello"
+
+        TOOL = {"description": "Say hello", "execute": run}
+        """,
+    )
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            local_tool_directories=[tool_dir],
+        ),
+    )
+
+    result = await runtime.run("say hello", session_id="session-disabled-local-tool")
+    schema_ids = [schema.id for schema in provider.requests[0].provider_request.tools]
+    request_metadata = provider.requests[0].metadata
+
+    assert result.status == LoopStatus.COMPLETED
+    assert "hello" not in runtime.tool_runtime.registry.ids()
+    assert "hello" not in schema_ids
+    assert request_metadata["enable_local_python_tools"] is False
+    assert request_metadata["local_python_tools_disabled"] is True
+    assert request_metadata["local_python_tool_directories"] == [str(tool_dir)]
+
+
+def test_runtime_config_enable_local_python_tools_registers_configured_directory(
+    tmp_path: Path,
+):
+    tool_dir = tmp_path / "local-tools"
+    _write_tool(
+        tool_dir / "hello.py",
+        """
+        def run(args, context):
+            return "hello"
+
+        TOOL = {"description": "Say hello", "execute": run}
+        """,
+    )
+
+    runtime = AgentRuntime(
+        provider=ScriptedLLMProvider([{"content": "done"}]),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=1,
+            enable_local_python_tools=True,
+            local_tool_directories=[tool_dir],
+        ),
+    )
+
+    assert "hello" in runtime.tool_runtime.registry.ids()
+    assert runtime.tool_runtime.registry.require("hello").metadata["local_tool"] is True
 
 
 @pytest.mark.asyncio

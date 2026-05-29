@@ -252,6 +252,7 @@ The loader maps the following opencode-style and snake_case keys into
 - `skillDirectories` / `skill_directories`, plus local `skills.paths`.
 - `activeSkills` / `active_skills`.
 - `commandDirectories` / `command_directories`.
+- `enableLocalPythonTools` / `enable_local_python_tools`.
 - `toolDirectories` / `tool_directories`.
 - `runtime.mode` or `runtime_mode`.
 - `compaction.prune`, `compaction.toolOutputMaxChars` /
@@ -271,13 +272,15 @@ are ignored. Passing `include_defaults=False` disables these default command
 directories. Configured `commandDirectories` / `command_directories` entries
 are appended after defaults.
 
-With `include_defaults=True`, the loader adds existing workspace-local Python
-tool directories in discovery order: `.opencode/tool`, then `.opencode/tools`.
-Missing default local tool directories are ignored. Configured
-`toolDirectories` / `tool_directories` entries are resolved under the workspace
-root and appended after defaults with stable de-duplication. Config loading only
-records these paths; Python tool files are imported later when an
-`AgentRuntime` builds and registers its tool registry.
+Workspace-local Python tools are a legacy explicit opt-in extension. With
+`include_defaults=True`, the loader adds existing `.opencode/tool` and
+`.opencode/tools` directories only when `enableLocalPythonTools` /
+`enable_local_python_tools` is true. Missing default local tool directories are
+ignored. Configured `toolDirectories` / `tool_directories` entries are resolved
+under the workspace root with stable de-duplication, but `AgentRuntime` registers
+those Python tools only when `RuntimeConfig.enable_local_python_tools` is true.
+When the flag is false, configured local tool directories remain visible in
+runtime metadata as disabled legacy paths and are not imported.
 
 ## Tool Surface
 
@@ -287,6 +290,8 @@ tool ids are `apply_patch`, `bash`, `edit`, `glob`, `grep`, `invalid`, `read`,
 `repo_clone`, `repo_overview`, `todowrite`, `webfetch`, and `write`. Optional
 opencode-style tools such as `task`, `question`, `lsp`, `plan_exit`, and
 `skill` are still registered only when their existing feature gates are enabled.
+The default opencode surface exposes built-in tools only; it does not scan or
+import workspace-local Python files from `.opencode/tool` or `.opencode/tools`.
 
 EFP legacy aliases are not registered by default: `fetch`, `shell_exec`,
 `shell_status`, `shell_kill`, `read_file`, `write_file`, `list_dir`,
@@ -511,13 +516,18 @@ providers can receive session and worktree context without mutating the original
 `ToolContext`.
 
 Workspace-local custom tools use the Python-native loader under
-`efp_runtime.tools.local`. With default config loading, existing
-`.opencode/tool` and `.opencode/tools` directories are searched for direct child
-`*.py` files only; nested files are not scanned. Additional workspace-relative
-directories can be configured with `toolDirectories` / `tool_directories` and
-are appended after defaults. Local Python modules may export `TOOL` or `tool`
-as a single spec, or `TOOLS` / `tools` as a mapping of export name to spec.
-Unrelated module exports are ignored.
+`efp_runtime.tools.local`. This loader is retained as a legacy compatibility
+path and is disabled by default because importing workspace files is executable
+Python code and should not be part of the ordinary opencode-aligned surface. To
+enable it explicitly, set `RuntimeConfig(enable_local_python_tools=True)` or set
+`enableLocalPythonTools` / `enable_local_python_tools` in config. With that flag
+enabled, existing `.opencode/tool` and `.opencode/tools` directories are
+searched for direct child `*.py` files only; nested files are not scanned.
+Additional workspace-relative directories can be configured with
+`toolDirectories` / `tool_directories` and are appended after defaults. Local
+Python modules may export `TOOL` or `tool` as a single spec, or `TOOLS` /
+`tools` as a mapping of export name to spec. Unrelated module exports are
+ignored.
 
 For `TOOL` / `tool`, the default runtime tool id is the Python file stem, such
 as `hello.py` becoming `hello`. For `TOOLS` / `tools`, the default id is

@@ -1,4 +1,4 @@
-"""Workspace-local Python tool loading for Runtime v2."""
+"""Legacy explicit opt-in workspace-local Python tool loading for Runtime v2."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def default_local_tool_directories(
     *,
     include_defaults: bool = True,
 ) -> list[Path]:
-    """Return existing default local Python tool directories in load order."""
+    """Return existing legacy local Python tool directories in load order."""
 
     if not include_defaults:
         return []
@@ -48,7 +48,7 @@ def default_local_tool_directories(
 
 
 def local_tool_defs(directories: Iterable[str | Path]) -> list[ToolDef]:
-    """Load direct child ``*.py`` local tool files as Runtime v2 ``ToolDef``s."""
+    """Load direct child ``*.py`` legacy local tool files as Runtime v2 tools."""
 
     definitions: list[ToolDef] = []
     for directory in directories:
@@ -68,7 +68,7 @@ def register_local_tools(
     *,
     allow_override: bool = False,
 ) -> list[str]:
-    """Register workspace-local Python tools into an existing registry."""
+    """Register explicitly enabled workspace-local Python tools."""
 
     registered: list[str] = []
     for tool in local_tool_defs(directories):

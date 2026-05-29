@@ -562,6 +562,8 @@ def test_child_config_merges_profile_permission_over_base_without_mutation(
         workspace_root=tmp_path,
         tool_permissions={"alpha": "allow", "beta": "deny"},
         inject_background_task_results=False,
+        enable_local_python_tools=True,
+        local_tool_directories=[tmp_path / "tools"],
     )
 
     child_config = _child_config(
@@ -580,6 +582,8 @@ def test_child_config_merges_profile_permission_over_base_without_mutation(
     assert profile.metadata == {"permission": profile_permission}
     assert child_config.tool_permissions is not base_config.tool_permissions
     assert child_config.inject_background_task_results is False
+    assert child_config.enable_local_python_tools is True
+    assert child_config.local_tool_directories == [tmp_path / "tools"]
 
 
 @pytest.mark.asyncio

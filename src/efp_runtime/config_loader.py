@@ -110,6 +110,8 @@ _RUNTIME_CONFIG_KEYS = {
     "commands",
     "commandDirectories",
     "command_directories",
+    "enableLocalPythonTools",
+    "enable_local_python_tools",
     "toolDirectories",
     "tool_directories",
     "runtime",
@@ -514,6 +516,10 @@ def _runtime_config_from_raw(
     if include_legacy_tool_aliases is not None:
         kwargs["include_legacy_tool_aliases"] = include_legacy_tool_aliases
 
+    enable_local_python_tools = _enable_local_python_tools(raw)
+    if enable_local_python_tools is not None:
+        kwargs["enable_local_python_tools"] = enable_local_python_tools
+
     kwargs.update(_compaction_policy_fields(raw))
 
     instruction_paths, instruction_texts = _instruction_sources(
@@ -573,6 +579,11 @@ def _runtime_config_from_raw(
         raw,
         workspace_root=workspace_root,
         include_defaults=include_defaults,
+        enable_local_python_tools=(
+            False
+            if enable_local_python_tools is None
+            else bool(enable_local_python_tools)
+        ),
     )
     if local_tool_directories is not None:
         kwargs["local_tool_directories"] = local_tool_directories
@@ -754,6 +765,13 @@ def _include_legacy_tool_aliases(raw: Mapping[str, Any]) -> Any:
     )
 
 
+def _enable_local_python_tools(raw: Mapping[str, Any]) -> Any:
+    return _runtime_alias_value(
+        raw,
+        ("enableLocalPythonTools", "enable_local_python_tools"),
+    )
+
+
 def _runtime_alias_value(raw: Mapping[str, Any], aliases: Iterable[str]) -> Any:
     alias_set = set(aliases)
     value = None
@@ -906,10 +924,15 @@ def _local_tool_directories(
     *,
     workspace_root: Path,
     include_defaults: bool,
+    enable_local_python_tools: bool,
 ) -> list[Path] | None:
-    paths = default_local_tool_directories(
-        workspace_root,
-        include_defaults=include_defaults,
+    paths = (
+        default_local_tool_directories(
+            workspace_root,
+            include_defaults=include_defaults,
+        )
+        if enable_local_python_tools
+        else []
     )
 
     configured = _merged_alias_paths(
@@ -956,6 +979,8 @@ def _unconsumed_config(raw: Mapping[str, Any]) -> dict[str, Any]:
                         "tool_surface",
                         "includeLegacyToolAliases",
                         "include_legacy_tool_aliases",
+                        "enableLocalPythonTools",
+                        "enable_local_python_tools",
                     }
                 }
                 if runtime_extra:

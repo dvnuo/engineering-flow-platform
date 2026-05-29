@@ -122,7 +122,7 @@ def test_parent_default_commands_marker_resolves_workspace_root(
 
 
 @pytest.mark.parametrize("default_name", ["tool", "tools"])
-def test_parent_default_tool_marker_resolves_workspace_root(
+def test_parent_default_tool_marker_resolves_workspace_root_without_local_tool_dirs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     default_name: str,
@@ -142,6 +142,32 @@ def test_parent_default_tool_marker_resolves_workspace_root(
 
     assert result.loaded_paths == []
     assert result.config.workspace_root == project.resolve()
+    assert result.config.enable_local_python_tools is False
+    assert result.config.local_tool_directories == []
+
+
+@pytest.mark.parametrize("default_name", ["tool", "tools"])
+def test_enable_local_python_tools_discovers_default_tool_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    default_name: str,
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    nested = project / "src" / "pkg"
+    nested.mkdir(parents=True)
+    tools = project / ".opencode" / default_name
+    tools.mkdir(parents=True)
+    (tools / "hello.py").write_text(
+        "TOOL = {'description': 'Hello', 'execute': lambda args, context: 'hi'}\n",
+        encoding="utf-8",
+    )
+    _write_json(project / "opencode.json", {"enableLocalPythonTools": True})
+
+    result = load_runtime_config(nested)
+
+    assert result.config.workspace_root == project.resolve()
+    assert result.config.enable_local_python_tools is True
     assert result.config.local_tool_directories == [tools.resolve()]
 
 
@@ -516,6 +542,23 @@ def test_tool_surface_config_aliases(tmp_path: Path):
     assert snake.metadata["unconsumed_config"] == {}
 
 
+@pytest.mark.parametrize(
+    "alias",
+    ["enableLocalPythonTools", "enable_local_python_tools"],
+)
+def test_enable_local_python_tools_config_aliases(tmp_path: Path, alias: str):
+    _write_json(tmp_path / "custom.json", {alias: True})
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=["custom.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.enable_local_python_tools is True
+    assert result.metadata["unconsumed_config"] == {}
+
+
 def test_invalid_tool_surface_config_raises(tmp_path: Path):
     _write_json(tmp_path / "custom.json", {"tool_surface": "expanded"})
 
@@ -535,6 +578,7 @@ def test_configured_local_tool_directories_append_after_defaults(tmp_path: Path)
     _write_json(
         tmp_path / "opencode.json",
         {
+            "enableLocalPythonTools": True,
             "toolDirectories": ["project-tools", ".opencode/tool"],
             "tool_directories": ["more-tools"],
         },

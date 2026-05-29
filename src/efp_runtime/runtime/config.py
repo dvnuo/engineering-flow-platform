@@ -78,6 +78,7 @@ class RuntimeConfig:
     command_directories: list[str | Path] = field(default_factory=list)
     enable_command_expansion: bool = True
     max_command_chars: int = 20000
+    enable_local_python_tools: bool = False
     local_tool_directories: list[str | Path] = field(default_factory=list)
     resolve_prompt_references: bool = True
     max_prompt_reference_chars: int = 20000
@@ -236,6 +237,7 @@ class RuntimeConfig:
         )
         self.command_directories = list(self.command_directories)
         self.enable_command_expansion = bool(self.enable_command_expansion)
+        self.enable_local_python_tools = bool(self.enable_local_python_tools)
         self.local_tool_directories = list(self.local_tool_directories)
         self.archive_truncated_tool_outputs = bool(self.archive_truncated_tool_outputs)
 

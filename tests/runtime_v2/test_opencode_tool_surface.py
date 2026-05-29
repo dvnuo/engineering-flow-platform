@@ -142,6 +142,8 @@ def test_child_config_inherits_tool_surface_fields(tmp_path: Path):
         workspace_root=tmp_path,
         tool_surface="legacy",
         include_legacy_tool_aliases=True,
+        enable_local_python_tools=True,
+        local_tool_directories=[tmp_path / "tools"],
     )
 
     child = _child_config(
@@ -153,3 +155,5 @@ def test_child_config_inherits_tool_surface_fields(tmp_path: Path):
 
     assert child.tool_surface == "legacy"
     assert child.include_legacy_tool_aliases is True
+    assert child.enable_local_python_tools is True
+    assert child.local_tool_directories == [tmp_path / "tools"]

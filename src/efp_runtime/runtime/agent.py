@@ -1441,6 +1441,17 @@ class AgentRuntime:
             self.config.model_aware_tool_selection
         )
         run_metadata["emit_llm_stream_events"] = self.config.emit_llm_stream_events
+        run_metadata["enable_local_python_tools"] = (
+            self.config.enable_local_python_tools
+        )
+        if (
+            self.config.local_tool_directories
+            and not self.config.enable_local_python_tools
+        ):
+            run_metadata["local_python_tools_disabled"] = True
+            run_metadata["local_python_tool_directories"] = [
+                str(path) for path in self.config.local_tool_directories
+            ]
         if self.config.workspace_root is not None:
             run_metadata["workspace_root"] = str(self.config.workspace_root)
         run_metadata["tool_output_truncation_enabled"] = (
@@ -2466,6 +2477,7 @@ def _resolve_config(
         command_directories=list(config.command_directories),
         enable_command_expansion=config.enable_command_expansion,
         max_command_chars=config.max_command_chars,
+        enable_local_python_tools=config.enable_local_python_tools,
         local_tool_directories=list(config.local_tool_directories),
         resolve_prompt_references=config.resolve_prompt_references,
         max_prompt_reference_chars=config.max_prompt_reference_chars,
@@ -2554,7 +2566,7 @@ def _resolve_tool_runtime(
                         tool_permissions=config.tool_permissions,
                     )
                 )
-    if config.local_tool_directories:
+    if config.enable_local_python_tools and config.local_tool_directories:
         register_local_tools(registry, config.local_tool_directories)
     if external_tool_providers is not None:
         register_external_tools(
