@@ -94,6 +94,27 @@ class _ToolExecutionOutcome:
     structured_output: Optional[dict[str, Any]] = None
 
 
+@dataclass(frozen=True)
+class _CompactionReplayInfo:
+    replayed_message_id: str
+    replay_message_id: str
+    compaction_trigger: str
+    overflow_retry: bool = False
+    auto_continue: bool = False
+
+
+@dataclass(frozen=True)
+class _StoredCompactionOutcome:
+    history: list[Message]
+    replay: _CompactionReplayInfo | None = None
+
+
+_COMPACTION_REPLAY_CONTINUE_TEXT = (
+    "Continue if you have next steps, or stop and ask for clarification if you are "
+    "unsure how to proceed."
+)
+
+
 class _RuntimeEventLog(list):
     def __init__(self, event_bus: Optional[RuntimeEventBus] = None):
         super().__init__()
@@ -285,6 +306,7 @@ class RuntimeLoopRunner:
             session=session,
             allow_create=append_user_message,
         )
+        appended_user_message: Message | None = None
         if append_user_message:
             if user_parts is not None:
                 resolved_user_parts = list(user_parts)
@@ -292,7 +314,7 @@ class RuntimeLoopRunner:
                 resolved_user_parts = [MessagePart.text_part(user_text)]
             else:
                 resolved_user_parts = []
-            self.store.append_message(
+            appended_user_message = self.store.append_message(
                 resolved_session_id,
                 role=MessageRole.USER,
                 parts=resolved_user_parts,
@@ -406,9 +428,18 @@ class RuntimeLoopRunner:
 
             iteration = iterations + 1
             history = self.store.read_history(resolved_session_id)
-            history = await self._maybe_compact_stored_session_history(
+            active_user_message = _active_user_message(
+                history,
+                preferred_message_id=(
+                    appended_user_message.message_id
+                    if appended_user_message is not None
+                    else None
+                ),
+            )
+            compaction_outcome = await self._maybe_compact_stored_session_history(
                 session_id=resolved_session_id,
                 history=history,
+                active_user_message=active_user_message,
                 runtime_events=runtime_events,
                 run_id=run_id,
                 iteration=iteration,
@@ -417,12 +448,17 @@ class RuntimeLoopRunner:
                 budget=self._context_budget(run_metadata),
                 metadata=run_metadata,
             )
+            history = compaction_outcome.history
             request_history = [*(context_messages or []), *history]
             request_metadata = _request_metadata(
                 run_metadata,
                 session_id=resolved_session_id,
                 iteration=iteration,
                 max_iterations=iteration_limit,
+            )
+            _apply_compaction_replay_request_metadata(
+                request_metadata,
+                compaction_outcome.replay,
             )
             request = await self._prepare_runtime_request(
                 session_id=resolved_session_id,
@@ -433,6 +469,10 @@ class RuntimeLoopRunner:
                 metadata=request_metadata,
                 tools=enabled_tools,
                 budget=self._context_budget(request_metadata),
+            )
+            _apply_compaction_replay_metadata_to_request(
+                request,
+                compaction_outcome.replay,
             )
             runtime_events.append(
                 RuntimeEvent(
@@ -854,6 +894,7 @@ class RuntimeLoopRunner:
         *,
         session_id: str,
         history: list[Message],
+        active_user_message: Message | None,
         runtime_events: List[RuntimeEvent],
         run_id: str,
         iteration: int,
@@ -862,13 +903,13 @@ class RuntimeLoopRunner:
         budget: ContextBudget,
         metadata: Mapping[str, Any] | None = None,
         overflow_retry: bool = False,
-    ) -> list[Message]:
+    ) -> _StoredCompactionOutcome:
         if not self.compaction_auto:
-            return history
+            return _StoredCompactionOutcome(history=history)
         if not self._context_budget_enabled(budget):
-            return history
+            return _StoredCompactionOutcome(history=history)
         if not history:
-            return history
+            return _StoredCompactionOutcome(history=history)
 
         model_context_metadata = self._model_context_budget_metadata(
             metadata,
@@ -914,11 +955,19 @@ class RuntimeLoopRunner:
             )
 
         if not result.compacted:
-            return history
+            return _StoredCompactionOutcome(history=history)
 
         compaction_metadata.update(operation_metadata)
-        compacted_messages = _apply_auto_compaction_metadata(
+        compacted_messages, replay_info = _ensure_active_user_replay(
             result.messages,
+            active_user_message=active_user_message,
+            trigger=trigger,
+            overflow_retry=overflow_retry,
+        )
+        if replay_info is not None:
+            compaction_metadata.update(_compaction_replay_metadata(replay_info))
+        compacted_messages = _apply_auto_compaction_metadata(
+            compacted_messages,
             source_messages=history,
             summary=summary,
             metadata=compaction_metadata,
@@ -959,7 +1008,7 @@ class RuntimeLoopRunner:
                 },
             )
         )
-        return updated_history
+        return _StoredCompactionOutcome(history=updated_history, replay=replay_info)
 
     def _stored_session_compaction_strategy(
         self,
@@ -1127,10 +1176,14 @@ class RuntimeLoopRunner:
                     : max(0, len(request_history) - len(history))
                 ]
                 retry_history = history
+                replay_info: _CompactionReplayInfo | None = None
                 if self.compaction_auto:
-                    retry_history = await self._maybe_compact_stored_session_history(
+                    stored_history = self.store.read_history(current_request.session_id)
+                    active_user_message = _active_user_message(stored_history)
+                    compaction_outcome = await self._maybe_compact_stored_session_history(
                         session_id=current_request.session_id,
-                        history=self.store.read_history(current_request.session_id),
+                        history=stored_history,
+                        active_user_message=active_user_message,
                         runtime_events=runtime_events,
                         run_id=run_id,
                         iteration=iteration,
@@ -1140,6 +1193,12 @@ class RuntimeLoopRunner:
                         budget=overflow_budget,
                         metadata=overflow_metadata,
                     )
+                    retry_history = compaction_outcome.history
+                    replay_info = compaction_outcome.replay
+                _apply_compaction_replay_request_metadata(
+                    overflow_metadata,
+                    replay_info,
+                )
                 retry_request_history = [
                     *provider_context_messages,
                     *retry_history,
@@ -1154,6 +1213,10 @@ class RuntimeLoopRunner:
                     tools=tools,
                     budget=overflow_budget,
                 )
+                _apply_compaction_replay_metadata_to_request(
+                    overflow_request,
+                    replay_info,
+                )
                 overflow_request = _with_provider_retry_metadata(
                     overflow_request,
                     retry_count=retry_count,
@@ -1165,21 +1228,25 @@ class RuntimeLoopRunner:
                     attempt=overflow_retry_count,
                     budget=overflow_budget,
                 )
+                overflow_event_payload = {
+                    "run_id": run_id,
+                    "iteration": iteration,
+                    "attempt": overflow_retry_count,
+                    "error_type": exc.__class__.__name__,
+                    "code": exc.code,
+                    "compaction": dict(
+                        overflow_request.prepared_request.compaction_metadata
+                    ),
+                }
+                overflow_event_payload.update(
+                    _compaction_replay_payload_from_metadata(overflow_request.metadata)
+                )
                 runtime_events.append(
                     RuntimeEvent(
                         type="provider.context_overflow_retry",
                         message="Provider context overflow triggered compacted retry.",
                         session_id=current_request.session_id,
-                        payload={
-                            "run_id": run_id,
-                            "iteration": iteration,
-                            "attempt": overflow_retry_count,
-                            "error_type": exc.__class__.__name__,
-                            "code": exc.code,
-                            "compaction": dict(
-                                overflow_request.prepared_request.compaction_metadata
-                            ),
-                        },
+                        payload=overflow_event_payload,
                     )
                 )
                 current_request = overflow_request
@@ -2337,6 +2404,292 @@ def _tail_start_message_id(
     return user_messages[max(0, len(user_messages) - tail_turns)].message_id
 
 
+def _active_user_message(
+    messages: Iterable[Message],
+    *,
+    preferred_message_id: str | None = None,
+) -> Message | None:
+    message_list = list(messages)
+    if preferred_message_id is not None:
+        for message in reversed(message_list):
+            if (
+                message.message_id == preferred_message_id
+                and message.role is MessageRole.USER
+                and not _message_has_compaction_part(message)
+            ):
+                return message
+
+    for message in reversed(message_list):
+        if message.role is not MessageRole.USER:
+            continue
+        if _message_has_compaction_part(message):
+            continue
+        return message
+    return None
+
+
+def _ensure_active_user_replay(
+    messages: Iterable[Message],
+    *,
+    active_user_message: Message | None,
+    trigger: str,
+    overflow_retry: bool,
+) -> tuple[list[Message], _CompactionReplayInfo | None]:
+    compacted_messages = list(messages)
+    if active_user_message is None:
+        return compacted_messages, None
+    if _history_contains_visible_message(
+        compacted_messages,
+        message_id=active_user_message.message_id,
+    ):
+        return compacted_messages, None
+
+    replay_message, replay_info = _build_compaction_replay_message(
+        active_user_message,
+        trigger=trigger,
+        overflow_retry=overflow_retry,
+    )
+    return [*compacted_messages, replay_message], replay_info
+
+
+def _history_contains_visible_message(
+    messages: Iterable[Message],
+    *,
+    message_id: str,
+) -> bool:
+    for message in messages:
+        if message.message_id != message_id:
+            continue
+        if message.role is not MessageRole.USER:
+            return False
+        return _message_has_model_visible_content(message)
+    return False
+
+
+def _message_has_model_visible_content(message: Message) -> bool:
+    for part in message.parts:
+        if part.type is MessagePartType.TEXT and (part.text or ""):
+            return True
+        if part.type is MessagePartType.ERROR and (part.text or ""):
+            return True
+        if part.type is MessagePartType.TASK and part.task is not None:
+            if part.task.prompt:
+                return True
+        if part.type is MessagePartType.ATTACHMENT and part.attachment is not None:
+            return True
+    return False
+
+
+def _message_has_compaction_part(message: Message) -> bool:
+    return any(part.type is MessagePartType.COMPACTION for part in message.parts)
+
+
+def _build_compaction_replay_message(
+    active_user_message: Message,
+    *,
+    trigger: str,
+    overflow_retry: bool,
+) -> tuple[Message, _CompactionReplayInfo]:
+    replayed_message_id = _replayed_message_id(active_user_message)
+    replay_message_id = new_id("msg")
+    parts = _compaction_replay_parts(
+        active_user_message,
+        replayed_message_id=replayed_message_id,
+        trigger=trigger,
+        overflow_retry=overflow_retry,
+    )
+    auto_continue = False
+    if not parts:
+        auto_continue = True
+        parts = [
+            _compaction_replay_text_part(
+                _COMPACTION_REPLAY_CONTINUE_TEXT,
+                replayed_message_id=replayed_message_id,
+                trigger=trigger,
+                overflow_retry=overflow_retry,
+                auto_continue=True,
+            )
+        ]
+
+    replay_info = _CompactionReplayInfo(
+        replayed_message_id=replayed_message_id,
+        replay_message_id=replay_message_id,
+        compaction_trigger=trigger,
+        overflow_retry=overflow_retry,
+        auto_continue=auto_continue,
+    )
+    return (
+        Message(
+            role=MessageRole.USER,
+            session_id=active_user_message.session_id,
+            message_id=replay_message_id,
+            parts=parts,
+            metadata={
+                "source": "compaction.replay",
+                **_compaction_replay_metadata(replay_info),
+            },
+            status="complete",
+        ),
+        replay_info,
+    )
+
+
+def _compaction_replay_parts(
+    message: Message,
+    *,
+    replayed_message_id: str,
+    trigger: str,
+    overflow_retry: bool,
+) -> list[MessagePart]:
+    parts: list[MessagePart] = []
+    for part in message.parts:
+        replay_text = _compaction_replay_part_text(part)
+        if not replay_text:
+            continue
+        replay_part = _compaction_replay_text_part(
+            replay_text,
+            replayed_message_id=replayed_message_id,
+            trigger=trigger,
+            overflow_retry=overflow_retry,
+        )
+        replay_part.metadata["replayed_part_id"] = part.part_id
+        replay_part.metadata["replayed_part_type"] = part.type.value
+        parts.append(replay_part)
+    return parts
+
+
+def _compaction_replay_part_text(part: MessagePart) -> str | None:
+    if part.type is MessagePartType.TEXT:
+        return part.text or None
+    if part.type is MessagePartType.ERROR:
+        return part.text or None
+    if part.type is MessagePartType.TASK and part.task is not None:
+        return part.task.prompt or None
+    if part.type is MessagePartType.ATTACHMENT and part.attachment is not None:
+        label = (
+            part.attachment.filename
+            or part.attachment.mime_type
+            or part.attachment.attachment_id
+            or "attachment"
+        )
+        return f"[Attachment omitted during compaction replay: {label}]"
+    return None
+
+
+def _compaction_replay_text_part(
+    text: str,
+    *,
+    replayed_message_id: str,
+    trigger: str,
+    overflow_retry: bool,
+    auto_continue: bool = False,
+) -> MessagePart:
+    metadata = {
+        "source": "compaction.replay",
+        "compaction_replay": True,
+        "compaction_trigger": trigger,
+        "replayed_message_id": replayed_message_id,
+    }
+    if overflow_retry:
+        metadata["overflow_retry"] = True
+    if auto_continue:
+        metadata["auto_continue"] = True
+    return MessagePart.text_part(text, metadata=metadata)
+
+
+def _replayed_message_id(message: Message) -> str:
+    if message.metadata.get("compaction_replay") is True:
+        value = message.metadata.get("replayed_message_id")
+        if value:
+            return str(value)
+    return message.message_id
+
+
+def _compaction_replay_metadata(
+    replay_info: _CompactionReplayInfo,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "compaction_replay": True,
+        "compaction_trigger": replay_info.compaction_trigger,
+        "replayed_message_id": replay_info.replayed_message_id,
+        "replay_message_id": replay_info.replay_message_id,
+    }
+    if replay_info.overflow_retry:
+        metadata["overflow_retry"] = True
+    if replay_info.auto_continue:
+        metadata["auto_continue"] = True
+    return metadata
+
+
+def _apply_compaction_replay_request_metadata(
+    metadata: dict[str, Any],
+    replay_info: _CompactionReplayInfo | None,
+) -> None:
+    if replay_info is None:
+        return
+    replay_metadata = _compaction_replay_metadata(replay_info)
+    metadata.update(replay_metadata)
+    compaction_metadata = metadata.get("compaction")
+    if isinstance(compaction_metadata, Mapping):
+        compaction_payload = dict(compaction_metadata)
+    else:
+        compaction_payload = {}
+    compaction_payload.update(replay_metadata)
+    metadata["compaction"] = compaction_payload
+
+
+def _apply_compaction_replay_metadata_to_request(
+    request: RuntimeRequest,
+    replay_info: _CompactionReplayInfo | None,
+) -> None:
+    replay_metadata = (
+        _compaction_replay_metadata(replay_info)
+        if replay_info is not None
+        else _compaction_replay_payload_from_metadata(request.metadata)
+    )
+    if not replay_metadata:
+        return
+
+    for metadata in (
+        request.metadata,
+        request.provider_request.metadata,
+        request.prepared_request.request.metadata,
+    ):
+        metadata.update(replay_metadata)
+        compaction_metadata = metadata.get("compaction")
+        if isinstance(compaction_metadata, Mapping):
+            compaction_payload = dict(compaction_metadata)
+        else:
+            compaction_payload = {}
+        compaction_payload.update(replay_metadata)
+        metadata["compaction"] = compaction_payload
+    request.prepared_request.compaction_metadata.update(replay_metadata)
+
+
+def _compaction_replay_payload_from_metadata(
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    if metadata.get("compaction_replay") is not True:
+        return {}
+    replayed_message_id = metadata.get("replayed_message_id")
+    if not replayed_message_id:
+        return {}
+    payload: dict[str, Any] = {
+        "compaction_replay": True,
+        "replayed_message_id": str(replayed_message_id),
+    }
+    for key in (
+        "compaction_trigger",
+        "replay_message_id",
+        "overflow_retry",
+        "auto_continue",
+    ):
+        value = metadata.get(key)
+        if value not in (None, False, ""):
+            payload[key] = value
+    return payload
+
+
 def _provider_retry_event(
     *,
     session_id: str,
@@ -2452,6 +2805,7 @@ def _apply_overflow_retry_metadata(
     budget: ContextBudget,
 ) -> None:
     overflow_info = _overflow_retry_info(attempt=attempt, budget=budget)
+    replay_metadata = _compaction_replay_payload_from_metadata(request.metadata)
     for metadata in (
         request.metadata,
         request.provider_request.metadata,
@@ -2464,8 +2818,10 @@ def _apply_overflow_retry_metadata(
             compaction_payload = dict(compaction_metadata)
         else:
             compaction_payload = {}
+        compaction_payload.update(replay_metadata)
         compaction_payload.update(overflow_info)
         metadata["compaction"] = compaction_payload
+    request.prepared_request.compaction_metadata.update(replay_metadata)
     request.prepared_request.compaction_metadata.update(overflow_info)
 
 

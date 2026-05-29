@@ -1320,6 +1320,19 @@ same `CompactionController` path used by manual compaction supplies the
 persisted summary; otherwise deterministic compaction creates the stored
 summary.
 
+Automatic compaction also has an active-user replay guard. The loop treats the
+current appended user message, or on resume the latest non-compaction user
+message, as the active request. After stored history is compacted, the loop
+checks that this active request is still present with model-visible text or
+context. If a strict budget or overflow compaction removed it, the loop appends
+a persisted synthetic user message with `source="compaction.replay"`,
+`compaction_replay=true`, `compaction_trigger`, and `replayed_message_id`
+metadata before building the provider request. Replay copies only safe text or
+context text; attachment parts become short placeholder text instead of
+reusing the original attachment reference. If there is no replayable user text
+but the loop still needs a user message to continue, the replay message uses a
+single conservative continue-or-clarify instruction.
+
 `AgentRuntime.compact_session(...)` provides manual persistent compaction for
 stored session history. Unlike request-local budget compaction, which only
 changes the provider request for a single turn, manual compaction replaces older
@@ -1343,7 +1356,10 @@ automatic compaction is enabled, the loop first persists that stricter overflow
 compaction to stored session history with `overflow_retry=true`,
 `overflow=true`, and `trigger="provider_context_overflow"` metadata. The retry
 request is then rebuilt from provider-only context messages plus the compacted
-stored history, keeping the latest user request visible. Existing part-aware
+stored history, keeping the latest user request visible. The same active-user
+replay guard runs on this overflow path, and replay metadata is copied onto the
+retried request and the overflow retry event when a synthetic user message is
+used. Existing part-aware
 request-local compaction remains a safety net for provider-only context
 overflow. The overflow retry is single-shot to avoid infinite loops, and the
 retried request records `overflow_retry` metadata on the request and compaction

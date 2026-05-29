@@ -12,7 +12,7 @@ from efp_runtime.loop import (
     RuntimeRequest,
     ScriptedLLMProvider,
 )
-from efp_runtime.models import Message, MessagePart, MessagePartType, MessageRole
+from efp_runtime.models import Attachment, Message, MessagePart, MessagePartType, MessageRole
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.store import InMemorySessionStore
 from efp_runtime.tools.registry import ToolRegistry
@@ -81,6 +81,14 @@ def _compaction_parts(messages):
     ]
 
 
+def _replay_messages(messages):
+    return [
+        message
+        for message in messages
+        if message.metadata.get("source") == "compaction.replay"
+    ]
+
+
 def _events(result, event_type: str):
     return [event for event in result.runtime_events if event.type == event_type]
 
@@ -133,6 +141,8 @@ async def test_auto_compaction_persists_before_provider_and_request_includes_lat
     stored_compactions = _compaction_parts(store.read_history("session-auto"))
     assert len(stored_compactions) == 1
     assert stored_compactions[0].compaction.metadata["auto"] is True
+    assert _replay_messages(store.read_history("session-auto")) == []
+    assert "compaction_replay" not in request.provider_request.metadata
 
     started = _events(result, "session_compaction_started")
     compacted = _events(result, "session_compacted")
@@ -264,6 +274,49 @@ async def test_max_context_chars_takes_priority_over_token_budget():
 
 
 @pytest.mark.asyncio
+async def test_auto_compaction_tail_zero_synthetic_replays_active_user():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-replay")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        max_context_parts=1,
+        compaction_tail_turns=0,
+    )
+
+    result = await runner.run(
+        session_id="session-replay",
+        user_text="latest request must survive",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    assert request.provider_request.messages[-1].role == "user"
+    assert request.provider_request.messages[-1].text == "latest request must survive"
+    assert request.provider_request.metadata["compaction_replay"] is True
+    replayed_message_id = request.provider_request.metadata["replayed_message_id"]
+
+    stored = store.read_history("session-replay")
+    replay_messages = _replay_messages(stored)
+    assert len(replay_messages) == 1
+    replay = replay_messages[0]
+    assert replay.metadata["compaction_replay"] is True
+    assert replay.metadata["compaction_trigger"] == "context_budget"
+    assert replay.metadata["replayed_message_id"] == replayed_message_id
+    assert replay.metadata["replay_message_id"] == replay.message_id
+    assert replay.parts[0].type is MessagePartType.TEXT
+    assert replay.parts[0].text == "latest request must survive"
+    assert replay.parts[0].metadata["compaction_replay"] is True
+    assert replay.parts[0].metadata["replayed_message_id"] == replayed_message_id
+    assert _events(result, "session_compacted")[0].payload["compaction_replay"] is True
+    assert (
+        _events(result, "session_compacted")[0].payload["replayed_message_id"]
+        == replayed_message_id
+    )
+
+
+@pytest.mark.asyncio
 async def test_compaction_auto_false_leaves_stored_session_unchanged():
     store = InMemorySessionStore()
     _seed_history(store, "session-disabled")
@@ -370,6 +423,92 @@ async def test_overflow_retry_persists_overflow_compaction_and_retries_once():
     assert len(_events(result, "provider.context_overflow_retry")) == 1
     assert len(_events(result, "session_compaction_started")) == 1
     assert len(_events(result, "session_compacted")) == 1
+
+
+@pytest.mark.asyncio
+async def test_overflow_retry_request_contains_replayed_active_user():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-overflow-replay", latest="retry latest request")
+    provider = SequenceProvider(
+        [
+            ProviderContextOverflowError("context too long"),
+            {"content": "Recovered."},
+        ]
+    )
+    runner = _runner(
+        store,
+        provider,
+        max_context_parts=1,
+        compaction_tail_turns=0,
+    )
+
+    result = await runner.run(
+        session_id="session-overflow-replay",
+        user_text="",
+        append_user_message=False,
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(provider.requests) == 2
+    retry_request = provider.requests[1]
+    assert retry_request.provider_request.messages[-1].role == "user"
+    assert retry_request.provider_request.messages[-1].text == "retry latest request"
+    retry_metadata = provider.metadata_snapshots[1]
+    assert retry_metadata["compaction_replay"] is True
+    assert retry_metadata["replayed_message_id"] == "msg-latest-user"
+    assert retry_metadata["overflow_retry"] is True
+    assert retry_metadata["compaction"]["compaction_replay"] is True
+    assert retry_metadata["compaction"]["replayed_message_id"] == "msg-latest-user"
+
+    overflow_events = _events(result, "provider.context_overflow_retry")
+    assert overflow_events[0].payload["compaction_replay"] is True
+    assert overflow_events[0].payload["replayed_message_id"] == "msg-latest-user"
+    assert overflow_events[0].payload["compaction"]["compaction_replay"] is True
+
+
+@pytest.mark.asyncio
+async def test_compaction_replay_replaces_attachment_with_placeholder_text():
+    store = InMemorySessionStore()
+    _seed_history(store, "session-attachment-replay")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        max_context_parts=1,
+        compaction_tail_turns=0,
+    )
+    attachment = Attachment(
+        mime_type="text/plain",
+        filename="notes.txt",
+        text_ref="blob:notes",
+    )
+
+    result = await runner.run(
+        session_id="session-attachment-replay",
+        user_text="",
+        user_parts=[MessagePart.attachment_part(attachment)],
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    replay_text = "[Attachment omitted during compaction replay: notes.txt]"
+    request_message = provider.requests[0].provider_request.messages[-1]
+    assert request_message.role == "user"
+    assert request_message.text == replay_text
+    assert request_message.attachments == []
+
+    stored = store.read_history("session-attachment-replay")
+    replay_messages = _replay_messages(stored)
+    assert len(replay_messages) == 1
+    replay = replay_messages[0]
+    assert replay.parts[0].type is MessagePartType.TEXT
+    assert replay.parts[0].text == replay_text
+    assert replay.parts[0].attachment is None
+    assert replay.parts[0].metadata["compaction_replay"] is True
+    assert all(
+        part.type is not MessagePartType.ATTACHMENT
+        for message in stored
+        for part in message.parts
+    )
 
 
 @pytest.mark.asyncio
