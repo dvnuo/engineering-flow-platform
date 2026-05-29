@@ -20,6 +20,7 @@ from .strategy import (
     CompactionResult,
     ContextBudget,
     PartAwareCompactionStrategy,
+    TailTurnCompactionStrategy,
 )
 
 __all__ = [
@@ -34,6 +35,7 @@ __all__ = [
     "ContextBudget",
     "DeterministicCompactionSummarizer",
     "PartAwareCompactionStrategy",
+    "TailTurnCompactionStrategy",
     "build_compaction_prompt",
     "latest_compaction_summary",
     "maybe_summarize_compaction",

@@ -72,6 +72,13 @@ _RUNTIME_CONFIG_KEYS = {
     "enabled_tools",
     "modelAwareToolSelection",
     "model_aware_tool_selection",
+    "compaction",
+    "compaction_auto",
+    "compaction_prune",
+    "compaction_tail_turns",
+    "compaction_preserve_recent_chars",
+    "compaction_reserved_chars",
+    "compaction_tool_output_max_chars",
     "instructions",
     "systemPrompt",
     "system_prompt",
@@ -478,6 +485,8 @@ def _runtime_config_from_raw(
     if model_aware_tool_selection is not None:
         kwargs["model_aware_tool_selection"] = model_aware_tool_selection
 
+    kwargs.update(_compaction_policy_fields(raw))
+
     instruction_paths, instruction_texts = _instruction_sources(
         raw.get("instructions"),
         workspace_root=workspace_root,
@@ -698,6 +707,55 @@ def _model_aware_tool_selection(raw: Mapping[str, Any]) -> Any:
     return selection
 
 
+_COMPACTION_NESTED_ALIASES = {
+    "auto": "compaction_auto",
+    "prune": "compaction_prune",
+    "tail_turns": "compaction_tail_turns",
+    "tailTurns": "compaction_tail_turns",
+    "preserve_recent_chars": "compaction_preserve_recent_chars",
+    "preserveRecentChars": "compaction_preserve_recent_chars",
+    "reserved": "compaction_reserved_chars",
+    "tool_output_max_chars": "compaction_tool_output_max_chars",
+    "toolOutputMaxChars": "compaction_tool_output_max_chars",
+}
+
+_COMPACTION_TOP_LEVEL_FIELDS = {
+    "compaction_auto",
+    "compaction_prune",
+    "compaction_tail_turns",
+    "compaction_preserve_recent_chars",
+    "compaction_reserved_chars",
+    "compaction_tool_output_max_chars",
+}
+
+
+def _compaction_policy_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key, value in raw.items():
+        key_text = str(key)
+        if key_text == "compaction":
+            if not isinstance(value, Mapping):
+                raise ValueError("compaction must be an object")
+            for nested_key, nested_value in value.items():
+                field_name = _COMPACTION_NESTED_ALIASES.get(str(nested_key))
+                if field_name is not None:
+                    fields[field_name] = nested_value
+            continue
+        if key_text in _COMPACTION_TOP_LEVEL_FIELDS:
+            fields[key_text] = value
+    return fields
+
+
+def _unconsumed_compaction_config(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("compaction must be an object")
+    return {
+        str(compaction_key): deepcopy(compaction_value)
+        for compaction_key, compaction_value in value.items()
+        if str(compaction_key) not in _COMPACTION_NESTED_ALIASES
+    }
+
+
 def _command_directories(
     raw: Mapping[str, Any],
     *,
@@ -805,6 +863,11 @@ def _unconsumed_config(raw: Mapping[str, Any]) -> dict[str, Any]:
                     unconsumed[key_text] = runtime_extra
             else:
                 unconsumed[key_text] = deepcopy(value)
+            continue
+        if key_text == "compaction":
+            compaction_extra = _unconsumed_compaction_config(value)
+            if compaction_extra:
+                unconsumed[key_text] = compaction_extra
             continue
         if key_text == "skills":
             skills_extra = _unconsumed_skills_config(value)

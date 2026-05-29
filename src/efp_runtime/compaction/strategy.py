@@ -82,6 +82,13 @@ class _Block:
         return sum(_part_chars(ref.part) for ref in self.refs)
 
 
+@dataclass(frozen=True)
+class _Turn:
+    start_index: int
+    end_index: int
+    message_id: str
+
+
 class BudgetCompactionStrategy:
     """Keep protected and recent part blocks inside an approximate budget."""
 
@@ -208,6 +215,146 @@ class PartAwareCompactionStrategy(BudgetCompactionStrategy):
         super().__init__(budget=ContextBudget(max_parts=max_parts))
 
 
+class TailTurnCompactionStrategy(BudgetCompactionStrategy):
+    """Keep a recent suffix of user turns and summarize older history."""
+
+    def __init__(
+        self,
+        *,
+        budget: ContextBudget,
+        tail_turns: int = 2,
+        preserve_recent_chars: int | None = None,
+    ):
+        _validate_non_negative_int(tail_turns, "tail_turns")
+        if preserve_recent_chars is not None:
+            _validate_non_negative_int(
+                preserve_recent_chars,
+                "preserve_recent_chars",
+            )
+        super().__init__(budget=budget)
+        self.tail_turns = tail_turns
+        self.preserve_recent_chars = preserve_recent_chars
+
+    def compact(self, messages: list[Message]) -> CompactionResult:
+        refs = _flatten_messages(messages)
+        total_chars = _messages_chars(messages)
+        if not self._over_budget(part_count=len(refs), char_count=total_chars):
+            return CompactionResult(
+                messages=list(messages),
+                source_messages=list(messages),
+                kept_messages=list(messages),
+                kept_chars=total_chars,
+            )
+
+        blocks = _group_part_blocks(refs)
+        pending_call_ids = _pending_tool_call_ids(refs)
+        protected_indices = {
+            index
+            for index, block in enumerate(blocks)
+            if _is_protected_block(block, pending_call_ids=pending_call_ids)
+        }
+        recent_budget = self._recent_tail_budget()
+        tail_start_index = self._tail_start_index(messages, recent_budget)
+        tail_indices = (
+            _block_indices_from_message_index(blocks, tail_start_index)
+            if tail_start_index is not None
+            else set()
+        )
+        kept_indices = protected_indices | tail_indices
+        compacted_blocks = [
+            block for index, block in enumerate(blocks) if index not in kept_indices
+        ]
+        if not compacted_blocks:
+            return CompactionResult(
+                messages=list(messages),
+                source_messages=list(messages),
+                kept_messages=list(messages),
+                kept_chars=total_chars,
+            )
+
+        kept_keys = {ref.key for index in kept_indices for ref in blocks[index].refs}
+        compacted_keys = {ref.key for block in compacted_blocks for ref in block.refs}
+        tail_start_message_id = _tail_start_message_id(
+            messages,
+            blocks=blocks,
+            tail_indices=tail_indices,
+            tail_start_index=tail_start_index,
+        )
+        compaction_message = _build_compaction_message(
+            compacted_blocks,
+            previous_summary=latest_compaction_summary(messages),
+            tail_start_message_id=tail_start_message_id,
+            metadata={
+                "strategy": "tail_turn",
+                "tail_turns": self.tail_turns,
+                "preserve_recent_chars": recent_budget,
+                "tail_start_message_id": tail_start_message_id,
+            },
+        )
+        remaining_items = _rebuild_message_items(messages, kept_keys)
+        final_messages = _insert_compaction_message(
+            compaction_message,
+            remaining_items,
+            compacted_blocks,
+        )
+        return CompactionResult(
+            messages=final_messages,
+            source_messages=list(messages),
+            compacted_messages=_rebuild_messages(messages, compacted_keys),
+            kept_messages=_rebuild_messages(messages, kept_keys),
+            compacted_part_count=sum(block.part_count for block in compacted_blocks),
+            compacted_message_count=len(
+                {ref.message_index for block in compacted_blocks for ref in block.refs}
+            ),
+            compacted_tool_pair_count=sum(1 for block in compacted_blocks if block.is_tool_pair),
+            compacted_chars=sum(block.char_count for block in compacted_blocks),
+            kept_chars=_messages_chars(final_messages),
+        )
+
+    def _recent_tail_budget(self) -> int:
+        if self.preserve_recent_chars is not None:
+            return self.preserve_recent_chars
+        effective_max_chars = self.budget.effective_max_chars
+        if effective_max_chars is None:
+            return 8000
+        return max(2000, min(8000, effective_max_chars // 4))
+
+    def _tail_start_index(
+        self,
+        messages: list[Message],
+        recent_budget: int,
+    ) -> int | None:
+        if self.tail_turns <= 0:
+            return None
+        turns = _user_turns(messages)
+        if not turns:
+            return None
+
+        recent_turns = turns[-self.tail_turns :]
+        turn_sizes = [
+            _messages_chars(messages[turn.start_index : turn.end_index])
+            for turn in recent_turns
+        ]
+        total = 0
+        keep_start: int | None = None
+        for index in reversed(range(len(recent_turns))):
+            turn = recent_turns[index]
+            turn_size = turn_sizes[index]
+            if total + turn_size <= recent_budget:
+                total += turn_size
+                keep_start = turn.start_index
+                continue
+            split_start = _split_turn_start(
+                messages,
+                turn=turn,
+                budget=recent_budget - total,
+            )
+            if split_start is not None:
+                keep_start = split_start
+            break
+        return keep_start
+
+
 def _flatten_messages(messages: list[Message]) -> list[_PartRef]:
     refs: list[_PartRef] = []
     for message_index, message in enumerate(messages):
@@ -274,6 +421,81 @@ def _pending_tool_call_ids(refs: list[_PartRef]) -> set[str]:
     return call_ids - result_ids
 
 
+def _user_turns(messages: list[Message]) -> list[_Turn]:
+    turns: list[_Turn] = []
+    for index, message in enumerate(messages):
+        if message.role is not MessageRole.USER:
+            continue
+        if _message_has_compaction_part(message):
+            continue
+        turns.append(
+            _Turn(
+                start_index=index,
+                end_index=len(messages),
+                message_id=message.message_id,
+            )
+        )
+
+    for index in range(len(turns) - 1):
+        turns[index] = _Turn(
+            start_index=turns[index].start_index,
+            end_index=turns[index + 1].start_index,
+            message_id=turns[index].message_id,
+        )
+    return turns
+
+
+def _message_has_compaction_part(message: Message) -> bool:
+    return any(part.type is MessagePartType.COMPACTION for part in message.parts)
+
+
+def _split_turn_start(
+    messages: list[Message],
+    *,
+    turn: _Turn,
+    budget: int,
+) -> int | None:
+    if budget <= 0:
+        return None
+    if turn.end_index - turn.start_index <= 1:
+        return None
+    for start_index in range(turn.start_index + 1, turn.end_index):
+        if _messages_chars(messages[start_index : turn.end_index]) <= budget:
+            return start_index
+    return None
+
+
+def _block_indices_from_message_index(
+    blocks: list[_Block],
+    message_index: int,
+) -> set[int]:
+    return {
+        index
+        for index, block in enumerate(blocks)
+        if any(ref.message_index >= message_index for ref in block.refs)
+    }
+
+
+def _tail_start_message_id(
+    messages: list[Message],
+    *,
+    blocks: list[_Block],
+    tail_indices: set[int],
+    tail_start_index: int | None,
+) -> str | None:
+    if tail_start_index is None:
+        return None
+    message_indices = [
+        ref.message_index
+        for index in tail_indices
+        for ref in blocks[index].refs
+        if ref.message_index >= tail_start_index
+    ]
+    if not message_indices:
+        return None
+    return messages[min(message_indices)].message_id
+
+
 def _is_protected_block(block: _Block, *, pending_call_ids: set[str]) -> bool:
     for ref in block.refs:
         if (
@@ -314,7 +536,13 @@ def _selection_usage(blocks: list[_Block], kept_indices: set[int]) -> tuple[int,
     return part_count, char_count
 
 
-def _build_compaction_message(compacted_blocks: list[_Block]) -> Message:
+def _build_compaction_message(
+    compacted_blocks: list[_Block],
+    *,
+    previous_summary: str | None = None,
+    tail_start_message_id: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> Message:
     part_count = sum(block.part_count for block in compacted_blocks)
     message_refs = {ref.message_index: ref.message for block in compacted_blocks for ref in block.refs}
     message_count = len(message_refs)
@@ -325,21 +553,26 @@ def _build_compaction_message(compacted_blocks: list[_Block]) -> Message:
     summary = render_anchored_compaction_summary(
         session_id=session_id,
         compacted_messages=source_messages,
-        previous_summary=latest_compaction_summary(source_messages),
+        previous_summary=previous_summary or latest_compaction_summary(source_messages),
         metadata={
             "compacted_part_count": part_count,
             "compacted_message_count": message_count,
             "compacted_tool_pair_count": tool_pair_count,
         },
     )
+    compaction_metadata = {
+        "approx_compacted_chars": sum(block.char_count for block in compacted_blocks)
+    }
+    compaction_metadata.update(dict(metadata or {}))
     compaction = CompactionPart(
         summary=summary,
         source_message_ids=source_message_ids,
         auto=True,
+        tail_start_message_id=tail_start_message_id,
         original_part_count=part_count,
         original_message_count=message_count,
         tool_pair_count=tool_pair_count,
-        metadata={"approx_compacted_chars": sum(block.char_count for block in compacted_blocks)},
+        metadata=compaction_metadata,
     )
     return Message(
         role="system",
@@ -464,3 +697,8 @@ def _json_chars(value: Mapping[str, Any]) -> int:
 
 def _copy_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
     return dict(mapping)
+
+
+def _validate_non_negative_int(value: Any, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name} must be greater than or equal to 0")

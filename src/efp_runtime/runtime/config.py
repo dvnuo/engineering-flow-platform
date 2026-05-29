@@ -22,6 +22,12 @@ class RuntimeConfig:
     max_context_parts: int | None = None
     max_context_chars: int | None = None
     context_reserve_chars: int = 0
+    compaction_auto: bool = True
+    compaction_prune: bool = True
+    compaction_tail_turns: int = 2
+    compaction_preserve_recent_chars: int | None = None
+    compaction_reserved_chars: int | None = None
+    compaction_tool_output_max_chars: int = 2000
     enable_compaction_summarizer: bool = False
     provider_max_retries: int = 2
     provider_retry_backoff_seconds: float = 0.0
@@ -83,6 +89,22 @@ class RuntimeConfig:
             raise ValueError("max_context_chars must be at least 1")
         if self.context_reserve_chars < 0:
             raise ValueError("context_reserve_chars must be at least 0")
+        _validate_non_negative_int(
+            self.compaction_tail_turns,
+            "compaction_tail_turns",
+        )
+        _validate_optional_non_negative_int(
+            self.compaction_preserve_recent_chars,
+            "compaction_preserve_recent_chars",
+        )
+        _validate_optional_non_negative_int(
+            self.compaction_reserved_chars,
+            "compaction_reserved_chars",
+        )
+        _validate_non_negative_int(
+            self.compaction_tool_output_max_chars,
+            "compaction_tool_output_max_chars",
+        )
         if self.provider_max_retries < 0:
             raise ValueError("provider_max_retries must be greater than or equal to 0")
         if self.provider_retry_backoff_seconds < 0:
@@ -120,6 +142,8 @@ class RuntimeConfig:
         self.enabled_tools = (
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
+        self.compaction_auto = bool(self.compaction_auto)
+        self.compaction_prune = bool(self.compaction_prune)
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
         self.enable_context_overflow_retry = bool(self.enable_context_overflow_retry)
         self.emit_llm_stream_events = bool(self.emit_llm_stream_events)
@@ -169,6 +193,17 @@ class RuntimeConfig:
         self.enable_command_expansion = bool(self.enable_command_expansion)
         self.local_tool_directories = list(self.local_tool_directories)
         self.archive_truncated_tool_outputs = bool(self.archive_truncated_tool_outputs)
+
+
+def _validate_non_negative_int(value: Any, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name} must be greater than or equal to 0")
+
+
+def _validate_optional_non_negative_int(value: Any, field_name: str) -> None:
+    if value is None:
+        return
+    _validate_non_negative_int(value, field_name)
 
 
 __all__ = ["RuntimeConfig"]

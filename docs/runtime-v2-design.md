@@ -1241,6 +1241,24 @@ retained, pending tool calls and the latest non-system block are protected, and
 provider request metadata records the configured budget plus compacted/kept
 part, message, pair, and character counts.
 
+Request-local budget compaction still exists: it only rewrites the provider
+request for the current turn and does not mutate stored session history.
+Runtime v2 also exposes opencode-style compaction policy fields on
+`RuntimeConfig`: `compaction_auto`, `compaction_prune`,
+`compaction_tail_turns`, `compaction_preserve_recent_chars`,
+`compaction_reserved_chars`, and `compaction_tool_output_max_chars`. Workspace
+config can load these from a nested `compaction` object or matching top-level
+snake_case keys.
+
+The tail-turn selection policy keeps a recent suffix of user turns. By default
+it considers the latest two user turns, bounds them with a recent-context
+character budget, can split an older recent turn by keeping only the suffix that
+fits, and still preserves protected system context plus pending tool calls.
+Generated compaction parts set `tail_start_message_id` to the first retained
+tail message so later compaction-aware flows can identify where verbatim recent
+history begins. This branch only adds the policy fields and selector; automatic
+persistent compaction is intentionally left for a later integration.
+
 `AgentRuntime.compact_session(...)` provides manual persistent compaction for
 stored session history. Unlike request-local budget compaction, which only
 changes the provider request for a single turn, manual compaction replaces older

@@ -2224,6 +2224,12 @@ def _resolve_config(
             if context_reserve_chars is not None
             else config.context_reserve_chars
         ),
+        compaction_auto=config.compaction_auto,
+        compaction_prune=config.compaction_prune,
+        compaction_tail_turns=config.compaction_tail_turns,
+        compaction_preserve_recent_chars=config.compaction_preserve_recent_chars,
+        compaction_reserved_chars=config.compaction_reserved_chars,
+        compaction_tool_output_max_chars=config.compaction_tool_output_max_chars,
         enable_compaction_summarizer=config.enable_compaction_summarizer,
         provider_max_retries=config.provider_max_retries,
         provider_retry_backoff_seconds=config.provider_retry_backoff_seconds,

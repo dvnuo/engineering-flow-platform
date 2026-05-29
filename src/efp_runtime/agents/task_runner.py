@@ -367,6 +367,28 @@ def _child_config(
         context_reserve_chars=(
             base_config.context_reserve_chars if base_config is not None else 0
         ),
+        compaction_auto=(
+            True if base_config is None else base_config.compaction_auto
+        ),
+        compaction_prune=(
+            True if base_config is None else base_config.compaction_prune
+        ),
+        compaction_tail_turns=(
+            2 if base_config is None else base_config.compaction_tail_turns
+        ),
+        compaction_preserve_recent_chars=(
+            None
+            if base_config is None
+            else base_config.compaction_preserve_recent_chars
+        ),
+        compaction_reserved_chars=(
+            None if base_config is None else base_config.compaction_reserved_chars
+        ),
+        compaction_tool_output_max_chars=(
+            2000
+            if base_config is None
+            else base_config.compaction_tool_output_max_chars
+        ),
         enable_compaction_summarizer=(
             False
             if base_config is None
