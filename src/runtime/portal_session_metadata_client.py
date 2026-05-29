@@ -163,22 +163,26 @@ def extract_session_metadata_publish_fields(
     default_event_type: str,
     default_state: str,
 ) -> Dict[str, Any]:
-    runtime_events = execution_result.runtime_events if isinstance(execution_result.runtime_events, list) else []
+    runtime_events_value = getattr(execution_result, "runtime_events", None)
+    runtime_events = runtime_events_value if isinstance(runtime_events_value, list) else []
     latest_event = runtime_events[-1] if runtime_events and isinstance(runtime_events[-1], dict) else {}
 
     latest_event_type = str(latest_event.get("event_type") or default_event_type)
-    latest_event_state = _normalized_state(latest_event.get("state") or execution_result.status, fallback=default_state)
+    result_status = getattr(execution_result, "status", None)
+    latest_event_state = _normalized_state(latest_event.get("state") or result_status, fallback=default_state)
 
-    artifacts = execution_result.artifacts if isinstance(execution_result.artifacts, dict) else {}
+    artifacts_value = getattr(execution_result, "artifacts", None)
+    artifacts = artifacts_value if isinstance(artifacts_value, dict) else {}
     recovery = artifacts.get("recovery") if isinstance(artifacts.get("recovery"), dict) else {}
     snapshot_version = recovery.get("snapshot_version") or artifacts.get("snapshot_version")
 
-    output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+    output_payload_value = getattr(execution_result, "output_payload", None)
+    output_payload = output_payload_value if isinstance(output_payload_value, dict) else {}
     if not snapshot_version:
         snapshot_version = output_payload.get("snapshot_version")
 
     return {
-        "last_execution_id": execution_result.request_id,
+        "last_execution_id": getattr(execution_result, "request_id", None),
         "latest_event_type": latest_event_type,
         "latest_event_state": latest_event_state,
         "snapshot_version": snapshot_version,

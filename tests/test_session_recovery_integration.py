@@ -1,14 +1,25 @@
 import pytest
 import importlib
-import asyncio
-import copy
 
 from src.runtime.recovery_pipeline import RecoveryHydrationResult
-from src.sessions.manager import SessionManager
+from src.efp_runtime.session.file_store import FileSessionStore
+from src.efp_runtime.session.gateway_facade import RuntimeV2SessionManager
 
 
 @pytest.mark.asyncio
-async def test_session_manager_recover_session_state_calls_runtime_pipeline(monkeypatch):
+async def test_legacy_session_manager_module_is_runtime_v2_file_store_wrapper(tmp_path):
+    from src.sessions.manager import SessionManager, session_manager
+
+    manager = SessionManager(root=tmp_path, auto_save=False)
+    assert isinstance(manager.store, FileSessionStore)
+
+    await manager.add_message("wrapper-session", "user", "hello wrapper")
+    assert manager.store.read_history("wrapper-session")[0].parts[0].text == "hello wrapper"
+    assert isinstance(session_manager.store, FileSessionStore)
+
+
+@pytest.mark.asyncio
+async def test_runtime_v2_session_facade_recover_session_state_calls_runtime_pipeline(monkeypatch, tmp_path):
     calls = []
 
     class _StubPipeline:
@@ -30,7 +41,7 @@ async def test_session_manager_recover_session_state_calls_runtime_pipeline(monk
     recovery_pipeline_module = importlib.import_module("src.runtime.recovery_pipeline")
     monkeypatch.setattr(recovery_pipeline_module, "get_recovery_pipeline", lambda: _StubPipeline())
 
-    manager = SessionManager(auto_save=False)
+    manager = RuntimeV2SessionManager(root=tmp_path, auto_save=False)
     data = await manager.recover_session_state("session-700")
 
     assert calls == ["session-700"]
@@ -45,8 +56,8 @@ async def test_session_manager_recover_session_state_calls_runtime_pipeline(monk
 
 
 @pytest.mark.asyncio
-async def test_session_manager_pending_delegation_metadata_lifecycle():
-    manager = SessionManager(auto_save=False)
+async def test_runtime_v2_session_facade_pending_delegation_metadata_lifecycle(tmp_path):
+    manager = RuntimeV2SessionManager(root=tmp_path, auto_save=False)
     session_id = "session-delegation-metadata"
     await manager.get_session(session_id)
 
@@ -69,43 +80,20 @@ async def test_session_manager_pending_delegation_metadata_lifecycle():
 
 
 @pytest.mark.asyncio
-async def test_session_manager_metadata_updates_schedule_persistence(monkeypatch):
-    manager = SessionManager(auto_save=True)
-    manager.persistence_enabled = True
+async def test_runtime_v2_session_facade_metadata_updates_file_store(tmp_path):
+    manager = RuntimeV2SessionManager(root=tmp_path, auto_save=True)
     session_id = "session-persist-metadata"
     await manager.get_session(session_id)
-
-    save_calls = []
-
-    async def _fake_save_session(*, session_id, channel, messages, metadata):
-        save_calls.append(
-            {
-                "session_id": session_id,
-                "channel": channel,
-                "messages": list(messages),
-                "metadata": copy.deepcopy(metadata),
-            }
-        )
-
-    created_tasks = []
-
-    def _run_now(coro):
-        created_tasks.append(coro)
-        loop = asyncio.get_running_loop()
-        return loop.create_task(coro)
-
-    monkeypatch.setattr("src.sessions.manager.session_persistence.save_session", _fake_save_session)
-    monkeypatch.setattr("src.sessions.manager.asyncio.create_task", _run_now)
 
     await manager.set_last_execution_id(session_id, "req-1")
     await manager.add_pending_delegation(session_id, {"delegation_id": "del-1", "status": "pending"})
     await manager.complete_pending_delegation(session_id, "del-1", status="completed")
-    await asyncio.sleep(0)
 
-    assert len(created_tasks) == 3
-    assert len(save_calls) == 3
-    metadata_states = [call["metadata"] for call in save_calls]
-    assert any(state.get("last_execution_id") == "req-1" for state in metadata_states)
-    final_session = await manager.get_session(session_id)
-    assert final_session["metadata"]["pending_delegations"] == []
-    assert final_session["metadata"]["completed_delegations"][-1]["delegation_id"] == "del-1"
+    final_session = RuntimeV2SessionManager(root=tmp_path).store.get_session(session_id)
+    assert final_session.metadata["last_execution_id"] == "req-1"
+    assert final_session.metadata["pending_delegations"] == []
+    assert final_session.metadata["completed_delegations"][-1]["delegation_id"] == "del-1"
+
+    final_session_view = await manager.get_session(session_id)
+    assert final_session_view["metadata"]["last_execution_id"] == "req-1"
+    assert final_session_view["metadata"]["pending_delegations"] == []

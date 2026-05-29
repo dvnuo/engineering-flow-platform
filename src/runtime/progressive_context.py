@@ -20,7 +20,7 @@ from src.runtime.context_summary import (
     build_context_state_from_messages,
     build_recovery_context_message,
 )
-from src.sessions.manager import session_manager
+from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager as session_manager
 from src.utils.truncate import truncate
 from src.context_blob_store import build_section_map, put_text
 

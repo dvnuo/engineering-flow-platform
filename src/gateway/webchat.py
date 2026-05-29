@@ -57,12 +57,16 @@ from src.gateway.webchat_request_contracts import (
 )
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
-from src.sessions.manager import resolve_session_display_name, session_manager
-from src.sessions.persistence import session_persistence
+from src.efp_runtime.session.gateway_facade import (
+    RuntimeV2SessionArtifacts,
+    resolve_session_display_name,
+    runtime_v2_session_manager as session_manager,
+)
 from src.sessions.usage import usage_tracker
 
 logger = logging.getLogger(__name__)
 runtime_task_tracker = RuntimeTaskTracker()
+runtime_v2_session_artifacts = RuntimeV2SessionArtifacts()
 
 
 # Get template and static paths
@@ -1084,18 +1088,9 @@ async def api_chat(request: web.Request) -> web.Response:
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for chat path", exc_info=True)
         
-        # Force save session to persistence
         session = await session_manager.get_session(session_id)
-        logger.info(f"[api_chat] Session after agent.process(): {session is not None}")
-        if session and session.get("history"):
-            logger.info(f"[api_chat] Saving session with {len(session['history'])} messages")
-            await session_persistence.save_session(
-                session_id=session_id,
-                channel=session.get("channel", ""),
-                messages=session["history"],
-                metadata=session.get("metadata", {}),
-            )
-        else:
+        logger.info(f"[api_chat] Runtime v2 session after chat: {session is not None}")
+        if not session or not session.get("history"):
             logger.warning(f"[api_chat] No session or empty history for {session_id}")
         
         response_data = build_webchat_response_payload(
@@ -1123,17 +1118,17 @@ async def api_chat(request: web.Request) -> web.Response:
         # Include events for thinking process display
         events = response_data.get("events", [])
         if events:
-            # Save events to session for persistence
-            if 'metadata' not in session:
-                session['metadata'] = {}
-            session['metadata']['thinking_events'] = events
+            metadata = dict(session.get("metadata") or {})
+            metadata["thinking_events"] = events
+            session["metadata"] = metadata
+            await session_manager.merge_metadata(session_id, {"thinking_events": events})
             logger.info(f"[api_chat] Saved {len(events)} thinking events to session metadata")
         
         # Include LLM debug info for sidebar display
         llm_debug = response_data.get("_llm_debug", {}) or {}
         
         # Always save thinking events to chatlog (even without llm_debug)
-        chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
+        chatlog_dir = os.path.join(runtime_v2_session_artifacts.storage_dir, "chatlogs")
         os.makedirs(chatlog_dir, exist_ok=True)
         chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
         try:
@@ -2126,7 +2121,7 @@ async def api_session_chatlog(request: web.Request) -> web.Response:
             return web.json_response({'error': 'Session ID required'}, status=400)
         
         # Load from chatlog file
-        chatlog_file = os.path.join(session_persistence.storage_dir, "chatlogs", f"{session_id}.json")
+        chatlog_file = os.path.join(runtime_v2_session_artifacts.storage_dir, "chatlogs", f"{session_id}.json")
         
         if os.path.exists(chatlog_file):
             with open(chatlog_file, "r") as f:

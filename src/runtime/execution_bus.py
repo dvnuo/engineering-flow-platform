@@ -276,10 +276,9 @@ class ExecutionBus:
         if not self._should_persist_last_execution_id(request):
             return
         try:
-            # local import keeps runtime dependency light and avoids import cycles at module load.
-            from src.sessions.manager import session_manager
+            from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
 
-            await session_manager.set_last_execution_id(request.session_id, request.request_id)
+            await runtime_v2_session_manager.set_last_execution_id(request.session_id, request.request_id)
         except Exception:
             logger.debug("ExecutionBus failed to persist last_execution_id", exc_info=True)
 
@@ -1908,9 +1907,9 @@ def build_default_execution_bus(
             }
             if request.session_id:
                 try:
-                    from src.sessions.manager import session_manager
+                    from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
 
-                    await session_manager.add_pending_delegation(request.session_id, pending_record)
+                    await runtime_v2_session_manager.add_pending_delegation(request.session_id, pending_record)
                 except Exception:
                     logger.debug("ExecutionBus failed to add pending delegation metadata", exc_info=True)
 
@@ -2119,9 +2118,9 @@ def build_default_execution_bus(
             finally:
                 if request.session_id:
                     try:
-                        from src.sessions.manager import session_manager
+                        from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
 
-                        await session_manager.complete_pending_delegation(
+                        await runtime_v2_session_manager.complete_pending_delegation(
                             request.session_id,
                             delegation_id,
                             status="completed" if skill_success else "failed",

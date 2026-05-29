@@ -126,6 +126,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                     "message_count": message_count,
                     "has_active_skill_session": active_skill_session is not None,
                     "has_last_execution_id": bool(last_execution_id),
+                    "has_pending_tool_calls": bool(snapshot.reconstructed_state.get("has_pending_tool_calls")),
                     "has_compaction_summary": bool(snapshot.reconstructed_state.get("has_compaction_summary")),
                     "has_session_memory_summary": bool(snapshot.reconstructed_state.get("has_session_memory_summary")),
                     "has_context_state": bool(snapshot.reconstructed_state.get("has_context_state")),
@@ -173,26 +174,16 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         return hydration
 
     async def _load_session_info(self, session_id: str, *, hydrate_via_manager: bool) -> Optional[Dict[str, Any]]:
-        from src.sessions.manager import session_manager
-        from src.sessions.persistence import session_persistence
+        from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
 
-        memory_session = session_manager.sessions.get(session_id)
-        if isinstance(memory_session, dict):
-            return {"source": "memory", "session": _normalize_session_record(memory_session, source="memory")}
-
-        persisted = await session_persistence.load_session(session_id)
-        if not isinstance(persisted, dict):
+        session = await runtime_v2_session_manager.get_existing_session(session_id)
+        if not isinstance(session, dict):
             return None
 
-        if hydrate_via_manager:
-            try:
-                hydrated = await session_manager.get_session(session_id)
-                if isinstance(hydrated, dict):
-                    return {"source": "persistence", "session": _normalize_session_record(hydrated, source="persistence")}
-            except Exception:
-                pass
-
-        return {"source": "persistence", "session": _normalize_session_record(persisted, source="persistence")}
+        return {
+            "source": "runtime_v2_file",
+            "session": _normalize_session_record(session, source="runtime_v2_file"),
+        }
 
     def _event(self, session_id: str, event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
         return build_runtime_event(
@@ -225,6 +216,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         pending_tool_tasks = await self._safe_pending_tool_tasks(session_id, runtime_warnings)
         active_subagents = await self._safe_active_subagents(session_id, runtime_warnings)
         pending_delegations = metadata.get("pending_delegations") if isinstance(metadata.get("pending_delegations"), list) else []
+        pending_tool_calls = metadata.get("pending_tool_calls") if isinstance(metadata.get("pending_tool_calls"), list) else []
         compaction_summary = _find_compaction_summary(metadata, session.get("history") or [])
         session_memory_summary = _find_session_memory_summary(metadata, session.get("history") or [])
         context_state = _extract_context_state(metadata)
@@ -232,11 +224,13 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             "active_skill_session": active_skill_session,
             "last_execution_id": last_execution_id,
             "pending_tool_tasks": pending_tool_tasks,
+            "pending_tool_calls": list(pending_tool_calls),
             "active_subagents": active_subagents,
             "pending_delegations": list(pending_delegations),
             "context_state": context_state,
         }
         has_pending_tool_tasks = bool(pending_tool_tasks)
+        has_pending_tool_calls = bool(pending_tool_calls)
         has_active_subagents = bool(active_subagents)
         has_pending_delegations = bool(pending_delegations)
         has_compaction_summary = compaction_summary is not None
@@ -253,6 +247,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             "has_active_skill_session": active_skill_session is not None,
             "has_last_execution_id": bool(last_execution_id),
             "has_pending_tool_tasks": has_pending_tool_tasks,
+            "has_pending_tool_calls": has_pending_tool_calls,
             "has_active_subagents": has_active_subagents,
             "has_pending_delegations": has_pending_delegations,
             "has_compaction_summary": has_compaction_summary,
@@ -267,6 +262,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                 (
                     has_pending_delegations,
                     has_pending_tool_tasks,
+                    has_pending_tool_calls,
                     has_active_subagents,
                     has_compaction_summary,
                     has_session_memory_summary,
@@ -323,6 +319,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                         "has_active_skill_session": active_skill_session is not None,
                         "has_last_execution_id": bool(last_execution_id),
                         "has_pending_tool_tasks": bool(pending_tool_tasks),
+                        "has_pending_tool_calls": bool(pending_tool_calls),
                         "has_active_subagents": bool(active_subagents),
                         "has_pending_delegations": bool(pending_delegations),
                         "has_compaction_summary": has_compaction_summary,

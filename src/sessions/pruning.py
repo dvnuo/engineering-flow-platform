@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.config import config, resolve_model_limits
-from src.sessions.manager import session_manager
+from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager as session_manager
 
 logger = logging.getLogger(__name__)
 

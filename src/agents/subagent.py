@@ -229,12 +229,12 @@ def sessions_list(
         JSON string with session list
     """
     import asyncio
-    from src.sessions.manager import session_manager
+    from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
     
     sessions = []
     
     # Get main session info
-    main_info = asyncio.run(session_manager.get_session_info("main"))
+    main_info = asyncio.run(runtime_v2_session_manager.get_session_info("main"))
     if main_info:
         sessions.append({
             "key": "main",
@@ -289,9 +289,9 @@ def sessions_history(
         JSON string with message history
     """
     import asyncio
-    from src.sessions.manager import session_manager
+    from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
     
-    messages = asyncio.run(session_manager.get_history(session_key))
+    messages = asyncio.run(runtime_v2_session_manager.get_history(session_key))
     
     if limit and len(messages) > limit:
         messages = messages[-limit:]
@@ -467,10 +467,10 @@ def cleanup_subagent(session_key: str) -> bool:
         True if cleaned up, False if not found
     """
     import asyncio
-    from src.sessions.manager import session_manager
+    from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
     
     if session_key in _subagent_sessions:
         del _subagent_sessions[session_key]
-        asyncio.run(session_manager.clear_history(session_key))
+        asyncio.run(runtime_v2_session_manager.clear_history(session_key))
         return True
     return False

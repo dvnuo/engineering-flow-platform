@@ -289,13 +289,12 @@ def test_resolve_webchat_session_id_avoids_same_second_collisions_without_client
 async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
     from src.gateway import webchat
 
-    async def fake_run_chat_execution(agent, **kwargs):
+    async def fake_run_runtime_v2_chat(**kwargs):
         assert kwargs["portal_user_id"] == "p-1"
         return {"response": "ok", "usage": {"total_tokens": 1}}
 
-    monkeypatch.setattr(webchat, "run_chat_execution", fake_run_chat_execution)
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", fake_run_runtime_v2_chat)
     result = await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-chat",
         message="hello",
         user_name="u1",
@@ -309,16 +308,15 @@ async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
 async def test_chat_execution_bus_adapter_stream(monkeypatch):
     from src.gateway import webchat
 
-    async def fake_run_chat_execution(agent, **kwargs):
+    async def fake_run_runtime_v2_chat(**kwargs):
         stream_callback = kwargs.get("stream_callback")
         await stream_callback.put("{\"type\":\"progress\"}")
         return {"response": "streamed"}
 
-    monkeypatch.setattr(webchat, "run_chat_execution", fake_run_chat_execution)
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", fake_run_runtime_v2_chat)
     import asyncio
     queue = asyncio.Queue()
     result = await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-stream",
         message="hello",
         user_name="u1",
@@ -335,17 +333,14 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
     from src.gateway import webchat
 
     captured = {}
-    async def _fake_execute_chat_orchestration(**kwargs):
-        captured.update(kwargs)
-        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}, "runtime_events": []})()
 
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
-    async def _fake_run_chat_execution(*args, **kwargs):
-        return {"response": "ignored"}
-    monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
+    async def _fake_run_runtime_v2_chat(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "runtime_events": []}
+
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
     await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-chat",
         message="hello",
         user_name="u1",
@@ -353,27 +348,22 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
         portal_user_name=None,
         request_path="/api/chat/stream",
     )
-    assert captured["metadata"]["path"] == "/api/chat/stream"
-    assert captured["metadata"]["persist_last_execution_id"] is True
+    assert captured["request_path"] == "/api/chat/stream"
+    assert str(captured["request_id"]).startswith("chat-")
 
 
 @pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_does_not_mutate_execution_output_payload(monkeypatch):
     from src.gateway import webchat
 
-    captured = {}
     original_payload = {"response": "ok"}
 
-    async def _fake_execute_chat_orchestration(**kwargs):
-        execution_result = type("R", (), {"status": "success", "output_payload": original_payload, "runtime_events": []})()
-        captured["execution_result"] = execution_result
-        return execution_result
+    async def _fake_run_runtime_v2_chat(**kwargs):
+        return original_payload
 
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
-    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
     result = await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-chat",
         message="hello",
         user_name="u1",
@@ -381,33 +371,24 @@ async def test_chat_execution_bus_adapter_does_not_mutate_execution_output_paylo
         portal_user_name=None,
     )
 
-    execution_result = captured["execution_result"]
-    assert result["_execution_result"] is execution_result
-    assert "_execution_result" not in execution_result.output_payload
-    assert result is not execution_result.output_payload
+    assert result is original_payload
+    assert "_execution_result" not in original_payload
 
 
 @pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_backfills_runtime_events_from_execution_result(monkeypatch):
     from src.gateway import webchat
 
-    async def _fake_execute_chat_orchestration(**kwargs):
-        return type(
-            "R",
-            (),
-            {
-                "status": "success",
-                "output_payload": {"response": "ok"},
-                "request_id": "req-1",
-                "runtime_events": [{"event_type": "context_snapshot"}],
-            },
-        )()
+    async def _fake_run_runtime_v2_chat(**kwargs):
+        return {
+            "response": "ok",
+            "request_id": "req-1",
+            "runtime_events": [{"event_type": "context_snapshot"}],
+        }
 
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
-    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
     result = await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-chat",
         message="hello",
         user_name="u1",
@@ -424,15 +405,13 @@ async def test_chat_execution_bus_adapter_forwards_agent_id(monkeypatch):
 
     captured = {}
 
-    async def _fake_execute_chat_orchestration(**kwargs):
+    async def _fake_run_runtime_v2_chat(**kwargs):
         captured.update(kwargs)
-        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}, "runtime_events": []})()
+        return {"response": "ok", "runtime_events": []}
 
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
-    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
     await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-chat",
         message="hello",
         user_name="u1",
@@ -449,15 +428,13 @@ async def test_chat_execution_bus_adapter_merges_execution_metadata_without_over
 
     captured = {}
 
-    async def _fake_execute_chat_orchestration(**kwargs):
+    async def _fake_run_runtime_v2_chat(**kwargs):
         captured.update(kwargs)
-        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}, "runtime_events": []})()
+        return {"response": "ok", "runtime_events": []}
 
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
-    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
     await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-chat",
         message="hello",
         user_name="u1",
@@ -467,8 +444,9 @@ async def test_chat_execution_bus_adapter_merges_execution_metadata_without_over
         execution_metadata={"path": "/forged", "allowed_capability_ids": ["tool:run_command"]},
     )
 
-    assert captured["metadata"]["path"] == "/api/chat"
-    assert captured["metadata"]["allowed_capability_ids"] == ["tool:run_command"]
+    assert captured["request_path"] == "/api/chat"
+    assert captured["execution_metadata"]["path"] == "/forged"
+    assert captured["execution_metadata"]["allowed_capability_ids"] == ["tool:run_command"]
 
 
 @pytest.mark.asyncio
@@ -477,29 +455,13 @@ async def test_chat_execution_bus_handler_uses_execution_request_metadata_for_ag
 
     captured = {}
 
-    async def _fake_run_chat_execution(agent, **kwargs):
+    async def _fake_run_runtime_v2_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "ok"}
 
-    async def _fake_execute_chat_orchestration(**kwargs):
-        req = type(
-            "Req",
-            (),
-            {
-                "input_payload": kwargs["input_payload"],
-                "metadata": {"allowed_capability_ids": ["tool:jira_search"], "llm_tool_loop": {"one_tool_per_turn": True}},
-                "request_id": kwargs["request_id"],
-                "session_id": kwargs["session_id"],
-            },
-        )()
-        output_payload = await kwargs["chat_handler"](req)
-        return type("R", (), {"status": "success", "output_payload": output_payload, "runtime_events": []})()
-
-    monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
     await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-chat",
         message="hello",
         user_name="u1",
@@ -508,125 +470,75 @@ async def test_chat_execution_bus_handler_uses_execution_request_metadata_for_ag
         execution_metadata={"allowed_capability_ids": ["tool:ignored_by_handler"]},
     )
 
-    assert captured["execution_metadata"]["allowed_capability_ids"] == ["tool:jira_search"]
-    assert captured["execution_metadata"]["llm_tool_loop"]["one_tool_per_turn"] is True
+    assert captured["execution_metadata"]["allowed_capability_ids"] == ["tool:ignored_by_handler"]
 
 
 @pytest.mark.asyncio
-async def test_chat_execution_bus_adapter_persists_last_execution_id(monkeypatch):
+async def test_chat_execution_bus_adapter_generates_runtime_request_id(monkeypatch):
     from src.gateway import webchat
 
-    calls = []
+    captured = {}
 
-    async def _fake_set_last_execution_id(session_id, request_id):
-        calls.append((session_id, request_id))
-
-    async def fake_run_chat_execution(agent, **kwargs):
+    async def fake_run_runtime_v2_chat(**kwargs):
+        captured.update(kwargs)
         return {"response": "ok"}
 
-    monkeypatch.setattr(webchat.session_manager, "set_last_execution_id", _fake_set_last_execution_id)
-    monkeypatch.setattr(webchat, "run_chat_execution", fake_run_chat_execution)
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", fake_run_runtime_v2_chat)
 
     await webchat._run_chat_via_execution_bus(
-        agent=object(),
         session_id="s-meta",
         message="hello",
         user_name="u1",
         portal_user_id=None,
         portal_user_name=None,
     )
-    assert calls
-    assert calls[0][0] == "s-meta"
-    assert str(calls[0][1]).startswith("chat-")
+    assert captured["session_id"] == "s-meta"
+    assert str(captured["request_id"]).startswith("chat-")
 
 
 @pytest.mark.asyncio
-async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
-    import json
-    from aiohttp import web
+async def test_chat_execution_bus_adapter_propagates_runtime_v2_errors(monkeypatch):
     from src.gateway import webchat
 
-    async def _fake_execute_chat_orchestration(**kwargs):
-        return type(
-            "R",
-            (),
-            {
-                "status": "error",
-                "request_id": "chat-structured-1",
-                "output_payload": {
-                    "error": "Model output was truncated because max_output_tokens was reached.",
-                    "error_type": "truncated_response",
-                    "code": "max_output_tokens_exceeded",
-                    "details": {"incomplete_reason": "max_output_tokens"},
-                    "status_code": 500,
-                },
-                "runtime_events": [],
-            },
-        )()
+    async def _fake_run_runtime_v2_chat(**kwargs):
+        raise webchat.RuntimeV2ChatError(
+            "Model output was truncated because max_output_tokens was reached.",
+            status_code=500,
+            error_type="truncated_response",
+            details={"incomplete_reason": "max_output_tokens"},
+        )
 
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
-    async def _fake_run_chat_execution(*args, **kwargs):
-        return {"response": "ignored"}
-
-    monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
-
-    with pytest.raises(web.HTTPInternalServerError) as exc_info:
+    with pytest.raises(webchat.RuntimeV2ChatError) as exc_info:
         await webchat._run_chat_via_execution_bus(
-            agent=object(),
             session_id="s-chat",
             message="hello",
             user_name="u1",
             portal_user_id=None,
             portal_user_name=None,
         )
-    body = json.loads(exc_info.value.text)
-    assert body["error"]
-    assert body["detail"] == body["error"]
-    assert body["error_type"] == "truncated_response"
-    assert body["code"] == "max_output_tokens_exceeded"
-    assert body["details"]["incomplete_reason"] == "max_output_tokens"
-    assert body["request_id"] == "chat-structured-1"
+    assert exc_info.value.error_type == "truncated_response"
+    assert exc_info.value.details["incomplete_reason"] == "max_output_tokens"
 
 
 @pytest.mark.asyncio
-async def test_chat_execution_bus_adapter_raises_on_legacy_string_error(monkeypatch):
-    import json
-    from aiohttp import web
+async def test_chat_execution_bus_adapter_propagates_generic_runtime_errors(monkeypatch):
     from src.gateway import webchat
 
-    async def _fake_execute_chat_orchestration(**kwargs):
-        return type(
-            "R",
-            (),
-            {
-                "status": "error",
-                "request_id": "chat-legacy-1",
-                "output_payload": {"error": "legacy failure"},
-                "runtime_events": [],
-            },
-        )()
+    async def _fake_run_runtime_v2_chat(**kwargs):
+        raise RuntimeError("runtime failure")
 
-    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
-    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+    monkeypatch.setattr(webchat, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
-    with pytest.raises(web.HTTPInternalServerError) as exc_info:
+    with pytest.raises(RuntimeError, match="runtime failure"):
         await webchat._run_chat_via_execution_bus(
-            agent=object(),
             session_id="s-chat",
             message="hello",
             user_name="u1",
             portal_user_id=None,
             portal_user_name=None,
         )
-
-    body = json.loads(exc_info.value.text)
-    assert body["error"] == "legacy failure"
-    assert body["detail"] == "legacy failure"
-    assert body["error_type"] == ""
-    assert body["code"] == ""
-    assert body["details"] == {}
-    assert body["request_id"] == "chat-legacy-1"
 
 
 @pytest.mark.asyncio
@@ -841,7 +753,7 @@ async def test_api_chat_resolves_portal_identity_from_headers(monkeypatch):
         return True
 
     monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
-    monkeypatch.setattr(webchat.session_persistence, "save_session", _fake_save_session)
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", _fake_save_session)
 
     class _Request:
         app = {}
@@ -867,8 +779,8 @@ async def test_api_chat_uses_trusted_portal_agent_name_for_assistant_author(monk
         return {
             "response": "ok",
             "usage": {},
-            "author_name": kwargs["agent"].agent_name,
-            "author_id": kwargs["agent"].agent_id,
+            "author_name": kwargs["agent_name"],
+            "author_id": kwargs["agent_id"],
             "author_type": "agent",
             "author_source": "runtime",
             "_execution_result": object(),
@@ -879,10 +791,10 @@ async def test_api_chat_uses_trusted_portal_agent_name_for_assistant_author(monk
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
-        app = {}
+        app = {"agent_id": "agent-1"}
         headers = {"X-Portal-Author-Source": "portal", "X-Portal-Agent-Name": "Portal Agent"}
 
         async def json(self):
@@ -891,9 +803,9 @@ async def test_api_chat_uses_trusted_portal_agent_name_for_assistant_author(monk
     resp = await webchat.api_chat(_Request())
     payload = json.loads(resp.text)
     assert resp.status == 200
-    assert captured["agent"].agent_name == "Portal Agent"
+    assert captured["agent_name"] == "Portal Agent"
     assert payload["author_name"] == "Portal Agent"
-    assert payload["author_id"] == captured["agent"].agent_id
+    assert payload["author_id"] == captured["agent_id"]
 
 
 @pytest.mark.asyncio
@@ -924,8 +836,8 @@ async def test_api_chat_chatlog_includes_request_status_runtime_events_and_conte
         "get_session",
         lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}),
     )
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
-    monkeypatch.setattr(webchat.session_persistence, "storage_dir", tmp_path)
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "storage_dir", tmp_path)
 
     class _Request:
         app = {}
@@ -1017,7 +929,7 @@ async def test_api_chat_stream_uses_trusted_portal_agent_name_for_agent_identity
     monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
 
     class _Request:
-        app = {}
+        app = {"agent_id": "agent-1"}
         headers = {"X-Portal-Author-Source": "portal", "X-Portal-Agent-Name": "Portal Agent"}
 
         async def json(self):
@@ -1025,7 +937,7 @@ async def test_api_chat_stream_uses_trusted_portal_agent_name_for_agent_identity
 
     response = await webchat.api_chat_stream(_Request())
     assert response.status == 200
-    assert captured["agent"].agent_name == "Portal Agent"
+    assert captured["agent_name"] == "Portal Agent"
 
 
 @pytest.mark.asyncio
@@ -1034,23 +946,16 @@ async def test_api_chat_uses_trusted_model_override_when_present(monkeypatch):
 
     captured = {}
 
-    class _FakeAgentCore:
-        def __init__(self, model, session_id, agent_id, agent_name):
-            captured["model"] = model
-            self.model = model
-            self.agent_id = agent_id
-            self.agent_name = agent_name
-
     async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured["model"] = kwargs["model"]
         return {"response": "ok", "usage": {}}
 
-    monkeypatch.setattr(webchat, "AgentCore", _FakeAgentCore)
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1070,23 +975,16 @@ async def test_api_chat_ignores_model_override_for_untrusted_request(monkeypatch
 
     captured = {}
 
-    class _FakeAgentCore:
-        def __init__(self, model, session_id, agent_id, agent_name):
-            captured["model"] = model
-            self.model = model
-            self.agent_id = agent_id
-            self.agent_name = agent_name
-
     async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured["model"] = kwargs["model"]
         return {"response": "ok", "usage": {}}
 
-    monkeypatch.setattr(webchat, "AgentCore", _FakeAgentCore)
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1106,14 +1004,8 @@ async def test_api_chat_stream_uses_trusted_model_override_when_present(monkeypa
 
     captured = {}
 
-    class _FakeAgentCore:
-        def __init__(self, model, session_id, agent_id, agent_name):
-            captured["model"] = model
-            self.model = model
-            self.agent_id = agent_id
-            self.agent_name = agent_name
-
     async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured["model"] = kwargs["model"]
         return {"response": "ok", "usage": {}}
 
     class _FakeStreamResponse:
@@ -1128,7 +1020,6 @@ async def test_api_chat_stream_uses_trusted_model_override_when_present(monkeypa
         async def write(self, data):
             self.writes.append(data)
 
-    monkeypatch.setattr(webchat, "AgentCore", _FakeAgentCore)
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
@@ -1151,14 +1042,8 @@ async def test_api_chat_stream_ignores_model_override_for_untrusted_request(monk
 
     captured = {}
 
-    class _FakeAgentCore:
-        def __init__(self, model, session_id, agent_id, agent_name):
-            captured["model"] = model
-            self.model = model
-            self.agent_id = agent_id
-            self.agent_name = agent_name
-
     async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured["model"] = kwargs["model"]
         return {"response": "ok", "usage": {}}
 
     class _FakeStreamResponse:
@@ -1173,7 +1058,6 @@ async def test_api_chat_stream_ignores_model_override_for_untrusted_request(monk
         async def write(self, data):
             self.writes.append(data)
 
-    monkeypatch.setattr(webchat, "AgentCore", _FakeAgentCore)
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
@@ -1212,7 +1096,7 @@ async def test_api_chat_usage_tracker_records_actual_override_model(monkeypatch)
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1300,7 +1184,7 @@ async def test_api_chat_forwards_all_attached_images(monkeypatch, tmp_path):
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
     monkeypatch.setattr(webchat, "get_metadata", lambda file_id: metadata_map[file_id])
     monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
 
@@ -1374,7 +1258,7 @@ async def test_api_chat_stream_forwards_all_attached_images(monkeypatch, tmp_pat
     assert len(captured["attached_images"]) == 2
     assert captured["attached_images"][0].endswith("b25l")
     assert captured["attached_images"][1].endswith("dHdv")
-    assert captured["attachments"] is None
+    assert captured["attachments"] == ["f1", "f2"]
 
 
 @pytest.mark.asyncio
@@ -1406,7 +1290,7 @@ async def test_api_chat_forwards_all_attached_images_without_local_cap_config(mo
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
     monkeypatch.setattr(webchat, "get_metadata", lambda file_id: metadata_map[file_id])
     monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
 
@@ -1437,7 +1321,7 @@ async def test_api_chat_trusted_portal_metadata_passed_to_execution_bus(monkeypa
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1479,7 +1363,7 @@ async def test_api_chat_untrusted_request_ignores_governance_metadata(monkeypatc
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1512,7 +1396,7 @@ async def test_api_chat_flattens_policy_context_derived_runtime_rules(monkeypatc
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1565,7 +1449,7 @@ async def test_api_chat_best_effort_publishes_session_metadata(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1612,7 +1496,7 @@ async def test_api_chat_trusted_client_request_id_forwarded_and_started_metadata
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1648,7 +1532,7 @@ async def test_api_chat_untrusted_client_request_id_not_accepted(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1688,7 +1572,7 @@ async def test_api_chat_publish_failure_does_not_break_response(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -2028,7 +1912,7 @@ async def test_api_chat_untrusted_portal_identity_is_ignored_and_trusted_header_
         return True
 
     monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
-    monkeypatch.setattr(webchat.session_persistence, "save_session", _fake_save_session)
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", _fake_save_session)
 
     class _UntrustedBodyIdentityRequest:
         app = {}
@@ -2087,7 +1971,7 @@ async def test_api_chat_direct_runtime_user_name_does_not_become_portal_identity
         return True
 
     monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
-    monkeypatch.setattr(webchat.session_persistence, "save_session", _fake_save_session)
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", _fake_save_session)
 
     class _Request:
         app = {}
@@ -2123,7 +2007,7 @@ async def test_portal_trust_uses_portal_source_header_only(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -3226,7 +3110,7 @@ async def test_api_chat_returns_display_blocks(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -3361,7 +3245,7 @@ async def test_api_chat_preserves_structured_display_blocks(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -3393,7 +3277,7 @@ async def test_api_chat_accepts_legacy_content_payload(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -3426,7 +3310,7 @@ async def test_api_chat_treats_whitespace_response_as_empty_and_falls_back_to_co
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -3670,16 +3554,23 @@ async def test_api_delete_conversation_from_deletes_target_message_and_following
 
 
 def test_agent_assistant_display_helpers_minimal_payload():
-    from src.agents.core import Agent
+    from src.gateway import webchat
 
-    agent = Agent.__new__(Agent)
-    agent.agent_name = "Assistant"
-    agent.agent_id = "agent-1"
+    message = webchat.normalize_assistant_history_message({"role": "assistant", "content": "hello"})
+    assert message["display_blocks"][0]["type"] == "markdown"
 
-    message_extra = agent._build_assistant_message_extra("hello")
-    assert message_extra["display_blocks"][0]["type"] == "markdown"
-
-    payload = agent._build_assistant_result_payload("hello", usage={}, user_message_id="u1")
+    payload = webchat.build_webchat_response_payload(
+        {
+            "response": "hello",
+            "usage": {},
+            "user_message_id": "u1",
+            "author_name": "Assistant",
+            "author_id": "agent-1",
+            "author_type": "agent",
+            "author_source": "runtime",
+        },
+        "s-display",
+    )
     assert payload["response"] == "hello"
     assert payload["display_blocks"][0]["content"] == "hello"
     assert payload["user_message_id"] == "u1"
@@ -3708,18 +3599,17 @@ def test_webchat_js_passes_display_blocks_in_both_session_render_paths():
 
 def test_core_max_iterations_response_text_is_consistent():
     repo_root = Path(__file__).parent.parent
-    core_py = (repo_root / "src" / "agents" / "core.py").read_text(encoding="utf-8")
+    runner_py = (repo_root / "src" / "efp_runtime" / "loop" / "runner.py").read_text(encoding="utf-8")
 
-    max_iter_anchor = "Stopped after reaching the maximum number of tool iterations before reliable completion."
-    start = core_py.find(max_iter_anchor)
+    max_iter_anchor = "Maximum loop iterations reached."
+    start = runner_py.find(max_iter_anchor)
     assert start != -1
-    chunk = core_py[start: start + 1100]
+    chunk = runner_py[start: start + 400]
 
-    assert 'send_event("complete", {' in chunk
-    assert '"response": max_iterations_text' in chunk
-    assert '_build_assistant_result_payload(' in chunk
-    assert "Task completed after maximum iterations." not in core_py
-    assert '"Task completed (max iterations reached)"' not in chunk
+    assert "LoopStatus.MAX_ITERATIONS" in runner_py
+    assert "event_type=\"runtime.max_iterations\"" in chunk
+    assert "Task completed after maximum iterations." not in runner_py
+    assert "Task completed (max iterations reached)" not in runner_py
 
 
 def test_webchat_js_block_only_final_assistant_detection_present():
@@ -3863,39 +3753,28 @@ def test_webchat_js_provider_model_defaults_default_to_gpt_5_4_mini():
 
 @pytest.mark.asyncio
 async def test_assistant_persist_and_result_payload_share_display_blocks(monkeypatch):
-    from src.agents.core import Agent
-    from src.agents import core as core_module
+    from src.gateway import webchat
 
-    agent = Agent.__new__(Agent)
-    agent.agent_name = "Assistant"
-    agent.agent_id = "agent-1"
     supplied_extra = {"display_blocks": [{"type": "code", "text": "print(1)", "language": "python"}]}
 
-    captured = {}
-
-    async def _fake_add_message(session_id, role, content, extra=None):
-        captured["session_id"] = session_id
-        captured["role"] = role
-        captured["content"] = content
-        captured["extra"] = extra or {}
-        return "m-1"
-
-    monkeypatch.setattr(core_module.session_manager, "add_message", _fake_add_message)
-
-    persisted_extra = await agent._persist_assistant_message(
+    normalized = webchat.normalize_assistant_history_message(
+        {
+            "role": "assistant",
+            "content": "print(1)",
+            "display_blocks": supplied_extra["display_blocks"],
+        }
+    )
+    payload = webchat.build_webchat_response_payload(
+        {
+            "response": "print(1)",
+            "usage": {},
+            "user_message_id": "u1",
+            "display_blocks": supplied_extra["display_blocks"],
+        },
         "s1",
-        "print(1)",
-        extra=supplied_extra,
-    )
-    payload = agent._build_assistant_result_payload(
-        "print(1)",
-        usage={},
-        user_message_id="u1",
-        extra=supplied_extra,
     )
 
-    assert captured["role"] == "assistant"
-    assert persisted_extra["display_blocks"] == payload["display_blocks"]
+    assert normalized["display_blocks"] == payload["display_blocks"]
 
 
 

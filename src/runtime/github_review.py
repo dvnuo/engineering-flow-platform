@@ -364,7 +364,7 @@ async def _execute_review_skill_via_chat_loop(
     automation_trace: Dict[str, Any],
 ) -> Dict[str, Any]:
     from src.config import DEFAULT_LLM_MODEL, config
-    from src.sessions.manager import session_manager
+    from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
     from src.gateway.runtime_v2_chat import run_runtime_v2_chat
     metadata = payload.get("_execution_metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -383,8 +383,8 @@ async def _execute_review_skill_via_chat_loop(
         skill_name=skill_name, owner=owner, repo=repo, pull_number=pull_number, requested_head_sha=requested_head_sha,
         review_target=review_target, requested_event=requested_event_text, writeback_mode=writeback_mode, runtime_managed_writeback=True,
     )
-    if not session_manager._initialized:
-        await session_manager.initialize()
+    if not runtime_v2_session_manager._initialized:
+        await runtime_v2_session_manager.initialize()
     model = metadata.get("resolved_model") or metadata.get("model") or config.llm.get("model", DEFAULT_LLM_MODEL)
     chat_metadata = {
         **metadata, "path": "/api/tasks/execute/github_review_task/chat", "task_type": "github_review_task", "skill_name": skill_name,

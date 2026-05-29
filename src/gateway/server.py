@@ -21,7 +21,11 @@ from src.channels.jira import jira_channel
 from src.config import config
 from src.gateway.runtime_v2_chat import run_runtime_v2_chat
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
-from src.sessions.manager import JIRA_SESSION_PREFIX
+from src.efp_runtime.session.gateway_facade import (
+    JIRA_SESSION_PREFIX,
+    resolve_session_display_name,
+    runtime_v2_session_manager as session_manager,
+)
 
 
 # Lazy import webchat to avoid circular dependency
@@ -278,7 +282,6 @@ class Gateway:
         Returns: List of sessions with name, last message, timestamp
         """
         from datetime import datetime
-        from src.sessions.manager import resolve_session_display_name, session_manager
 
         logger.info(f"[handle_list_sessions] ENTERING - listing sessions")
 
@@ -358,8 +361,6 @@ class Gateway:
 
     async def handle_clear_session(self, request: Request) -> web.Response:
         """Clear a session's history."""
-        from src.sessions.manager import session_manager
-
         session_id = request.match_info.get("session_id", "")
 
         if session_id:

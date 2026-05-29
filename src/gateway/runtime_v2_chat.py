@@ -17,7 +17,11 @@ from src.efp_runtime.llm.provider import (
 )
 from src.efp_runtime.loop.runner import RuntimeLoopResult
 from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig
-from src.efp_runtime.session import FileSessionStore
+from src.efp_runtime.session.gateway_facade import (
+    get_runtime_v2_session_manager,
+    get_runtime_v2_session_store,
+    runtime_v2_session_root,
+)
 from src.efp_runtime.session.models import MessagePartType
 
 
@@ -74,7 +78,7 @@ async def run_runtime_v2_chat(
     runtime = AgentRuntime(
         provider=provider,
         config=_runtime_config(runtime_model, track_usage=track_usage),
-        store=FileSessionStore(_runtime_session_root()),
+        store=get_runtime_v2_session_store(),
         event_bus=event_bus,
         metadata={
             "gateway": "webchat",
@@ -117,6 +121,11 @@ async def run_runtime_v2_chat(
             session_id=session_id,
             metadata=run_metadata,
         )
+        await get_runtime_v2_session_manager().record_runtime_result(
+            session_id,
+            result,
+            request_id=request_id,
+        )
     except ProviderTransportError as exc:
         raise RuntimeV2ChatError(
             str(exc),
@@ -138,7 +147,7 @@ async def run_runtime_v2_chat(
 
 
 def _runtime_session_root() -> Path:
-    return Path.home() / ".efp" / "runtime-v2"
+    return runtime_v2_session_root()
 
 
 def _runtime_workspace_root() -> Path:

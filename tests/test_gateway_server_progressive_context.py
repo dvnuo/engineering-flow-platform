@@ -12,14 +12,14 @@ class _FakeRequest:
 
 
 @pytest.mark.asyncio
-async def test_handle_jira_message_uses_run_chat_execution(monkeypatch):
+async def test_handle_jira_message_uses_runtime_v2_chat(monkeypatch):
     captured = {}
 
-    async def _fake_run_chat_execution(**kwargs):
+    async def _fake_run_runtime_v2_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "jira-ok"}
 
-    monkeypatch.setattr(gateway_server, "run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr(gateway_server, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
     response = await gateway_server.handle_jira_message(
         message="hello",
@@ -35,14 +35,14 @@ async def test_handle_jira_message_uses_run_chat_execution(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_handle_test_message_uses_run_chat_execution(monkeypatch):
+async def test_handle_test_message_uses_runtime_v2_chat(monkeypatch):
     captured = {}
 
-    async def _fake_run_chat_execution(**kwargs):
+    async def _fake_run_runtime_v2_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "test-ok", "usage": {"prompt_tokens": 1}}
 
-    monkeypatch.setattr(gateway_server, "run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr(gateway_server, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
 
     fake_request = _FakeRequest({
         "message": "ping",

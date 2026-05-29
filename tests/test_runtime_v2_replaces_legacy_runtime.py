@@ -37,6 +37,31 @@ def test_gateway_entrypoints_do_not_reference_legacy_chat_loop_symbols():
         assert "run_chat_execution" not in text
 
 
+def test_production_runtime_paths_do_not_import_legacy_session_sources():
+    command = [
+        "rg",
+        "-n",
+        (
+            "from src\\.sessions\\.manager import session_manager|"
+            "import src\\.sessions\\.manager|"
+            "from src\\.sessions\\.persistence|"
+            "session_persistence"
+        ),
+        "src/gateway",
+        "src/runtime",
+        "src/agents",
+    ]
+    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+
+
+def test_runtime_v2_chat_uses_gateway_facade_store_contract():
+    text = (ROOT / "src/gateway/runtime_v2_chat.py").read_text(encoding="utf-8")
+    assert "get_runtime_v2_session_store" in text
+    assert "store=get_runtime_v2_session_store()" in text
+    assert "get_runtime_v2_session_manager().record_runtime_result" in text
+
+
 def test_src_init_does_not_aggregate_legacy_python_tools():
     text = (ROOT / "src/__init__.py").read_text(encoding="utf-8")
     for token in (
