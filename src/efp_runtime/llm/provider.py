@@ -1,16 +1,21 @@
 """Provider transport facade for Runtime v2 OpenAI-compatible clients.
 
-The classes in this module do not perform network I/O and do not import an
-OpenAI SDK. A caller injects the transport boundary, which receives the
-projected payload and returns raw provider data.
+The facade classes in this module do not import an OpenAI SDK. A caller injects
+the transport boundary, which receives the projected payload and returns raw
+provider data.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterable, Iterable, Mapping
 from copy import deepcopy
 import inspect
+import json
+import os
 from typing import TYPE_CHECKING, Any, List, Optional, Protocol, Union
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from .adapter import DefaultLLMEventAdapter, LLMEventAdapter
 from .models import DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID
@@ -39,6 +44,97 @@ class ProviderTransport(Protocol):
 
 class ProviderTransportError(RuntimeError):
     """Raised by transports or helpers when provider transport fails."""
+
+
+class GitHubCopilotHTTPTransport:
+    """Standard-library HTTP JSON transport for GitHub Copilot chat completions."""
+
+    DEFAULT_BASE_URL = "https://api.githubcopilot.com"
+    CHAT_COMPLETIONS_PATH = "/chat/completions"
+
+    def __init__(
+        self,
+        *,
+        token: str,
+        base_url: Optional[str] = None,
+        timeout: float = 60,
+        user_agent: str = "efp-runtime-v2",
+        initiator: str = "user",
+    ) -> None:
+        self._token = _required_non_empty_string(token, "token")
+        self.base_url = _normalize_base_url(base_url)
+        self.timeout = timeout
+        self.user_agent = _required_non_empty_string(user_agent, "user_agent")
+        self.initiator = _required_non_empty_string(initiator, "initiator")
+        self.endpoint = "{0}{1}".format(self.base_url, self.CHAT_COMPLETIONS_PATH)
+
+    async def send(self, payload: dict[str, Any]) -> TransportOutput:
+        if payload.get("stream") is True:
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport does not support streaming responses"
+            )
+        return await asyncio.to_thread(self._send_sync, payload)
+
+    def _send_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport received a non-JSON payload"
+            ) from exc
+
+        request = urllib_request.Request(
+            self.endpoint,
+            data=body,
+            headers=self._headers(),
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                raw_body = response.read()
+        except urllib_error.HTTPError as exc:
+            message = _format_http_error(exc, self._token)
+            raise ProviderTransportError(message) from None
+        except urllib_error.URLError as exc:
+            reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport failed: {0}".format(reason)
+            ) from None
+        except TimeoutError as exc:
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport timed out after {0} seconds".format(
+                    self.timeout
+                )
+            ) from None
+
+        try:
+            text = raw_body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport returned non-UTF-8 response data"
+            ) from exc
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport returned invalid JSON"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport returned a non-object JSON response"
+            )
+        return data
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": "Bearer {0}".format(self._token),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": self.user_agent,
+            "Openai-Intent": "conversation-edits",
+            "x-initiator": self.initiator,
+        }
 
 
 class OpenAICompatibleProvider:
@@ -186,6 +282,49 @@ class RecordingTransport:
         return len(self._responses)
 
 
+def github_copilot_provider_from_env(
+    *,
+    model: str = DEFAULT_MODEL_ID,
+    endpoint: str = "chat",
+    instructions: Optional[str] = None,
+    stream: bool = False,
+    metadata: Optional[Mapping[str, Any]] = None,
+    adapter: Optional[LLMEventAdapter] = None,
+    timeout: float = 60,
+    user_agent: str = "efp-runtime-v2",
+    initiator: str = "user",
+    env: Optional[Mapping[str, str]] = None,
+) -> GitHubCopilotProvider:
+    """Create a GitHub Copilot provider using caller-supplied environment auth."""
+
+    environ = os.environ if env is None else env
+    token = _env_string(environ, "EFP_GITHUB_COPILOT_TOKEN") or _env_string(
+        environ,
+        "GITHUB_COPILOT_TOKEN",
+    )
+    if token is None:
+        raise ProviderTransportError(
+            "GitHub Copilot token is required; set EFP_GITHUB_COPILOT_TOKEN "
+            "or GITHUB_COPILOT_TOKEN"
+        )
+    transport = GitHubCopilotHTTPTransport(
+        token=token,
+        base_url=_env_string(environ, "EFP_GITHUB_COPILOT_BASE_URL"),
+        timeout=timeout,
+        user_agent=user_agent,
+        initiator=initiator,
+    )
+    return GitHubCopilotProvider(
+        transport=transport,
+        model=model,
+        endpoint=endpoint,
+        instructions=instructions,
+        stream=stream,
+        metadata=metadata,
+        adapter=adapter,
+    )
+
+
 def _requested_model(request: RuntimeRequest) -> Optional[str]:
     requested_model = request.metadata.get("requested_model")
     if not isinstance(requested_model, str):
@@ -196,11 +335,70 @@ def _requested_model(request: RuntimeRequest) -> Optional[str]:
     return requested_model
 
 
+def _env_string(environ: Mapping[str, str], name: str) -> Optional[str]:
+    value = environ.get(name)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _required_non_empty_string(value: str, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("{0} must be a non-empty string".format(field_name))
+    value = value.strip()
+    if not value:
+        raise ValueError("{0} must be a non-empty string".format(field_name))
+    return value
+
+
+def _normalize_base_url(base_url: Optional[str]) -> str:
+    if base_url is None:
+        return GitHubCopilotHTTPTransport.DEFAULT_BASE_URL
+    base_url = _required_non_empty_string(base_url, "base_url")
+    return base_url.rstrip("/")
+
+
+def _format_http_error(exc: urllib_error.HTTPError, token: str) -> str:
+    status = getattr(exc, "code", None)
+    reason = getattr(exc, "reason", None) or getattr(exc, "msg", "")
+    parts = ["GitHub Copilot HTTP transport failed"]
+    if status is not None:
+        parts.append("with status {0}".format(status))
+    if reason:
+        parts.append("({0})".format(_redact_secret(str(reason), token)))
+    response_text = _read_http_error_body(exc)
+    if response_text:
+        parts.append("response: {0}".format(_redact_secret(response_text, token)))
+    return " ".join(parts)
+
+
+def _read_http_error_body(exc: urllib_error.HTTPError) -> str:
+    try:
+        raw_body = exc.read(2048)
+    except Exception:
+        return ""
+    if not raw_body:
+        return ""
+    try:
+        return raw_body.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    if not text or not secret:
+        return text
+    return text.replace(secret, "[redacted]")
+
+
 __all__ = [
+    "GitHubCopilotHTTPTransport",
     "GitHubCopilotProvider",
     "OpenAICompatibleProvider",
     "ProviderTransport",
     "ProviderTransportError",
     "RecordingTransport",
     "TransportOutput",
+    "github_copilot_provider_from_env",
 ]

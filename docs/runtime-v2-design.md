@@ -456,8 +456,31 @@ error status without depending on SDK exception types.
 `GitHubCopilotProvider` is a thin Copilot-first helper on top of the same
 OpenAI-compatible projection. It defaults to `gpt-5-mini`, marks payload
 metadata with `provider_id="github-copilot"`, and still relies on an injected
-transport; Runtime v2 does not perform Copilot authentication or network I/O
-inside the provider facade.
+transport.
+
+`GitHubCopilotHTTPTransport` provides a standard-library JSON HTTP transport
+for Copilot Chat Completions at
+`https://api.githubcopilot.com/chat/completions` by default, or
+`{EFP_GITHUB_COPILOT_BASE_URL}/chat/completions` when a caller supplies a
+different base URL. It posts the OpenAI-compatible chat payload directly and
+returns the provider's raw JSON object. Authentication remains caller-owned:
+constructors receive the token explicitly, and
+`github_copilot_provider_from_env(...)` reads `EFP_GITHUB_COPILOT_TOKEN` first
+and then `GITHUB_COPILOT_TOKEN`. Runtime v2 does not discover or mint Copilot
+credentials, and transport errors must not expose the token.
+
+The smoke entrypoint can validate payload construction without credentials:
+
+```bash
+PYTHONPATH=src python -m efp_runtime.smoke.github_copilot --dry-run --prompt "Say ok" --model gpt-5-mini
+```
+
+With a token in the environment, the same entrypoint runs a real non-streaming
+Copilot request with an empty tool registry:
+
+```bash
+EFP_GITHUB_COPILOT_TOKEN=... PYTHONPATH=src python -m efp_runtime.smoke.github_copilot --prompt "Say ok" --model gpt-5-mini
+```
 
 When `RuntimeRequest.metadata["requested_model"]` is a non-empty string,
 `OpenAICompatibleProvider` uses it as the outgoing payload `model` for Chat

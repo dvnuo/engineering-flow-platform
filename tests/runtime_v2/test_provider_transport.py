@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib import error as urllib_error
 
 import pytest
 
+import efp_runtime.llm.provider as provider_module
 from efp_runtime.llm.provider import (
+    GitHubCopilotHTTPTransport,
     GitHubCopilotProvider,
     OpenAICompatibleProvider,
+    ProviderTransportError,
     RecordingTransport,
+    github_copilot_provider_from_env,
 )
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner
 from efp_runtime.session.models import MessagePartType, MessageRole
@@ -200,6 +206,7 @@ async def test_github_copilot_provider_defaults_metadata_and_model_payload():
 
     assert result.status == LoopStatus.COMPLETED
     assert provider.model == "gpt-5-mini"
+    assert provider.metadata["provider_id"] == "github-copilot"
     payload = transport.payloads[0]
     assert payload["model"] == "gpt-5-mini"
     assert payload["metadata"]["provider"] == "github-copilot"
@@ -227,6 +234,189 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     assert provider.model == "gpt-5-mini"
     assert transport.payloads[0]["model"] == "gpt-5"
     assert transport.payloads[0]["metadata"]["provider_id"] == "github-copilot"
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_posts_json_headers_and_returns_raw(
+    monkeypatch,
+):
+    requests = []
+    raw_response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "HTTP answer.",
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        return _FakeHTTPResponse(raw_response)
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(
+        token="secret-token",
+        timeout=12,
+        user_agent="efp-test",
+        initiator="tester",
+    )
+    payload = {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "Say ok"}],
+        "stream": False,
+    }
+
+    result = await transport.send(payload)
+
+    assert result == raw_response
+    assert len(requests) == 1
+    request, timeout = requests[0]
+    assert timeout == 12
+    assert request.full_url == "https://api.githubcopilot.com/chat/completions"
+    assert request.get_method() == "POST"
+    assert json.loads(request.data.decode("utf-8")) == payload
+
+    headers = _request_headers(request)
+    assert headers["authorization"] == "Bearer secret-token"
+    assert headers["content-type"] == "application/json"
+    assert headers["accept"] == "application/json"
+    assert headers["user-agent"] == "efp-test"
+    assert headers["openai-intent"] == "conversation-edits"
+    assert headers["x-initiator"] == "tester"
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_rejects_stream_without_network(
+    monkeypatch,
+):
+    called = False
+
+    def fake_urlopen(request, timeout):
+        nonlocal called
+        called = True
+        return _FakeHTTPResponse({})
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderTransportError, match="does not support streaming"):
+        await transport.send({"model": "gpt-5-mini", "stream": True})
+
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_errors_do_not_leak_token(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            401,
+            "Unauthorized secret-token",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error": "bad secret-token"}'),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderTransportError) as exc_info:
+        await transport.send(
+            {
+                "model": "gpt-5-mini",
+                "messages": [{"role": "user", "content": "Say ok"}],
+                "stream": False,
+            }
+        )
+
+    message = str(exc_info.value)
+    assert "401" in message
+    assert "[redacted]" in message
+    assert "secret-token" not in message
+    assert exc_info.value.__cause__ is None
+
+
+def test_github_copilot_provider_from_env_reads_token_and_base_url():
+    provider = github_copilot_provider_from_env(
+        env={
+            "EFP_GITHUB_COPILOT_TOKEN": " efp-token ",
+            "GITHUB_COPILOT_TOKEN": "fallback-token",
+            "EFP_GITHUB_COPILOT_BASE_URL": "https://copilot-api.enterprise.example/",
+        }
+    )
+
+    assert provider.model == "gpt-5-mini"
+    assert provider.metadata["provider_id"] == "github-copilot"
+    assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
+    assert (
+        provider.transport.endpoint
+        == "https://copilot-api.enterprise.example/chat/completions"
+    )
+    assert provider.transport._headers()["Authorization"] == "Bearer efp-token"
+
+
+def test_github_copilot_provider_from_env_falls_back_to_github_token():
+    provider = github_copilot_provider_from_env(
+        model="gpt-5",
+        env={"GITHUB_COPILOT_TOKEN": "github-token"},
+    )
+
+    assert provider.model == "gpt-5"
+    assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
+    assert provider.transport._headers()["Authorization"] == "Bearer github-token"
+
+
+def test_github_copilot_provider_from_env_requires_token():
+    with pytest.raises(ProviderTransportError) as exc_info:
+        github_copilot_provider_from_env(env={})
+
+    message = str(exc_info.value)
+    assert "EFP_GITHUB_COPILOT_TOKEN" in message
+    assert "GITHUB_COPILOT_TOKEN" in message
+
+
+def test_github_copilot_smoke_dry_run_outputs_payload_without_token():
+    env = dict(os.environ)
+    env["PYTHONPATH"] = "src"
+    env.pop("EFP_GITHUB_COPILOT_TOKEN", None)
+    env.pop("GITHUB_COPILOT_TOKEN", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "efp_runtime.smoke.github_copilot",
+            "--dry-run",
+            "--prompt",
+            "Say ok",
+            "--model",
+            "gpt-5-mini",
+        ],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is True
+    assert payload["provider"] == "github-copilot"
+    assert payload["provider_id"] == "github-copilot"
+    assert payload["model"] == "gpt-5-mini"
+    assert payload["payload_summary"]["tool_count"] == 0
+    assert payload["payload_summary"]["stream"] is False
+    assert payload["payload"]["model"] == "gpt-5-mini"
+    assert payload["payload"]["messages"][-1] == {
+        "role": "user",
+        "content": "Say ok",
+    }
+    assert payload["payload"]["metadata"]["provider_id"] == "github-copilot"
+    assert "Authorization" not in result.stdout
 
 
 @pytest.mark.asyncio
@@ -459,3 +649,26 @@ def _responses_response(text):
             }
         ]
     }
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        if isinstance(self.payload, bytes):
+            return self.payload
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def _request_headers(request):
+    headers = {key.lower(): value for key, value in request.header_items()}
+    for source in (request.headers, request.unredirected_hdrs):
+        headers.update({key.lower(): value for key, value in source.items()})
+    return headers
