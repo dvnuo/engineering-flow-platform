@@ -761,6 +761,19 @@ while non-HTML text is returned as decoded text. Responses are rejected when the
 declared or actual body exceeds 5 MiB, and `max_chars` still controls
 model-visible truncation.
 
+### opencode parity status
+
+`src/efp_runtime/opencode_parity.py` is the Runtime v2 parity manifest for the
+audited opencode dev head. It pins the upstream commit, the default core tool
+ids, conditional tool ids, excluded external protocol tools, and capability
+group status. The default surface remains the workspace-contained core registry:
+file read/write/edit/patch, shell, grep/glob, repository clone/overview,
+`webfetch`, `todowrite`, and invalid-call feedback. `question`, `lsp`,
+`plan_exit`, `task`, `skill`, and legacy aliases are conditional surface exposed
+only by explicit config, registry switches, or injected runtime collaborators.
+`websearch` remains a remaining item because it needs a search-service boundary,
+permission category, and config gate before Runtime v2 adds a tool id.
+
 `repo_clone` prepares a git repository under the workspace-local cache
 `.efp_runtime/repositories/` unless a workspace-relative `target_dir` is
 provided. Repository inputs can be an existing local path, a full URL, or GitHub

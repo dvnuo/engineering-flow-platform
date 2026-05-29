@@ -7,37 +7,13 @@ import pytest
 from efp_runtime.agents import AgentProfile
 from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
+from efp_runtime.opencode_parity import DEFAULT_CORE_TOOL_IDS, LEGACY_ALIAS_TOOL_IDS
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.tools.builtin import create_core_tool_registry
 
 
-OPENCODE_TOOL_IDS = [
-    "apply_patch",
-    "bash",
-    "edit",
-    "glob",
-    "grep",
-    "invalid",
-    "read",
-    "repo_clone",
-    "repo_overview",
-    "todowrite",
-    "webfetch",
-    "write",
-]
-LEGACY_ALIAS_IDS = {
-    "fetch",
-    "list_dir",
-    "read_file",
-    "shell_exec",
-    "shell_kill",
-    "shell_status",
-    "skill_list",
-    "task_cancel",
-    "task_status",
-    "todo_write",
-    "write_file",
-}
+OPENCODE_TOOL_IDS = list(DEFAULT_CORE_TOOL_IDS)
+LEGACY_ALIAS_IDS = set(LEGACY_ALIAS_TOOL_IDS)
 
 
 def test_default_core_registry_uses_opencode_tool_surface(tmp_path: Path):
