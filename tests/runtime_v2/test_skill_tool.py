@@ -552,6 +552,7 @@ async def test_active_skill_and_skill_tool_coexist_without_active_skill_pollutio
             active_skills=["active-skill"],
             max_iterations=2,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
     )
@@ -623,6 +624,7 @@ async def test_agent_runtime_filters_denied_active_skill_context(tmp_path):
             tool_permissions={"skill": {"*": "allow", "internal-*": "deny"}},
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
     )

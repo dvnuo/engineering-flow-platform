@@ -459,6 +459,26 @@ def test_runtime_config_field_mapping(tmp_path: Path):
     assert config.runtime_mode == "plan"
 
 
+@pytest.mark.parametrize(
+    "alias",
+    ["includeEnvironmentContext", "include_environment_context"],
+)
+def test_config_loader_maps_environment_context_aliases(
+    tmp_path: Path,
+    alias: str,
+):
+    _write_json(tmp_path / "custom.json", {alias: False})
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=["custom.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.include_environment_context is False
+    assert alias not in result.metadata["unconsumed_config"]
+
+
 def test_tool_surface_config_aliases(tmp_path: Path):
     _write_json(
         tmp_path / "camel.json",

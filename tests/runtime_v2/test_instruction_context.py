@@ -137,6 +137,7 @@ async def test_agent_runtime_run_injects_instruction_context_without_persisting_
             workspace_root=tmp_path,
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
     )
@@ -188,6 +189,7 @@ async def test_resume_injects_instruction_context_without_empty_user_message(
             workspace_root=tmp_path,
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         store=store,
@@ -227,6 +229,7 @@ async def test_instruction_context_precedes_active_skill_context(tmp_path: Path)
             active_skills=["review-pr"],
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
     )

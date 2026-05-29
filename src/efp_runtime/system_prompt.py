@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 from .session.models import Message, MessagePart, MessageRole
@@ -49,6 +52,7 @@ class SystemPromptBuilder:
         *,
         workspace_root: str | Path | None,
         include_default_system_prompt: bool = True,
+        include_environment_context: bool = True,
         system_prompt_texts: Iterable[str] = (),
         system_prompt_paths: Iterable[str | Path] = (),
         max_system_prompt_chars: int = 20000,
@@ -58,6 +62,7 @@ class SystemPromptBuilder:
             raise ValueError("max_system_prompt_chars must be greater than or equal to 0")
         self.workspace_root = _coerce_workspace_root(workspace_root)
         self.include_default_system_prompt = bool(include_default_system_prompt)
+        self.include_environment_context = bool(include_environment_context)
         self.system_prompt_texts = list(system_prompt_texts)
         self.system_prompt_paths = list(system_prompt_paths)
         self.max_system_prompt_chars = max_system_prompt_chars
@@ -74,6 +79,11 @@ class SystemPromptBuilder:
                     source="default_system_prompt",
                 )
             )
+
+        if self.include_environment_context:
+            environment = self._environment_context_message(runtime_metadata)
+            if environment is not None:
+                messages.append(environment)
 
         for index, text in enumerate(self.system_prompt_texts):
             content = str(text)
@@ -131,6 +141,52 @@ class SystemPromptBuilder:
             path=str(path) if path is not None else None,
             content=rendered_content,
             truncated=truncated,
+            original_chars=len(content),
+            metadata=source_metadata,
+        )
+        return _system_text_message(source)
+
+    def _environment_context_message(
+        self,
+        metadata: Mapping[str, Any],
+    ) -> Message | None:
+        workspace_root = _environment_workspace_root(metadata, self.workspace_root)
+        working_directory = _environment_working_directory(metadata, workspace_root)
+        model_id = _environment_model_id(metadata)
+        git_repository = _is_git_repository(workspace_root)
+        platform_id = sys.platform
+        current_date = _current_local_date_iso()
+
+        fields: list[tuple[str, str]] = [("model", model_id)]
+        if working_directory is not None:
+            fields.append(("working directory", str(working_directory)))
+        if workspace_root is not None:
+            fields.append(("workspace root", str(workspace_root)))
+        fields.extend(
+            [
+                ("git repository", str(git_repository).lower()),
+                ("platform", platform_id),
+                ("date", current_date),
+            ]
+        )
+        if not fields:
+            return None
+
+        content = "Environment:\n" + "\n".join(
+            f"- {label}: {value}" for label, value in fields
+        )
+        source_metadata: dict[str, Any] = {
+            "source": "environment_context",
+            "kind": "environment_context",
+            "model_id": model_id,
+            "git_repository": git_repository,
+        }
+        if workspace_root is not None:
+            source_metadata["workspace_root"] = str(workspace_root)
+        source = SystemPromptSource(
+            path=None,
+            content=content,
+            truncated=False,
             original_chars=len(content),
             metadata=source_metadata,
         )
@@ -270,6 +326,90 @@ def _metadata_value(metadata: Mapping[str, Any], key: str) -> Any:
     if isinstance(runtime_config, Mapping):
         return runtime_config.get(key)
     return None
+
+
+def _environment_workspace_root(
+    metadata: Mapping[str, Any],
+    builder_workspace_root: Path | None,
+) -> Path | None:
+    metadata_workspace_root = _coerce_metadata_path(
+        _metadata_value(metadata, "workspace_root")
+    )
+    return metadata_workspace_root or builder_workspace_root
+
+
+def _environment_working_directory(
+    metadata: Mapping[str, Any],
+    workspace_root: Path | None,
+) -> Path | None:
+    for key in ("cwd", "working_directory"):
+        path = _coerce_metadata_path(_metadata_value(metadata, key))
+        if path is not None:
+            return path
+    return workspace_root
+
+
+def _environment_model_id(metadata: Mapping[str, Any]) -> str:
+    provider_id = (
+        _metadata_string(metadata, "default_provider_id") or "github-copilot"
+    )
+    requested_model = _metadata_string(metadata, "requested_model")
+    if requested_model is not None:
+        return _qualified_model_id(requested_model, provider_id)
+    default_model = _metadata_string(metadata, "default_model") or "gpt-5-mini"
+    return _qualified_model_id(default_model, provider_id)
+
+
+def _qualified_model_id(model_id: str, provider_id: str | None) -> str:
+    model = str(model_id).strip()
+    if not model:
+        return "github-copilot/gpt-5-mini"
+    if "/" in model:
+        return model
+    provider = str(provider_id or "").strip().strip("/")
+    if not provider:
+        provider = "github-copilot"
+    return f"{provider}/{model}"
+
+
+def _metadata_string(metadata: Mapping[str, Any], key: str) -> str | None:
+    value = _metadata_value(metadata, key)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _coerce_metadata_path(value: Any) -> Path | None:
+    if not isinstance(value, (str, Path)):
+        return None
+    return _coerce_workspace_root(value)
+
+
+def _is_git_repository(workspace_root: Path | None) -> bool:
+    if workspace_root is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(workspace_root), "rev-parse", "--is-inside-work-tree"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip().lower() == "true"
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    try:
+        return (workspace_root / ".git").exists()
+    except OSError:
+        return False
+
+
+def _current_local_date_iso() -> str:
+    return date.today().isoformat()
 
 
 def _metadata_bool(metadata: Mapping[str, Any], *keys: str) -> bool:

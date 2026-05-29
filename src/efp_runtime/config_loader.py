@@ -97,6 +97,8 @@ _RUNTIME_CONFIG_KEYS = {
     "compaction_prune_min_chars",
     "compaction_prune_protect_chars",
     "instructions",
+    "includeEnvironmentContext",
+    "include_environment_context",
     "systemPrompt",
     "system_prompt",
     "skills",
@@ -526,6 +528,13 @@ def _runtime_config_from_raw(
     system_prompt_texts = _merged_alias_strings(raw, ("systemPrompt", "system_prompt"))
     if system_prompt_texts is not None:
         kwargs["system_prompt_texts"] = system_prompt_texts
+
+    include_environment_context = _first_alias_value(
+        raw,
+        ("includeEnvironmentContext", "include_environment_context"),
+    )
+    if include_environment_context is not None:
+        kwargs["include_environment_context"] = include_environment_context
 
     default_skill_dirs = default_skill_directories(
         workspace_root,

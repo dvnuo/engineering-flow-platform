@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -55,16 +56,37 @@ async def test_default_runtime_prepends_system_prompt_before_instructions_and_sk
     assert messages[0].role == "system"
     assert "EFP Runtime v2" in messages[0].text
 
+    environment_index = _message_index(messages, "Environment:")
     instruction_index = _message_index(messages, "Instructions from:")
     available_skill_index = _message_index(messages, "<available_skills>")
     skill_index = _message_index(messages, '<skill_content name="review-pr">')
     user_index = _message_index(messages, "Inspect this.")
-    assert 0 < instruction_index < available_skill_index < skill_index < user_index
-    assert request.metadata["system_prompt_context_count"] == 2
+    assert 0 < environment_index < instruction_index
+    assert instruction_index < available_skill_index < skill_index < user_index
+    environment_message = messages[environment_index]
+    assert environment_message.metadata["message_metadata"]["source"] == (
+        "environment_context"
+    )
+    assert environment_message.metadata["message_metadata"]["kind"] == (
+        "environment_context"
+    )
+    assert "- model: github-copilot/gpt-5-mini" in environment_message.text
+    assert f"- working directory: {tmp_path.resolve()}" in environment_message.text
+    assert f"- workspace root: {tmp_path.resolve()}" in environment_message.text
+    assert "- git repository: false" in environment_message.text
+    assert f"- platform: {sys.platform}" in environment_message.text
+    assert re.search(r"- date: \d{4}-\d{2}-\d{2}", environment_message.text)
+    assert request.metadata["system_prompt_context_count"] == 3
+    assert request.metadata["environment_context_count"] == 1
+    assert request.metadata["environment_context_model"] == "github-copilot/gpt-5-mini"
     assert request.metadata["instruction_context_count"] == 1
     assert request.metadata["available_skill_context_count"] == 1
     assert request.metadata["skill_context_count"] == 1
-    assert request.provider_request.metadata["system_prompt_context_count"] == 2
+    assert request.provider_request.metadata["system_prompt_context_count"] == 3
+    assert request.provider_request.metadata["environment_context_count"] == 1
+    assert request.provider_request.metadata["environment_context_model"] == (
+        "github-copilot/gpt-5-mini"
+    )
     assert request.provider_request.metadata["instruction_context_count"] == 1
     assert request.provider_request.metadata["available_skill_context_count"] == 1
     assert request.provider_request.metadata["skill_context_count"] == 1
@@ -203,6 +225,7 @@ async def test_default_system_prompt_can_be_disabled_but_explicit_texts_remain(
         config=RuntimeConfig(
             workspace_root=tmp_path,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
             system_prompt_texts=["Custom system layer."],
             max_iterations=1,
@@ -229,6 +252,7 @@ def test_system_prompt_paths_load_workspace_files_with_truncation_metadata(
     messages = SystemPromptBuilder(
         workspace_root=tmp_path,
         include_default_system_prompt=False,
+        include_environment_context=False,
         include_runtime_reminders=False,
         system_prompt_paths=["prompts/base.txt"],
         max_system_prompt_chars=3,
@@ -247,7 +271,7 @@ def test_system_prompt_paths_load_workspace_files_with_truncation_metadata(
     assert "truncated to 3 of 6 chars" in message.parts[0].text
 
 
-def test_inline_and_file_prompts_appear_between_default_and_runtime_reminders(
+def test_environment_inline_and_file_prompts_appear_before_runtime_reminders(
     tmp_path: Path,
 ):
     prompt_dir = tmp_path / "prompts"
@@ -266,17 +290,20 @@ def test_inline_and_file_prompts_appear_between_default_and_runtime_reminders(
         MessageRole.SYSTEM,
         MessageRole.SYSTEM,
         MessageRole.SYSTEM,
+        MessageRole.SYSTEM,
     ]
     assert [message.metadata["source"] for message in messages] == [
         "default_system_prompt",
+        "environment_context",
         "inline",
         "file",
         "runtime_reminders",
     ]
     assert "EFP Runtime v2" in messages[0].parts[0].text
-    assert messages[1].parts[0].text == "Inline prompt."
-    assert messages[2].parts[0].text == "Team file prompt."
-    assert "max_iterations=2" in messages[3].parts[0].text
+    assert "Environment:" in messages[1].parts[0].text
+    assert messages[2].parts[0].text == "Inline prompt."
+    assert messages[3].parts[0].text == "Team file prompt."
+    assert "max_iterations=2" in messages[4].parts[0].text
 
 
 def test_system_prompt_paths_reject_path_traversal_and_outside_files(tmp_path: Path):
@@ -286,6 +313,7 @@ def test_system_prompt_paths_reject_path_traversal_and_outside_files(tmp_path: P
     messages = SystemPromptBuilder(
         workspace_root=tmp_path,
         include_default_system_prompt=False,
+        include_environment_context=False,
         include_runtime_reminders=False,
         system_prompt_paths=["../outside-system.txt", outside],
     ).build_messages()
@@ -297,6 +325,7 @@ def test_runtime_reminders_can_be_enabled_and_disabled():
     enabled = SystemPromptBuilder(
         workspace_root=None,
         include_default_system_prompt=False,
+        include_environment_context=False,
         include_runtime_reminders=True,
     ).build_messages(
         metadata={
@@ -319,6 +348,7 @@ def test_runtime_reminders_can_be_enabled_and_disabled():
     disabled = SystemPromptBuilder(
         workspace_root=None,
         include_default_system_prompt=False,
+        include_environment_context=False,
         include_runtime_reminders=False,
     ).build_messages(metadata={"max_iterations": 3, "enable_question_tool": True})
     assert disabled == []
@@ -328,6 +358,7 @@ def test_plan_mode_reminder_is_read_only_and_finishes_with_plan_exit():
     messages = SystemPromptBuilder(
         workspace_root=None,
         include_default_system_prompt=False,
+        include_environment_context=False,
     ).build_messages(metadata={"runtime_mode": "plan"})
 
     assert len(messages) == 1
@@ -374,18 +405,127 @@ async def test_system_prompt_context_is_not_persisted_or_duplicated_between_runs
     default_prompt_count = sum(
         1 for message in second_messages if "EFP Runtime v2" in message.text
     )
+    environment_count = sum(
+        1 for message in second_messages if "Environment:" in message.text
+    )
     assert default_prompt_count == 1
+    assert environment_count == 1
     assert [message.role for message in provider.requests[1].messages] == [
         MessageRole.USER,
         MessageRole.ASSISTANT,
         MessageRole.USER,
     ]
+    assert all(
+        "Environment:" not in part.text
+        for message in history
+        for part in message.parts
+        if part.text is not None
+    )
+
+
+def test_environment_context_builder_contains_runtime_environment(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    cwd = tmp_path / "src"
+
+    messages = SystemPromptBuilder(
+        workspace_root=tmp_path,
+        include_default_system_prompt=False,
+        include_runtime_reminders=False,
+    ).build_messages(
+        metadata={
+            "requested_model": "github-copilot/gpt-5",
+            "cwd": cwd,
+        }
+    )
+
+    assert len(messages) == 1
+    message = messages[0]
+    assert message.metadata["source"] == "environment_context"
+    assert message.metadata["kind"] == "environment_context"
+    assert message.metadata["model_id"] == "github-copilot/gpt-5"
+    assert message.metadata["workspace_root"] == str(tmp_path.resolve())
+    assert message.metadata["git_repository"] is True
+    assert message.parts[0].metadata == message.metadata
+    text = message.parts[0].text
+    assert text.startswith("Environment:\n")
+    assert "- model: github-copilot/gpt-5" in text
+    assert f"- working directory: {cwd.resolve()}" in text
+    assert f"- workspace root: {tmp_path.resolve()}" in text
+    assert "- git repository: true" in text
+    assert f"- platform: {sys.platform}" in text
+    assert re.search(r"- date: \d{4}-\d{2}-\d{2}", text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "expected_model"),
+    [
+        ("github-copilot/gpt-5", "github-copilot/gpt-5"),
+        ("gpt-5", "github-copilot/gpt-5"),
+    ],
+)
+async def test_environment_context_uses_requested_model(
+    tmp_path: Path,
+    requested_model: str,
+    expected_model: str,
+):
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+            max_iterations=1,
+        ),
+    )
+
+    await runtime.run(
+        "Use requested model.",
+        session_id=f"session-env-{requested_model.replace('/', '-')}",
+        metadata={"requested_model": requested_model},
+    )
+
+    request = provider.requests[0]
+    environment_message = request.provider_request.messages[0]
+    assert environment_message.metadata["message_metadata"]["kind"] == (
+        "environment_context"
+    )
+    assert f"- model: {expected_model}" in environment_message.text
+    assert request.metadata["environment_context_count"] == 1
+    assert request.metadata["environment_context_model"] == expected_model
+
+
+@pytest.mark.asyncio
+async def test_environment_context_can_be_disabled(tmp_path: Path):
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            include_environment_context=False,
+            include_runtime_reminders=False,
+            max_iterations=1,
+        ),
+    )
+
+    await runtime.run("No environment.", session_id="session-no-env")
+
+    request = provider.requests[0]
+    assert all(
+        "Environment:" not in message.text
+        for message in request.provider_request.messages
+    )
+    assert request.metadata["environment_context_count"] == 0
+    assert "environment_context_model" not in request.metadata
+    assert request.provider_request.metadata["environment_context_count"] == 0
 
 
 def test_child_config_preserves_system_prompt_settings(tmp_path: Path):
     base_config = RuntimeConfig(
         workspace_root=tmp_path,
         include_default_system_prompt=False,
+        include_environment_context=False,
         system_prompt_texts=["Child system prompt."],
         system_prompt_paths=["prompts/child.md"],
         max_system_prompt_chars=17,
@@ -400,6 +540,7 @@ def test_child_config_preserves_system_prompt_settings(tmp_path: Path):
     )
 
     assert child.include_default_system_prompt is False
+    assert child.include_environment_context is False
     assert child.system_prompt_texts == ["Child system prompt."]
     assert child.system_prompt_paths == ["prompts/child.md"]
     assert child.max_system_prompt_chars == 17

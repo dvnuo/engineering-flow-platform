@@ -52,6 +52,7 @@ async def test_named_agent_injects_profile_prompt_into_provider_system_context()
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
             system_prompt_texts=["Base system prompt."],
             instruction_texts=["Workspace instructions."],
@@ -92,6 +93,7 @@ async def test_builtin_read_only_agent_records_metadata_and_applies_prompt():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         agent_registry=registry,
@@ -136,6 +138,7 @@ async def test_profile_prompt_is_not_written_to_session_history():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
     )
@@ -163,6 +166,7 @@ async def test_default_agent_is_used_when_run_omits_agent():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         agent_registry=registry,
@@ -194,6 +198,7 @@ async def test_switch_agent_persists_event_and_run_resume_use_session_profile():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         agent_registry=registry,
@@ -259,6 +264,7 @@ async def test_caller_command_and_mention_agents_override_session_agent():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         command_registry=command_registry,
@@ -309,6 +315,7 @@ async def test_agent_mention_selects_profile_and_strips_token():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         agent_registry=registry,
@@ -338,6 +345,7 @@ async def test_agent_mention_alone_selects_profile_and_sends_clean_prompt():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         agent_registry=registry,
@@ -369,6 +377,7 @@ async def test_caller_agent_wins_over_agent_mention_without_stripping():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         agent_registry=registry,
@@ -412,6 +421,7 @@ async def test_command_agent_wins_over_agent_mention_without_stripping():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         command_registry=command_registry,
@@ -443,6 +453,7 @@ async def test_unknown_agent_mention_is_left_as_prompt_text():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         agent_registry=registry,
@@ -472,6 +483,7 @@ async def test_file_reference_at_first_token_is_not_consumed_as_agent_mention(
             workspace_root=tmp_path,
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         agent_registry=registry,
@@ -496,6 +508,7 @@ async def test_direct_agent_profile_does_not_require_registry():
         config=RuntimeConfig(
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
     )
@@ -531,6 +544,7 @@ async def test_profile_active_skills_are_base_and_skill_commands_are_temporary(
             active_skills=["runtime-skill"],
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
     )
@@ -579,6 +593,7 @@ async def test_profile_active_skills_do_not_leak_to_next_plain_run(tmp_path: Pat
             skill_directories=[tmp_path],
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
     )
@@ -626,6 +641,7 @@ async def test_profile_active_skills_apply_when_profile_selected_by_command(
             skill_directories=[tmp_path],
             max_iterations=1,
             include_default_system_prompt=False,
+            include_environment_context=False,
             include_runtime_reminders=False,
         ),
         command_registry=command_registry,

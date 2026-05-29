@@ -537,7 +537,10 @@ class AgentRuntime:
             if profile is None:
                 self.active_skills = active_skills
 
-            run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
+            self._annotate_system_prompt_context_metadata(
+                run_metadata,
+                system_prompt_messages,
+            )
             run_metadata["agent_prompt_context_count"] = len(agent_profile_messages)
             run_metadata["structured_output_context_count"] = len(
                 structured_output_messages
@@ -744,7 +747,10 @@ class AgentRuntime:
                 *available_skill_context_messages,
                 *skill_context_messages,
             ]
-            run_metadata["system_prompt_context_count"] = len(system_prompt_messages)
+            self._annotate_system_prompt_context_metadata(
+                run_metadata,
+                system_prompt_messages,
+            )
             run_metadata["agent_prompt_context_count"] = len(agent_profile_messages)
             run_metadata["structured_output_context_count"] = len(
                 structured_output_messages
@@ -1086,6 +1092,26 @@ class AgentRuntime:
     def _build_system_prompt_messages(self, metadata: Mapping[str, Any]):
         return self.system_prompt_builder.build_messages(metadata=metadata)
 
+    def _annotate_system_prompt_context_metadata(
+        self,
+        run_metadata: dict[str, Any],
+        messages: list[Message],
+    ) -> None:
+        environment_messages = [
+            message
+            for message in messages
+            if message.metadata.get("kind") == "environment_context"
+            or message.metadata.get("source") == "environment_context"
+        ]
+        run_metadata["system_prompt_context_count"] = len(messages)
+        run_metadata["environment_context_count"] = len(environment_messages)
+        if environment_messages:
+            model_id = environment_messages[0].metadata.get("model_id")
+            if model_id is not None:
+                run_metadata["environment_context_model"] = model_id
+        else:
+            run_metadata.pop("environment_context_model", None)
+
     def _build_agent_profile_messages(self, profile: Any | None) -> list[Message]:
         if profile is None:
             return []
@@ -1409,6 +1435,8 @@ class AgentRuntime:
         run_metadata["runtime_mode"] = self.config.runtime_mode
         run_metadata["plan_mode_read_only"] = self.config.plan_mode_read_only
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
+        run_metadata["default_provider_id"] = self.config.default_provider_id
+        run_metadata["default_model"] = self.config.default_model
         run_metadata["model_aware_tool_selection_enabled"] = (
             self.config.model_aware_tool_selection
         )
@@ -2420,6 +2448,7 @@ def _resolve_config(
         ),
         metadata=resolved_metadata,
         include_default_system_prompt=config.include_default_system_prompt,
+        include_environment_context=config.include_environment_context,
         system_prompt_texts=list(config.system_prompt_texts),
         system_prompt_paths=list(config.system_prompt_paths),
         max_system_prompt_chars=config.max_system_prompt_chars,
@@ -2704,6 +2733,7 @@ def _resolve_system_prompt_builder(
     return SystemPromptBuilder(
         workspace_root=config.workspace_root,
         include_default_system_prompt=config.include_default_system_prompt,
+        include_environment_context=config.include_environment_context,
         system_prompt_texts=config.system_prompt_texts,
         system_prompt_paths=config.system_prompt_paths,
         max_system_prompt_chars=config.max_system_prompt_chars,

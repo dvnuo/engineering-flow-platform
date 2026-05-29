@@ -77,8 +77,8 @@ Each loop iteration builds a `RuntimeRequest` for the provider. It keeps the raw
 `ProviderRequest`, the `PreparedProviderRequest` with compaction metadata, and
 the sorted `ToolDef` list used to render provider-neutral tool schemas.
 `AgentRuntime` prepends provider-only context before persisted history in this
-order: system prompt and runtime reminders, workspace instructions, active
-skills, then session history.
+order: system prompt stack, workspace instructions, active skills, then session
+history.
 
 `STEP_FINISH` updates the active assistant message. Tool result events append a
 separate tool message and do not make that tool message the active assistant
@@ -243,6 +243,8 @@ The loader maps the following opencode-style and snake_case keys into
   `context_reserve_tokens` for Copilot context budgeting.
 - `toolSurface` / `tool_surface`, either `opencode` or `legacy`.
 - `includeLegacyToolAliases` / `include_legacy_tool_aliases`.
+- `includeEnvironmentContext` / `include_environment_context` to toggle the
+  transient environment system context.
 - `instructions`, as string paths or `{"path": ...}` / `{"text": ...}` entries,
   to `instruction_paths` and `instruction_texts`.
 - `systemPrompt` / `system_prompt`, as a string or list, to
@@ -1230,26 +1232,32 @@ as provider-only system context.
 ## System Prompt Stack
 
 Runtime v2 has a small configurable system prompt stack. By default,
-`AgentRuntime` adds a stable base code-agent prompt, then optional explicit
+`AgentRuntime` adds a stable base code-agent prompt, then a transient
+environment context message, then optional explicit
 `RuntimeConfig.system_prompt_texts` and UTF-8 workspace-local
 `RuntimeConfig.system_prompt_paths`. It can also add runtime reminders for the
 current iteration limit, the optional `question` tool, plan mode, and saved
 truncated tool output referenced by `output_path`.
 
-The default prompt is provider-only coding-agent context. Runtime reminders are
-separate transient system messages driven by request metadata, so per-run loop
-guidance can be added or omitted without changing configured prompts. System
-prompt and reminder messages are not appended to the session store, are not
-copied into user messages, and are rebuilt for each `run()` or `resume()`
+The default prompt is provider-only coding-agent context. The environment
+context is provider-only and request-local: it exposes the selected model,
+working directory, workspace root, local git repository detection, platform, and
+local date so model-visible runtime facts match opencode-style environment
+visibility. `RuntimeConfig.include_environment_context=False` disables this
+message without changing configured prompts. Runtime reminders are separate
+transient system messages driven by request metadata, so per-run loop guidance
+can be added or omitted without changing configured prompts. System prompt,
+environment, and reminder messages are not appended to the session store, are
+not copied into user messages, and are rebuilt for each `run()` or `resume()`
 request.
 Plan mode does not persist extra system prompt text either; only ordinary
 user, assistant, and tool history is stored.
 
 The full provider request context order is:
 
-1. System prompt and runtime reminder messages.
+1. System prompt stack messages.
 2. Workspace instruction messages.
-3. Active skill messages.
+3. Available-skill and active-skill messages.
 4. Persisted session history.
 
 ## Instructions

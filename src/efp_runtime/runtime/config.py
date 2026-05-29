@@ -60,6 +60,7 @@ class RuntimeConfig:
     structured_output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     include_default_system_prompt: bool = True
+    include_environment_context: bool = True
     system_prompt_texts: list[str] = field(default_factory=list)
     system_prompt_paths: list[str | Path] = field(default_factory=list)
     max_system_prompt_chars: int = 20000
@@ -218,6 +219,7 @@ class RuntimeConfig:
         self.tool_permissions = normalize_tool_permissions(self.tool_permissions)
         self.metadata = dict(self.metadata)
         self.include_default_system_prompt = bool(self.include_default_system_prompt)
+        self.include_environment_context = bool(self.include_environment_context)
         self.system_prompt_texts = list(self.system_prompt_texts)
         self.system_prompt_paths = list(self.system_prompt_paths)
         self.include_runtime_reminders = bool(self.include_runtime_reminders)
