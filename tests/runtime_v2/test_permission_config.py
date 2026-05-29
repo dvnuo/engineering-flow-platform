@@ -15,9 +15,11 @@ from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import ToolCall
 from efp_runtime.permissions import (
     ALLOW,
+    ASK,
     ConfiguredPermissionBroker,
     PermissionConfig,
     PermissionMetadata,
+    PermissionRequest,
     normalize_agent_permission_overlay,
     normalize_tool_permissions,
 )
@@ -123,6 +125,23 @@ async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
     tool_result = history[2].parts[0].tool_result
     assert tool_result.status == "success"
     assert tool_result.output["stdout"] == "ok"
+
+
+def test_shell_permission_request_respects_static_patterns():
+    request = PermissionRequest.create(
+        tool_id="bash",
+        args={"command": "cat src/app.py"},
+        metadata=PermissionMetadata(
+            action=ASK,
+            category="shell",
+            data={"patterns": ["configured-shell-pattern"]},
+        ),
+    )
+
+    assert request.patterns == ["configured-shell-pattern"]
+    assert request.metadata["patterns"] == ["configured-shell-pattern"]
+    assert request.metadata["permission_patterns"] == ["configured-shell-pattern"]
+    assert request.metadata["path_args"][0]["path"] == "src/app.py"
 
 
 @pytest.mark.asyncio

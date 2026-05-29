@@ -248,6 +248,9 @@ async def test_shell_permission_request_includes_usable_metadata(tmp_path: Path)
     assert request["risk"] == "high"
     assert request["reason"] == "Shell execution requires approval."
     assert request["metadata"]["command_preview"] == "printf ok"
+    assert request["metadata"]["command_name"] == "printf"
+    assert request["metadata"]["command_names"] == ["printf"]
+    assert request["metadata"]["path_args"] == []
     assert request["metadata"]["description"] == "Print ok"
     assert request["metadata"]["workdir"] == "src"
     assert request["patterns"] == ["printf ok"]

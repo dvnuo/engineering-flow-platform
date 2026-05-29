@@ -587,6 +587,16 @@ allow rule for the matching retry, while `always=True` creates a persistent
 allow rule for the same tool/category. Deny follows the same rule scope model
 and is appended as a final tool result on resume.
 
+For `bash` and legacy `shell_exec`, the permission request includes lightweight
+opencode-style shell metadata derived before execution from the submitted args.
+Runtime v2 records the command preview, command name list, workdir, recognized
+path arguments, dynamic/glob/path-escape flags, and permission patterns. The
+scanner is deterministic and conservative: it tokenizes simple command segments
+with the Python standard library, recognizes common file-oriented commands, and
+falls back to the command preview when it cannot safely identify paths. This
+gives UIs and policy layers enough structure for command- or path-granular
+allow/ask/deny decisions without running a full shell parser.
+
 `RuntimeConfig.tool_permissions` adds an opencode-style execution permission
 layer on top of the static permission metadata carried by each tool definition.
 Keys can be exact tool ids such as `bash`, `shell_exec`, `read`, `read_file`,

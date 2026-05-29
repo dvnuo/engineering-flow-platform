@@ -9,6 +9,7 @@ import hashlib
 import json
 from typing import Any, Protocol
 
+from .shell_permissions import shell_permission_metadata, shell_permission_patterns
 from .types import utc_now_iso
 
 
@@ -365,7 +366,12 @@ class PermissionRequest:
         request_patterns = (
             _normalize_patterns(patterns)
             if patterns is not None
-            else _request_patterns(args=args, metadata=metadata, context=context)
+            else _request_patterns(
+                tool_id=tool_id,
+                args=args,
+                metadata=metadata,
+                context=context,
+            )
         )
         request_metadata = dict(metadata.data)
         request_metadata.update(_args_request_metadata(tool_id, args, metadata))
@@ -1171,6 +1177,7 @@ def _make_request_id(
 
 def _request_patterns(
     *,
+    tool_id: str,
     args: Mapping[str, Any],
     metadata: PermissionMetadata,
     context: Any,
@@ -1196,10 +1203,8 @@ def _request_patterns(
         subject = _permission_subject(args, metadata)
         if subject:
             patterns = [subject]
-    if not patterns and metadata.category == "shell":
-        command = _string_arg(args, "command")
-        if command:
-            patterns = [command[:500]]
+    if not patterns and _is_shell_permission(tool_id, metadata):
+        patterns = shell_permission_patterns(args)
     return patterns
 
 
@@ -1211,21 +1216,20 @@ def _args_request_metadata(
     if _is_fetch_permission(tool_id, metadata):
         return _fetch_request_metadata(args)
 
-    if tool_id != "shell_exec" and metadata.category != "shell":
+    if not _is_shell_permission(tool_id, metadata):
         return {}
 
-    request_metadata: dict[str, Any] = {}
-    command = _string_arg(args, "command")
-    if command:
-        request_metadata["command_preview"] = _preview_text(command)
-
-    description = _string_arg(args, "description")
-    if description is not None:
-        request_metadata["description"] = description
-
-    workdir = _string_arg(args, "workdir") or _string_arg(args, "cwd") or "."
-    request_metadata["workdir"] = workdir
+    request_metadata = shell_permission_metadata(args)
+    explicit_patterns = _normalize_patterns(metadata.data.get("patterns"))
+    if not explicit_patterns:
+        explicit_patterns = _normalize_patterns(metadata.data.get("pattern"))
+    if explicit_patterns:
+        request_metadata["permission_patterns"] = explicit_patterns
     return request_metadata
+
+
+def _is_shell_permission(tool_id: str, metadata: PermissionMetadata) -> bool:
+    return tool_id in {"bash", "shell_exec"} or metadata.category == "shell"
 
 
 def _is_fetch_permission(tool_id: str, metadata: PermissionMetadata) -> bool:
