@@ -40,6 +40,7 @@ class RuntimeConfig:
     provider_retry_backoff_seconds: float = 0.0
     provider_retry_backoff_multiplier: float = 2.0
     enable_context_overflow_retry: bool = True
+    enable_session_revert_snapshots: bool = True
     emit_llm_stream_events: bool = True
     track_usage: bool = True
     usage_pricing: dict[str, float] = field(default_factory=dict)
@@ -172,6 +173,9 @@ class RuntimeConfig:
         self.compaction_prune = bool(self.compaction_prune)
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
         self.enable_context_overflow_retry = bool(self.enable_context_overflow_retry)
+        self.enable_session_revert_snapshots = bool(
+            self.enable_session_revert_snapshots
+        )
         self.emit_llm_stream_events = bool(self.emit_llm_stream_events)
         self.track_usage = bool(self.track_usage)
         self.usage_pricing = validate_usage_pricing(self.usage_pricing)

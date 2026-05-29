@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 import fnmatch
 import hashlib
@@ -719,6 +720,13 @@ class ConfiguredPermissionBroker(PermissionBroker):
             args=args,
             metadata=metadata,
         )
+        if match is not None and match.rule.action == DENY:
+            return await super().evaluate(
+                tool_id=tool_id,
+                args=args,
+                metadata=_metadata_from_permission_config(metadata, match),
+                context=context,
+            )
         if overlay_match is not None:
             return await super().evaluate(
                 tool_id=tool_id,
@@ -978,11 +986,13 @@ def merge_tool_permission_configs(
     base_permissions: Mapping[str, Any] | None,
     overlay_permissions: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Return normalized permissions with overlay keys replacing base keys."""
+    """Return normalized permissions while preserving base deny priority."""
 
-    merged = normalize_tool_permissions(base_permissions)
-    merged.update(normalize_tool_permissions(overlay_permissions))
-    return merged
+    base = normalize_tool_permissions(base_permissions)
+    merged = deepcopy(base)
+    overlay = normalize_tool_permissions(overlay_permissions)
+    merged.update(deepcopy(overlay))
+    return _enforce_base_deny_priority(merged, base=base, overlay=overlay)
 
 
 def _permission_config_rules(
@@ -1087,6 +1097,53 @@ _PERMISSION_ALIAS_METADATA_CATEGORIES: dict[str, frozenset[str]] = {
     "question": frozenset({"question"}),
     "doom_loop": frozenset({"doom_loop"}),
 }
+
+
+def _enforce_base_deny_priority(
+    merged: dict[str, Any],
+    *,
+    base: Mapping[str, Any],
+    overlay: Mapping[str, Any],
+) -> dict[str, Any]:
+    for key, value in base.items():
+        if _direct_permission_action(value) != DENY:
+            continue
+        for enforced_key in _base_deny_enforced_keys(key, overlay):
+            merged[enforced_key] = deepcopy(value)
+    return merged
+
+
+def _base_deny_enforced_keys(
+    key: str,
+    overlay: Mapping[str, Any],
+) -> list[str]:
+    if key == "*":
+        return sorted({"*", *overlay.keys()})
+    alias_tool_ids = _PERMISSION_CATEGORY_ALIASES.get(key)
+    if alias_tool_ids is not None:
+        return sorted({key, *alias_tool_ids})
+    if _is_permission_wildcard(key):
+        return sorted(
+            {
+                key,
+                *(
+                    candidate
+                    for candidate in overlay
+                    if fnmatch.fnmatchcase(candidate, key)
+                ),
+            }
+        )
+    return [key]
+
+
+def _direct_permission_action(value: Any) -> PermissionAction | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        action = value.get("action")
+        if isinstance(action, str):
+            return action
+    return None
 
 
 def _is_permission_wildcard(key: str) -> bool:

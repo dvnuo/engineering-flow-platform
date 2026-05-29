@@ -239,7 +239,17 @@ def test_file_store_forks_session_through_message(tmp_path: Path):
     session = store.create_session(
         session_id="session-source",
         title="Source",
-        metadata={"suite": "file"},
+        metadata={
+            "suite": "file",
+            "revert": {"active": False},
+            "summary": {"diff_count": 1},
+            "last_execution_id": "run-1",
+            "last_runtime_status": "completed",
+            "last_runtime_updated_at": "2026-05-29T00:00:00Z",
+            "pending_permission_request": {"id": "permission-1"},
+            "pending_question_request": {"id": "question-1"},
+            "pending_tool_calls": [{"call_id": "call-1"}],
+        },
     )
     store.append_message(
         session.session_id,

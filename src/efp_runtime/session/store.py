@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..types import new_id
 from .checkpoint import SessionCheckpoint
+from .fork import fork_session_metadata
 from .models import Message, MessagePart, MessagePartType, MessageRole, Session
 
 
@@ -99,10 +100,11 @@ class InMemorySessionStore:
                 message_index = self._message_index(source, message_id)
                 messages = messages[: message_index + 1]
 
-            metadata = deepcopy(source.metadata)
-            metadata["parent_session_id"] = source.session_id
-            if message_id is not None:
-                metadata["forked_from_message_id"] = message_id
+            metadata = fork_session_metadata(
+                source.metadata,
+                parent_session_id=source.session_id,
+                message_id=message_id,
+            )
 
             forked = Session(
                 session_id=fork_id,

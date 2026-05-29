@@ -54,7 +54,14 @@ from ..session.query import (
     query_sessions as _query_sessions,
     session_context_messages as _session_context_messages,
 )
+from ..session.revert import (
+    finalize_session_revert_record,
+    prepare_session_revert_record,
+    revert_session_state,
+    unrevert_session_state,
+)
 from ..session.store import InMemorySessionStore
+from ..session.summary import collect_session_file_diffs, summarize_session_diffs
 from ..session.todo import SessionTodoStore
 from ..skills.commands import (
     SkillCommandResult,
@@ -390,6 +397,62 @@ class AgentRuntime:
     def session_context(self, session_id: str) -> list[Message]:
         return _session_context_messages(self.session_messages(session_id))
 
+    def session_diff(
+        self,
+        session_id: str,
+        message_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return collect_session_file_diffs(
+            self.store.read_history(session_id),
+            message_id=message_id,
+        )
+
+    def summarize_session(
+        self,
+        session_id: str,
+        message_id: str | None = None,
+        *,
+        include_diffs: bool = True,
+    ) -> dict[str, Any]:
+        summary = summarize_session_diffs(
+            self.store.read_history(session_id),
+            message_id=message_id,
+        )
+        summary["session_id"] = session_id
+        if not include_diffs:
+            summary.pop("diffs", None)
+        return summary
+
+    def revert_session(
+        self,
+        session_id: str,
+        message_id: str | None = None,
+        part_id: str | None = None,
+        *,
+        delete_added: bool = True,
+    ) -> Session:
+        return revert_session_state(
+            store=self.store,
+            session_id=session_id,
+            workspace_snapshot_store=self.workspace_snapshot_store,
+            message_id=message_id,
+            part_id=part_id,
+            delete_added=delete_added,
+        )
+
+    def unrevert_session(
+        self,
+        session_id: str,
+        *,
+        delete_added: bool = True,
+    ) -> Session:
+        return unrevert_session_state(
+            store=self.store,
+            session_id=session_id,
+            workspace_snapshot_store=self.workspace_snapshot_store,
+            delete_added=delete_added,
+        )
+
     def get_todos(self, session_id: str | None = None) -> list[dict[str, str]]:
         return self._session_todo_store().get(session_id)
 
@@ -470,9 +533,15 @@ class AgentRuntime:
             if structured_output_active
             else self.tool_runtime
         )
-        resolved_session_id = session_id or self.store.create_session().session_id
+        resolved_session_id = self._ensure_run_session(session_id)
         run_id = self.run_state.begin(resolved_session_id)
+        revert_record = None
         try:
+            revert_record = self._prepare_session_revert_record(
+                resolved_session_id,
+                run_id=run_id,
+                source="run",
+            )
             self._inject_pending_background_task_results(resolved_session_id)
             run_metadata["max_iterations"] = iteration_limit
             run_metadata["run_id"] = run_id
@@ -622,6 +691,10 @@ class AgentRuntime:
                 )
             )
         self.run_state.finish(resolved_session_id, result.status)
+        self._finalize_session_revert_record(
+            revert_record,
+            status=result.status,
+        )
         return result
 
     async def run_command(
@@ -697,7 +770,13 @@ class AgentRuntime:
             else self.tool_runtime
         )
         run_id = self.run_state.begin(session_id)
+        revert_record = None
         try:
+            revert_record = self._prepare_session_revert_record(
+                session_id,
+                run_id=run_id,
+                source="resume",
+            )
             self._inject_pending_background_task_results(session_id)
             run_metadata = self._base_run_metadata(metadata)
             self._apply_session_model_default(run_metadata, session)
@@ -822,6 +901,10 @@ class AgentRuntime:
             raise
 
         self.run_state.finish(session_id, result.status)
+        self._finalize_session_revert_record(
+            revert_record,
+            status=result.status,
+        )
         return result
 
     async def compact_session(
@@ -1447,6 +1530,52 @@ class AgentRuntime:
             return self.store.get_session(session_id)
         except KeyError:
             return None
+
+    def _ensure_run_session(self, session_id: str | None) -> str:
+        if session_id is None:
+            return self.store.create_session().session_id
+        try:
+            self.store.get_session(session_id)
+        except KeyError:
+            self.store.create_session(session_id=session_id)
+        return session_id
+
+    def _prepare_session_revert_record(
+        self,
+        session_id: str,
+        *,
+        run_id: str,
+        source: str,
+    ):
+        return prepare_session_revert_record(
+            store=self.store,
+            session_id=session_id,
+            run_id=run_id,
+            source=source,
+            workspace_snapshot_store=self.workspace_snapshot_store,
+            enable_workspace_snapshot=self._session_revert_snapshots_enabled(),
+        )
+
+    def _finalize_session_revert_record(
+        self,
+        record,
+        *,
+        status: str,
+    ) -> None:
+        if record is None:
+            return
+        finalize_session_revert_record(
+            store=self.store,
+            record=record,
+            status=status,
+        )
+
+    def _session_revert_snapshots_enabled(self) -> bool:
+        if not self.config.enable_session_revert_snapshots:
+            return False
+        if self.workspace_snapshot_store is None or self.config.workspace_root is None:
+            return False
+        return Path(self.config.workspace_root).exists()
 
     def _apply_session_model_default(
         self,
@@ -2414,6 +2543,7 @@ def _resolve_config(
         provider_retry_backoff_seconds=config.provider_retry_backoff_seconds,
         provider_retry_backoff_multiplier=config.provider_retry_backoff_multiplier,
         enable_context_overflow_retry=config.enable_context_overflow_retry,
+        enable_session_revert_snapshots=config.enable_session_revert_snapshots,
         emit_llm_stream_events=config.emit_llm_stream_events,
         track_usage=config.track_usage,
         usage_pricing=dict(config.usage_pricing),

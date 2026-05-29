@@ -7,6 +7,10 @@ from efp_runtime.opencode_parity import (
     CAPABILITY_GROUPS,
     DEFAULT_CORE_TOOL_IDS,
     EXCLUDED_TOOL_IDS,
+    OPENCODE_AUDITED_AT,
+    OPENCODE_DEV_HEAD,
+    OPENCODE_DEV_TREE,
+    OPENCODE_UPSTREAM_REPO,
     OPTIONAL_CONDITIONAL_TOOL_IDS,
 )
 from efp_runtime.skills.discovery import SkillDiscovery
@@ -58,6 +62,7 @@ def test_capability_group_statuses_are_explicit_and_known():
         "context/compaction",
         "Copilot provider",
         "session state",
+        "legacy boundary",
     }
 
     assert expected_groups.issubset(CAPABILITY_GROUPS)
@@ -65,6 +70,20 @@ def test_capability_group_statuses_are_explicit_and_known():
         assert name.strip()
         assert entry.status in ALLOWED_STATUSES
         assert entry.summary.strip()
+
+
+def test_opencode_upstream_baseline_is_exact():
+    assert OPENCODE_UPSTREAM_REPO == "https://github.com/anomalyco/opencode"
+    assert OPENCODE_DEV_HEAD == "7da2620078d4d645cc045f8bc3d9746aca46ee4f"
+    assert OPENCODE_DEV_TREE == "bbdef9db7158b097654ff43a2a3f51ad6ac53c67"
+    assert OPENCODE_AUDITED_AT == "2026-05-29T11:13:50Z"
+
+
+def test_session_state_manifest_mentions_summary_and_revert():
+    summary = CAPABILITY_GROUPS["session state"].summary
+
+    assert "summary diffs" in summary
+    assert "revert/unrevert" in summary
 
 
 def test_remaining_manifest_items_have_concrete_next_actions():

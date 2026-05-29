@@ -648,6 +648,79 @@ async def test_child_profile_permission_overlay_denies_base_allowed_tool(
 
 
 @pytest.mark.asyncio
+async def test_parent_edit_deny_wins_over_child_write_allow(tmp_path: Path):
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-write",
+                        "type": "function",
+                        "function": {
+                            "name": "write",
+                            "arguments": json.dumps(
+                                {
+                                    "filePath": "parent-blocked.txt",
+                                    "content": "blocked",
+                                },
+                                sort_keys=True,
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    profile = AgentProfile(
+        name="writer",
+        metadata={"permission": {"write": "allow"}},
+    )
+    base_config = RuntimeConfig(
+        workspace_root=tmp_path,
+        max_iterations=2,
+        model_aware_tool_selection=False,
+        tool_permissions={"edit": "deny"},
+    )
+    child_config = _child_config(
+        profile=profile,
+        base_config=base_config,
+        workspace_root=None,
+        metadata={},
+    )
+    runner = create_subagent_task_runner(
+        provider=provider,
+        profiles=[profile],
+        base_config=base_config,
+    )
+
+    result = await runner(
+        TaskToolRequest(
+            description="Write",
+            prompt="Write the file.",
+            subagent_type="writer",
+            task_id="task-parent-deny",
+            session_id="parent-permission",
+        )
+    )
+
+    tool_message = provider.requests[1].messages[-1]
+    tool_result = tool_message.parts[0].tool_result
+
+    assert result.state == "completed"
+    assert result.text == "done"
+    assert child_config.tool_permissions["edit"] == "deny"
+    assert child_config.tool_permissions["write"] == "deny"
+    assert child_config.tool_permissions["apply_patch"] == "deny"
+    assert tool_result is not None
+    assert tool_result.status == "disabled"
+    assert tool_result.error == "Tool is disabled: write"
+    assert (tmp_path / "parent-blocked.txt").exists() is False
+    assert base_config.tool_permissions == {"edit": "deny"}
+    assert profile.metadata == {"permission": {"write": "allow"}}
+
+
+@pytest.mark.asyncio
 async def test_profile_active_skills_enter_child_context_without_base_pollution(
     tmp_path: Path,
 ):

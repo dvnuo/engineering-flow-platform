@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -16,6 +19,9 @@ from efp_runtime.session.models import MessagePartType
 from efp_runtime.tools.definition import ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.asyncio
@@ -136,6 +142,27 @@ async def test_pending_permission_tool_call_survives_facade_metadata_and_resume(
         MessageRole.ASSISTANT,
     ]
 
+    recovered = await manager.recover_session_state("permission-session")
+
+    assert recovered["session_id"] == "permission-session"
+    assert recovered["recovered"] is True
+    assert recovered["last_execution_id"] == "req-permission"
+    assert recovered["runtime_state"]["status"] == LoopStatus.WAITING_FOR_PERMISSION
+    assert recovered["runtime_state"]["pending_tool_calls"][0]["call_id"] == (
+        "call-gated"
+    )
+    assert recovered["reconstructed_state"]["message_count"] == 2
+    assert recovered["reconstructed_state"]["last_message_id"] == (
+        store.read_history("permission-session")[-1].message_id
+    )
+    assert recovered["reconstructed_state"]["latest_user_message"]["content"] == (
+        "Use gated."
+    )
+    assert recovered["reconstructed_state"]["has_pending_tool_calls"] is True
+    assert recovered["reconstructed_state"]["has_pending_permission"] is True
+    assert recovered["reconstructed_state"]["has_pending_question"] is False
+    assert recovered["recovery_context_message"]
+
     resumed = await runtime.resume("permission-session", metadata={"run_id": "resume-permission"})
     await manager.record_runtime_result("permission-session", resumed, request_id="req-permission-resume")
 
@@ -195,6 +222,35 @@ async def test_pending_question_state_is_recorded_on_runtime_v2_session(tmp_path
     assert metadata["pending_tool_calls"][0]["call_id"] == "call-question"
     facade = await manager.get_session("question-session")
     assert facade["metadata"]["pending_question_request"]["id"] == "question-1"
+
+
+def test_gateway_facade_import_does_not_load_legacy_runtime():
+    code = """
+import importlib
+import json
+import sys
+
+importlib.import_module("efp_runtime.session.gateway_facade")
+legacy_modules = [
+    "src.runtime",
+    "src.runtime.recovery_pipeline",
+]
+print(json.dumps({
+    "legacy_loaded": [name for name in legacy_modules if name in sys.modules],
+}))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = "src"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload == {"legacy_loaded": []}
 
 
 def _tool_call(call_id: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:

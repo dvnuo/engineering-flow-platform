@@ -31,7 +31,9 @@ class CapabilityEntry:
 
 
 OPENCODE_UPSTREAM_REPO = "https://github.com/anomalyco/opencode"
-OPENCODE_DEV_HEAD = "c7e1fc5e4260fc3e1aea24e26d67ed4074e3575d"
+OPENCODE_DEV_HEAD = "7da2620078d4d645cc045f8bc3d9746aca46ee4f"
+OPENCODE_DEV_TREE = "bbdef9db7158b097654ff43a2a3f51ad6ac53c67"
+OPENCODE_AUDITED_AT = "2026-05-29T11:13:50Z"
 
 DEFAULT_CORE_TOOL_IDS = (
     "apply_patch",
@@ -113,7 +115,11 @@ CAPABILITY_GROUPS: dict[str, CapabilityEntry] = {
     ),
     "session state": CapabilityEntry(
         status="done",
-        summary="In-memory and file-backed sessions, todos, checkpoints, retry state, and query helpers are implemented.",
+        summary="In-memory and file-backed sessions, todos, checkpoints, summary diffs, revert/unrevert, retry state, and query helpers are implemented.",
+    ),
+    "legacy boundary": CapabilityEntry(
+        status="done",
+        summary="Runtime v2 default tool surfaces exclude legacy Python tool aliases and keep opencode-style built-ins on the main path.",
     ),
 }
 
@@ -121,7 +127,9 @@ __all__ = [
     "CAPABILITY_GROUPS",
     "DEFAULT_CORE_TOOL_IDS",
     "EXCLUDED_TOOL_IDS",
+    "OPENCODE_AUDITED_AT",
     "OPENCODE_DEV_HEAD",
+    "OPENCODE_DEV_TREE",
     "OPENCODE_UPSTREAM_REPO",
     "OPTIONAL_CONDITIONAL_TOOL_IDS",
     "CapabilityEntry",

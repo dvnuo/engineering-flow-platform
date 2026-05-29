@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime
-import importlib
 import logging
 import os
 from pathlib import Path
@@ -445,20 +444,49 @@ class RuntimeV2SessionManager:
         self.store.update_session(session_id, metadata=metadata, replace_metadata=True)
 
     async def recover_session_state(self, session_id: str) -> dict[str, Any]:
-        recovery_module = importlib.import_module("src.runtime.recovery_pipeline")
-        hydration = await recovery_module.get_recovery_pipeline().hydrate_session_state(session_id)
+        warnings: list[str] = []
+        try:
+            session = self.store.get_session(session_id)
+            recovered = True
+        except KeyError:
+            session = self.store.create_session(session_id=session_id)
+            recovered = False
+            warnings.append("Session did not exist; created an empty Runtime v2 session.")
+
+        metadata = deepcopy(session.metadata)
+        pending_tool_calls = _pending_tool_call_payloads(session.messages)
+        runtime_state = _runtime_state_from_metadata(
+            metadata,
+            pending_tool_calls=pending_tool_calls,
+        )
+        reconstructed_state = _reconstructed_state_from_session(
+            session,
+            pending_tool_calls=pending_tool_calls,
+            runtime_state=runtime_state,
+        )
+        recovery_context_message = _recovery_context_message(
+            session,
+            runtime_state=runtime_state,
+            reconstructed_state=reconstructed_state,
+        )
+        if recovery_context_message is not None:
+            reconstructed_state["recovery_context_message"] = recovery_context_message
+
+        active_skill = metadata.get("active_skill_session")
         return {
-            "session_id": hydration.session_id,
-            "recovered": hydration.recovered,
-            "snapshot_version": hydration.snapshot_version,
-            "active_skill_session": hydration.active_skill_session,
-            "last_execution_id": hydration.last_execution_id,
-            "runtime_state": dict(hydration.runtime_state),
-            "reconstructed_state": dict(hydration.reconstructed_state),
-            "warnings": list(hydration.warnings),
-            "runtime_events": list(hydration.runtime_events),
-            "metadata": dict(hydration.metadata),
-            "recovery_context_message": hydration.reconstructed_state.get("recovery_context_message"),
+            "session_id": session.session_id,
+            "recovered": recovered,
+            "snapshot_version": metadata.get("snapshot_version", 1),
+            "active_skill_session": (
+                deepcopy(active_skill) if isinstance(active_skill, dict) else None
+            ),
+            "last_execution_id": metadata.get("last_execution_id"),
+            "runtime_state": runtime_state,
+            "reconstructed_state": reconstructed_state,
+            "warnings": warnings,
+            "runtime_events": _runtime_events_from_metadata(metadata),
+            "metadata": metadata,
+            "recovery_context_message": recovery_context_message,
         }
 
     async def save_all(self) -> None:
@@ -678,6 +706,97 @@ def _pending_tool_call_payloads(history: Iterable[Message]) -> list[dict[str, An
                     }
                 )
     return result
+
+
+def _runtime_state_from_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    pending_tool_calls: list[dict[str, Any]],
+) -> dict[str, Any]:
+    pending_permission = metadata.get("pending_permission_request")
+    pending_question = metadata.get("pending_question_request")
+    status = metadata.get("last_runtime_status")
+    if not isinstance(status, str) or not status:
+        if pending_permission is not None:
+            status = "waiting_for_permission"
+        elif pending_question is not None:
+            status = "waiting_for_question"
+        elif pending_tool_calls:
+            status = "pending_tool_calls"
+        else:
+            status = "unknown"
+    return {
+        "status": status,
+        "pending_permission_request": deepcopy(pending_permission),
+        "pending_question_request": deepcopy(pending_question),
+        "pending_tool_calls": deepcopy(pending_tool_calls),
+    }
+
+
+def _reconstructed_state_from_session(
+    session: Session,
+    *,
+    pending_tool_calls: list[dict[str, Any]],
+    runtime_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    latest_user_message = _latest_message(session.messages, MessageRole.USER)
+    latest_assistant_message = _latest_message(session.messages, MessageRole.ASSISTANT)
+    return {
+        "message_count": len(session.messages),
+        "last_message_id": (
+            session.messages[-1].message_id if session.messages else None
+        ),
+        "latest_user_message": (
+            _message_to_legacy(latest_user_message)
+            if latest_user_message is not None
+            else None
+        ),
+        "latest_assistant_message": (
+            _message_to_legacy(latest_assistant_message)
+            if latest_assistant_message is not None
+            else None
+        ),
+        "pending_tool_calls": deepcopy(pending_tool_calls),
+        "has_pending_tool_calls": bool(pending_tool_calls),
+        "has_pending_permission": runtime_state.get("pending_permission_request")
+        is not None,
+        "has_pending_question": runtime_state.get("pending_question_request")
+        is not None,
+    }
+
+
+def _latest_message(
+    messages: Iterable[Message],
+    role: MessageRole,
+) -> Message | None:
+    for message in reversed(list(messages)):
+        if message.role is role:
+            return message
+    return None
+
+
+def _runtime_events_from_metadata(metadata: Mapping[str, Any]) -> list[Any]:
+    runtime_events = metadata.get("runtime_events")
+    if isinstance(runtime_events, list):
+        return deepcopy(runtime_events)
+    return []
+
+
+def _recovery_context_message(
+    session: Session,
+    *,
+    runtime_state: Mapping[str, Any],
+    reconstructed_state: Mapping[str, Any],
+) -> str | None:
+    if not session.messages:
+        return None
+    status = runtime_state.get("status") or "unknown"
+    pending_count = len(runtime_state.get("pending_tool_calls") or [])
+    return (
+        "Runtime v2 session recovery: "
+        f"status={status}, messages={reconstructed_state.get('message_count', 0)}, "
+        f"pending_tool_calls={pending_count}."
+    )
 
 
 def _coerce_role(role: str) -> MessageRole:

@@ -47,6 +47,9 @@ _PRIMARY_TASK_PROFILE_MODES = {"primary", "build", "plan"}
 _SUBAGENT_TASK_TOOL_IDS = frozenset({"task"})
 _SUBAGENT_TODO_WRITE_TOOL_IDS = frozenset({"todowrite"})
 _SUBAGENT_GUARD_ALLOW_ACTIONS = frozenset({"allow", "ask"})
+_MUTATING_FILE_PERMISSION_ALIASES = {
+    "edit": frozenset({"write", "edit", "apply_patch"}),
+}
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,9 @@ def create_subagent_task_runner(
                 tools=_child_tool_overrides(
                     profile,
                     available_tool_ids=runtime.tool_runtime.registry.ids(),
+                    parent_tool_permissions=(
+                        None if base_config is None else base_config.tool_permissions
+                    ),
                 ),
             )
             text = _assistant_text(result.final_assistant_message)
@@ -417,6 +423,11 @@ def _child_config(
             if base_config is None
             else base_config.enable_context_overflow_retry
         ),
+        enable_session_revert_snapshots=(
+            True
+            if base_config is None
+            else base_config.enable_session_revert_snapshots
+        ),
         emit_llm_stream_events=(
             True
             if base_config is None
@@ -564,6 +575,7 @@ def _child_tool_overrides(
     profile: AgentProfile,
     *,
     available_tool_ids: Iterable[str] | None = None,
+    parent_tool_permissions: Mapping[str, Any] | None = None,
 ) -> dict[str, bool] | None:
     overrides = dict(profile.tools or {})
     available = (
@@ -586,6 +598,9 @@ def _child_tool_overrides(
     ):
         for tool_id in _SUBAGENT_TODO_WRITE_TOOL_IDS:
             _force_child_tool_disabled(overrides, tool_id, available)
+
+    for tool_id in _parent_forced_disabled_tool_ids(parent_tool_permissions):
+        _force_child_tool_disabled(overrides, tool_id, available)
 
     return overrides or None
 
@@ -636,6 +651,34 @@ def _permission_rule_explicitly_permits(rule: Any) -> bool:
             ):
                 return True
     return False
+
+
+def _parent_forced_disabled_tool_ids(
+    tool_permissions: Mapping[str, Any] | None,
+) -> list[str]:
+    if not isinstance(tool_permissions, Mapping):
+        return []
+    disabled: set[str] = set()
+    for raw_key, rule in tool_permissions.items():
+        key = str(raw_key)
+        if _permission_rule_action(rule) != "deny":
+            continue
+        aliases = _MUTATING_FILE_PERMISSION_ALIASES.get(key)
+        if aliases is not None:
+            disabled.update(aliases)
+        elif key in {"write", "edit", "apply_patch"}:
+            disabled.add(key)
+    return sorted(disabled)
+
+
+def _permission_rule_action(rule: Any) -> str | None:
+    if isinstance(rule, str):
+        return rule
+    if isinstance(rule, Mapping):
+        action = rule.get("action")
+        if isinstance(action, str):
+            return action
+    return None
 
 
 def _make_store(store_factory: Callable[[], SessionStore] | None) -> SessionStore | None:

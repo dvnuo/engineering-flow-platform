@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Union
 
 from ..types import new_id
 from .checkpoint import SessionCheckpoint
+from .fork import fork_session_metadata
 from .models import Message, MessagePart, MessagePartType, MessageRole, Session
 from .protocol import ToolPair
 from .serialization import (
@@ -480,11 +481,11 @@ class FileSessionStore:
         *,
         message_id: Optional[str],
     ) -> dict:
-        metadata = deepcopy(source.metadata)
-        metadata["parent_session_id"] = source.session_id
-        if message_id is not None:
-            metadata["forked_from_message_id"] = message_id
-        return metadata
+        return fork_session_metadata(
+            source.metadata,
+            parent_session_id=source.session_id,
+            message_id=message_id,
+        )
 
     def _find_part(self, session: Session, part_id: str) -> Optional[MessagePart]:
         for message in session.messages:
