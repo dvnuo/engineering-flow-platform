@@ -1,7 +1,6 @@
 """Core built-in tools for EFP Runtime v2."""
 
 from .apply_patch import create_apply_patch_tool
-from .background_shell import ShellJob, ShellJobManager
 from .edit import create_edit_tool
 from .fetch import create_webfetch_tool
 from .filesystem import (
@@ -35,8 +34,6 @@ __all__ = [
     "TaskToolRunner",
     "WebSearchRequest",
     "WebSearchRunner",
-    "ShellJob",
-    "ShellJobManager",
     "DEFAULT_STRUCTURED_OUTPUT_TOOL_ID",
     "create_apply_patch_tool",
     "create_bash_tool",

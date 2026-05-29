@@ -129,7 +129,7 @@ async def test_plan_mode_disabled_alias_calls_append_results_without_execution(
             {
                 "tool_calls": [
                     _tool_call("call-write", "write", {"filePath": "blocked.txt"}),
-                    _tool_call("call-bash", "bash", {"command": "printf blocked"}),
+                    _tool_call("call-bash", "bash", {"command": "printf blocked", "description": "Blocked shell"}),
                 ]
             },
             {"content": "continued after disabled aliases"},
@@ -357,8 +357,6 @@ def test_child_config_preserves_plan_mode_settings(tmp_path: Path):
         runtime_mode="plan",
         enable_plan_tool=True,
         plan_mode_read_only=False,
-        enable_background_shell=False,
-        background_shell_max_buffer_bytes=4096,
         max_iterations=2,
     )
 
@@ -372,8 +370,6 @@ def test_child_config_preserves_plan_mode_settings(tmp_path: Path):
     assert child.runtime_mode == "plan"
     assert child.enable_plan_tool is True
     assert child.plan_mode_read_only is False
-    assert child.enable_background_shell is False
-    assert child.background_shell_max_buffer_bytes == 4096
 
 
 def test_plan_mode_import_boundary():

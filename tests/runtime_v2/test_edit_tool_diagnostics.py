@@ -70,7 +70,7 @@ async def test_edit_success_returns_tool_result_with_diff_diagnostics(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_edit_no_op_returns_changed_false_without_writing(tmp_path: Path):
+async def test_edit_rejects_identical_old_and_new_string(tmp_path: Path):
     target = tmp_path / "notes.txt"
     target.write_text("alpha\nalpha\n", encoding="utf-8")
     before = target.read_bytes()
@@ -87,19 +87,8 @@ async def test_edit_no_op_returns_changed_false_without_writing(tmp_path: Path):
         )
     )
 
-    assert result.status == "success"
-    assert result.output["changed"] is False
-    assert result.output["replacement_count"] == 1
-    assert result.output["old_bytes"] == result.output["new_bytes"]
-    assert result.output["diff"] == ""
-    filediff = result.output["filediff"]
-    assert result.metadata["filediff"] == filediff
-    assert filediff["path"] == "notes.txt"
-    assert filediff["old_path"] == "notes.txt"
-    assert filediff["additions"] == 0
-    assert filediff["deletions"] == 0
-    assert filediff["patch"] == ""
-    assert "No changes made to notes.txt" in result.content
+    assert result.status == "error"
+    assert "No changes to apply" in result.error
     assert target.read_bytes() == before
 
 
@@ -162,15 +151,48 @@ async def test_edit_missing_old_text_error_includes_path_preview_and_file_size(
 
 
 @pytest.mark.asyncio
-async def test_edit_diff_preview_limits_truncate_and_mark_output(tmp_path: Path):
+async def test_edit_empty_old_string_creates_or_overwrites_file(tmp_path: Path):
     runtime = ToolRuntime(
         create_core_tool_registry(tmp_path),
         permission_evaluator=AllowEvaluator(),
     )
-    line_target = tmp_path / "lines.txt"
-    line_target.write_text("one\ntwo\nthree\n", encoding="utf-8")
 
-    line_result = await runtime.execute(
+    created = await runtime.execute(
+        ToolCall(
+            id="call-edit-create",
+            tool_id="edit",
+            args={"filePath": "nested/new.txt", "oldString": "", "newString": "created\n"},
+        )
+    )
+
+    assert created.status == "success"
+    assert created.output["path"] == "nested/new.txt"
+    assert created.output["changed"] is True
+    assert (tmp_path / "nested/new.txt").read_text(encoding="utf-8") == "created\n"
+
+    overwritten = await runtime.execute(
+        ToolCall(
+            id="call-edit-overwrite",
+            tool_id="edit",
+            args={"filePath": "nested/new.txt", "oldString": "", "newString": "overwritten\n"},
+        )
+    )
+
+    assert overwritten.status == "success"
+    assert overwritten.output["old_bytes"] == len("created\n".encode("utf-8"))
+    assert (tmp_path / "nested/new.txt").read_text(encoding="utf-8") == "overwritten\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_rejects_model_visible_diff_preview_limits(tmp_path: Path):
+    runtime = ToolRuntime(
+        create_core_tool_registry(tmp_path),
+        permission_evaluator=AllowEvaluator(),
+    )
+    target = tmp_path / "lines.txt"
+    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result = await runtime.execute(
         ToolCall(
             id="call-edit-lines",
             tool_id="edit",
@@ -183,29 +205,9 @@ async def test_edit_diff_preview_limits_truncate_and_mark_output(tmp_path: Path)
         )
     )
 
-    assert line_result.status == "success"
-    assert line_result.output["diff_truncated"] is True
-    assert len(line_result.output["diff"].splitlines()) <= 3
-    assert "Diff preview truncated" in line_result.content
-
-    char_target = tmp_path / "chars.txt"
-    char_target.write_text("short\n", encoding="utf-8")
-    char_result = await runtime.execute(
-        ToolCall(
-            id="call-edit-chars",
-            tool_id="edit",
-            args={
-                "filePath": "chars.txt",
-                "oldString": "short",
-                "newString": "x" * 200,
-                "max_diff_chars": 60,
-            },
-        )
-    )
-
-    assert char_result.status == "success"
-    assert char_result.output["diff_truncated"] is True
-    assert len(char_result.output["diff"]) <= 60
+    assert result.status == "validation_error"
+    assert "Unexpected argument(s): max_diff_lines" in result.error
+    assert target.read_text(encoding="utf-8") == "one\ntwo\nthree\n"
 
 
 @pytest.mark.asyncio

@@ -52,18 +52,6 @@ async def test_glob_matches_sorted_workspace_relative_paths(tmp_path: Path):
     assert result.output["truncated"] is False
     assert result.content == "pkg/nested/a.py\npkg/b.py"
 
-    limited = await runtime.execute(
-        ToolCall(
-            id="call-glob-limited",
-            tool_id="glob",
-            args={"pattern": "**/*.py", "path": "pkg", "max_matches": 1},
-        )
-    )
-
-    assert limited.status == "success"
-    assert limited.output["paths"] == ["pkg/nested/a.py"]
-    assert limited.output["truncated"] is True
-    assert "Results are truncated" in limited.content
 
 
 @pytest.mark.asyncio
@@ -274,8 +262,8 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
             tool_id="todowrite",
             args={
                 "todos": [
-                    {"content": "Inspect tools", "status": "completed"},
-                    {"content": "Run tests", "status": "in_progress"},
+                    {"content": "Inspect tools", "status": "completed", "priority": "medium"},
+                    {"content": "Run tests", "status": "in_progress", "priority": "medium"},
                     {
                         "content": "Drop stale task",
                         "status": "cancelled",
@@ -324,7 +312,7 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
         ToolCall(
             id="call-todo-invalid",
             tool_id="todowrite",
-            args={"todos": [{"content": "Bad status", "status": "blocked"}]},
+            args={"todos": [{"content": "Bad status", "status": "blocked", "priority": "medium"}]},
         )
     )
 

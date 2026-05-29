@@ -35,7 +35,7 @@ async def test_builtin_ask_requests_are_recorded_as_pending(tmp_path: Path):
         context=context,
     )
     shell_result = await runtime.execute(
-        ToolCall(id="call-shell", tool_id="bash", args={"command": "printf ok"}),
+        ToolCall(id="call-shell", tool_id="bash", args={"command": "printf ok", "description": "Print ok"}),
         context=context,
     )
 

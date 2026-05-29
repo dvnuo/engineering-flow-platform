@@ -214,7 +214,7 @@ async def test_webfetch_rejects_invalid_format(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_fetch_timeout_above_limit_is_capped_in_metadata(
+async def test_fetch_rejects_timeout_above_opencode_limit(
     tmp_path: Path,
     local_http_server: str,
 ):
@@ -228,8 +228,9 @@ async def test_fetch_timeout_above_limit_is_capped_in_metadata(
         )
     )
 
-    assert result.status == "success"
-    assert result.metadata["timeout"] == 120.0
+    assert result.status == "validation_error"
+    assert "timeout" in result.error
+    assert "less than or equal to 120" in result.error
 
 
 @pytest.mark.asyncio
@@ -254,7 +255,7 @@ async def test_fetch_permission_request_includes_url_format_and_timeout(
             args={
                 "url": "https://example.test/page",
                 "format": "text",
-                "timeout": 999,
+                "timeout": 120,
             },
         )
     )
@@ -310,7 +311,7 @@ async def test_fetch_rejects_actual_response_over_five_mib(
 
 
 @pytest.mark.asyncio
-async def test_webfetch_max_chars_truncates_visible_content(
+async def test_webfetch_rejects_model_visible_max_chars(
     tmp_path: Path,
     local_http_server: str,
 ):
@@ -324,16 +325,12 @@ async def test_webfetch_max_chars_truncates_visible_content(
         )
     )
 
-    assert result.status == "success"
-    assert result.content == "0123"
-    assert result.truncated is True
-    assert result.metadata["truncated"] is True
-    assert result.metadata["original_chars"] == len(FetchFormatHandler.long_body)
-    assert result.output["original_chars"] == len(FetchFormatHandler.long_body)
+    assert result.status == "validation_error"
+    assert "Unexpected argument(s): max_chars" in result.error
 
 
 @pytest.mark.asyncio
-async def test_fetch_caller_headers_override_defaults(
+async def test_fetch_uses_builtin_default_headers(
     tmp_path: Path,
     local_http_server: str,
 ):
@@ -343,23 +340,15 @@ async def test_fetch_caller_headers_override_defaults(
         ToolCall(
             id="call-fetch-headers",
             tool_id="webfetch",
-            args={
-                "url": f"{local_http_server}/echo-headers",
-                "headers": {
-                    "User-Agent": "custom-agent",
-                    "Accept": "application/custom",
-                    "Accept-Language": "zz-ZZ",
-                },
-            },
+            args={"url": f"{local_http_server}/echo-headers"},
         )
     )
 
     assert result.status == "success"
-    assert result.content.splitlines() == [
-        "custom-agent",
-        "application/custom",
-        "zz-ZZ",
-    ]
+    lines = result.content.splitlines()
+    assert "Chrome/" in lines[0]
+    assert "text/plain" in lines[1]
+    assert lines[2] == "en-US,en;q=0.9"
 
 
 @pytest.mark.asyncio

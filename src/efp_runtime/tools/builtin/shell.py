@@ -12,7 +12,6 @@ from typing import Any
 from ...permissions import ASK, PermissionMetadata
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
-from .background_shell import ShellJobManager
 from .filesystem import normalize_workspace_root, resolve_workspace_path, workspace_relative_path
 from .output import (
     DEFAULT_MAX_OUTPUT_CHARS,
@@ -22,7 +21,7 @@ from .output import (
 )
 
 
-DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_TIMEOUT_MS = 30_000
 _CANCEL_POLL_SECONDS = 0.05
 
 
@@ -30,16 +29,12 @@ def create_bash_tool(
     workspace_root: str | Path,
     *,
     permission: PermissionMetadata | None = None,
-    shell_job_manager: ShellJobManager | None = None,
-    enable_background: bool = False,
 ) -> ToolDef:
     return _create_shell_tool(
         "bash",
         workspace_root,
         description="Run a bash command from a workspace-contained working directory.",
         permission=permission,
-        shell_job_manager=shell_job_manager,
-        enable_background=enable_background,
     )
 
 
@@ -49,14 +44,12 @@ def _create_shell_tool(
     *,
     description: str,
     permission: PermissionMetadata | None = None,
-    shell_job_manager: ShellJobManager | None = None,
-    enable_background: bool = False,
 ) -> ToolDef:
     root = normalize_workspace_root(workspace_root)
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         command = args["command"]
-        description = args.get("description") or ""
+        description = args["description"]
         cwd = _resolve_workdir(root, args)
         if not cwd.exists():
             raise FileNotFoundError(f"Working directory does not exist: {workspace_relative_path(root, cwd)}")
@@ -64,54 +57,9 @@ def _create_shell_tool(
             raise NotADirectoryError(f"Working path is not a directory: {workspace_relative_path(root, cwd)}")
 
         cwd_relative = workspace_relative_path(root, cwd)
-        background = args.get("background", False)
-        if background:
-            if not enable_background or shell_job_manager is None:
-                raise ValueError("Background shell jobs are disabled.")
-            job = await shell_job_manager.start(
-                command,
-                cwd,
-                description=description,
-            )
-            tool_call_id = _result_call_id(context, tool_id)
-            output = {
-                "job_id": job.job_id,
-                "status": job.status,
-                "cwd": cwd_relative,
-                "command": command,
-                "description": description,
-                "started_at": job.started_at,
-            }
-            metadata: dict[str, Any] = {
-                "background": True,
-                "job_id": job.job_id,
-                "status": job.status,
-                "cwd": cwd_relative,
-                "description": description,
-                "tool_call_id": tool_call_id,
-            }
-            run_id = _context_value(context, "run_id")
-            if run_id:
-                metadata["run_id"] = run_id
-            return ToolResult(
-                call_id=tool_call_id,
-                tool_name=tool_id,
-                content=_format_background_content(output),
-                output=output,
-                metadata=metadata,
-            )
-
         timeout, timeout_ms = _resolve_timeout(args)
-        max_output_chars = _positive_int_arg(
-            args,
-            "max_output_chars",
-            DEFAULT_MAX_OUTPUT_CHARS,
-        )
-        max_output_lines = _positive_int_arg(
-            args,
-            "max_output_lines",
-            DEFAULT_MAX_OUTPUT_LINES,
-        )
+        max_output_chars = DEFAULT_MAX_OUTPUT_CHARS
+        max_output_lines = DEFAULT_MAX_OUTPUT_LINES
 
         started = time.monotonic()
         process = await asyncio.create_subprocess_shell(
@@ -216,57 +164,27 @@ def _create_shell_tool(
 def _shell_input_schema() -> dict[str, Any]:
     return {
         "type": "object",
-        "required": ["command"],
+        "required": ["command", "description"],
         "properties": {
             "command": {"type": "string"},
             "description": {"type": "string"},
-            "cwd": {"type": "string"},
+            "timeout": {"type": "integer", "minimum": 1},
             "workdir": {"type": "string"},
-            "timeout": {"type": "number"},
-            "timeout_ms": {"type": "number"},
-            "max_output_chars": {"type": "integer"},
-            "max_output_lines": {"type": "integer"},
-            "background": {"type": "boolean"},
         },
         "additionalProperties": False,
     }
 
 
 def _resolve_workdir(root: Path, args: dict[str, Any]) -> Path:
-    cwd_value = args.get("cwd")
-    workdir_value = args.get("workdir")
-    cwd_provided = cwd_value not in (None, "")
-    workdir_provided = workdir_value not in (None, "")
-
-    if cwd_provided and workdir_provided:
-        cwd = resolve_workspace_path(root, cwd_value)
-        workdir = resolve_workspace_path(root, workdir_value)
-        if cwd != workdir:
-            raise ValueError("cwd and workdir must resolve to the same workspace path.")
-        return cwd
-
-    return resolve_workspace_path(root, workdir_value or cwd_value or ".")
+    return resolve_workspace_path(root, args.get("workdir") or ".")
 
 
 def _resolve_timeout(args: dict[str, Any]) -> tuple[float, int]:
-    if args.get("timeout_ms") is not None:
-        timeout_ms = _positive_number(args["timeout_ms"], "timeout_ms")
-        return timeout_ms / 1000.0, max(1, int(round(timeout_ms)))
-
-    timeout = _positive_number(args.get("timeout", DEFAULT_TIMEOUT_SECONDS), "timeout")
-    return timeout, max(1, int(round(timeout * 1000)))
+    timeout_ms = _positive_int(args.get("timeout", DEFAULT_TIMEOUT_MS), "timeout")
+    return timeout_ms / 1000.0, timeout_ms
 
 
-def _positive_number(value: Any, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be a number.")
-    if value <= 0:
-        raise ValueError(f"{name} must be greater than 0.")
-    return float(value)
-
-
-def _positive_int_arg(args: dict[str, Any], name: str, default: int) -> int:
-    value = args.get(name, default)
+def _positive_int(value: Any, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{name} must be an integer.")
     if value <= 0:
@@ -358,19 +276,6 @@ def _format_shell_content(
             )
         )
     return "\n".join(parts)
-
-
-def _format_background_content(output: dict[str, Any]) -> str:
-    return "\n".join(
-        [
-            "<shell_job>",
-            f"job_id: {output['job_id']}",
-            f"status: {output['status']}",
-            f"cwd: {output['cwd']}",
-            f"command: {output['command']}",
-            "</shell_job>",
-        ]
-    )
 
 
 def _tagged_output(tag: str, content: str) -> str:

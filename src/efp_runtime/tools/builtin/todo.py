@@ -45,7 +45,7 @@ def _create_todo_tool(
             {
                 "content": todo["content"],
                 "status": todo["status"],
-                "priority": todo.get("priority", "medium"),
+                "priority": todo["priority"],
             }
             for todo in args["todos"]
         ]
@@ -92,7 +92,7 @@ def _create_todo_tool(
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["content", "status"],
+                        "required": ["content", "status", "priority"],
                         "properties": {
                             "content": {"type": "string"},
                             "status": {"type": "string", "enum": list(TODO_STATUSES)},

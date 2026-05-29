@@ -179,6 +179,7 @@ async def test_agent_runtime_cancel_interrupts_foreground_shell_tool(tmp_path: P
                                     "command": _python_command(
                                         "import sys, time; print('before'); sys.stdout.flush(); time.sleep(5)"
                                     ),
+                                    "description": "Run cancellable shell command",
                                 }
                             ),
                         },

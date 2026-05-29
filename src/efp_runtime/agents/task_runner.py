@@ -460,14 +460,6 @@ def _child_config(
         enable_lsp_tool=(
             False if base_config is None else base_config.enable_lsp_tool
         ),
-        enable_background_shell=(
-            True if base_config is None else base_config.enable_background_shell
-        ),
-        background_shell_max_buffer_bytes=(
-            1024 * 1024
-            if base_config is None
-            else base_config.background_shell_max_buffer_bytes
-        ),
         inject_background_task_results=(
             True
             if base_config is None

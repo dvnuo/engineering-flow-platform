@@ -237,7 +237,7 @@ async def test_bash_saves_full_output_when_not_truncated(tmp_path: Path):
         ToolCall(
             id="call-shell-full",
             tool_id="bash",
-            args={"command": _python_command("print('visible-output')")},
+            args={"command": _python_command("print('visible-output')"), "description": "Print visible output"},
         ),
         context=ToolContext(session_id="session-shell", run_id="run-shell"),
     )
@@ -274,11 +274,10 @@ async def test_bash_truncates_visible_content_but_saves_complete_output(
             args={
                 "command": _python_command(
                     "import sys\n"
-                    "for i in range(40): print('stdout-%03d' % i)\n"
+                    "for i in range(240): print('stdout-%03d' % i)\n"
                     "print('stderr-complete', file=sys.stderr)\n"
                 ),
-                "max_output_chars": 180,
-                "max_output_lines": 5,
+                "description": "Print enough output to truncate",
             },
         ),
         context=ToolContext(session_id="session-shell", run_id="run-shell"),
@@ -296,7 +295,7 @@ async def test_bash_truncates_visible_content_but_saves_complete_output(
     saved_path.relative_to(tmp_path.resolve())
     saved_content = saved_path.read_text(encoding="utf-8")
     assert "stdout-000" in saved_content
-    assert "stdout-039" in saved_content
+    assert "stdout-239" in saved_content
     assert "stderr-complete" in saved_content
     assert result.metadata["full_output_chars"] == len(saved_content)
     assert Path(output_path).stem == "call-shell-truncated"

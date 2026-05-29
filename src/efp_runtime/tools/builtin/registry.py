@@ -15,7 +15,6 @@ from ...skills.discovery import SkillDiscovery
 from ...skills.tool import build_skill_tool
 from ..registry import ToolRegistry
 from .apply_patch import create_apply_patch_tool
-from .background_shell import DEFAULT_MAX_BUFFER_BYTES, ShellJobManager
 from .edit import create_edit_tool
 from .fetch import create_webfetch_tool
 from .filesystem import (
@@ -47,9 +46,6 @@ def create_core_tool_registry(
     websearch_runner: WebSearchRunner | None = None,
     include_websearch_tool: bool = False,
     websearch_permission: PermissionMetadata | None = None,
-    shell_job_manager: ShellJobManager | None = None,
-    enable_background_shell: bool = True,
-    background_shell_max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
     task_runner: TaskToolRunner | None = None,
     include_task_tool: bool = True,
     allow_background_task: bool = False,
@@ -72,15 +68,6 @@ def create_core_tool_registry(
     """Create a registry containing Runtime v2 core built-in tools."""
 
     root = normalize_workspace_root(workspace_root)
-    shell_background_manager = (
-        shell_job_manager
-        if enable_background_shell
-        else None
-    )
-    if enable_background_shell and shell_background_manager is None:
-        shell_background_manager = ShellJobManager(
-            max_buffer_bytes=background_shell_max_buffer_bytes
-        )
     resolved_skill_discovery = _resolve_skill_discovery(
         skill_discovery=skill_discovery,
         skill_directories=skill_directories,
@@ -115,14 +102,7 @@ def create_core_tool_registry(
         registry.register(
             create_lsp_tool(root, client=lsp_client, permission=lsp_permission)
         )
-    registry.register(
-        create_bash_tool(
-            root,
-            permission=shell_permission,
-            shell_job_manager=shell_background_manager,
-            enable_background=enable_background_shell,
-        )
-    )
+    registry.register(create_bash_tool(root, permission=shell_permission))
     if include_task_tool:
         resolved_task_runner = task_runner or _missing_task_runner
         task_manager = background_task_manager

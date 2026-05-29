@@ -206,7 +206,7 @@ async def test_shell_requires_permission_by_default(tmp_path: Path):
     runtime = ToolRuntime(create_core_tool_registry(tmp_path))
 
     result = await runtime.execute(
-        ToolCall(id="call-shell", tool_id="bash", args={"command": "printf ok"})
+        ToolCall(id="call-shell", tool_id="bash", args={"command": "printf ok", "description": "Print ok"})
     )
 
     assert result.status == "permission_requested"
@@ -226,7 +226,7 @@ async def test_shell_succeeds_with_allow_evaluator(tmp_path: Path):
         ToolCall(
             id="call-shell",
             tool_id="bash",
-            args={"command": "printf 'ok\\n'", "timeout": 5},
+            args={"command": "printf 'ok\\n'", "description": "Print ok", "timeout": 5000},
         )
     )
 
@@ -310,23 +310,23 @@ async def test_webfetch_rejects_non_http_urls(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_webfetch_validates_header_values_before_execution(tmp_path: Path):
+async def test_webfetch_rejects_model_visible_headers(tmp_path: Path):
     runtime = ToolRuntime(create_core_tool_registry(tmp_path))
 
     result = await runtime.execute(
         ToolCall(
             id="call-fetch",
             tool_id="webfetch",
-            args={"url": "http://example.test", "headers": {"X-Test": 1}},
+            args={"url": "http://example.test", "headers": {"X-Test": "1"}},
         )
     )
 
     assert result.status == "validation_error"
-    assert "headers.X-Test" in result.error
+    assert "Unexpected argument(s): headers" in result.error
 
 
 @pytest.mark.asyncio
-async def test_webfetch_truncates_content_by_max_chars(
+async def test_webfetch_rejects_model_visible_max_chars(
     tmp_path: Path,
     local_http_server: str,
 ):
@@ -341,14 +341,8 @@ async def test_webfetch_truncates_content_by_max_chars(
         )
     )
 
-    assert result.status == "success"
-    assert result.content == "0123"
-    assert result.truncated is True
-    assert result.output["content"] == "0123"
-    assert result.output["bytes"] == len(LocalFetchHandler.long_body.encode("utf-8"))
-    assert result.output["truncated"] is True
-    assert result.output["original_chars"] == len(LocalFetchHandler.long_body)
-    assert result.metadata["original_chars"] == len(LocalFetchHandler.long_body)
+    assert result.status == "validation_error"
+    assert "Unexpected argument(s): max_chars" in result.error
 
 
 def test_builtin_tools_import_standalone_without_legacy_modules():

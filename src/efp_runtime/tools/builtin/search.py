@@ -31,10 +31,8 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
         include = args.get("include")
         include_patterns = _expand_include_patterns(include)
         include_root = base_path if base_path.is_dir() else base_path.parent
-        case_sensitive = args.get("case_sensitive", True)
-        max_matches = args.get("max_matches", DEFAULT_SEARCH_MATCHES)
-        if max_matches < 1:
-            raise ValueError("max_matches must be at least 1.")
+        case_sensitive = True
+        max_matches = DEFAULT_SEARCH_MATCHES
 
         if not base_path.exists():
             raise FileNotFoundError(f"Search path does not exist: {workspace_relative_path(root, base_path)}")
@@ -106,8 +104,6 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
                 "pattern": {"type": "string"},
                 "path": {"type": "string"},
                 "include": {"type": "string"},
-                "case_sensitive": {"type": "boolean"},
-                "max_matches": {"type": "integer"},
             },
             "additionalProperties": False,
         },
@@ -137,9 +133,7 @@ def create_glob_tool(workspace_root: str | Path) -> ToolDef:
         if not base_path.is_dir():
             raise NotADirectoryError(f"Glob path is not a directory: {workspace_relative_path(root, base_path)}")
 
-        max_matches = args.get("max_matches", DEFAULT_SEARCH_MATCHES)
-        if max_matches < 1:
-            raise ValueError("max_matches must be at least 1.")
+        max_matches = DEFAULT_SEARCH_MATCHES
 
         all_matches = await _sorted_glob_matches(root, base_path, pattern)
         truncated = len(all_matches) > max_matches
@@ -177,7 +171,6 @@ def create_glob_tool(workspace_root: str | Path) -> ToolDef:
             "properties": {
                 "pattern": {"type": "string"},
                 "path": {"type": "string"},
-                "max_matches": {"type": "integer"},
             },
             "additionalProperties": False,
         },

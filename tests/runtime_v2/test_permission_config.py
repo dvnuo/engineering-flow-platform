@@ -100,7 +100,7 @@ async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
                     _provider_tool_call(
                         "call-shell",
                         "bash",
-                        {"command": "printf ok"},
+                        {"command": "printf ok", "description": "Print ok"},
                     )
                 ]
             },
@@ -129,7 +129,7 @@ async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
 def test_shell_permission_request_respects_static_patterns():
     request = PermissionRequest.create(
         tool_id="bash",
-        args={"command": "cat src/app.py"},
+        args={"command": "cat src/app.py", "description": "Read app"},
         metadata=PermissionMetadata(
             action=ASK,
             category="shell",

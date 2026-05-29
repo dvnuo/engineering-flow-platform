@@ -52,8 +52,6 @@ class RuntimeConfig:
     plan_mode_read_only: bool = True
     enable_question_tool: bool = False
     enable_lsp_tool: bool = False
-    enable_background_shell: bool = True
-    background_shell_max_buffer_bytes: int = 1024 * 1024
     inject_background_task_results: bool = True
     structured_output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -167,12 +165,6 @@ class RuntimeConfig:
             raise ValueError("tool_output_truncation_direction must be 'head' or 'tail'")
         if self.runtime_mode not in ("build", "plan"):
             raise ValueError("runtime_mode must be 'build' or 'plan'")
-        if (
-            isinstance(self.background_shell_max_buffer_bytes, bool)
-            or not isinstance(self.background_shell_max_buffer_bytes, int)
-            or self.background_shell_max_buffer_bytes < 1
-        ):
-            raise ValueError("background_shell_max_buffer_bytes must be greater than 0")
         self.enabled_tools = (
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
@@ -190,10 +182,6 @@ class RuntimeConfig:
         self.plan_mode_read_only = bool(self.plan_mode_read_only)
         self.enable_question_tool = bool(self.enable_question_tool)
         self.enable_lsp_tool = bool(self.enable_lsp_tool)
-        self.enable_background_shell = bool(self.enable_background_shell)
-        self.background_shell_max_buffer_bytes = int(
-            self.background_shell_max_buffer_bytes
-        )
         self.inject_background_task_results = bool(
             self.inject_background_task_results
         )

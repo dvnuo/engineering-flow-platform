@@ -22,7 +22,7 @@ async def test_bash_permission_request_extracts_cat_path(tmp_path: Path):
         ToolCall(
             id="call-bash-cat",
             tool_id="bash",
-            args={"command": "cat src/app.py"},
+            args={"command": "cat src/app.py", "description": "Read app"},
         ),
         context=ToolContext(session_id="session-bash-cat"),
     )
@@ -44,7 +44,7 @@ async def test_bash_permission_request_applies_workdir_to_paths(tmp_path: Path):
         ToolCall(
             id="call-bash-workdir",
             tool_id="bash",
-            args={"command": "cat app.py", "workdir": "src"},
+            args={"command": "cat app.py", "description": "Read app", "workdir": "src"},
         ),
         context=ToolContext(session_id="session-bash-workdir"),
     )
@@ -124,7 +124,7 @@ async def test_bash_permission_request_uses_same_scan(tmp_path: Path):
         ToolCall(
             id="call-shell-exec-cat",
             tool_id="bash",
-            args={"command": "cat legacy.py"},
+            args={"command": "cat legacy.py", "description": "Read legacy"},
         ),
         context=ToolContext(session_id="session-shell-exec-cat"),
     )

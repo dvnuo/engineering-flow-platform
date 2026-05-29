@@ -103,7 +103,6 @@ def create_read_tool(
                 "filePath": {"type": "string"},
                 "offset": {"type": "integer", "minimum": 1},
                 "limit": {"type": "integer", "minimum": 0},
-                "encoding": {"type": "string"},
             },
             "additionalProperties": False,
         },
@@ -176,7 +175,7 @@ def _read_workspace_file(
     instruction_resolver: ReadInstructionResolver | None,
 ) -> ToolResult:
     relative_path = workspace_relative_path(workspace_root, path)
-    encoding = args.get("encoding") or "utf-8"
+    encoding = "utf-8"
     data, text = _read_text_file_strict(workspace_root, path, encoding)
     offset = args.get("offset", 1)
     default_limit_applied = "limit" not in args
@@ -483,7 +482,7 @@ def create_write_tool(
                 f"Parent path is not a directory: {workspace_relative_path(root, parent)}"
             )
 
-        encoding = args.get("encoding") or "utf-8"
+        encoding = "utf-8"
         content = args["content"]
         encoded = _encode_text_for_write(relative_path, content, encoding)
         existed = path.exists()
@@ -495,8 +494,8 @@ def create_write_tool(
         new_bytes = len(encoded)
         created = not existed
         changed = created or old_data != encoded
-        max_diff_lines = args.get("max_diff_lines", DEFAULT_MAX_PREVIEW_LINES)
-        max_diff_chars = args.get("max_diff_chars", DEFAULT_MAX_PREVIEW_CHARS)
+        max_diff_lines = DEFAULT_MAX_PREVIEW_LINES
+        max_diff_chars = DEFAULT_MAX_PREVIEW_CHARS
         diff = ""
         diff_truncated = False
         if old_text is not None:
@@ -565,9 +564,6 @@ def create_write_tool(
             "properties": {
                 "filePath": {"type": "string"},
                 "content": {"type": "string"},
-                "encoding": {"type": "string"},
-                "max_diff_lines": {"type": "integer", "minimum": 0},
-                "max_diff_chars": {"type": "integer", "minimum": 0},
             },
             "additionalProperties": False,
         },

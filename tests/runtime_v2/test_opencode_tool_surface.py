@@ -76,6 +76,56 @@ async def test_model_aware_selection_uses_only_registered_file_tools_by_default(
     assert set(provider.requests[0].metadata["disabled_tool_ids"]) == {"edit", "write"}
 
 
+
+def test_opencode_core_tool_schemas_expose_only_source_level_parameters(tmp_path: Path):
+    registry = create_core_tool_registry(tmp_path)
+
+    expected = {
+        "bash": {
+            "required": ["command", "description"],
+            "properties": ["command", "description", "timeout", "workdir"],
+        },
+        "webfetch": {
+            "required": ["url"],
+            "properties": ["url", "format", "timeout"],
+        },
+        "edit": {
+            "required": ["filePath", "oldString", "newString"],
+            "properties": ["filePath", "oldString", "newString", "replaceAll"],
+        },
+        "read": {
+            "required": ["filePath"],
+            "properties": ["filePath", "offset", "limit"],
+        },
+        "write": {
+            "required": ["filePath", "content"],
+            "properties": ["filePath", "content"],
+        },
+        "glob": {
+            "required": ["pattern"],
+            "properties": ["pattern", "path"],
+        },
+        "grep": {
+            "required": ["pattern"],
+            "properties": ["pattern", "path", "include"],
+        },
+        "todowrite": {
+            "required": ["todos"],
+            "properties": ["todos"],
+        },
+    }
+
+    for tool_id, shape in expected.items():
+        schema = registry.require(tool_id).input_schema
+        assert schema["required"] == shape["required"]
+        assert list(schema["properties"]) == shape["properties"]
+        assert schema["additionalProperties"] is False
+
+    todo_schema = registry.require("todowrite").input_schema
+    todo_item_schema = todo_schema["properties"]["todos"]["items"]
+    assert todo_item_schema["required"] == ["content", "status", "priority"]
+
+
 def test_child_config_inherits_only_opencode_tool_fields(tmp_path: Path):
     base = RuntimeConfig(workspace_root=tmp_path, disabled_tools=["write"])
 

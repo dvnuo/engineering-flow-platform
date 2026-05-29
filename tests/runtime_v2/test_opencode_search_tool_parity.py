@@ -54,36 +54,31 @@ async def test_grep_include_filters_files_relative_to_search_root(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_grep_content_is_readable_recent_first_and_bounded(tmp_path: Path):
-    recent = tmp_path / "recent.py"
-    middle = tmp_path / "middle.py"
-    old = tmp_path / "old.py"
-    recent.write_text("needle " + "x" * 2105 + "\n", encoding="utf-8")
-    middle.write_text("needle middle\n", encoding="utf-8")
-    old.write_text("needle old\n", encoding="utf-8")
-    os.utime(old, (100, 100))
-    os.utime(middle, (200, 200))
-    os.utime(recent, (300, 300))
+    for index in range(105):
+        path = tmp_path / f"match-{index:03}.py"
+        line = "needle " + ("x" * 2105 if index == 104 else f"match {index}") + "\n"
+        path.write_text(line, encoding="utf-8")
+        os.utime(path, (100 + index, 100 + index))
     runtime = ToolRuntime(create_core_tool_registry(tmp_path))
 
     result = await runtime.execute(
         ToolCall(
             id="call-grep-readable",
             tool_id="grep",
-            args={"pattern": "needle", "path": ".", "max_matches": 2},
+            args={"pattern": "needle", "path": "."},
         )
     )
 
     assert result.status == "success"
-    assert result.output["total_matches"] == 3
-    assert result.output["returned_matches"] == 2
+    assert result.output["total_matches"] == 105
+    assert result.output["returned_matches"] == 100
     assert result.output["truncated"] is True
-    assert result.output["matches"][0]["path"] == "recent.py"
-    assert result.output["matches"][1]["path"] == "middle.py"
-    assert result.content.startswith("Found 3 matches (showing first 2)")
-    assert "recent.py:\n  Line 1: " in result.content
-    assert "middle.py:\n  Line 1: needle middle" in result.content
-    assert "old.py" not in result.content
-    assert "Results truncated: showing 2 of 3 matches" in result.content
+    assert result.output["matches"][0]["path"] == "match-104.py"
+    assert result.output["matches"][1]["path"] == "match-103.py"
+    assert result.content.startswith("Found 105 matches (showing first 100)")
+    assert "match-104.py:\n  Line 1: " in result.content
+    assert "match-004.py" not in result.content
+    assert "Results truncated: showing 100 of 105 matches" in result.content
     assert "x" * 2100 not in result.content
     assert result.output["matches"][0]["line"].endswith("...")
 

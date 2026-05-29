@@ -27,45 +27,51 @@ def create_edit_tool(
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         path = resolve_workspace_path(root, args["filePath"])
-        if not path.exists():
-            raise FileNotFoundError(f"File does not exist: {workspace_relative_path(root, path)}")
-        if not path.is_file():
-            raise IsADirectoryError(f"Path is not a file: {workspace_relative_path(root, path)}")
-
         old_text = args["oldString"]
-        if old_text == "":
-            raise ValueError("oldString must not be empty.")
-        max_diff_lines = args.get("max_diff_lines", DEFAULT_MAX_PREVIEW_LINES)
-        max_diff_chars = args.get("max_diff_chars", DEFAULT_MAX_PREVIEW_CHARS)
+        new_text = args["newString"]
+        if old_text == new_text:
+            raise ValueError("No changes to apply: oldString and newString are identical.")
 
-        content = _read_utf8_text(root, path)
+        max_diff_lines = DEFAULT_MAX_PREVIEW_LINES
+        max_diff_chars = DEFAULT_MAX_PREVIEW_CHARS
         relative_path = workspace_relative_path(root, path)
-        replacement_count = content.count(old_text)
-        if replacement_count == 0:
-            raise ValueError(
-                "oldString was not found in "
-                f"{relative_path}. oldString preview: {text_preview(old_text)}. "
-                f"file characters: {len(content)}."
-            )
-        if (
-            args["newString"] != old_text
-            and not args.get("replaceAll")
-            and replacement_count > 1
-        ):
-            raise ValueError(
-                "oldString occurs multiple times "
-                f"({replacement_count} times) in {relative_path}; set "
-                "replaceAll=true or provide a more precise oldString."
-            )
 
-        new_content = content.replace(old_text, args["newString"], -1 if args.get("replaceAll") else 1)
+        if old_text == "":
+            if path.exists() and not path.is_file():
+                raise IsADirectoryError(f"Path is not a file: {relative_path}")
+            content = _read_utf8_text(root, path) if path.exists() else ""
+            new_content = new_text
+            applied_replacement_count = 1
+        else:
+            if not path.exists():
+                raise FileNotFoundError(f"File does not exist: {relative_path}")
+            if not path.is_file():
+                raise IsADirectoryError(f"Path is not a file: {relative_path}")
+
+            content = _read_utf8_text(root, path)
+            replacement_count = content.count(old_text)
+            if replacement_count == 0:
+                raise ValueError(
+                    "oldString was not found in "
+                    f"{relative_path}. oldString preview: {text_preview(old_text)}. "
+                    f"file characters: {len(content)}."
+                )
+            if not args.get("replaceAll") and replacement_count > 1:
+                raise ValueError(
+                    "oldString occurs multiple times "
+                    f"({replacement_count} times) in {relative_path}; set "
+                    "replaceAll=true or provide a more precise oldString."
+                )
+            new_content = content.replace(old_text, new_text, -1 if args.get("replaceAll") else 1)
+            applied_replacement_count = replacement_count if args.get("replaceAll") else 1
+
         old_bytes = len(content.encode("utf-8"))
         encoded = new_content.encode("utf-8")
         new_bytes = len(encoded)
         changed = new_content != content
-        applied_replacement_count = replacement_count if args.get("replaceAll") else 1
 
         if changed:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(encoded)
 
         diff, diff_truncated = unified_diff_preview(
@@ -123,8 +129,6 @@ def create_edit_tool(
                 "oldString": {"type": "string"},
                 "newString": {"type": "string"},
                 "replaceAll": {"type": "boolean"},
-                "max_diff_lines": {"type": "integer", "minimum": 0},
-                "max_diff_chars": {"type": "integer", "minimum": 0},
             },
             "additionalProperties": False,
         },

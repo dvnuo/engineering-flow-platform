@@ -18,13 +18,17 @@ from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 
 
-DEFAULT_TIMEOUT_SECONDS = 10
+DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_CHARS = 20000
 MAX_TIMEOUT_SECONDS = 120
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 DEFAULT_FORMAT = "markdown"
 FETCH_FORMATS = {"markdown", "text", "html"}
-DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; EFP Runtime v2)"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
 
 
 def create_webfetch_tool(
@@ -98,12 +102,7 @@ def _create_webfetch_tool(
                     "type": "string",
                     "enum": ["markdown", "text", "html"],
                 },
-                "timeout": {"type": "number"},
-                "max_chars": {"type": "integer"},
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": {"type": "string"},
-                },
+                "timeout": {"type": "number", "maximum": 120},
             },
             "additionalProperties": False,
         },
@@ -148,9 +147,8 @@ def _fetch_url(
     timeout = _capped_timeout(
         _positive_number(args.get("timeout", default_timeout_seconds), "timeout")
     )
-    max_chars = _non_negative_int(args.get("max_chars", default_max_chars), "max_chars")
-    headers = _headers(args.get("headers"), format_name=format_name)
-    request = Request(url, headers=headers)
+    max_chars = default_max_chars
+    request = Request(url, headers=_default_headers(format_name))
 
     try:
         with urlopen(request, timeout=timeout) as response:
@@ -213,13 +211,6 @@ def _capped_timeout(value: float) -> float:
     return min(value, float(MAX_TIMEOUT_SECONDS))
 
 
-def _non_negative_int(value: Any, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{name} must be an integer.")
-    if value < 0:
-        raise ValueError(f"{name} must be greater than or equal to 0.")
-    return value
-
 
 def _format(value: Any) -> str:
     if value is None:
@@ -230,21 +221,6 @@ def _format(value: Any) -> str:
         allowed = ", ".join(sorted(FETCH_FORMATS))
         raise ValueError(f"format must be one of: {allowed}.")
     return value
-
-
-def _headers(value: Any, *, format_name: str) -> dict[str, str]:
-    headers = _default_headers(format_name)
-    if value is None:
-        return headers
-    if not isinstance(value, dict):
-        raise ValueError("headers must be an object.")
-    for key, item in value.items():
-        if not isinstance(key, str):
-            raise ValueError("headers keys must be strings.")
-        if not isinstance(item, str):
-            raise ValueError("headers values must be strings.")
-        headers[key] = item
-    return headers
 
 
 def _default_headers(format_name: str) -> dict[str, str]:

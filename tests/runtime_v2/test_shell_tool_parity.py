@@ -42,7 +42,21 @@ def _python_command(script: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_workdir_alias_sets_workspace_relative_cwd(tmp_path: Path):
+async def test_shell_schema_matches_opencode_visible_arguments(tmp_path: Path):
+    schema = create_core_tool_registry(tmp_path).require("bash").input_schema
+
+    assert schema["required"] == ["command", "description"]
+    assert list(schema["properties"]) == [
+        "command",
+        "description",
+        "timeout",
+        "workdir",
+    ]
+    assert schema["properties"]["timeout"] == {"type": "integer", "minimum": 1}
+
+
+@pytest.mark.asyncio
+async def test_workdir_sets_workspace_relative_cwd(tmp_path: Path):
     (tmp_path / "pkg").mkdir()
     runtime = _runtime(tmp_path)
 
@@ -61,7 +75,7 @@ async def test_workdir_alias_sets_workspace_relative_cwd(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_timeout_ms_takes_precedence_and_adds_shell_metadata(tmp_path: Path):
+async def test_timeout_is_milliseconds_and_adds_shell_metadata(tmp_path: Path):
     runtime = _runtime(tmp_path)
 
     result = await runtime.execute(
@@ -70,8 +84,8 @@ async def test_timeout_ms_takes_precedence_and_adds_shell_metadata(tmp_path: Pat
             tool_id="bash",
             args={
                 "command": _python_command("import time; time.sleep(1)"),
-                "timeout": 5,
-                "timeout_ms": 100,
+                "description": "Sleep longer than timeout",
+                "timeout": 100,
             },
         )
     )
@@ -110,6 +124,7 @@ async def test_shell_command_cancellation_kills_process_and_preserves_output(tmp
                     "command": _python_command(
                         "import sys, time; print('before'); sys.stdout.flush(); time.sleep(5)"
                     ),
+                    "description": "Run cancellable command",
                 },
             ),
             context=ToolContext(cancel_requested=is_cancelled),
@@ -140,7 +155,8 @@ async def test_stdout_and_stderr_are_both_visible_and_exit_code_is_kept(tmp_path
             args={
                 "command": _python_command(
                     "import sys; print('out'); print('err', file=sys.stderr); sys.exit(7)"
-                )
+                ),
+                "description": "Print stdout and stderr",
             },
         )
     )
@@ -164,10 +180,9 @@ async def test_long_output_is_truncated_and_full_output_saved_inside_workspace(t
             tool_id="bash",
             args={
                 "command": _python_command(
-                    "for i in range(80): print('line-%03d' % i)"
+                    "for i in range(250): print('line-%03d' % i)"
                 ),
-                "max_output_chars": 220,
-                "max_output_lines": 5,
+                "description": "Print many lines",
             },
         )
     )
@@ -176,7 +191,7 @@ async def test_long_output_is_truncated_and_full_output_saved_inside_workspace(t
     assert result.truncated is True
     assert result.metadata["truncated"] is True
     assert result.content.startswith("...output truncated...")
-    assert "line-079" in result.content
+    assert "line-249" in result.content
     assert "line-000" not in result.content
 
     output_path = result.metadata["output_path"]
@@ -185,25 +200,23 @@ async def test_long_output_is_truncated_and_full_output_saved_inside_workspace(t
     saved_path.relative_to(tmp_path.resolve())
     saved_content = saved_path.read_text(encoding="utf-8")
     assert "line-000" in saved_content
-    assert "line-079" in saved_content
+    assert "line-249" in saved_content
 
 
 @pytest.mark.asyncio
-async def test_cwd_and_workdir_conflict_is_an_error(tmp_path: Path):
-    (tmp_path / "a").mkdir()
-    (tmp_path / "b").mkdir()
+async def test_cwd_alias_is_not_model_visible(tmp_path: Path):
     runtime = _runtime(tmp_path)
 
     result = await runtime.execute(
         ToolCall(
-            id="call-shell-conflict",
+            id="call-shell-cwd",
             tool_id="bash",
-            args={"command": "printf ok", "cwd": "a", "workdir": "b"},
+            args={"command": "printf ok", "description": "Print ok", "cwd": "."},
         )
     )
 
-    assert result.status == "error"
-    assert "cwd and workdir" in result.error
+    assert result.status == "validation_error"
+    assert "Unexpected argument(s): cwd" in result.error
 
 
 @pytest.mark.asyncio
@@ -214,7 +227,7 @@ async def test_workdir_cannot_escape_workspace(tmp_path: Path):
         ToolCall(
             id="call-shell-escape",
             tool_id="bash",
-            args={"command": "printf ok", "workdir": "../"},
+            args={"command": "printf ok", "description": "Print ok", "workdir": "../"},
         )
     )
 

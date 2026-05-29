@@ -29,6 +29,7 @@ async def test_todowrite_updates_runtime_session_todo_state(tmp_path: Path):
                                 {
                                     "content": "Inspect runtime state",
                                     "status": "completed",
+                                    "priority": "medium",
                                 },
                                 {
                                     "content": "Run focused tests",
@@ -181,9 +182,9 @@ async def test_todowrite_event_payload_shape_is_unchanged(tmp_path: Path):
             tool_id="todowrite",
             args={
                 "todos": [
-                    {"content": "Done", "status": "completed"},
-                    {"content": "Cancelled", "status": "cancelled"},
-                    {"content": "Active", "status": "in_progress"},
+                    {"content": "Done", "status": "completed", "priority": "medium"},
+                    {"content": "Cancelled", "status": "cancelled", "priority": "medium"},
+                    {"content": "Active", "status": "in_progress", "priority": "medium"},
                 ]
             },
         ),
