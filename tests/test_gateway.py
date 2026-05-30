@@ -69,7 +69,7 @@ class TestGatewayInit:
 
         monkeypatch.setattr(gateway_server, "config", _FakeConfig())
         monkeypatch.setattr(gateway_server, "bootstrap_runtime_profile_sync", _bootstrap)
-        monkeypatch.setattr(gateway_server, "setup_webchat_routes", lambda app: None)
+        monkeypatch.setattr(gateway_server, "setup_runtime_api_routes", lambda app: None)
         gateway = gateway_server.Gateway()
         assert gateway.jira_enabled is True
 
@@ -113,7 +113,7 @@ class TestGatewayRoutes:
             server = {"host": "0.0.0.0", "port": 8000}
 
         monkeypatch.setattr(gateway_server, "config", _FakeConfig())
-        monkeypatch.setattr(gateway_server, "setup_webchat_routes", lambda app: None)
+        monkeypatch.setattr(gateway_server, "setup_runtime_api_routes", lambda app: None)
 
         gateway = gateway_server.Gateway()
         routes = list(gateway.app.router.routes())

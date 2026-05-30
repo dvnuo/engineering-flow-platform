@@ -4,12 +4,9 @@
 
 ```
 src/
-├── agents/                 # Agent core + skill execution
-│   ├── executor.py         # SkillsExecutor, execute_skill()
+├── agents/                 # Compatibility support modules and skill/subagent helpers
 │   ├── subagent.py        # SubAgent spawning & management
 │   ├── subagent_schemas.py
-│   ├── core.py            # Agent with ReAct pattern
-│   ├── llm.py            # LLM client
 │   ├── heartbeat.py      # Periodic background checks
 │   ├── memory.py         # Memory system
 │   ├── model_fallback.py # Model fallback logic
@@ -26,9 +23,10 @@ src/
 │   ├── automation_watchers.py  # Deprecated compatibility shim; Portal owns automation monitoring rules
 │   └── jira_reconciliation.py  # Legacy/separate reconciliation workflow (not GitHub PR automation monitoring)
 │
-├── gateway/              # Web API server
+├── gateway/              # API-only runtime HTTP server
 │   ├── server.py        # Main gateway
-│   └── webchat.py       # WebChat UI
+│   ├── runtime_api.py   # Portal/runtime API routes
+│   └── runtime_request_contracts.py
 │
 ├── memory/               # Memory storage
 │   ├── __init__.py
@@ -63,6 +61,7 @@ src/
 - Portal provisions skills repository/branch.
 - EFP native runtime no longer supports the External tools subsystem.
 - Runtime tool surface is built-in/native only.
+- The native runtime is API-only. Portal owns the UI; this repo no longer serves an embedded browser page or static/template assets.
 
 ## Runtime / Portal boundary (important)
 

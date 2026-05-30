@@ -39,7 +39,7 @@ def test_src_tool_surface_is_runtime_v2_opencode_only():
 
 
 def test_gateway_entrypoints_do_not_reference_legacy_chat_loop_symbols():
-    for relative in ("src/gateway/webchat.py", "src/gateway/server.py"):
+    for relative in ("src/gateway/runtime_api.py", "src/gateway/server.py"):
         text = (ROOT / relative).read_text(encoding="utf-8")
         for module_name in REMOVED_LEGACY_MODULES:
             assert module_name not in text

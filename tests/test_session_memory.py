@@ -58,7 +58,7 @@ class TestSaveSessionSummary:
                     {"role": "user", "content": "Test message"},
                     {"role": "assistant", "content": "Test response"}
                 ],
-                "channel": "webchat",
+                "channel": "runtime_api",
                 "created_at": "2026-02-26T12:00:00"
             }
             mock_manager.get_session = AsyncMock(return_value=mock_session)
@@ -79,7 +79,7 @@ class TestSaveSessionSummary:
     async def test_save_empty_session(self):
         """Test saving empty session returns None"""
         with patch('src.hooks.session_memory.session_manager') as mock_manager:
-            mock_session = {"history": [], "channel": "webchat"}
+            mock_session = {"history": [], "channel": "runtime_api"}
             mock_manager.get_session = AsyncMock(return_value=mock_session)
             
             from src.hooks.session_memory import save_session_summary
@@ -106,7 +106,7 @@ class TestSaveSessionSummary:
                         "next_step": "Run final verification",
                     }
                 },
-                "channel": "webchat",
+                "channel": "runtime_api",
                 "created_at": "2026-02-26T12:00:00",
             }
             mock_manager.get_session = AsyncMock(return_value=mock_session)
@@ -121,6 +121,49 @@ class TestSaveSessionSummary:
 
             mock_summarize.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_save_session_summary_defaults_missing_channel_to_runtime_api(self, tmp_path):
+        """Missing channels are saved under the native runtime API channel."""
+        from src.hooks.session_memory import save_session_summary
+
+        memory_file = await save_session_summary(
+            "test-session",
+            workspace_dir=tmp_path,
+            session_data={
+                "history": [
+                    {"role": "user", "content": "Initial objective"},
+                    {"role": "assistant", "content": "Response"},
+                    {"role": "user", "content": "Follow up"},
+                ],
+                "created_at": "2026-02-26T12:00:00",
+            },
+        )
+
+        assert memory_file is not None
+        assert "- **Channel**: runtime_api" in memory_file.read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_save_session_summary_preserves_explicit_legacy_channel(self, tmp_path):
+        """Explicit persisted legacy channel values are preserved."""
+        from src.hooks.session_memory import save_session_summary
+
+        memory_file = await save_session_summary(
+            "test-session",
+            workspace_dir=tmp_path,
+            session_data={
+                "history": [
+                    {"role": "user", "content": "Initial objective"},
+                    {"role": "assistant", "content": "Response"},
+                    {"role": "user", "content": "Follow up"},
+                ],
+                "channel": "webchat",
+                "created_at": "2026-02-26T12:00:00",
+            },
+        )
+
+        assert memory_file is not None
+        assert "- **Channel**: webchat" in memory_file.read_text(encoding="utf-8")
+
 
 class TestBuildSessionEntry:
     """Tests for _build_session_entry"""
@@ -131,11 +174,11 @@ class TestBuildSessionEntry:
         
         entry = _build_session_entry(
             session_id="test-123",
-            channel="webchat",
+            channel="runtime_api",
             created_at="2026-02-26T12:00:00",
             summary="Fixed the login bug"
         )
         
         assert "Session:" in entry
-        assert "webchat" in entry
+        assert "runtime_api" in entry
         assert "Fixed the login bug" in entry

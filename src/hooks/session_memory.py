@@ -159,7 +159,7 @@ async def save_session_summary(
             summary = "Session completed."
         
         # Get source channel
-        channel = session.get("channel", "webchat")
+        channel = session.get("channel", "runtime_api")
         
         # Get session metadata
         created_at = session.get("created_at", datetime.now().isoformat())
@@ -215,7 +215,7 @@ def _build_session_entry(
     
     Args:
         session_id: Session ID
-        channel: Source channel (webchat, jira, etc.)
+        channel: Source channel (runtime_api, jira, etc.)
         created_at: Session creation timestamp
         summary: Heuristic-based summary
         

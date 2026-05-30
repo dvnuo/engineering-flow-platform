@@ -41,7 +41,7 @@ def test_gateway_chat_entrypoint_uses_runtime_v2_agent_runtime():
 
 
 def test_gateway_entrypoints_do_not_import_removed_legacy_runtime_modules():
-    for relative in ("src/gateway/webchat.py", "src/gateway/server.py", "src/gateway/runtime_v2_chat.py"):
+    for relative in ("src/gateway/runtime_api.py", "src/gateway/server.py", "src/gateway/runtime_v2_chat.py"):
         source = (ROOT / relative).read_text(encoding="utf-8")
         for module_name in REMOVED_LEGACY_MODULES:
             assert module_name not in source

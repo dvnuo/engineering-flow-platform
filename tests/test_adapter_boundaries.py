@@ -84,9 +84,9 @@ def test_subagent_sessions_spawn_uses_execute_subagent_orchestration(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypatch):
-    from src.gateway import webchat
-    webchat.runtime_task_tracker.reset()
+async def test_runtime_api_tasks_execute_uses_execute_runtime_task_request(monkeypatch):
+    from src.gateway import runtime_api
+    runtime_api.runtime_task_tracker.reset()
 
     captured = {}
     spawned = []
@@ -107,8 +107,8 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
             },
         )()
 
-    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
-    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     class _Request:
         headers = {}
@@ -120,7 +120,7 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
                 "input_payload": {"action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "PROJ-1"}},
             }
 
-    response = await webchat.api_tasks_execute(_Request())
+    response = await runtime_api.api_tasks_execute(_Request())
     payload = json.loads(response.body)
     await spawned[0]
 
@@ -134,12 +134,12 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
 
 def test_entrypoints_do_not_reintroduce_direct_bus_construction():
     from src.agents import skill_mode, subagent
-    from src.gateway import webchat
+    from src.gateway import runtime_api
 
     sources = {
         "skill_mode": inspect.getsource(skill_mode),
         "subagent": inspect.getsource(subagent),
-        "webchat": inspect.getsource(webchat),
+        "runtime_api": inspect.getsource(runtime_api),
     }
     forbidden = ("build_default_execution_bus(", "make_execution_request(")
     for name, source in sources.items():

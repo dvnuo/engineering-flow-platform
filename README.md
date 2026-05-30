@@ -15,12 +15,12 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 
 ### Core Capabilities
 
-- **AI Chat Interface** - Natural language interaction with the agent
-- **Runtime v2 Chat** - WebChat and Jira chat use Runtime v2 with GitHub Copilot
+- **Runtime API Chat** - Natural language interaction with the agent over the HTTP API
+- **Runtime v2 Chat** - Portal and Jira chat use Runtime v2 with GitHub Copilot
 - **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash outside the model-visible tool surface
 - **Session Persistence** - Conversations persist across restarts
-- **File Attachments** - Support for images in chat (documents via file-parse)
-- **Settings Panel** - Web-based configuration for LLM and integrations
+- **File Attachments** - Support for Portal-provided transient image and document attachment ids in chat
+- **Runtime Settings APIs** - Configuration validation and reload endpoints for operations
 
 ---
 
@@ -64,7 +64,15 @@ python main.py
 EFP_CONFIG_KEY="your-secret-passphrase" python main.py
 ```
 
-Access the web UI at `http://localhost:8000/`
+The native runtime is API-only. Check health and call chat endpoints directly:
+
+```bash
+curl http://localhost:8000/health
+
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Hello","session_id":"local-dev"}'
+```
 
 ---
 
@@ -159,11 +167,10 @@ engineering-flow-platform/
 ├── src/
 │   ├── efp_runtime/         # Runtime v2 AgentRuntime, provider, session, and tools
 │   ├── agents/              # Compatibility support modules only; legacy loop removed
-│   ├── gateway/            # HTTP server & WebChat
+│   ├── gateway/            # API-only HTTP server
 │   │   ├── server.py        # aiohttp server
-│   │   ├── webchat.py       # Chat API & UI
-│   │   ├── static/          # Web assets
-│   │   └── templates/       # HTML templates
+│   │   ├── runtime_api.py   # Portal/runtime API routes
+│   │   └── runtime_request_contracts.py
 │   ├── channels/           # Channel adapters
 │   ├── jira/               # Jira integration
 │   ├── confluence/         # Confluence integration
@@ -249,24 +256,12 @@ Additional runtime contracts:
 | `/api/sessions/{id}/rename` | POST | Rename session |
 | `/api/sessions/{id}` | DELETE | Delete session |
 | `/api/sessions/{id}/clear` | POST | Clear session history |
-| `/api/clear` | POST | Clear all sessions |
-
-### Files
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/files/upload` | POST | Upload file (multipart) |
-| `/api/files` | GET | List files |
-| `/api/files/{id}` | GET | Download file |
-| `/api/files/parse` | POST | Parse file content (body: {file_id}) |
-| `/api/files/{id}/preview` | GET | Get file preview |
 
 ### Settings
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/config` | GET | Get current config |
-| `/api/config/save` | POST | Save config |
+| `/api/config/reload` | POST | Reload runtime config |
 | `/api/git-info` | GET | Git repository info |
 
 ---
@@ -275,43 +270,16 @@ Additional runtime contracts:
 
 ### Sending Attachments
 
-The chat API supports file attachments in two ways:
+Portal can pass runtime-known transient attachment ids in the `attachments` array:
 
-1. **New format** (recommended): Send `attachments` array in JSON body
-   ```json
-   {
-     "message": "Analyze this image",
-     "attachments": ["file_id1", "file_id2"]
-   }
-   ```
-
-2. **Legacy format**: Include `@file_<id>` in message text
-   ```
-   What is in @file_abc12345?
-   ```
-
-Only the first image attachment is processed to avoid large payloads.
-
-### Uploading Files
-
-```
-POST /api/files/upload
-Content-Type: multipart/form-data
-
-file: <binary>
-```
-
-Returns:
 ```json
 {
-  "success": true,
-  "file_id": "uuid...",
-  "filename": "example.png",
-  "content_type": "image/png",
-  "size": 12345,
-  "uploaded_at": "2024-01-01T00:00:00Z"
+  "message": "Analyze this image",
+  "attachments": ["file_id1", "file_id2"]
 }
 ```
+
+The native runtime does not serve the old embedded browser upload/file-browser API.
 
 ---
 

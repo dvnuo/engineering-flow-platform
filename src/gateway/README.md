@@ -4,15 +4,14 @@
 
 ```
 gateway/
-├── server.py     # Main gateway server
-├── webchat.py    # Web chat interface
-├── static/       # Static assets
-└── templates/    # HTML templates
+├── server.py                      # Main gateway server
+├── runtime_api.py                 # Portal/runtime API routes
+└── runtime_request_contracts.py   # Small request-id helpers
 ```
 
 ## Purpose
 
-Provides REST API and web interface for the platform.
+Provides the API-only native runtime HTTP surface. Portal owns the browser UI; the gateway does not serve embedded browser HTML, CSS, or JavaScript.
 
 ## Usage
 

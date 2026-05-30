@@ -1,7 +1,4 @@
-"""WebChat UI and HTTP server for Engineering Flow Platform.
-
-A simple web interface to chat with the agent directly.
-"""
+"""API-only runtime gateway routes for Engineering Flow Platform."""
 
 import asyncio
 import hashlib
@@ -11,19 +8,13 @@ import os
 import re
 import uuid
 import time
-import io
-import mimetypes
-import shutil
-import unicodedata
-import zipfile
 from datetime import datetime
 from pathlib import Path
-from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFileNotFoundError, get_metadata
+from src.utils.file_parser.storage import init_storage, StoredFileNotFoundError, get_metadata
 init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
@@ -31,14 +22,12 @@ from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception
 from src.utils.logger import clear_log_context, set_log_context
 
 
-from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.hooks.file_context.models import Chunk, SessionFileMeta
 from src.hooks.file_context.retrieval import retrieval_engine
 from src.hooks.file_context.storage import storage as file_context_storage
 from src.config import config as global_config, DEFAULT_LLM_MODEL
-from src.github.url_utils import normalize_github_api_base_url
 from src.runtime.chat_orchestration_adapter import execute_runtime_task_request
 from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 from src.runtime.portal_session_metadata_client import (
@@ -47,16 +36,14 @@ from src.runtime.portal_session_metadata_client import (
 )
 from src.runtime.progressive_context import build_portal_context_preview
 from src.gateway.chat_payloads import (
-    build_webchat_response_payload,
+    build_runtime_response_payload,
     normalize_assistant_history_message,
 )
 from src.gateway.runtime_v2_chat import (
-    RUNTIME_V2_NATIVE_PROVIDER_ERROR,
     RuntimeV2ChatError,
-    SUPPORTED_PROVIDER_KEYS,
     run_runtime_v2_chat,
 )
-from src.gateway.webchat_request_contracts import (
+from src.gateway.runtime_request_contracts import (
     build_stream_start_event_payload,
     extract_trusted_client_request_id,
 )
@@ -74,9 +61,6 @@ runtime_task_tracker = RuntimeTaskTracker()
 runtime_v2_session_artifacts = RuntimeV2SessionArtifacts()
 
 
-# Get template and static paths
-TEMPLATE_DIR = Path(__file__).parent / "templates"
-STATIC_DIR = Path(__file__).parent / "static"
 MAX_PORTAL_IDENTITY_LENGTH = 256
 _DERIVED_RUNTIME_RULE_KEYS = {
     "allowed_capability_ids",
@@ -166,7 +150,7 @@ def _is_trusted_portal_request(request: web.Request) -> bool:
 
 def _resolve_chat_display_user_name(data: Dict[str, Any], portal_user_name: Optional[str]) -> str:
     direct_user_name = _sanitize_portal_identity_value(data.get("user_name")) or None
-    return portal_user_name or direct_user_name or "webchat-user"
+    return portal_user_name or direct_user_name or "runtime-api-user"
 
 
 def _parse_optional_execution_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -207,13 +191,13 @@ def _extract_trusted_model_override(request: web.Request, data: Dict[str, Any]) 
     return value or None
 
 
-def _resolve_webchat_session_id(data: Dict[str, Any]) -> str:
+def _resolve_runtime_session_id(data: Dict[str, Any]) -> str:
     # Keep explicit client IDs (trimmed), but generate collision-safe defaults.
     # The UUID suffix avoids same-second timestamp collisions across rapid new sessions.
     candidate = data.get("session_id")
     if isinstance(candidate, str) and candidate.strip():
         return candidate.strip()
-    return f"webchat_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    return f"runtime_api_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
 
 async def _persist_chat_failure_state(
@@ -821,83 +805,6 @@ def _normalize_chat_history_message(
     return normalized_message
 
 
-def load_template(filename: str) -> str:
-    """Load HTML template from file."""
-    template_path = TEMPLATE_DIR / filename
-    with open(template_path, 'r', encoding='utf-8') as f:
-        return f.read()
-
-
-async def serve_webchat(request: web.Request) -> web.Response:
-    """Serve the WebChat UI."""
-    try:
-        html_content = load_template("webchat.html")
-        return web.Response(
-            text=html_content,
-            content_type='text/html',
-            headers={
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-            }
-        )
-    except FileNotFoundError:
-        logger.error(f"WebChat template not found: {TEMPLATE_DIR / 'webchat.html'}")
-        return web.Response(
-            text="<html><body><h1>WebChat template not found</h1></body></html>",
-            status=500,
-            content_type='text/html'
-        )
-
-
-async def serve_static(request: web.Request) -> web.Response:
-    """Serve static files (CSS, JS)."""
-    path = request.match_info.get('path', '')
-    file_path = STATIC_DIR / path
-    
-    # Security: prevent directory traversal
-    try:
-        file_path = file_path.resolve()
-        if not str(file_path).startswith(str(STATIC_DIR.resolve())):
-            return web.Response(status=403, text="Forbidden")
-    except (ValueError, OSError):
-        return web.Response(status=400, text="Invalid path")
-    
-    if not file_path.exists():
-        return web.Response(status=404, text="Not found")
-    
-    # Determine content type
-    content_type = 'text/plain'
-    if file_path.suffix == '.css':
-        content_type = 'text/css'
-    elif file_path.suffix == '.js':
-        content_type = 'application/javascript'
-    elif file_path.suffix == '.html':
-        content_type = 'text/html'
-    elif file_path.suffix == '.json':
-        content_type = 'application/json'
-    elif file_path.suffix == '.png':
-        content_type = 'image/png'
-    elif file_path.suffix == '.jpg' or file_path.suffix == '.jpeg':
-        content_type = 'image/jpeg'
-    elif file_path.suffix == '.svg':
-        content_type = 'image/svg+xml'
-    elif file_path.suffix == '.ico':
-        content_type = 'image/x-icon'
-    
-    try:
-        with open(file_path, 'rb') as f:
-            content = f.read()
-        return web.Response(
-            body=content,
-            content_type=content_type,
-            headers={
-                'Cache-Control': 'public, max-age=3600',
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error serving static file {file_path}: {e}")
-        return web.Response(status=500, text="Internal server error")
-
-
 async def api_chat(request: web.Request) -> web.Response:
     """Handle chat API requests.
     
@@ -918,7 +825,7 @@ async def api_chat(request: web.Request) -> web.Response:
         path="/api/chat",
         runtime_type=os.getenv("EFP_RUNTIME_TYPE", "native"),
         execution_type="chat",
-        source_type="webchat",
+        source_type="runtime_api",
     )
     try:
         data = await request.json()
@@ -926,7 +833,7 @@ async def api_chat(request: web.Request) -> web.Response:
         message = original_user_text
         
         # Dynamic session_id with collision-safe default for multi-session support
-        session_id = _resolve_webchat_session_id(data)
+        session_id = _resolve_runtime_session_id(data)
         
         # Get reasoning_replay setting
         reasoning_replay = data.get('reasoning_replay', None)
@@ -1098,7 +1005,7 @@ async def api_chat(request: web.Request) -> web.Response:
         if not session or not session.get("history"):
             logger.warning(f"[api_chat] No session or empty history for {session_id}")
         
-        response_data = build_webchat_response_payload(
+        response_data = build_runtime_response_payload(
             result if isinstance(result, dict) else None,
             session_id,
         )
@@ -1261,13 +1168,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         path="/api/chat/stream",
         runtime_type=os.getenv("EFP_RUNTIME_TYPE", "native"),
         execution_type="chat",
-        source_type="webchat",
+        source_type="runtime_api",
     )
     try:
         data = await request.json()
         original_user_text = (data.get('message') or '').strip()
         message = original_user_text
-        session_id = _resolve_webchat_session_id(data)
+        session_id = _resolve_runtime_session_id(data)
         attachment_ids = _normalize_attachment_ids(data.get("attachments", []))
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
@@ -1454,7 +1361,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         }
         await response.write(_sse_event_bytes("usage", usage_data))
 
-        response_data = build_webchat_response_payload(
+        response_data = build_runtime_response_payload(
             result if isinstance(result, dict) else None,
             session_id,
         )
@@ -2064,7 +1971,7 @@ async def api_load_session(request: web.Request) -> web.Response:
         path="/api/sessions/{session_id}",
         runtime_type=os.getenv("EFP_RUNTIME_TYPE", "native"),
         execution_type="session",
-        source_type="webchat",
+        source_type="runtime_api",
     )
     try:
         # Initialize session manager if needed
@@ -2142,391 +2049,6 @@ async def api_session_chatlog(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
-def _workspace_root() -> Path:
-    return (Path.home() / ".efp" / "workspace").resolve()
-
-
-def _is_within_root(path: Path, root: Path) -> bool:
-    try:
-        return path == root or root in path.parents
-    except Exception:
-        return False
-
-
-def _resolve_server_file_path(raw_path: Optional[str]) -> Path:
-    """Resolve user-supplied path against workspace root and enforce boundary."""
-    root = _workspace_root()
-    value = (raw_path or "").strip()
-    if not value:
-        candidate = root
-    else:
-        supplied = Path(value)
-        if supplied.is_absolute():
-            candidate = supplied.resolve(strict=False)
-        else:
-            candidate = (root / supplied).resolve(strict=False)
-
-    if not _is_within_root(candidate, root):
-        raise web.HTTPBadRequest(text=json.dumps({"error": "Path must be within workspace root"}), content_type="application/json")
-    return candidate
-
-
-def _server_file_language(path: Path) -> str:
-    language_map = {
-        '.py': 'python',
-        '.js': 'javascript',
-        '.ts': 'typescript',
-        '.html': 'html',
-        '.css': 'css',
-        '.json': 'json',
-        '.md': 'markdown',
-        '.yaml': 'yaml',
-        '.yml': 'yaml',
-        '.sh': 'bash',
-        '.sql': 'sql',
-        '.xml': 'xml',
-        '.csv': 'csv',
-    }
-    return language_map.get(path.suffix.lower(), 'text')
-
-
-def _server_file_content_type(path: Path) -> str:
-    if path.suffix.lower() == ".md":
-        return "text/markdown"
-    return mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-
-
-def _safe_download_filename(name: str, fallback: str = "server-files") -> str:
-    raw_name = "" if name is None else str(name)
-    sanitized = ''.join(ch for ch in raw_name if not unicodedata.category(ch).startswith("C"))
-    sanitized = sanitized.replace('/', '').replace('\\', '').replace('"', "'").strip()
-    return sanitized or fallback
-
-
-def _attachment_disposition(filename: str) -> str:
-    safe_name = _safe_download_filename(filename, fallback="download")
-    return f'attachment; filename="{safe_name}"'
-
-
-def _server_files_archive_name(paths: List[Path]) -> str:
-    if len(paths) != 1:
-        return "server-files-selection.zip"
-
-    base_name = _safe_download_filename(paths[0].name, fallback="server-files")
-    if base_name.lower().endswith('.zip'):
-        return base_name
-    return f"{base_name}.zip"
-
-
-def _create_server_files_zip(paths: List[Path]) -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for entry in paths:
-            if entry.is_dir():
-                for root, _, files in os.walk(entry):
-                    for file_name in files:
-                        file_path = Path(root) / file_name
-                        arcname = file_path.relative_to(entry.parent)
-                        zf.write(file_path, str(arcname))
-            elif entry.is_file():
-                zf.write(entry, entry.name)
-    return buffer.getvalue()
-
-
-async def api_server_files_browse(request: web.Request) -> web.Response:
-    """Browse workspace files rooted at ~/.efp/workspace."""
-    try:
-        base_path = _resolve_server_file_path(request.query.get('path'))
-        logger.debug("[server-files] browse path=%s", base_path)
-
-        if not base_path.exists():
-            return web.json_response({'error': 'Path not found', 'path': str(base_path)}, status=404)
-        if not base_path.is_dir():
-            return web.json_response({'error': 'Path is not a directory', 'path': str(base_path)}, status=400)
-
-        items = []
-        for item in sorted(base_path.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower())):
-            data = {
-                'name': item.name,
-                'path': str(item.resolve()),
-                'is_dir': item.is_dir(),
-                'is_file': item.is_file(),
-            }
-            if item.is_file():
-                data['size'] = item.stat().st_size
-            items.append(data)
-
-        return web.json_response({
-            'root_path': str(_workspace_root()),
-            'path': str(base_path.resolve()),
-            'items': items,
-        })
-    except web.HTTPBadRequest as exc:
-        return web.json_response(json.loads(exc.text), status=400)
-    except Exception as e:
-        logger.error(f"Error browsing server files: {e}")
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def api_server_files_read(request: web.Request) -> web.Response:
-    """Read UTF-8 text files under workspace root."""
-    try:
-        file_path = _resolve_server_file_path(request.query.get('path'))
-        if not file_path.exists():
-            return web.json_response({'error': 'File not found', 'path': str(file_path)}, status=404)
-        if not file_path.is_file():
-            return web.json_response({'error': 'Not a file', 'path': str(file_path)}, status=400)
-
-        try:
-            content = file_path.read_text(encoding='utf-8')
-        except UnicodeDecodeError:
-            return web.json_response({
-                'error': 'Cannot read binary file; use /api/server-files/content for inline preview',
-                'path': str(file_path),
-            }, status=400)
-
-        return web.json_response({
-            'path': str(file_path.resolve()),
-            'name': file_path.name,
-            'size': file_path.stat().st_size,
-            'content': content,
-            'language': _server_file_language(file_path),
-            'content_type': _server_file_content_type(file_path),
-        })
-    except web.HTTPBadRequest as exc:
-        return web.json_response(json.loads(exc.text), status=400)
-    except Exception as e:
-        logger.error(f"Error reading server file: {e}")
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def api_server_files_content(request: web.Request) -> web.Response:
-    """Serve file bytes for inline browser preview."""
-    try:
-        file_path = _resolve_server_file_path(request.query.get('path'))
-        logger.debug("[server-files] content path=%s", file_path)
-        if not file_path.exists():
-            return web.json_response({'error': 'File not found', 'path': str(file_path)}, status=404)
-        if not file_path.is_file():
-            return web.json_response({'error': 'Not a file', 'path': str(file_path)}, status=400)
-
-        response = web.FileResponse(file_path)
-        response.content_type = _server_file_content_type(file_path)
-        response.headers['Content-Disposition'] = f'inline; filename="{file_path.name}"'
-        return response
-    except web.HTTPBadRequest as exc:
-        return web.json_response(json.loads(exc.text), status=400)
-    except Exception as e:
-        logger.error(f"Error serving server file content: {e}")
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def api_server_files_upload(request: web.Request) -> web.Response:
-    """Upload files to workspace root (with optional ZIP extraction)."""
-    try:
-        reader = await request.multipart()
-        target_path_raw: Optional[str] = None
-        upload_filename: Optional[str] = None
-        upload_content_type: Optional[str] = None
-        upload_payload: Optional[bytes] = None
-
-        while True:
-            field = await reader.next()
-            if field is None:
-                break
-            if field.name == 'path':
-                target_path_raw = await field.text()
-            elif field.name == 'file' and upload_payload is None:
-                upload_filename = Path(field.filename or 'upload.bin').name
-                upload_content_type = getattr(field, 'content_type', None)
-                # Consume upload bytes immediately so multipart iteration cannot
-                # drain/discard the file payload before we process it.
-                upload_payload = await field.read(decode=False)
-
-        if upload_payload is None:
-            return web.json_response({'success': False, 'error': 'file is required'}, status=400)
-
-        target_dir = _resolve_server_file_path(target_path_raw)
-        if not target_dir.exists():
-            return web.json_response({'success': False, 'error': 'Target path not found'}, status=404)
-        if not target_dir.is_dir():
-            return web.json_response({'success': False, 'error': 'Target path must be a directory'}, status=400)
-
-        filename = upload_filename or 'upload.bin'
-        logger.info("[server-files] upload target=%s filename=%s", target_dir, filename)
-        payload = upload_payload
-
-        if filename.lower().endswith('.zip'):
-            payload_size = len(payload)
-            starts_with_zip_signature = payload.startswith(b'PK')
-            is_zip_payload = zipfile.is_zipfile(io.BytesIO(payload)) if payload else False
-            logger.info(
-                "[server-files] zip upload diagnostics target=%s filename=%s content_type=%s payload_size=%s starts_with_pk=%s is_zipfile=%s",
-                target_dir,
-                filename,
-                upload_content_type,
-                payload_size,
-                starts_with_zip_signature,
-                is_zip_payload,
-            )
-
-            if payload_size == 0:
-                return web.json_response({'success': False, 'error': 'Uploaded ZIP file is empty'}, status=400)
-            if not is_zip_payload:
-                return web.json_response({'success': False, 'error': 'Uploaded file is not a valid ZIP archive'}, status=400)
-
-            try:
-                archive = zipfile.ZipFile(io.BytesIO(payload))
-                items: List[str] = []
-                extracted_count = 0
-                with archive:
-                    for member in archive.infolist():
-                        member_path = PurePosixPath(member.filename)
-                        if not member.filename or member.filename.endswith('/'):
-                            continue
-                        if member_path.is_absolute() or '..' in member_path.parts:
-                            return web.json_response({'success': False, 'error': f'Unsafe ZIP entry: {member.filename}'}, status=400)
-
-                        destination = (target_dir / Path(*member_path.parts)).resolve(strict=False)
-                        if not _is_within_root(destination, target_dir):
-                            return web.json_response({'success': False, 'error': f'Unsafe ZIP entry: {member.filename}'}, status=400)
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        with archive.open(member, 'r') as source, open(destination, 'wb') as sink:
-                            shutil.copyfileobj(source, sink)
-                        items.append(str(destination))
-                        extracted_count += 1
-
-                logger.info(
-                    "[server-files] zip extract success target=%s filename=%s extracted_count=%s",
-                    target_dir,
-                    filename,
-                    extracted_count,
-                )
-                return web.json_response({
-                    'success': True,
-                    'mode': 'zip_extract',
-                    'target_path': str(target_dir),
-                    'uploaded_filename': filename,
-                    'extracted_count': extracted_count,
-                    'items': items,
-                })
-            except zipfile.BadZipFile:
-                return web.json_response({'success': False, 'error': 'Uploaded ZIP archive is malformed'}, status=400)
-            except RuntimeError as exc:
-                return web.json_response({'success': False, 'error': 'Failed to extract ZIP archive', 'detail': str(exc)}, status=400)
-            except ValueError as exc:
-                return web.json_response({'success': False, 'error': 'Invalid ZIP archive parameters', 'detail': str(exc)}, status=400)
-            except NotImplementedError as exc:
-                return web.json_response({'success': False, 'error': 'ZIP archive uses an unsupported feature', 'detail': str(exc)}, status=400)
-
-        destination = (target_dir / filename).resolve(strict=False)
-        if not _is_within_root(destination, target_dir):
-            return web.json_response({'success': False, 'error': 'Invalid target filename'}, status=400)
-        # Intentionally allow explicit zero-byte regular file uploads.
-        with open(destination, 'wb') as output:
-            output.write(payload)
-
-        return web.json_response({
-            'success': True,
-            'mode': 'file_save',
-            'target_path': str(target_dir),
-            'uploaded_filename': filename,
-            'saved_path': str(destination),
-        })
-    except web.HTTPBadRequest as exc:
-        return web.json_response({'success': False, **json.loads(exc.text)}, status=400)
-    except Exception as e:
-        logger.error(f"Error uploading server file: {e}")
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
-
-
-async def api_server_files_delete(request: web.Request) -> web.Response:
-    """Delete one or more files/directories rooted under workspace."""
-    try:
-        body = await request.json()
-        raw_paths = body.get('paths')
-        if not isinstance(raw_paths, list) or len(raw_paths) == 0:
-            return web.json_response({'success': False, 'error': 'paths is required and must be a non-empty list'}, status=400)
-        if not all(isinstance(raw, str) for raw in raw_paths):
-            return web.json_response({'success': False, 'error': 'paths must be a list of strings'}, status=400)
-
-        root = _workspace_root()
-        resolved_paths = [_resolve_server_file_path(raw) for raw in raw_paths]
-        for resolved in resolved_paths:
-            if resolved == root:
-                return web.json_response({'success': False, 'error': 'Deleting workspace root is not allowed'}, status=400)
-
-        deleted = []
-        for resolved in resolved_paths:
-            if not resolved.exists() and not resolved.is_symlink():
-                return web.json_response({'success': False, 'error': 'Path not found', 'path': str(resolved)}, status=404)
-
-            if resolved.is_symlink() or resolved.is_file():
-                resolved.unlink()
-                deleted.append({'path': str(resolved), 'type': 'file'})
-            elif resolved.is_dir():
-                shutil.rmtree(resolved)
-                deleted.append({'path': str(resolved), 'type': 'directory'})
-            else:
-                return web.json_response({'success': False, 'error': 'Unsupported path type', 'path': str(resolved)}, status=400)
-
-        logger.info("[server-files] delete count=%s", len(deleted))
-        return web.json_response({'success': True, 'deleted': deleted})
-    except web.HTTPBadRequest as exc:
-        return web.json_response({'success': False, **json.loads(exc.text)}, status=400)
-    except json.JSONDecodeError:
-        return web.json_response({'success': False, 'error': 'Invalid JSON body'}, status=400)
-    except Exception as e:
-        logger.error(f"Error deleting server files: {e}")
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
-
-
-async def api_server_files_download(request: web.Request) -> web.Response:
-    """Download one or more files/directories rooted under workspace."""
-    try:
-        raw_paths = list(request.query.getall('paths', []))
-        if not raw_paths and request.query.get('path'):
-            raw_paths.append(request.query.get('path', ''))
-        if not raw_paths:
-            return web.json_response({'success': False, 'error': 'path is required'}, status=400)
-
-        resolved_paths = [_resolve_server_file_path(raw) for raw in raw_paths if raw is not None]
-        for resolved in resolved_paths:
-            if not resolved.exists():
-                return web.json_response({'success': False, 'error': 'File not found', 'path': str(resolved)}, status=404)
-
-        logger.debug("[server-files] download paths=%s", ",".join(str(path) for path in resolved_paths))
-        if len(resolved_paths) == 1 and resolved_paths[0].is_file():
-            file_path = resolved_paths[0]
-            response = web.FileResponse(file_path)
-            response.content_type = _server_file_content_type(file_path)
-            response.headers['Content-Disposition'] = _attachment_disposition(file_path.name)
-            return response
-
-        archive = await asyncio.to_thread(_create_server_files_zip, resolved_paths)
-        archive_name = _server_files_archive_name(resolved_paths)
-        return web.Response(
-            body=archive,
-            content_type='application/zip',
-            headers={'Content-Disposition': _attachment_disposition(archive_name)},
-        )
-    except web.HTTPBadRequest as exc:
-        return web.json_response({'success': False, **json.loads(exc.text)}, status=400)
-    except Exception as e:
-        logger.error(f"Error downloading server files: {e}")
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
-
-
-async def api_browse_files(request: web.Request) -> web.Response:
-    """Backward-compatible alias for legacy file browsing endpoint."""
-    return await api_server_files_browse(request)
-
-
-async def api_read_file(request: web.Request) -> web.Response:
-    """Backward-compatible alias for legacy text file reader endpoint."""
-    return await api_server_files_read(request)
-
-
 async def api_usage(request: web.Request) -> web.Response:
     """Get usage statistics."""
     try:
@@ -2547,24 +2069,6 @@ async def api_usage(request: web.Request) -> web.Response:
                 'by_model': by_model,
                 'by_provider': by_provider,
             })
-    except Exception as e:
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def api_clear(request: web.Request) -> web.Response:
-    """Clear chat history.
-    
-    POST /api/clear
-    Body: {"session_id": "optional"}
-    """
-    try:
-        data = await request.json()
-        session_id = data.get('session_id', 'webchat')
-        
-        await session_manager.clear_history(session_id)
-        
-        return web.json_response({'success': True})
-            
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
@@ -2626,170 +2130,6 @@ async def api_delete_session(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
-async def api_edit_message(request: web.Request) -> web.Response:
-    """Edit a message, delete subsequent messages.
-    
-    After editing, the frontend should reload the session to get the updated
-    state. A new LLM response will be generated when the user sends a message.
-    
-    POST /api/sessions/{session_id}/messages/{message_id}/edit
-    Body: {"new_content": "edited message content"}
-    """
-    try:
-        session_id = request.match_info.get('session_id')
-        message_id = request.match_info.get('message_id')
-        
-        if not session_id or not message_id:
-            return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
-        
-        # Initialize session_manager if needed
-        if not session_manager._initialized:
-            await session_manager.initialize()
-        
-        try:
-            data = await request.json()
-        except (json.JSONDecodeError, ContentTypeError):
-            return web.json_response({'error': 'Invalid JSON in request body'}, status=400)
-        
-        new_content = data.get('new_content')
-        if new_content is None:
-            return web.json_response({'error': "Missing 'new_content' in request body"}, status=400)
-        if not isinstance(new_content, str):
-            return web.json_response({'error': "'new_content' must be a string"}, status=400)
-        
-        # Edit the message
-        edited = await session_manager.edit_message(session_id, message_id, new_content)
-        if not edited:
-            return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
-        
-        # Delete all messages after the edited message
-        deleted_count = await session_manager.delete_messages_after(session_id, message_id)
-        
-        # Get updated history
-        history = await session_manager.get_history(session_id)
-        
-        return web.json_response({
-            'success': True,
-            'deleted_count': deleted_count,
-            'messages': history
-        })
-            
-    except Exception as e:
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def api_delete_conversation_from(request: web.Request) -> web.Response:
-    """Delete a message and all subsequent messages in the conversation.
-    
-    This endpoint truncates the conversation starting from the specified message.
-    Frontends can use it for workflows where "editing" a message is implemented
-    as delete-and-resend (delete the original and then send a new message with
-    the edited content). For in-place edits of an existing message, prefer
-    ``api_edit_message``.
-    
-    POST /api/sessions/{session_id}/messages/{message_id}/delete-from-here
-    """
-    try:
-        session_id = request.match_info.get('session_id')
-        message_id = request.match_info.get('message_id')
-        
-        if not session_id or not message_id:
-            return web.json_response({'error': 'Missing session_id or message_id', 'user_message_id': message_id}, status=400)
-        
-        history = await session_manager.get_history(session_id)
-
-        if not any(msg.get('id') == message_id for msg in history):
-            return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
-
-        deleted_count = await session_manager.delete_messages_from(
-            session_id,
-            message_id,
-            wait_for_save=True,
-        )
-
-        return web.json_response({
-            'success': True,
-            'deleted_count': deleted_count
-        })
-            
-    except Exception as e:
-        return web.json_response({'error': str(e), 'user_message_id': message_id}, status=500)
-
-
-def _remove_legacy_ssh_config(config_data: Dict[str, Any]) -> None:
-    """Remove deprecated top-level SSH configuration."""
-    if isinstance(config_data, dict):
-        config_data.pop("ssh", None)
-
-
-def _runtime_v2_provider_validation_error(config_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if "llm" not in config_data:
-        return None
-    llm = config_data.get("llm")
-    if not isinstance(llm, dict):
-        return {"error": "llm must be an object"}
-    if "provider" not in llm:
-        return None
-    provider = str(llm.get("provider") or "").strip().lower()
-    if provider in SUPPORTED_PROVIDER_KEYS:
-        return None
-    return {
-        "error": RUNTIME_V2_NATIVE_PROVIDER_ERROR,
-        "supported_providers": sorted(SUPPORTED_PROVIDER_KEYS),
-    }
-
-
-async def api_save_config(request: web.Request) -> web.Response:
-    """Save configuration to config.yaml.
-    
-    POST /api/config/save
-    Body: JSON with config sections to update (partial updates supported)
-    
-    This endpoint performs partial saves - only modified fields are updated,
-    preserving existing values for unchanged fields within each section.
-    """
-    try:
-        data = await request.json()
-        sections = ['llm', 'jira', 'confluence', 'github', 'git', 'debug', 'proxy']
-        payload = dict(data) if isinstance(data, dict) else {}
-        _remove_legacy_ssh_config(payload)
-        provider_error = _runtime_v2_provider_validation_error(payload)
-        if provider_error is not None:
-            return web.json_response(
-                {"success": False, "status": "error", **provider_error},
-                status=400,
-            )
-        updated_sections = global_config.save_partial_sections(payload, sections)
-        
-        return web.json_response({
-            'success': True, 
-            'message': 'Configuration saved and reloaded.',
-            'updated_sections': updated_sections
-        })
-    except Exception as e:
-        logger.error(f"Error saving config: {e}")
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def api_get_config(request: web.Request) -> web.Response:
-    """Get current configuration.
-    
-    GET /api/config
-    """
-    try:
-        effective_config = global_config.get_effective_config()
-        _remove_legacy_ssh_config(effective_config)
-        return web.json_response(
-            {
-                'config': effective_config,
-                'runtime_profile': global_config.get_managed_overlay_meta(),
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error reading config: {e}")
-        return web.json_response({'error': str(e)}, status=500)
-
-
 async def api_apply_runtime_profile(request: web.Request) -> web.Response:
     """Apply managed runtime-profile snapshot from trusted Portal control-plane request."""
     if not _is_trusted_portal_request(request):
@@ -2828,263 +2168,6 @@ async def api_apply_runtime_profile(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
-# ========== GitHub Copilot Authorization ==========
-
-import httpx
-import uuid
-
-# In-memory storage for pending authorizations (in production, use Redis/database)
-_pending_authorizations: Dict[str, Dict[str, Any]] = {}
-
-def _get_github_api_base_url() -> str:
-    """Return normalized GitHub API base URL from github.base_url config."""
-    return normalize_github_api_base_url(global_config.get("github.base_url"))
-
-
-async def api_copilot_auth_start(request: web.Request) -> web.Response:
-    """Start GitHub Copilot device authorization flow.
-    
-    POST /api/copilot/auth/start
-    
-    Returns:
-        - verification_url: URL for user to authorize
-        - user_code: Code to display to user
-        - device_code: Device code for polling
-        - expires_in: Seconds until expiration
-        - interval: Polling interval in seconds
-    """
-    try:
-        # Get normalized GitHub API base URL from config
-        api_base_url = _get_github_api_base_url()
-        
-        async with httpx.AsyncClient() as client:
-            # Request device authorization from GitHub
-            response = await client.post(
-                f"{api_base_url}/copilot/token_verification",
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-                json={
-                    "action": "create"
-                }
-            )
-            
-            if response.status_code != 201:
-                logger.error(f"GitHub Copilot auth failed: {response.status_code} {response.text}")
-                return web.json_response({
-                    'error': 'Failed to start authorization',
-                    'details': f'GitHub API returned {response.status_code}'
-                }, status=500)
-            
-            data = response.json()
-            
-            # Store pending authorization
-            device_code = data.get("device_code", str(uuid.uuid4()))
-            auth_id = str(uuid.uuid4())[:8]
-            
-            _pending_authorizations[auth_id] = {
-                'device_code': device_code,
-                'user_code': data.get("user_code", ""),
-                'verification_uri': data.get("verification_uri", ""),
-                'verification_uri_complete': data.get("verification_uri_complete", ""),
-                'expires_at': datetime.utcnow().timestamp() + data.get("expires_in", 600),
-                'interval': data.get("interval", 5),
-                'status': 'pending',
-                'token': None,
-                'created_at': datetime.utcnow().isoformat(),
-            }
-            
-            logger.info(f"GitHub Copilot auth started: {auth_id}")
-            
-            return web.json_response({
-                'auth_id': auth_id,
-                'user_code': data.get("user_code", ""),
-                'verification_url': data.get("verification_uri", ""),
-                'verification_complete_url': data.get("verification_uri_complete", ""),
-                'expires_in': data.get("expires_in", 600),
-                'interval': data.get("interval", 5),
-            })
-            
-    except Exception as e:
-        logger.error(f"Error starting Copilot auth: {e}", exc_info=True)
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def api_copilot_auth_check(request: web.Request) -> web.Response:
-    """Check GitHub Copilot authorization status.
-    
-    POST /api/copilot/auth/check
-    Body: { "auth_id": "...", "device_code": "..." }
-    
-    Returns:
-        - status: "pending" | "authorized" | "expired" | "failed"
-        - token: (only if authorized) the GitHub Copilot token
-    """
-    try:
-        import uuid
-        
-        data = await request.json()
-        auth_id = data.get("auth_id", "")
-        device_code = data.get("device_code", "")
-        
-        if not auth_id or not device_code:
-            return web.json_response({'error': 'auth_id and device_code required'}, status=400)
-        
-        # Check if authorization exists
-        auth = _pending_authorizations.get(auth_id)
-        if not auth:
-            return web.json_response({'error': 'Authorization not found or expired'}, status=404)
-        
-        # Check if expired
-        if datetime.utcnow().timestamp() > auth['expires_at']:
-            _pending_authorizations.pop(auth_id, None)
-            return web.json_response({'status': 'expired', 'message': 'Authorization expired'})
-        
-        # Check current status
-        if auth['status'] == 'authorized':
-            token = auth['token']
-            _pending_authorizations.pop(auth_id, None)
-            return web.json_response({
-                'status': 'authorized',
-                'token': token,
-            })
-        
-        # Get normalized GitHub API base URL from config
-        api_base_url = _get_github_api_base_url()
-        
-        async with httpx.AsyncClient() as client:
-            # Check token status
-            response = await client.post(
-                f"{api_base_url}/copilot/token_verification",
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-                json={
-                    "action": "verify",
-                    "device_code": device_code
-                }
-            )
-            
-            if response.status_code == 200:
-                # Authorization complete!
-                token_data = response.json()
-                token = token_data.get("token", "")
-                
-                # Update authorization status
-                auth['status'] = 'authorized'
-                auth['token'] = token
-                
-                logger.info(f"GitHub Copilot authorized: {auth_id}")
-                
-                # Clean up and return
-                _pending_authorizations.pop(auth_id, None)
-                
-                return web.json_response({
-                    'status': 'authorized',
-                    'token': token,
-                })
-            elif response.status_code == 400:
-                error_data = response.json()
-                error = error_data.get("error", "")
-                
-                if error == "authorization_pending":
-                    return web.json_response({'status': 'pending'})
-                elif error == "expired_token":
-                    _pending_authorizations.pop(auth_id, None)
-                    return web.json_response({'status': 'expired', 'message': 'Device code expired'})
-                elif error == "authorization_declined":
-                    _pending_authorizations.pop(auth_id, None)
-                    return web.json_response({'status': 'declined', 'message': 'User declined authorization'})
-                else:
-                    return web.json_response({'status': 'failed', 'message': error})
-            else:
-                return web.json_response({
-                    'status': 'pending',
-                    'message': 'Still waiting...'
-                })
-                
-    except Exception as e:
-        logger.error(f"Error checking Copilot auth: {e}", exc_info=True)
-        return web.json_response({'error': str(e)}, status=500)
-
-
-def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
-    """Parse a skill from skill.md file.
-    
-    Args:
-        skill_path: Path to skill.md file
-        
-    Returns:
-        Skill dict or None if parsing fails
-    """
-    try:
-        content = skill_path.read_text(encoding='utf-8')
-        
-        # Extract skill name from first line (without # prefix)
-        lines = content.strip().split('\n')
-        name = ""
-        description = ""
-        emoji = "🔧"
-        examples = []
-        in_examples = False
-        
-        for i, line in enumerate(lines):
-            line = line.strip()
-            if line.startswith('# ') and not name:
-                name = line[2:].strip().replace(' Skill', '').lower()
-            elif line.startswith('## Examples'):
-                in_examples = True
-                continue
-            elif in_examples:
-                if line.startswith('```') or line.startswith('## '):
-                    in_examples = False
-                    continue
-                # Extract example commands from comments
-                if line.startswith('# '):
-                    example = line[2:].strip()
-                    if example and len(example) < 80:  # Limit example length
-                        examples.append(example)
-            elif not description and line and not line.startswith('#'):
-                description = line
-        
-        # Try to find emoji in first line or after #
-        emoji_match = content.strip().split('\n')[0]
-        if '📌' in emoji_match:
-            emoji = "📌"
-        elif '🔧' in emoji_match:
-            emoji = "🔧"
-        elif '💻' in emoji_match:
-            emoji = "💻"
-        elif '📝' in emoji_match:
-            emoji = "📝"
-        elif '🔍' in emoji_match:
-            emoji = "🔍"
-        elif '🌤️' in emoji_match:
-            emoji = "🌤️"
-        
-        return {
-            "name": name,
-            "description": description,
-            "emoji": emoji,
-            "path": str(skill_path.parent.name),
-            "examples": examples[:3],  # Limit to 3 examples
-        }
-    except Exception:
-        return None
-
-
-def _get_skills_list() -> List[Dict[str, Any]]:
-    """Get list of all available skills from the centralized skill registry."""
-    from src.skills import skill_registry
-
-    if not skill_registry._initialized:
-        skill_registry.load_skills()
-
-    return skill_registry.get_all_skill_summaries()
-
-
 async def api_skills(request: web.Request) -> web.Response:
     """Get list of available skills.
     
@@ -3107,454 +2190,8 @@ async def api_skills(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e), 'skills': []}, status=500)
 
 
-# ===== File Upload API =====
-
-async def api_files_upload(request: web.Request) -> web.Response:
-    """Upload a file.
-    
-    POST /api/files/upload
-    Content-Type: multipart/form-data
-    Body: file (binary)
-    
-    Returns:
-        201: {"success": true, "file_id": "...", "filename": "...", ...}
-        400: {"success": false, "error": "..."}
-    """
-    try:
-        from src.utils.file_parser import upload_file, FileTooLargeError, UnsupportedFileTypeError
-        
-        # Get session ID from query or header
-        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        
-        # Parse multipart form
-        reader = await request.multipart()
-        file_field = await reader.next()
-        
-        if not file_field or file_field.name != 'file':
-            return web.json_response({
-                'success': False,
-                'error': 'No file provided'
-            }, status=400)
-        
-        # Read file content
-        max_size_mb = 10
-        max_bytes = max_size_mb * 1024 * 1024
-        
-        try:
-            content = await file_field.read()
-        except TypeError:
-            content_chunks = []
-            total_size = 0
-            while True:
-                chunk = await file_field.read(8192)
-                if not chunk:
-                    break
-                content_chunks.append(chunk)
-                total_size += len(chunk)
-                if total_size > max_bytes:
-                    return web.json_response({
-                        'success': False,
-                        'error': f'File exceeds maximum size of {max_size_mb} MB'
-                    }, status=400)
-            content = b''.join(content_chunks)
-        
-        filename = file_field.filename
-        
-        if not filename:
-            return web.json_response({
-                'success': False,
-                'error': 'Filename is required'
-            }, status=400)
-        
-        logger.info(f"[api_files_upload] session_id={session_id}, filename={filename}")
-        metadata = await upload_file(
-            session_id=session_id,
-            content=content,
-            filename=filename,
-            max_size_mb=max_size_mb
-        )
-        _file_metadata[metadata.file_id] = metadata
-        logger.info(f"[api_files_upload] saved metadata.session_id={metadata.session_id}")
-
-        return web.json_response({
-            'success': True,
-            'file_id': metadata.file_id,
-            'filename': metadata.original_filename,
-            'content_type': metadata.content_type,
-            'size': metadata.size,
-            'uploaded_at': metadata.uploaded_at
-        }, status=201)
-        
-    except FileTooLargeError as e:
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=400)
-        
-    except UnsupportedFileTypeError as e:
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=400)
-        
-    except Exception as e:
-        logger.error(f"File upload error: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
-
-
-async def api_files_parse(request: web.Request) -> web.Response:
-    """Parse a file.
-
-    POST /api/files/parse
-    Content-Type: application/json
-    Body: {"file_id": "...", "options": {...}}
-
-    Returns:
-        200: {"success": true, "markdown": "...", "blocks": [...], ...}
-        400: {"success": false, "error": "..."}
-    """
-    session_id = None
-    file_id = None
-    try:
-        try:
-            data = await request.json()
-        except json.JSONDecodeError:
-            return web.json_response({'success': False, 'error': 'Invalid JSON body'}, status=400)
-
-        file_id = data.get('file_id')
-        if not file_id:
-            return web.json_response({'success': False, 'error': 'file_id is required'}, status=400)
-
-        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        metadata = get_metadata(file_id)
-        if metadata.session_id and (not session_id or metadata.session_id != session_id):
-            return web.json_response({'success': False, 'error': 'File not found'}, status=404)
-        if not session_id:
-            session_id = metadata.session_id or "default"
-
-        options = data.get('options', {})
-        parse_ctx = await _parse_file_into_file_context(session_id=session_id, file_id=file_id, options=options)
-        if not parse_ctx.get("success"):
-            return web.json_response({'success': False, 'error': parse_ctx.get("error")}, status=400)
-        result = parse_ctx["result"]
-
-        return web.json_response({
-            'success': True,
-            'content_type': result.content_type,
-            'file_id': result.file_id,
-            'filename': result.filename,
-            'markdown': result.markdown,
-            'blocks': [b.model_dump(by_alias=True, exclude_none=True) for b in result.blocks],
-            'json': result.json,
-            'parse_time_ms': result.parse_time_ms,
-        })
-
-    except StoredFileNotFoundError as e:
-        return web.json_response({'success': False, 'error': str(e)}, status=404)
-    except Exception as e:
-        try:
-            if session_id and file_id:
-                from src.hooks.file_context.storage import storage as file_context_storage
-                file_context_storage.update_file_status(session_id, file_id, status="failed", error=str(e))
-        except Exception:
-            logger.exception("Failed to persist file_context failure state for %s/%s", session_id, file_id)
-        logger.error(f"File parse error: {e}")
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
-
-
-async def api_files_preview(request: web.Request) -> web.Response:
-    """Preview a file.
-    
-    GET /api/files/{file_id}/preview?max_chars=5000
-    
-    Returns:
-        200: {"success": true, "preview": "...", "truncated": true, ...}
-    """
-    try:
-        from src.utils.file_parser import preview_file, StoredFileNotFoundError, get_metadata
-        
-        file_id = request.match_info.get('file_id')
-        
-        # Validate max_chars
-        max_chars_raw = request.query.get('max_chars', '5000')
-        try:
-            max_chars = int(max_chars_raw)
-        except (TypeError, ValueError):
-            return web.json_response({
-                'success': False,
-                'error': 'max_chars must be an integer'
-            }, status=400)
-        
-        if not file_id:
-            return web.json_response({
-                'success': False,
-                'error': 'file_id is required'
-            }, status=400)
-        
-        # Validate session ownership
-        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        try:
-            metadata = get_metadata(file_id)
-            # If the file is bound to a session, require a matching session_id
-            if metadata.session_id:
-                if not session_id or metadata.session_id != session_id:
-                    return web.json_response({
-                        'success': False,
-                        'error': 'File not found'
-                    }, status=404)
-        except StoredFileNotFoundError:
-            pass
-        
-        result = await preview_file(file_id, max_chars)
-        
-        if not result.get('success'):
-            error_msg = str(result.get('error', '') or '')
-            if 'not found' in error_msg.lower():
-                return web.json_response(result, status=404)
-            return web.json_response(result, status=400)
-        
-        return web.json_response(result)
-        
-    except StoredFileNotFoundError:
-        return web.json_response({
-            'success': False,
-            'error': 'File not found'
-        }, status=404)
-        
-    except Exception as e:
-        logger.error(f"File preview error: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
-
-
-async def api_files_list(request: web.Request) -> web.Response:
-    """List uploaded files (deprecated for one-shot attachments)."""
-    return web.json_response({'success': True, 'files': []})
-
-
-async def api_context_files(request: web.Request) -> web.Response:
-    """Deprecated for one-shot attachments. Do not expose transient upload context."""
-    return web.json_response({'success': True, 'files': []})
-
-
-async def api_chunks_search(request: web.Request) -> web.Response:
-    """Deprecated for one-shot attachments. Do not expose transient upload chunks."""
-    return web.json_response({
-        'success': True,
-        'chunks': [],
-        'total': 0,
-        'estimated_tokens': 0,
-    })
-
-
-async def api_files_get(request: web.Request) -> web.Response:
-    """Get a file (for direct display in img, etc).
-    
-    GET /api/files/{file_id}
-    
-    Returns:
-        200: File content with appropriate Content-Type
-        404: File not found
-    """
-    try:
-        from src.utils.file_parser import get_file_path, get_metadata, StoredFileNotFoundError
-        
-        file_id = request.match_info.get('file_id')
-        
-        if not file_id:
-            return web.json_response({
-                'success': False,
-                'error': 'file_id is required'
-            }, status=400)
-        
-        try:
-            metadata = get_metadata(file_id)
-        except StoredFileNotFoundError:
-            return web.json_response({
-                'success': False,
-                'error': 'File not found'
-            }, status=404)
-        
-        file_path = get_file_path(file_id)
-        
-        if not file_path.exists():
-            return web.json_response({
-                'success': False,
-                'error': 'File not found on disk'
-            }, status=404)
-        
-        # Determine content type
-        content_type = metadata.content_type or 'application/octet-stream'
-        
-        # Read and return file
-        with open(file_path, 'rb') as f:
-            file_content = f.read()
-        
-        return web.Response(
-            body=file_content,
-            content_type=content_type,
-            headers={
-                'Content-Disposition': f'inline; filename="{metadata.original_filename}"'
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"File get error: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
-
-
-
-
-    """Get a file by ID.
-    
-    GET /api/files/{file_id}
-    
-    Returns:
-        200: The file content
-        404: File not found
-    """
-    try:
-        from src.utils.file_parser import get_file_path, get_metadata, StoredFileNotFoundError
-        
-        file_id = request.match_info.get('file_id')
-        
-        if not file_id:
-            return web.json_response({
-                'success': False,
-                'error': 'file_id is required'
-            }, status=400)
-        
-        try:
-            file_path = get_file_path(file_id)
-        except StoredFileNotFoundError:
-            return web.json_response({
-                'success': False,
-                'error': 'File not found'
-            }, status=404)
-        
-        metadata = get_metadata(file_id)
-        
-        # Determine content type
-        content_type = metadata.content_type or 'application/octet-stream'
-        if not content_type or content_type == 'application/octet-stream':
-            # Try to detect from extension
-            import mimetypes
-            content_type = mimetypes.guess_type(metadata.filename)[0] or 'application/octet-stream'
-        
-        # Read and return file
-        with open(file_path, 'rb') as f:
-            file_content = f.read()
-        
-        return web.Response(
-            body=file_content,
-            content_type=content_type,
-            headers={
-                'Content-Disposition': f'inline; filename="{metadata.filename}"'
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error getting file {file_id}: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
-
-
-async def api_files_download(request: web.Request) -> web.Response:
-    """Backward-compatible alias for legacy file download endpoint."""
-    return await api_server_files_download(request)
-
-
-async def api_files_delete(request: web.Request) -> web.Response:
-    """Delete a file.
-    
-    DELETE /api/files/{file_id}
-    
-    Returns:
-        200: {"success": true}
-    """
-    try:
-        from src.utils.file_parser.storage import init_storage, delete_file, get_metadata, StoredFileNotFoundError
-        init_storage()
-        
-        file_id = request.match_info.get('file_id')
-        
-        if not file_id:
-            return web.json_response({
-                'success': False,
-                'error': 'file_id is required'
-            }, status=400)
-        
-        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        context_removed = False
-
-        if session_id:
-            try:
-                from src.hooks.file_context.storage import storage as file_context_storage
-                from src.hooks.file_context.retrieval import retrieval_engine
-                context_removed = file_context_storage.remove_file_from_session(session_id, file_id)
-                if context_removed:
-                    retrieval_engine.rebuild_index(session_id)
-            except Exception:
-                logger.warning(
-                    "Best-effort file_context delete cleanup failed for %s/%s",
-                    session_id,
-                    file_id,
-                    exc_info=True,
-                )
-
-        deleted = delete_file(file_id)
-
-        if not deleted and not context_removed:
-            return web.json_response({
-                'success': False,
-                'error': 'File not found'
-            }, status=404)
-        
-        return web.json_response({'success': True})
-        
-    except Exception as e:
-        logger.error(f"File delete error: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
-
-
-def setup_webchat_routes(app: web.Application):
-    """Set up WebChat routes.
-    
-    Routes:
-        GET  /             - WebChat UI (root)
-        GET  /chat         - WebChat UI
-        GET  /static/*     - Static files (CSS, JS)
-        POST /api/chat     - Send message
-        POST /api/chat/stream - Send message (streaming SSE)
-        POST /api/tasks/execute - Accept and execute structured runtime task
-        GET  /api/tasks/{task_id} - Runtime task status for portal polling
-        POST /api/tasks/{task_id}/cancel - Cancel runtime task
-        GET  /api/sessions - List recent sessions
-        GET  /api/sessions/{session_id} - Load session messages
-        POST /api/sessions/{session_id}/rename - Rename existing session
-        DELETE /api/sessions/{session_id} - Delete existing session
-        GET  /api/server-files/* - Canonical path-based workspace file API
-        GET  /api/files and /api/files/read - Legacy path-based compatibility aliases
-        /api/files/{file_id}* - File-ID attachment APIs (separate from path-based server files)
-        GET  /api/usage   - Get usage stats
-        POST /api/clear   - Clear session
-        GET  /api/skills  - Get available skills
-    """
-    app.router.add_get('/', serve_webchat)
-    
-    app.router.add_get('/static/{path:.*}', serve_static)
+def setup_runtime_api_routes(app: web.Application):
+    """Register API-only runtime routes used by Portal and runtime clients."""
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_post('/api/tasks/execute', api_tasks_execute)
@@ -3566,53 +2203,11 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/rename', api_rename_session)
     app.router.add_delete('/api/sessions/{session_id}', api_delete_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
-    # Primary workspace path-based API
-    app.router.add_get('/api/server-files', api_server_files_browse)
-    app.router.add_get('/api/server-files/read', api_server_files_read)
-    app.router.add_get('/api/server-files/content', api_server_files_content)
-    app.router.add_post('/api/server-files/upload', api_server_files_upload)
-    app.router.add_post('/api/server-files/delete', api_server_files_delete)
-    app.router.add_get('/api/server-files/download', api_server_files_download)
-
-    # Legacy compatibility aliases for older clients (path-based)
-    app.router.add_get('/api/files', api_browse_files)
-    app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
-    app.router.add_post('/api/clear', api_clear)
-    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit', api_edit_message)
-    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
-    app.router.add_get('/api/config', api_get_config)
-    app.router.add_post('/api/config/save', api_save_config)
     app.router.add_post('/api/internal/runtime-profile/apply', api_apply_runtime_profile)
     app.router.add_get('/api/skills', api_skills)
-    app.router.add_post('/api/copilot/auth/start', api_copilot_auth_start)
-    app.router.add_post('/api/copilot/auth/check', api_copilot_auth_check)
-    
-    # Attachment APIs (file-id based, separate from path-based server-files routes)
-    app.router.add_post('/api/files/upload', api_files_upload)
-    app.router.add_post('/api/files/parse', api_files_parse)
-    app.router.add_get('/api/files/list', api_files_list)
-    app.router.add_get('/api/files/download', api_files_download)
-    app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
-    app.router.add_get('/api/files/{file_id}', api_files_get)
-    app.router.add_delete('/api/files/{file_id}', api_files_delete)
 
-    # Basic sanity check to ensure the GET /api/files/{file_id} route stays registered.
-    # This helps catch regressions if the route is removed or renamed without updating tests.
-    assert any(
-        route.method == 'GET'
-        and getattr(route.resource, 'canonical', None) == '/api/files/{file_id}'
-        for route in app.router.routes()
-    ), "Expected GET /api/files/{file_id} route to be registered"
-    
-    # File context API endpoints
-    app.router.add_get('/api/context/files', api_context_files)
-    app.router.add_get('/api/chunks/search', api_chunks_search)
-    
-    logger.info("WebChat routes registered:")
-    logger.info("  GET  /              - WebChat UI (root)")
-    
-    logger.info("  GET  /static/*     - Static files (CSS, JS)")
+    logger.info("Runtime API routes registered:")
     logger.info("  POST /api/chat     - Send message")
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
     logger.info("  POST /api/tasks/execute - Accept and execute structured runtime task")
@@ -3622,15 +2217,5 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  POST /api/sessions/{id}/rename - Rename existing session")
     logger.info("  DELETE /api/sessions/{id} - Delete existing session")
-    logger.info("  GET  /api/server-files - Browse workspace files")
-    logger.info("  GET  /api/server-files/read - Read text file content")
-    logger.info("  GET  /api/server-files/content - Inline file content")
-    logger.info("  POST /api/server-files/upload - Upload/extract files into workspace")
-    logger.info("  POST /api/server-files/delete - Delete files/directories from workspace")
-    logger.info("  GET  /api/server-files/download - Download file(s) from workspace")
-    logger.info("  GET  /api/files (legacy alias) - Compatibility browse route")
-    logger.info("  GET  /api/files/read (legacy alias) - Compatibility text-read route")
-    logger.info("  /api/files/{file_id}* - Attachment APIs (file-id based, separate namespace)")
     logger.info("  GET  /api/usage   - Get usage stats")
-    logger.info("  POST /api/clear   - Clear session")
     logger.info("  GET  /api/skills  - Get available skills")

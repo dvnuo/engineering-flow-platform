@@ -315,7 +315,7 @@ class TestRedactionIntegration:
 
     def test_default_format_includes_trace_fields_with_bound_context(self):
         stream = io.StringIO()
-        logger = logging.getLogger("src.gateway.webchat")
+        logger = logging.getLogger("src.gateway.runtime_api")
         logger.handlers = []
         logger.propagate = False
         logger.setLevel(logging.INFO)
@@ -338,7 +338,7 @@ class TestRedactionIntegration:
 
     def test_default_format_omits_trace_block_without_context(self):
         stream = io.StringIO()
-        logger = logging.getLogger("src.gateway.webchat")
+        logger = logging.getLogger("src.gateway.runtime_api")
         logger.handlers = []
         logger.propagate = False
         logger.setLevel(logging.INFO)

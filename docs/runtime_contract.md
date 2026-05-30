@@ -4,6 +4,8 @@
 
 This document defines the native Engineering Flow Platform (EFP) runtime contract exposed to Portal and integration smoke suites.
 
+The native runtime is an API-only service. It does not serve a built-in browser page, root HTML route, bundled asset routes, template files, or frontend assets; Portal is the UI.
+
 ## Required HTTP Surface
 
 Native runtime must support:

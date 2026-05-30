@@ -21,7 +21,7 @@ async def test_execution_bus_binds_and_resets_log_context(monkeypatch):
     request = make_execution_request(
         request_id="req-observe-1",
         source_type="chat",
-        source_ref="webchat",
+        source_ref="runtime_api",
         agent_id="agent-obs",
         session_id="sess-obs",
         execution_type="tool",
@@ -75,7 +75,7 @@ async def test_execution_bus_resets_log_context_after_handler_failure():
     request = make_execution_request(
         request_id="req-observe-fail",
         source_type="chat",
-        source_ref="webchat",
+        source_ref="runtime_api",
         session_id="sess-fail",
         execution_type="tool",
         input_payload={"tool_name": "contract_echo"},
@@ -92,7 +92,7 @@ async def test_execution_bus_resets_log_context_after_handler_failure():
 
 def test_gateway_session_endpoints_do_not_expose_debug_version_markers():
     gateway_files = [
-        Path("src/gateway/webchat.py"),
+        Path("src/gateway/runtime_api.py"),
         Path("src/gateway/server.py"),
     ]
 
@@ -115,13 +115,13 @@ def test_gateway_debug_marker_regexes_match_response_marker_shapes():
 
 
 def test_chat_stream_cleanup_is_not_duplicated():
-    text = Path("src/gateway/webchat.py").read_text(encoding="utf-8")
+    text = Path("src/gateway/runtime_api.py").read_text(encoding="utf-8")
     # Expected: one cleanup in api_chat and one cleanup in api_chat_stream.
     assert text.count("await _cleanup_one_shot_attachments(session_id, attachment_ids)") == 2
 
 
 def test_load_session_endpoint_binds_and_clears_log_context():
-    text = Path("src/gateway/webchat.py").read_text(encoding="utf-8")
+    text = Path("src/gateway/runtime_api.py").read_text(encoding="utf-8")
     start = text.index("async def api_load_session")
     next_def = text.find("\nasync def ", start + 1)
     assert next_def != -1, "api_load_session should be followed by another async handler; keep this test bounded"
@@ -131,6 +131,6 @@ def test_load_session_endpoint_binds_and_clears_log_context():
     assert 'path="/api/sessions/{session_id}"' in chunk
     assert 'runtime_type=os.getenv("EFP_RUNTIME_TYPE", "native")' in chunk
     assert 'execution_type="session"' in chunk
-    assert 'source_type="webchat"' in chunk
+    assert 'source_type="runtime_api"' in chunk
     assert "finally:" in chunk
     assert re.search(r"finally:\s+clear_log_context\(\)", chunk)

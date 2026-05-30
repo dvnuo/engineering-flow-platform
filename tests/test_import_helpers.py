@@ -4,10 +4,10 @@ def test_load_module_from_repo_path_keeps_gateway_importable():
     load_module_from_repo_path("src.gateway.event_bus", "src/gateway/event_bus.py")
 
     import src.gateway.server as gateway_server
-    from src.gateway import webchat
+    from src.gateway import runtime_api
 
     assert gateway_server is not None
-    assert webchat is not None
+    assert runtime_api is not None
 
 
 def test_load_module_from_repo_path_sets_real_package_paths():

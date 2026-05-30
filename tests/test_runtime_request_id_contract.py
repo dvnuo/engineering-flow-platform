@@ -1,4 +1,4 @@
-"""Import-light contract tests for webchat request-id behavior."""
+"""Import-light contract tests for runtime request-id behavior."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from tests._import_helpers import load_module_from_repo_path
 
 def _load_contracts_module():
     return load_module_from_repo_path(
-        "src.gateway.webchat_request_contracts",
-        "src/gateway/webchat_request_contracts.py",
+        "src.gateway.runtime_request_contracts",
+        "src/gateway/runtime_request_contracts.py",
     )
 
 
@@ -69,9 +69,9 @@ def test_build_stream_start_event_payload_contract():
     assert payload == {"session_id": "s-1", "request_id": "req-1"}
 
 
-def test_build_webchat_response_payload_request_id_priority_prefers_top_level():
+def test_build_runtime_response_payload_request_id_priority_prefers_top_level():
     mod = _load_chat_payloads_module()
-    payload = mod.build_webchat_response_payload(
+    payload = mod.build_runtime_response_payload(
         {
             "response": "ok",
             "request_id": "top-1",
@@ -82,9 +82,9 @@ def test_build_webchat_response_payload_request_id_priority_prefers_top_level():
     assert payload["request_id"] == "top-1"
 
 
-def test_build_webchat_response_payload_request_id_backfills_from_execution_result():
+def test_build_runtime_response_payload_request_id_backfills_from_execution_result():
     mod = _load_chat_payloads_module()
-    payload = mod.build_webchat_response_payload(
+    payload = mod.build_runtime_response_payload(
         {
             "response": "ok",
             "_execution_result": type("ExecutionResult", (), {"request_id": "exec-1"})(),
@@ -94,18 +94,18 @@ def test_build_webchat_response_payload_request_id_backfills_from_execution_resu
     assert payload["request_id"] == "exec-1"
 
 
-def test_build_webchat_response_payload_includes_context_state():
+def test_build_runtime_response_payload_includes_context_state():
     mod = _load_chat_payloads_module()
-    payload = mod.build_webchat_response_payload(
+    payload = mod.build_runtime_response_payload(
         {"response": "ok", "context_state": {"budget": {"usage_percent": 42.0}}},
         "s1",
     )
     assert payload["context_state"]["budget"]["usage_percent"] == 42.0
 
 
-def test_build_webchat_response_payload_includes_runtime_events():
+def test_build_runtime_response_payload_includes_runtime_events():
     mod = _load_chat_payloads_module()
-    payload = mod.build_webchat_response_payload(
+    payload = mod.build_runtime_response_payload(
         {
             "response": "ok",
             "runtime_events": [{"type": "context_snapshot", "request_id": "r1"}],

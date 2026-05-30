@@ -1378,7 +1378,7 @@ def build_default_execution_bus(
     bus = ExecutionBus(event_emitter=event_emitter, governance=governance or build_default_governance_bus())
 
     if chat_handler is not None:
-        # Chat is intentionally optional and injected by caller (e.g., webchat/gateway path).
+        # Chat is intentionally optional and injected by caller (e.g., runtime API/gateway path).
         bus.register_handler("chat", chat_handler)
 
     execute_tool_callable = execute_tool_func or execute_tool_by_name

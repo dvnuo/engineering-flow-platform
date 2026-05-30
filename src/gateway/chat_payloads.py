@@ -1,4 +1,4 @@
-"""Pure helpers for normalizing WebChat assistant payloads."""
+"""Pure helpers for normalizing runtime chat assistant payloads."""
 
 from __future__ import annotations
 
@@ -133,7 +133,7 @@ def _meaningful_text(value: Any) -> str:
     return text
 
 
-def build_webchat_response_payload(result: Optional[Dict[str, Any]], session_id: str) -> Dict[str, Any]:
+def build_runtime_response_payload(result: Optional[Dict[str, Any]], session_id: str) -> Dict[str, Any]:
     """Build the stable JSON payload returned by ``/api/chat``."""
     payload_result = result if isinstance(result, dict) else {}
     response_value = _meaningful_text(payload_result.get("response"))

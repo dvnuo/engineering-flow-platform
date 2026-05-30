@@ -1,4 +1,4 @@
-"""Lightweight request-id contracts shared by WebChat handlers and tests."""
+"""Lightweight request-id contracts shared by runtime API handlers and tests."""
 
 from __future__ import annotations
 

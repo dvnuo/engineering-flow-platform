@@ -88,7 +88,7 @@ async def run_runtime_v2_chat(
         store=get_runtime_v2_session_store(),
         event_bus=event_bus,
         metadata={
-            "gateway": "webchat",
+            "gateway": "runtime_api",
             "request_path": request_path,
             "agent_id": agent_id,
             "agent_name": agent_name,
@@ -334,7 +334,7 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
         model=model,
         endpoint="chat",
         stream=False,
-        metadata={"gateway": "webchat"},
+        metadata={"gateway": "runtime_api"},
     )
 
 

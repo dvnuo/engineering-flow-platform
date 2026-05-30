@@ -13,7 +13,7 @@ def _module(name: str, **attrs):
     return m
 
 
-def load_webchat_lightweight():
+def load_runtime_api_lightweight():
     src_pkg = _module("src")
     src_pkg.__path__ = []
     gateway_pkg = _module("src.gateway")
@@ -69,7 +69,7 @@ def load_webchat_lightweight():
 
     class _RuntimeV2SessionArtifacts:
         def __init__(self):
-            self.storage_dir = Path("/tmp/efp-lightweight-webchat")
+            self.storage_dir = Path("/tmp/efp-lightweight-runtime-api")
 
         async def save_session(self, *_args, **_kwargs):
             return True
@@ -168,7 +168,7 @@ def load_webchat_lightweight():
         "src.runtime.progressive_context": _module("src.runtime.progressive_context", build_portal_context_preview=lambda *_a, **_k: {}),
         "src.gateway.chat_payloads": _module(
             "src.gateway.chat_payloads",
-            build_webchat_response_payload=lambda *_a, **_k: {},
+            build_runtime_response_payload=lambda *_a, **_k: {},
             normalize_assistant_history_message=lambda x: x,
         ),
         "src.gateway.runtime_v2_chat": _module(
@@ -178,8 +178,8 @@ def load_webchat_lightweight():
             SUPPORTED_PROVIDER_KEYS={"github_copilot", "github-copilot", "copilot"},
             run_runtime_v2_chat=_noop_async,
         ),
-        "src.gateway.webchat_request_contracts": _module(
-            "src.gateway.webchat_request_contracts",
+        "src.gateway.runtime_request_contracts": _module(
+            "src.gateway.runtime_request_contracts",
             build_stream_start_event_payload=lambda *_a, **_k: {},
             extract_trusted_client_request_id=lambda *_a, **_k: None,
         ),
@@ -208,10 +208,10 @@ def load_webchat_lightweight():
     sys.modules.update(modules)
     src_pkg.gateway = gateway_pkg
 
-    spec = importlib.util.spec_from_file_location("src.gateway.webchat", Path("src/gateway/webchat.py"))
+    spec = importlib.util.spec_from_file_location("src.gateway.runtime_api", Path("src/gateway/runtime_api.py"))
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
-    sys.modules["src.gateway.webchat"] = module
+    sys.modules["src.gateway.runtime_api"] = module
     spec.loader.exec_module(module)
 
     def _cleanup():
@@ -220,6 +220,6 @@ def load_webchat_lightweight():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = old
-        sys.modules.pop("src.gateway.webchat", None)
+        sys.modules.pop("src.gateway.runtime_api", None)
 
     return module, _cleanup

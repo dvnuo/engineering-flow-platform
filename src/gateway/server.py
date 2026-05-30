@@ -27,16 +27,15 @@ from src.gateway.runtime_v2_chat import (
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.efp_runtime.session.gateway_facade import (
     JIRA_SESSION_PREFIX,
-    resolve_session_display_name,
     runtime_v2_session_manager as session_manager,
 )
 
 
-# Lazy import webchat to avoid circular dependency
+# Lazy import runtime API route registration to avoid circular dependency
 try:
-    from .webchat import setup_webchat_routes
+    from .runtime_api import setup_runtime_api_routes
 except ImportError:
-    setup_webchat_routes = None
+    setup_runtime_api_routes = None
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +118,6 @@ class Gateway:
         self.app.router.add_get("/actuator/health", self.handle_health)
         self.app.router.add_get("/api/git-info", self.handle_git_info)
         self.app.router.add_get("/api/skill-git-info", self.handle_skill_git_info)
-        self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
         self.app.router.add_post("/api/test", self.handle_test_message)
         self.app.router.add_post("/api/config/reload", self.handle_config_reload)
@@ -142,9 +140,9 @@ class Gateway:
         if self.jira_enabled:
             self.app.router.add_post("/webhook/jira", self.handle_jira_webhook)
 
-        # WebChat routes (if available)
-        if setup_webchat_routes:
-            setup_webchat_routes(self.app)
+        # Runtime API routes (if available)
+        if setup_runtime_api_routes:
+            setup_runtime_api_routes(self.app)
 
         # Setup event routes (WebSocket for real-time events)
         try:
@@ -156,7 +154,7 @@ class Gateway:
             raise
         except Exception as e:
             logger.warning(f"Could not setup event routes: {e}")
-            logger.info("WebChat UI enabled at /")
+            logger.info("Runtime event routes are unavailable")
 
     async def handle_health(self, request: Request) -> web.Response:
         """Health check endpoint."""
@@ -278,90 +276,6 @@ class Gateway:
                 pass
 
         return web.json_response({"commit_id": commit_id, "repo_url": _clean_repo_url(repo_url)})
-
-    async def handle_list_sessions(self, request: Request) -> web.Response:
-        """List all active sessions with details.
-
-        GET /api/sessions?limit=10
-        Returns: List of sessions with name, last message, timestamp
-        """
-        from datetime import datetime
-
-        logger.info(f"[handle_list_sessions] ENTERING - listing sessions")
-
-        try:
-            # Initialize session manager if needed
-            if not session_manager._initialized:
-                logger.info("[handle_list_sessions] Initializing session manager")
-                await session_manager.initialize()
-
-            # Pagination parameters
-            limit = int(request.query.get("limit", 20))
-            offset = int(request.query.get("offset", 0))
-
-            session_ids = await session_manager.list_sessions()
-            logger.info(f"[handle_list_sessions] Found {len(session_ids)} sessions")
-
-            # Get all sessions with their details first
-            sessions_with_details = []
-            for session_id in session_ids:
-                # Get session with full history (not get_session_info which excludes history)
-                session = await session_manager.get_session(session_id)
-
-                if not session:
-                    logger.warning(f"[handle_list_sessions] No session: {session_id}")
-                    continue
-
-                history = session.get("history", [])
-
-                # Skip empty sessions (no user messages)
-                user_messages = [msg for msg in history if msg.get("role") == "user"]
-                if not user_messages:
-                    continue
-
-                session_name = resolve_session_display_name(session)
-
-                # Get last message preview
-                last_message = ""
-                for msg in reversed(history):
-                    if msg.get("role") in ("user", "assistant"):
-                        last_message = truncate(msg.get("content", "") or "", 50)
-                        break
-
-                updated_at = session.get("updated_at", datetime.utcnow().isoformat())
-
-                sessions_with_details.append(
-                    {
-                        "session_id": session_id,
-                        "name": session_name,
-                        "last_message": last_message,
-                        "updated_at": updated_at,
-                        "message_count": len(user_messages),
-                    }
-                )
-
-            # Sort by updated_at descending (newest first)
-            sessions_with_details.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-
-            # Apply pagination
-            total_count = len(sessions_with_details)
-            detailed_sessions = sessions_with_details[offset : offset + limit]
-            has_more = offset + limit < total_count
-
-            for s in detailed_sessions:
-                logger.info(f"[handle_list_sessions] Added session: {s['session_id']} -> name='{s['name']}'")
-
-            logger.info(
-                f"[handle_list_sessions] Returning {len(detailed_sessions)} sessions (offset={offset}, has_more={has_more})"
-            )
-            return web.json_response({"sessions": detailed_sessions, "has_more": has_more, "total": total_count})
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            logger.error(f"[handle_list_sessions] ERROR: {e}", exc_info=True)
-            return web.json_response({"error": str(e)}, status=500)
 
     async def handle_clear_session(self, request: Request) -> web.Response:
         """Clear a session's history."""
