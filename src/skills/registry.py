@@ -361,7 +361,7 @@ class SkillRegistry:
         return summarize_skill_references(skill)
     
     def get_all_skill_summaries(self) -> List[Dict]:
-        """Get summary of all skills for frontend/UI."""
+        """Get summary of all skills for runtime clients."""
         return [
             {
                 "name": s.name,

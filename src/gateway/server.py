@@ -6,7 +6,6 @@ import logging
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Dict
 
 from aiohttp import web
 from aiohttp.web import Request
@@ -19,11 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.truncate import truncate
 from src.channels.jira import jira_channel
 from src.config import config
-from src.gateway.runtime_v2_chat import (
-    RUNTIME_V2_NATIVE_PROVIDER_ERROR,
-    SUPPORTED_PROVIDER_KEYS,
-    run_runtime_v2_chat,
-)
+from src.gateway.runtime_v2_chat import run_runtime_v2_chat
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.efp_runtime.session.gateway_facade import (
     JIRA_SESSION_PREFIX,
@@ -119,16 +114,8 @@ class Gateway:
         self.app.router.add_get("/api/git-info", self.handle_git_info)
         self.app.router.add_get("/api/skill-git-info", self.handle_skill_git_info)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
-        self.app.router.add_post("/api/test", self.handle_test_message)
         self.app.router.add_post("/api/config/reload", self.handle_config_reload)
         self.app.router.add_get("/api/queue/status", self.handle_queue_status)
-
-        # Settings routes
-        self.app.router.add_get("/api/settings", self.handle_settings_get)
-        self.app.router.add_post("/api/settings", self.handle_settings_post)
-        self.app.router.add_get("/api/settings/providers", self.handle_settings_providers)
-        self.app.router.add_get("/api/settings/ollama/models", self.handle_ollama_models)
-        self.app.router.add_post("/api/settings/ollama/pull", self.handle_ollama_pull)
 
         # System prompt config routes
         self.app.router.add_get("/api/agent/system-prompt/config", self.handle_system_prompt_config_get)
@@ -476,121 +463,6 @@ class Gateway:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
 
-    async def handle_settings_get(self, request: Request) -> web.Response:
-        """Get current settings.
-
-        GET /api/settings
-        Returns: {...config}
-        """
-        from src.config import config as runtime_config
-
-        return web.json_response(
-            {
-                "llm": {
-                    "provider": runtime_config.llm.get("provider"),
-                    "model": runtime_config.llm.get("model"),
-                    "api_base": runtime_config.llm.get("api_base"),
-                    "temperature": runtime_config.llm.get("temperature"),
-                    "max_tokens": runtime_config.llm.get("max_tokens"),
-                },
-                "jira": {
-                    "enabled": bool(runtime_config.jira.get("webhook_url")),
-                },
-            }
-        )
-
-    async def handle_settings_post(self, request: Request) -> web.Response:
-        """Update settings.
-
-        POST /api/settings
-        Body: {"llm": {...}, ...}
-        Returns: {"status": "ok"}
-        """
-        try:
-            data = await request.json()
-            # For now, just validate the settings
-            if "llm" in data:
-                llm = data["llm"]
-                if not isinstance(llm, dict):
-                    return web.json_response({"status": "error", "message": "llm must be an object"}, status=400)
-                if "provider" in llm:
-                    provider = str(llm["provider"] or "").strip().lower()
-                    if provider not in SUPPORTED_PROVIDER_KEYS:
-                        return web.json_response(
-                            {
-                                "status": "error",
-                                "message": RUNTIME_V2_NATIVE_PROVIDER_ERROR,
-                                "supported_providers": sorted(SUPPORTED_PROVIDER_KEYS),
-                            },
-                            status=400,
-                        )
-            return web.json_response({"status": "ok", "message": "Settings validated. Restart required to apply."})
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            return web.json_response({"status": "error", "message": str(e)}, status=400)
-
-    async def handle_settings_providers(self, request: Request) -> web.Response:
-        """Get provider information.
-
-        GET /api/settings/providers
-        Returns: {provider: {name, default_model, models: [...]}}
-        """
-        return web.json_response(
-            {
-                "github_copilot": {
-                    "name": "GitHub Copilot",
-                    "default_model": config.llm.get("model", "gpt-5-mini"),
-                    "models": [config.llm.get("model", "gpt-5-mini")],
-                    "runtime": "efp_runtime_v2",
-                }
-            }
-        )
-
-    async def handle_ollama_models(self, request: Request) -> web.Response:
-        """Get Ollama models.
-
-        GET /api/settings/ollama/models
-        Returns: {"status": "healthy", "models": [...]}
-        """
-        return web.json_response(
-            {
-                "status": "unsupported",
-                "message": "Runtime v2 native mode only supports GitHub Copilot.",
-                "models": [],
-            },
-            status=400,
-        )
-
-    async def handle_ollama_pull(self, request: Request) -> web.Response:
-        """Pull an Ollama model.
-
-        POST /api/settings/ollama/pull
-        Body: {"model": "llama3"}
-        """
-        try:
-            data = await request.json()
-            model = data.get("model")
-            if not model:
-                return web.json_response({"status": "error", "message": "model required"}, status=400)
-
-            return web.json_response(
-                {
-                    "status": "unsupported",
-                    "message": "Runtime v2 native mode only supports GitHub Copilot.",
-                    "model": model,
-                },
-                status=400,
-            )
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
-
     async def handle_config_reload(self, request: Request) -> web.Response:
         """Reload configuration from config.yaml.
 
@@ -631,57 +503,6 @@ class Gateway:
             raise
         except Exception as e:
             logger.error(f"Queue status error: {e}")
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
-
-    async def handle_test_message(self, request: Request) -> web.Response:
-        """Test endpoint for sending a message to the agent via HTTP.
-
-        POST /api/test
-        Body: {"message": "your message here", "session_id": "optional-session-id", "reasoning_replay": false}
-        """
-        try:
-            data = await request.json()
-            message = data.get("message", "")
-            session_id = data.get("session_id", "test-session")
-            reasoning_replay = data.get("reasoning_replay", None)
-
-            if not message:
-                return web.json_response({"status": "error", "message": "message required"}, status=400)
-
-            result = await run_runtime_v2_chat(
-                message=message,
-                session_id=session_id,
-                user_name="http-tester",
-                reasoning_replay=reasoning_replay,
-                request_path="/api/test",
-            )
-
-            if result is None:
-                return web.json_response({"status": "error", "message": "Agent returned None"}, status=500)
-
-            response_data = {
-                "status": "ok",
-                "message": message,
-                "response": result.get("response", ""),
-                "session_id": session_id,
-            }
-
-            # Include reasoning if available
-            if "reasoning" in result:
-                response_data["reasoning"] = result["reasoning"]
-
-            # Include usage if available
-            if "usage" in result:
-                response_data["usage"] = result["usage"]
-
-            return web.json_response(response_data)
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error(f"Test message error: {e}\nTraceback:\n{tb}")
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_jira_webhook(self, request: Request) -> web.Response:

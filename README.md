@@ -20,7 +20,7 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 - **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash outside the model-visible tool surface
 - **Session Persistence** - Conversations persist across restarts
 - **File Attachments** - Support for Portal-provided transient image and document attachment ids in chat
-- **Runtime Settings APIs** - Configuration validation and reload endpoints for operations
+- **Runtime Operations APIs** - Configuration reload and runtime metadata endpoints for operations
 
 ---
 
@@ -181,7 +181,7 @@ engineering-flow-platform/
 │   ├── runtime/            # Runtime task/control-plane orchestration
 │   ├── hooks/              # Lifecycle hooks
 │   └── utils/              # Utilities
-│       └── file_parser/     # File upload & storage
+│       └── file_parser/     # Attachment parsing/storage helpers
 ├── src/skills/             # Runtime skill registry/loading infrastructure
 ├── tests/                  # Test suite
 └── workspace/               # Workspace files (for local dev)
@@ -279,7 +279,7 @@ Portal can pass runtime-known transient attachment ids in the `attachments` arra
 }
 ```
 
-The native runtime does not serve the old embedded browser upload/file-browser API.
+Attachment bytes are provided by Portal and resolved by runtime storage helpers.
 
 ---
 
@@ -371,14 +371,6 @@ Create test files in `tests/` following `test_*.py` pattern.
 1. Check LLM configuration is correct
 2. Verify API key has sufficient credits
 3. Check server logs for errors
-
-### File Upload Fails
-
-1. Ensure upload directory exists: `~/.efp/workspace/uploads/`
-2. Check file size limits
-3. Verify file type is allowed
-
----
 
 ## License
 

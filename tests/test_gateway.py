@@ -5,8 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
-import json
+from unittest.mock import patch, MagicMock
 
 from src.gateway.server import Gateway
 
@@ -158,13 +157,6 @@ class TestGatewaySessionManagement:
 class TestGatewayRequestHandling:
     """Gateway request handling tests."""
 
-    class _JsonRequest:
-        def __init__(self, payload):
-            self.payload = payload
-
-        async def json(self):
-            return self.payload
-
     @pytest.mark.asyncio
     async def test_handle_health(self):
         """Test health check endpoint."""
@@ -183,32 +175,6 @@ class TestGatewayRequestHandling:
         data = json.loads(response.body)
         assert data["status"] == "ok"
         assert data["service"] == "engineering-flow-platform"
-
-    @pytest.mark.asyncio
-    async def test_handle_settings_post_rejects_openai_provider(self):
-        gateway = object.__new__(Gateway)
-
-        response = await gateway.handle_settings_post(
-            self._JsonRequest({"llm": {"provider": "openai"}})
-        )
-        data = json.loads(response.body)
-
-        assert response.status == 400
-        assert data["status"] == "error"
-        assert "only supports GitHub Copilot" in data["message"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("provider", ["github_copilot", "github-copilot", "copilot"])
-    async def test_handle_settings_post_accepts_github_copilot_aliases(self, provider):
-        gateway = object.__new__(Gateway)
-
-        response = await gateway.handle_settings_post(
-            self._JsonRequest({"llm": {"provider": provider}})
-        )
-        data = json.loads(response.body)
-
-        assert response.status == 200
-        assert data["status"] == "ok"
 
 
 class TestGatewayIntegration:
