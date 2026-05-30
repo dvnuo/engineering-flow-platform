@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from efp_runtime.models import ToolCall
-from efp_runtime.permissions import ALLOW, ASK, PermissionDecision, PermissionMetadata
+from efp_runtime.permissions import ALLOW, PermissionDecision, PermissionMetadata
 from efp_runtime.opencode_parity import DEFAULT_CORE_TOOL_IDS
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolContext
@@ -353,17 +353,18 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
     assert registry.require("todowrite").permission.category == "planning"
     assert registry.require("todowrite").permission.resource == "session"
     assert registry.require("todowrite").permission.risk == "low"
-    assert registry.require("edit").permission.action == ASK
-    assert registry.require("apply_patch").permission.action == ASK
-    assert registry.require("bash").permission.action == ASK
+    assert registry.require("write").permission.action == ALLOW
+    assert registry.require("edit").permission.action == ALLOW
+    assert registry.require("apply_patch").permission.action == ALLOW
+    assert registry.require("bash").permission.action == ALLOW
     assert registry.require("bash").permission.category == "shell"
     assert registry.require("bash").permission.resource == "workspace"
     assert registry.require("bash").permission.risk == "high"
     repo_registry = create_core_tool_registry(tmp_path, include_repository_tools=True)
-    assert repo_registry.require("repo_clone").permission.action == ASK
+    assert repo_registry.require("repo_clone").permission.action == ALLOW
     assert repo_registry.require("repo_clone").permission.category == "repository"
     assert repo_registry.require("repo_clone").permission.risk == "medium"
-    assert repo_registry.require("repo_overview").permission.action == ASK
+    assert repo_registry.require("repo_overview").permission.action == ALLOW
     assert repo_registry.require("repo_overview").permission.category == "repository"
     assert repo_registry.require("repo_overview").permission.risk == "low"
 
@@ -378,5 +379,5 @@ async def test_new_core_tool_permission_defaults(tmp_path: Path):
         )
     )
 
-    assert result.status == "permission_requested"
-    assert target.read_text(encoding="utf-8") == "alpha\n"
+    assert result.status == "success"
+    assert target.read_text(encoding="utf-8") == "beta\n"

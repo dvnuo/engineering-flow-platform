@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ...instructions import ReadInstructionResolver
-from ...permissions import ALLOW, ASK, PermissionMetadata
+from ...permissions import ALLOW, PermissionMetadata
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 from .diff_preview import (
@@ -784,8 +784,7 @@ def _decode_existing_text_for_diff(data: bytes, encoding: str) -> str | None:
 
 def _default_write_permission() -> PermissionMetadata:
     return PermissionMetadata(
-        action=ASK,
-        reason="Writing files requires approval.",
+        action=ALLOW,
         category="filesystem",
         resource="workspace",
         risk="medium",

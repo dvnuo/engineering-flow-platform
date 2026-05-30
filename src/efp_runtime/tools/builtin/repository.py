@@ -14,7 +14,7 @@ import unicodedata
 from typing import Any
 from urllib.parse import urlparse
 
-from ...permissions import ASK, PermissionMetadata
+from ...permissions import ALLOW, PermissionMetadata
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 from .filesystem import (
@@ -216,8 +216,7 @@ def create_repo_clone_tool(workspace_root: str | Path) -> ToolDef:
         },
         execute=execute,
         permission=PermissionMetadata(
-            action=ASK,
-            reason="Cloning or refreshing repositories requires approval.",
+            action=ALLOW,
             category="repository",
             resource="workspace",
             risk="medium",
@@ -308,8 +307,7 @@ def create_repo_overview_tool(workspace_root: str | Path) -> ToolDef:
         },
         execute=execute,
         permission=PermissionMetadata(
-            action=ASK,
-            reason="Repository overview requires approval.",
+            action=ALLOW,
             category="repository",
             resource="workspace",
             risk="low",

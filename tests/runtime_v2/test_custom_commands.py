@@ -808,6 +808,7 @@ async def test_command_executed_event_emits_on_pause_and_not_resume(tmp_path: Pa
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
+            tool_permissions={"write": "ask"},
         ),
         event_bus=bus,
     )

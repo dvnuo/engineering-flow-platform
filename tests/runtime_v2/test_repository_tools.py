@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from efp_runtime.models import ToolCall
-from efp_runtime.permissions import ASK, PermissionDecision, PermissionMetadata
+from efp_runtime.permissions import ALLOW, PermissionDecision, PermissionMetadata
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.runtime import ToolRuntime
@@ -32,11 +32,11 @@ def test_core_registry_includes_repository_tools(tmp_path: Path):
     assert {"repo_clone", "repo_overview"}.issubset(set(registry.ids()))
     clone_permission = registry.require("repo_clone").permission
     overview_permission = registry.require("repo_overview").permission
-    assert clone_permission.action == ASK
+    assert clone_permission.action == ALLOW
     assert clone_permission.category == "repository"
     assert clone_permission.risk == "medium"
     assert clone_permission.data["subject_arg"] == "repository"
-    assert overview_permission.action == ASK
+    assert overview_permission.action == ALLOW
     assert overview_permission.category == "repository"
     assert overview_permission.risk == "low"
     assert overview_permission.data["subject_arg"] == "repository"

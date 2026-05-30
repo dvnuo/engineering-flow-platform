@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from efp_runtime.models import ToolCall
-from efp_runtime.permissions import PermissionDecision, PermissionMetadata
+from efp_runtime.permissions import ASK, PermissionDecision, PermissionMetadata
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.runtime import ToolRuntime
@@ -239,7 +239,21 @@ async def test_workdir_cannot_escape_workspace(tmp_path: Path):
 async def test_shell_permission_request_includes_usable_metadata(tmp_path: Path):
     (tmp_path / "src").mkdir()
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path)
+        create_core_tool_registry(
+            tmp_path,
+            shell_permission=PermissionMetadata(
+                action=ASK,
+                reason="Shell execution requires approval.",
+                category="shell",
+                resource="workspace",
+                risk="high",
+                data={
+                    "command_preview": "",
+                    "description": "",
+                    "workdir": ".",
+                },
+            ),
+        )
     )
 
     result = await runtime.execute(

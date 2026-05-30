@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.mark.asyncio
 async def test_builtin_ask_requests_are_recorded_as_pending(tmp_path: Path):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path, ))
+    runtime = ToolRuntime(_ask_core_registry(tmp_path))
     broker = runtime.permission_evaluator
     assert isinstance(broker, PermissionBroker)
     context = ToolContext(session_id="session-permissions")
@@ -60,7 +60,7 @@ async def test_builtin_ask_requests_are_recorded_as_pending(tmp_path: Path):
 async def test_approve_once_allows_the_next_matching_retry_only(tmp_path: Path):
     broker = PermissionBroker()
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, ),
+        _ask_core_registry(tmp_path),
         permission_evaluator=broker,
     )
     context = ToolContext(session_id="session-once")
@@ -93,7 +93,7 @@ async def test_approve_once_allows_the_next_matching_retry_only(tmp_path: Path):
 async def test_approve_always_allows_subsequent_same_tool_and_category(tmp_path: Path):
     broker = PermissionBroker()
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, ),
+        _ask_core_registry(tmp_path),
         permission_evaluator=broker,
     )
     context = ToolContext(session_id="session-always")
@@ -126,7 +126,7 @@ async def test_approve_always_allows_subsequent_same_tool_and_category(tmp_path:
 async def test_deny_always_denies_subsequent_same_tool_and_category(tmp_path: Path):
     broker = PermissionBroker()
     runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path, ),
+        _ask_core_registry(tmp_path),
         permission_evaluator=broker,
     )
     context = ToolContext(session_id="session-deny")
@@ -265,3 +265,23 @@ def test_permission_broker_source_stays_inside_runtime_v2_boundary():
 
     for token in forbidden_tokens:
         assert token not in source
+
+
+def _ask_core_registry(workspace_root: Path):
+    ask_write = PermissionMetadata(
+        action=ASK,
+        category="filesystem",
+        resource="workspace",
+        risk="medium",
+    )
+    ask_shell = PermissionMetadata(
+        action=ASK,
+        category="shell",
+        resource="workspace",
+        risk="high",
+    )
+    return create_core_tool_registry(
+        workspace_root,
+        write_permission=ask_write,
+        shell_permission=ask_shell,
+    )

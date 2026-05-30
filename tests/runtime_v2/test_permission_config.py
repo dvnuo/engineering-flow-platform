@@ -92,7 +92,7 @@ def test_normalize_tool_permissions_rejects_malformed_nested_entries(
 
 
 @pytest.mark.asyncio
-async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
+async def test_default_bash_executes_shell_without_pending(tmp_path: Path):
     provider = ScriptedLLMProvider(
         [
             {
@@ -112,7 +112,6 @@ async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
         config=RuntimeConfig(
             workspace_root=tmp_path,
             max_iterations=3,
-            tool_permissions={"bash": "allow"},
         ),
     )
 
@@ -124,6 +123,50 @@ async def test_bash_allow_config_executes_shell_without_pending(tmp_path: Path):
     tool_result = history[2].parts[0].tool_result
     assert tool_result.status == "success"
     assert tool_result.output["stdout"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_write_ask_config_requests_permission_without_writing(tmp_path: Path):
+    runtime = AgentRuntime(
+        provider=ScriptedLLMProvider([]),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            tool_permissions={"write": "ask"},
+        ),
+    )
+
+    result = await _execute_tool(
+        runtime,
+        "write",
+        {"filePath": "created.txt", "content": "blocked"},
+    )
+    request = result.metadata["permission_request"]
+
+    assert result.status == "permission_requested"
+    assert request["tool_id"] == "write"
+    assert request["metadata"]["permission_config_key"] == "write"
+    assert (tmp_path / "created.txt").exists() is False
+    assert runtime.pending_permissions()[0]["request_id"] == request["request_id"]
+
+
+@pytest.mark.asyncio
+async def test_bash_deny_config_rejects_shell_default_open(tmp_path: Path):
+    runtime = AgentRuntime(
+        provider=ScriptedLLMProvider([]),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            tool_permissions={"bash": "deny"},
+        ),
+    )
+
+    result = await _execute_tool(
+        runtime,
+        "bash",
+        {"command": "printf blocked", "description": "Blocked shell"},
+    )
+
+    assert result.status == "permission_denied"
+    assert result.error == "Permission denied by runtime config: bash"
 
 
 def test_shell_permission_request_respects_static_patterns():

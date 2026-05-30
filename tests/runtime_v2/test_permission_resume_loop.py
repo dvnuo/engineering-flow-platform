@@ -11,6 +11,7 @@ from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, ScriptedLLMProvider
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.models import MessagePart, MessagePartType, MessageRole
 from efp_runtime.session.store import InMemorySessionStore
+from efp_runtime.permissions import ASK, PermissionMetadata
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
@@ -42,6 +43,7 @@ async def test_permission_request_waits_without_appending_tool_result(tmp_path: 
             workspace_root=tmp_path,
             max_iterations=3,
             model_aware_tool_selection=False,
+            tool_permissions={"write": "ask"},
         ),
         event_bus=bus,
     )
@@ -81,6 +83,37 @@ async def test_permission_request_waits_without_appending_tool_result(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_default_write_executes_without_permission_pause(tmp_path: Path):
+    provider = ScriptedLLMProvider(
+        [
+            {"tool_calls": [_write_file_call(content="open\n")]},
+            {"content": "File written."},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=3,
+            model_aware_tool_selection=False,
+        ),
+    )
+
+    result = await runtime.run("Write the file.", session_id="session-default-open")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.pending_permission_request is None
+    assert runtime.pending_permissions() == []
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "open\n"
+    assert [message.role for message in runtime.store.read_history("session-default-open")] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_approve_then_resume_executes_pending_tool_call_without_empty_user(
     tmp_path: Path,
 ):
@@ -96,6 +129,7 @@ async def test_approve_then_resume_executes_pending_tool_call_without_empty_user
             workspace_root=tmp_path,
             max_iterations=3,
             model_aware_tool_selection=False,
+            tool_permissions={"write": "ask"},
         ),
     )
 
@@ -145,6 +179,7 @@ async def test_deny_then_resume_appends_denial_tool_result_for_provider(tmp_path
             workspace_root=tmp_path,
             max_iterations=3,
             model_aware_tool_selection=False,
+            tool_permissions={"write": "ask"},
         ),
     )
 
@@ -269,12 +304,20 @@ def test_permission_resume_sources_stay_inside_runtime_v2_boundary():
 
 
 @pytest.mark.asyncio
-async def test_default_core_tool_registry_is_used_for_permission_resume(tmp_path: Path):
+async def test_explicit_ask_core_tool_registry_is_used_for_permission_resume(tmp_path: Path):
     runtime = AgentRuntime(
         provider=ScriptedLLMProvider([{"tool_calls": [_write_file_call()]}]),
         config=RuntimeConfig(model_aware_tool_selection=False),
         tool_runtime=ToolRuntime(
-            create_core_tool_registry(tmp_path)
+            create_core_tool_registry(
+                tmp_path,
+                write_permission=PermissionMetadata(
+                    action=ASK,
+                    category="filesystem",
+                    resource="workspace",
+                    risk="medium",
+                ),
+            )
         ),
     )
 

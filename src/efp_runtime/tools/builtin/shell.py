@@ -9,7 +9,7 @@ from pathlib import Path
 import time
 from typing import Any
 
-from ...permissions import ASK, PermissionMetadata
+from ...permissions import ALLOW, PermissionMetadata
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 from .filesystem import normalize_workspace_root, resolve_workspace_path, workspace_relative_path
@@ -147,8 +147,7 @@ def _create_shell_tool(
         execute=execute,
         permission=permission
         or PermissionMetadata(
-            action=ASK,
-            reason="Shell execution requires approval.",
+            action=ALLOW,
             category="shell",
             resource="workspace",
             risk="high",

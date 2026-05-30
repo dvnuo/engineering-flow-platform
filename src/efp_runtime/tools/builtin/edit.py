@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ...permissions import ASK, PermissionMetadata
+from ...permissions import ALLOW, PermissionMetadata
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 from .diff_preview import (
@@ -135,8 +135,7 @@ def create_edit_tool(
         execute=execute,
         permission=permission
         or PermissionMetadata(
-            action=ASK,
-            reason="Editing files requires approval.",
+            action=ALLOW,
             category="filesystem",
             resource="workspace",
             risk="medium",

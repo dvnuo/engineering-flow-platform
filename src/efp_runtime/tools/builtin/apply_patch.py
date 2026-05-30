@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ...permissions import ASK, PermissionMetadata
+from ...permissions import ALLOW, PermissionMetadata
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 from .diff_preview import (
@@ -167,8 +167,7 @@ def create_apply_patch_tool(
         execute=execute,
         permission=permission
         or PermissionMetadata(
-            action=ASK,
-            reason="Applying patches requires approval.",
+            action=ALLOW,
             category="filesystem",
             resource="workspace",
             risk="medium",

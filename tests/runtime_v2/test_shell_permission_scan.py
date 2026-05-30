@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from efp_runtime.models import ToolCall
+from efp_runtime.permissions import ASK, PermissionMetadata
 from efp_runtime.shell_permissions import (
     shell_permission_metadata,
     shell_permission_patterns,
@@ -16,7 +17,7 @@ from efp_runtime.tools.runtime import ToolRuntime
 
 @pytest.mark.asyncio
 async def test_bash_permission_request_extracts_cat_path(tmp_path: Path):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+    runtime = _runtime_with_ask_shell(tmp_path)
 
     result = await runtime.execute(
         ToolCall(
@@ -38,7 +39,7 @@ async def test_bash_permission_request_extracts_cat_path(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_bash_permission_request_applies_workdir_to_paths(tmp_path: Path):
-    runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+    runtime = _runtime_with_ask_shell(tmp_path)
 
     result = await runtime.execute(
         ToolCall(
@@ -116,9 +117,7 @@ def test_shell_permission_scan_parse_failure_falls_back_to_command_pattern():
 
 @pytest.mark.asyncio
 async def test_bash_permission_request_uses_same_scan(tmp_path: Path):
-    runtime = ToolRuntime(
-        create_core_tool_registry(tmp_path)
-    )
+    runtime = _runtime_with_ask_shell(tmp_path)
 
     result = await runtime.execute(
         ToolCall(
@@ -135,3 +134,17 @@ async def test_bash_permission_request_uses_same_scan(tmp_path: Path):
     assert metadata["command_name"] == "cat"
     assert metadata["path_args"][0]["path"] == "legacy.py"
     assert request["patterns"] == ["legacy.py"]
+
+
+def _runtime_with_ask_shell(workspace_root: Path) -> ToolRuntime:
+    return ToolRuntime(
+        create_core_tool_registry(
+            workspace_root,
+            shell_permission=PermissionMetadata(
+                action=ASK,
+                category="shell",
+                resource="workspace",
+                risk="high",
+            ),
+        )
+    )

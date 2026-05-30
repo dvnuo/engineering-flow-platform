@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from efp_runtime.models import ToolCall
-from efp_runtime.permissions import PermissionDecision, PermissionMetadata
+from efp_runtime.permissions import ASK, PermissionDecision, PermissionMetadata
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.runtime import ToolRuntime
@@ -122,8 +122,36 @@ async def test_path_traversal_is_rejected(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_write_requires_permission_by_default_and_does_not_write(tmp_path: Path):
+async def test_write_succeeds_by_default(tmp_path: Path):
     runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+    target = tmp_path / "created.txt"
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-write",
+            tool_id="write",
+            args={"filePath": "created.txt", "content": "blocked"},
+        )
+    )
+
+    assert result.status == "success"
+    assert result.success is True
+    assert target.read_text(encoding="utf-8") == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_write_explicit_ask_permission_does_not_write(tmp_path: Path):
+    runtime = ToolRuntime(
+        create_core_tool_registry(
+            tmp_path,
+            write_permission=PermissionMetadata(
+                action=ASK,
+                category="filesystem",
+                resource="workspace",
+                risk="medium",
+            ),
+        )
+    )
     target = tmp_path / "created.txt"
 
     result = await runtime.execute(
@@ -202,8 +230,31 @@ async def test_grep_finds_matches(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_shell_requires_permission_by_default(tmp_path: Path):
+async def test_shell_succeeds_by_default(tmp_path: Path):
     runtime = ToolRuntime(create_core_tool_registry(tmp_path))
+
+    result = await runtime.execute(
+        ToolCall(id="call-shell", tool_id="bash", args={"command": "printf ok", "description": "Print ok"})
+    )
+
+    assert result.status == "success"
+    assert result.success is True
+    assert result.output["stdout"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_shell_explicit_ask_permission_requests_approval(tmp_path: Path):
+    runtime = ToolRuntime(
+        create_core_tool_registry(
+            tmp_path,
+            shell_permission=PermissionMetadata(
+                action=ASK,
+                category="shell",
+                resource="workspace",
+                risk="high",
+            ),
+        )
+    )
 
     result = await runtime.execute(
         ToolCall(id="call-shell", tool_id="bash", args={"command": "printf ok", "description": "Print ok"})
