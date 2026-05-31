@@ -27,6 +27,9 @@ def test_runtime_tool_snapshot_is_builtin_only(monkeypatch):
     names = {c.get("name") for c in tools}
     assert {"bash", "read", "write", "edit", "grep", "glob", "webfetch", "todowrite", "apply_patch"}.issubset(names)
     assert {"jira_get_issue", "github_get_pr", "confluence_get_page", "git_clone", "run_command", "list_dir"}.isdisjoint(names)
+    assert {"jira", "confluence", "browser"}.isdisjoint(names)
+    function_tool_names = {tool["function"]["name"] for tool in src.get_tools_schema()}
+    assert {"jira", "confluence", "browser"}.isdisjoint(function_tool_names)
     assert not hasattr(src, "get_external_tool_visibility")
     assert not hasattr(src, "get_external_tools_visibility")
     assert not hasattr(src, "is_external_tool_exposed")
