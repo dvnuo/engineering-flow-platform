@@ -6,6 +6,9 @@ OUTPUT_DIR="$ROOT/runtime-tools"
 TOOLS_REPO_URL="https://github.com/dvnuo/engineering-flow-platform-tools.git"
 TEMP_DIR=""
 TOOLS_REPO_DIR=""
+TARGET_GOOS="${GOOS:-linux}"
+TARGET_GOARCH="${GOARCH:-amd64}"
+TARGET_CGO_ENABLED="${CGO_ENABLED:-0}"
 
 log() {
   printf '[prepare-runtime-tools] %s\n' "$*" >&2
@@ -53,19 +56,38 @@ mkdir -p "$OUTPUT_DIR"
 
 resolve_tools_repo_dir
 [[ -f "$TOOLS_REPO_DIR/go.mod" ]] || die "tools repo is missing go.mod: $TOOLS_REPO_DIR"
+[[ -d "$TOOLS_REPO_DIR/cmd" ]] || die "tools repo is missing cmd directory: $TOOLS_REPO_DIR"
 
 log "Using tools repo: $TOOLS_REPO_DIR"
-log "Building Linux amd64 jira binary"
-(
-  cd "$TOOLS_REPO_DIR"
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$ROOT/runtime-tools/jira" ./cmd/jira
-)
+log "Target platform: GOOS=$TARGET_GOOS GOARCH=$TARGET_GOARCH CGO_ENABLED=$TARGET_CGO_ENABLED"
 
-log "Building Linux amd64 confluence binary"
-(
-  cd "$TOOLS_REPO_DIR"
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$ROOT/runtime-tools/confluence" ./cmd/confluence
-)
+tool_names=()
+while IFS= read -r -d '' main_go; do
+  tool_names+=("$(basename "$(dirname "$main_go")")")
+done < <(find "$TOOLS_REPO_DIR/cmd" -mindepth 2 -maxdepth 2 -type f -name main.go -print0 | sort -z)
 
-chmod 0755 "$ROOT/runtime-tools/jira" "$ROOT/runtime-tools/confluence"
+if [[ "${#tool_names[@]}" -eq 0 ]]; then
+  die "no runtime tools found under $TOOLS_REPO_DIR/cmd/*/main.go"
+fi
+
+log "Discovered runtime tools: ${tool_names[*]}"
+
+# runtime-tools/ is a generated Docker build input. Keep README.md, but remove
+# stale binaries so deleted or renamed cmd/<tool> directories do not enter PATH.
+find "$OUTPUT_DIR" -maxdepth 1 -type f ! -name README.md -delete
+
+built_outputs=()
+for tool_name in "${tool_names[@]}"; do
+  output_path="$OUTPUT_DIR/$tool_name"
+  log "Building $TARGET_GOOS/$TARGET_GOARCH $tool_name binary"
+  (
+    cd "$TOOLS_REPO_DIR"
+    CGO_ENABLED="$TARGET_CGO_ENABLED" GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH" \
+      go build -o "$output_path" "./cmd/$tool_name"
+  )
+  built_outputs+=("$output_path")
+done
+
+chmod 0755 "${built_outputs[@]}"
+log "Built runtime tools: ${tool_names[*]}"
 log "Prepared runtime tool binaries in $OUTPUT_DIR"

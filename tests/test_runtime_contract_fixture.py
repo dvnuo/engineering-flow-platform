@@ -40,6 +40,7 @@ def test_runtime_contract_fixture_capability_snapshot(monkeypatch, tmp_path):
         skills = [c for c in snapshot["capabilities"] if c.get("type") == "skill"]
         assert tools
         assert all((c.get("metadata") or {}).get("tool_source") != "external_tools_repo" for c in tools)
+        assert {"jira", "confluence", "browser"}.isdisjoint({c.get("name") for c in tools})
         assert any(c.get("name") == "smoke-skill" for c in skills)
     finally:
         skill_registry.project_skills_dir = original_project_skills_dir

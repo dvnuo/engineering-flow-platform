@@ -37,7 +37,10 @@ Native runtime must support:
 - Runtime tool surface comes from the opencode-style EFP runtime built-in registry only (`src.__init__.get_tools_schema()`).
 - Model-visible tool ids include `bash`, `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `todowrite`, and `apply_patch`.
 - Legacy Python tool packages such as `src.bash_tools` are not present, and Jira/GitHub/Confluence/Git Python tools are not exposed as LLM tools.
-- Legacy external-tools envs (`EFP_TOOLS_DIR`, `EFP_EXTERNAL_TOOLS_*`) are ignored by native runtime.
+- The runtime image may include prebuilt `engineering-flow-platform-tools` CLI binaries on `PATH` in `/usr/local/bin`. Current binaries include `jira`, `confluence`, and `browser`; future binaries are discovered from `cmd/<tool>` in that repo.
+- Agents use those CLIs through the model-visible `bash` built-in in the workspace-full-access runtime workspace. They should run `<tool> commands --json`, then `<tool> schema <command> --json`, prefer `--json`, use `--dry-run` before writes, and pass `--yes` for destructive operations.
+- Runtime profile application still projects Jira, Confluence, GitHub, and Git configuration to the corresponding CLI config files.
+- Legacy `EFP_TOOLS_DIR` / `EFP_EXTERNAL_TOOLS_*` Python external tool loaders are ignored by native runtime. `runtime-tools/*` is a Docker/CI build input for prebuilt CLI binaries and is copied into `PATH`; it is not a Python loader.
 - MCP servers and external protocol tool providers are intentionally excluded.
 
 ## External Skills Surface

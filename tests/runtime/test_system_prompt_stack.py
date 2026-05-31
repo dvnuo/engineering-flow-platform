@@ -28,6 +28,16 @@ def test_default_system_prompt_contains_coding_agent_operating_rules():
     assert "concise and direct, like a CLI coding agent" in DEFAULT_SYSTEM_PROMPT
     assert "Preserve user changes" in DEFAULT_SYSTEM_PROMPT
     assert "Do not commit changes unless the user explicitly asks" in DEFAULT_SYSTEM_PROMPT
+    assert "engineering-flow-platform-tools binaries on PATH" in DEFAULT_SYSTEM_PROMPT
+    assert "`jira`, `confluence`, `browser`" in DEFAULT_SYSTEM_PROMPT
+    assert "built from `cmd/<tool>`" in DEFAULT_SYSTEM_PROMPT
+    assert "EFP `bash` built-in" in DEFAULT_SYSTEM_PROMPT
+    assert "workspace-full-access" in DEFAULT_SYSTEM_PROMPT
+    assert "<tool> commands --json" in DEFAULT_SYSTEM_PROMPT
+    assert "<tool> schema <command> --json" in DEFAULT_SYSTEM_PROMPT
+    assert "`--dry-run`" in DEFAULT_SYSTEM_PROMPT
+    assert "`--yes`" in DEFAULT_SYSTEM_PROMPT
+    assert "not model-facing function tools" in DEFAULT_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio
