@@ -1173,8 +1173,8 @@ def _triggered_event_secondary_action_descriptor(
             "event_prefix": "task.triggered_event.secondary_action",
         },
         "confluence.mention": {
-            "action_id": "channel_action:confluence_add_comment",
-            "capability_type": "channel_action",
+            "action_id": "adapter:confluence:add_comment",
+            "capability_type": "adapter_action",
             "event_prefix": "task.triggered_event.secondary_action",
         },
     }

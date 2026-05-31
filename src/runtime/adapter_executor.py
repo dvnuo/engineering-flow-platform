@@ -8,6 +8,7 @@ from aiohttp import ClientSession
 
 from src.runtime.events import build_runtime_event
 from src.runtime.capability_adapters import (
+    build_confluence_adapter_capabilities,
     build_github_adapter_capabilities,
     build_jira_adapter_capabilities,
     build_portal_adapter_capabilities,
@@ -61,7 +62,8 @@ def _normalize_adapter_contract(
 
 
 async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    from src import jira as jira_module
+    from src.external_cli import jira as jira_cli
+    from src.external_cli.runner import ExternalCLIError
 
     action = str(action_name or "").strip()
     payload = dict(kwargs or {})
@@ -70,23 +72,24 @@ async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any])
         issue_key = payload.get("issue_key")
         if not issue_key:
             return {"success": False, "error": "issue_key is required", "system": "jira", "action_name": action}
-        raw = await jira_module.jira_get_issue(issue_key)
+        raw = await jira_cli.get_issue(issue_key)
     elif action == "update_issue":
         issue_key = payload.get("issue_key")
         fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
         if not issue_key:
             return {"success": False, "error": "issue_key is required", "system": "jira", "action_name": action}
-        raw = await jira_module.jira_update_issue(
+        raw = await jira_cli.update_issue(
             issue_key=issue_key,
             summary=fields.get("summary"),
             description=fields.get("description"),
+            fields={k: v for k, v in fields.items() if k not in {"summary", "description"}},
         )
     elif action == "assign_issue":
         issue_key = payload.get("issue_key")
         assignee = payload.get("assignee")
         if not issue_key:
             return {"success": False, "error": "issue_key is required", "system": "jira", "action_name": action}
-        raw = await jira_module.jira_assign_issue(issue_key=issue_key, assignee=assignee)
+        raw = await jira_cli.assign_issue(issue_key=issue_key, assignee=assignee)
     elif action == "transition_issue":
         issue_key = payload.get("issue_key")
         transition = payload.get("transition") or payload.get("to_status")
@@ -98,7 +101,7 @@ async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any])
                 "system": "jira",
                 "action_name": action,
             }
-        raw = await jira_module.jira_transition(issue_key=issue_key, to_status=transition, comment=comment)
+        raw = await jira_cli.transition_issue(issue_key=issue_key, transition=transition, comment=comment)
     elif action == "add_comment":
         issue_key = payload.get("issue_key")
         comment = payload.get("comment") or payload.get("body")
@@ -109,9 +112,12 @@ async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any])
                 "system": "jira",
                 "action_name": action,
             }
-        raw = await jira_module.jira_add_comment(issue_key=issue_key, comment=comment)
+        raw = await jira_cli.add_comment(issue_key=issue_key, comment=comment)
     elif action == "export_issues_to_markdown":
-        raw = await jira_module.jira_export_issues_to_markdown(**payload)
+        try:
+            raw = await jira_cli.export_issues_to_markdown(**payload)
+        except ExternalCLIError as exc:
+            return {"success": False, "error": str(exc), "system": "jira", "action_name": action, "result": None}
     else:
         return {"success": False, "error": f"Unsupported jira action: {action}", "system": "jira", "action_name": action}
 
@@ -126,8 +132,8 @@ async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any])
 
 
 async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute GitHub runtime adapter actions via existing src.github APIs."""
-    from src import github as github_module
+    """Execute GitHub runtime adapter actions via gh CLI."""
+    from src.external_cli import github as github_cli
 
     action = str(action_name or "").strip()
     payload = dict(kwargs or {})
@@ -157,7 +163,7 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
         commit_id = payload.get("commit_id")
         path = payload.get("path")
         line = payload.get("line")
-        raw = await github_module.github_submit_pr_review(
+        raw = await github_cli.review_pull_request(
             owner=owner,
             repo=repo,
             pull_number=int(pull_number),
@@ -180,7 +186,7 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
                 "action_name": action,
             }
         # GitHub PR general comments share the issues comments endpoint.
-        raw = await github_module.github_add_comment(owner, repo, int(issue_number), str(comment))
+        raw = await github_cli.add_comment(owner, repo, int(issue_number), str(comment))
     elif action == "reply_review_comment":
         comment_id = (
             payload.get("in_reply_to_id")
@@ -195,7 +201,7 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
                 "system": "github",
                 "action_name": action,
             }
-        raw = await github_module.github_reply_pr_review_comment(
+        raw = await github_cli.reply_pr_review_comment(
             owner=owner,
             repo=repo,
             pull_number=int(pull_number),
@@ -215,7 +221,7 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
                 "system": "github",
                 "action_name": action,
             }
-        raw = await github_module.github_add_commit_comment(
+        raw = await github_cli.add_commit_comment(
             owner=owner,
             repo=repo,
             commit_sha=str(commit_sha),
@@ -235,7 +241,7 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
                 "system": "github",
                 "action_name": action,
             }
-        raw = await github_module.github_add_discussion_comment(
+        raw = await github_cli.add_discussion_comment(
             discussion_id=str(discussion_id),
             comment=str(comment),
             reply_to_id=str(reply_to_id) if reply_to_id else None,
@@ -253,6 +259,36 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
     }
 
 
+async def execute_confluence_workflow_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute Confluence runtime adapter actions via external confluence CLI."""
+    from src.external_cli import confluence as confluence_cli
+
+    action = str(action_name or "").strip()
+    payload = dict(kwargs or {})
+    if action == "add_comment":
+        page_id = payload.get("page_id") or payload.get("id")
+        comment = payload.get("comment") or payload.get("body")
+        if not page_id or not comment:
+            return {
+                "success": False,
+                "error": "page_id and comment are required",
+                "system": "confluence",
+                "action_name": action,
+            }
+        raw = await confluence_cli.add_comment(str(page_id), str(comment))
+    else:
+        return {"success": False, "error": f"Unsupported confluence action: {action}", "system": "confluence", "action_name": action}
+
+    success = _result_success(raw)
+    return {
+        "success": success,
+        "error": None if success else str(raw),
+        "system": "confluence",
+        "action_name": action,
+        "result": raw,
+    }
+
+
 async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     normalized_action_id = str(action_id or "").strip().lower()
     payload = dict(kwargs or {})
@@ -262,6 +298,8 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
         if normalized_action_id.startswith("adapter:jira:")
         else "github"
         if normalized_action_id.startswith("adapter:github:")
+        else "confluence"
+        if normalized_action_id.startswith("adapter:confluence:")
         else "portal"
         if normalized_action_id.startswith("adapter:portal:")
         else "unknown"
@@ -313,6 +351,10 @@ async def _exec_github(action_name: str, payload: Dict[str, Any]) -> Dict[str, A
     return await execute_github_workflow_action(action_name, payload)
 
 
+async def _exec_confluence(action_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return await execute_confluence_workflow_action(action_name, payload)
+
+
 async def _exec_portal(action_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return await execute_portal_control_plane_action(action_name, payload)
 
@@ -329,6 +371,7 @@ ACTION_ID_TO_EXECUTOR = {
     "adapter:github:reply_review_comment": lambda payload: _exec_github("reply_review_comment", payload),
     "adapter:github:add_commit_comment": lambda payload: _exec_github("add_commit_comment", payload),
     "adapter:github:add_discussion_comment": lambda payload: _exec_github("add_discussion_comment", payload),
+    "adapter:confluence:add_comment": lambda payload: _exec_confluence("add_comment", payload),
     "adapter:portal:create_delegation": lambda payload: _exec_portal("create_delegation", payload),
     "adapter:portal:list_group_delegations": lambda payload: _exec_portal("list_group_delegations", payload),
     "adapter:portal:get_group_task_board": lambda payload: _exec_portal("get_group_task_board", payload),
@@ -346,6 +389,7 @@ def validate_enabled_adapter_actions_have_executors() -> list[str]:
         for descriptor in [
             *build_github_adapter_capabilities(),
             *build_jira_adapter_capabilities(),
+            *build_confluence_adapter_capabilities(),
             *build_portal_adapter_capabilities(),
         ]
         if descriptor.enabled

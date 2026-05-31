@@ -13,6 +13,13 @@ REMOVED_LEGACY_MODULES = {
     "src.agents.llm": ROOT / "src/agents/llm.py",
     "src.bash_tools": ROOT / "src/bash_tools",
     "src.context_tools": ROOT / "src/context_tools.py",
+    "src.jira": ROOT / "src/jira",
+    "src.confluence": ROOT / "src/confluence",
+    "src.github": ROOT / "src/github",
+    "src.channels": ROOT / "src/channels",
+    "src.channels.jira": ROOT / "src/channels/jira.py",
+    "src.channels.confluence": ROOT / "src/channels/confluence.py",
+    "src.channels.github": ROOT / "src/channels/github.py",
 }
 
 

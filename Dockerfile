@@ -17,6 +17,10 @@ RUN apt-get update \
         ca-certificates \
         curl \
         gnupg \
+    && mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -25,6 +29,7 @@ RUN apt-get update \
         python3.11-dev \
         build-essential \
         git \
+        gh \
         tesseract-ocr \
     && python3.11 -m venv "$VIRTUAL_ENV" \
     && "$VIRTUAL_ENV/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel \
@@ -40,6 +45,11 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 # Copy application code.
 COPY . .
+
+# CI/release must place prebuilt engineering-flow-platform-tools binaries here.
+# The runtime image intentionally does not install the Go toolchain.
+COPY runtime-tools/jira runtime-tools/confluence /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/jira /usr/local/bin/confluence
 
 # Create the workspace directory for this container image's default runtime user (root).
 # Note: the canonical runtime workspace model is user-home-based (`~/.efp/workspace`);

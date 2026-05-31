@@ -9,16 +9,6 @@ import pytest
 def _load_shared_loader_module_with_github_stubs():
     src_pkg = types.ModuleType("src")
     src_pkg.__path__ = []
-    jira_pkg = types.ModuleType("src.jira")
-    jira_pkg.__path__ = []
-    jira_service = types.ModuleType("src.jira.source_service")
-    jira_service.format_jira_source_manifest = lambda prepared: "jira-manifest"
-    jira_service.prepare_jira_issue_source = lambda *_a, **_k: None
-    confluence_pkg = types.ModuleType("src.confluence")
-    confluence_pkg.__path__ = []
-    confluence_service = types.ModuleType("src.confluence.source_service")
-    confluence_service.format_confluence_source_manifest = lambda prepared: "confluence-manifest"
-    confluence_service.prepare_confluence_page_source = lambda *_a, **_k: None
     runtime_pkg = types.ModuleType("src.runtime")
     runtime_pkg.__path__ = []
 
@@ -28,20 +18,12 @@ def _load_shared_loader_module_with_github_stubs():
 
     modules = {
         "src": src_pkg,
-        "src.jira": jira_pkg,
-        "src.jira.source_service": jira_service,
-        "src.confluence": confluence_pkg,
-        "src.confluence.source_service": confluence_service,
         "src.runtime": runtime_pkg,
         "src.runtime.requirement_bundle_assets": rb_assets,
     }
     prev = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
-    src_pkg.jira = jira_pkg
-    src_pkg.confluence = confluence_pkg
     src_pkg.runtime = runtime_pkg
-    jira_pkg.source_service = jira_service
-    confluence_pkg.source_service = confluence_service
     runtime_pkg.requirement_bundle_assets = rb_assets
     spec = importlib.util.spec_from_file_location("skills.shared_bundle_source_loaders", Path("tests/fixtures/skills/shared_bundle_source_loaders.py"))
     module = importlib.util.module_from_spec(spec)

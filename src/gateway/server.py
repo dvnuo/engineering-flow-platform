@@ -16,8 +16,8 @@ import re
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.truncate import truncate
-from src.channels.jira import jira_channel
 from src.config import config
+from src.external_cli import jira as jira_cli
 from src.gateway.runtime_chat import run_runtime_chat
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.efp_runtime.session.gateway_facade import (
@@ -68,13 +68,6 @@ async def handle_jira_message(
     try:
         logger.info(f"Processing Jira message | issue_key={issue_key} | session_id={session_id}")
 
-        # Check for test case generation command
-        if jira_channel.is_test_case_command(message):
-            # Test case generation feature removed in PR #131
-            # Inform user and skip
-            await jira_channel.send_message(issue_key, "Test case generation feature is temporarily unavailable.")
-            return ""
-
         result = await run_runtime_chat(
             message=message,
             session_id=session_id,
@@ -94,6 +87,29 @@ async def handle_jira_message(
         tb_str = get_traceback_str()
         logger.error(f"Error processing Jira comment | issue_key={issue_key} | error={e}", exc_info=True)
         return f"Sorry, I encountered an error: {str(e)}"
+
+
+def _extract_jira_comment_event(payload: dict) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    issue = payload.get("issue") if isinstance(payload.get("issue"), dict) else {}
+    comment = payload.get("comment") if isinstance(payload.get("comment"), dict) else {}
+    issue_key = str(issue.get("key") or payload.get("issue_key") or "").strip()
+    body = str(comment.get("body") or payload.get("body") or "").strip()
+    if not issue_key or not body:
+        return None
+    author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+    username = (
+        str(author.get("displayName") or author.get("name") or author.get("accountId") or "").strip()
+        or str(payload.get("username") or "").strip()
+        or "unknown"
+    )
+    return {
+        "issue_key": issue_key,
+        "body": body,
+        "username": username,
+        "comment_id": str(comment.get("id") or payload.get("comment_id") or "").strip(),
+    }
 
 
 class Gateway:
@@ -510,8 +526,7 @@ class Gateway:
         try:
             payload = await request.json()
 
-            # Handle Jira webhook
-            result = jira_channel.handle_webhook_payload(payload)
+            result = _extract_jira_comment_event(payload)
 
             if not result:
                 # Not a comment event or filtered out
@@ -532,7 +547,7 @@ class Gateway:
             response = await handle_jira_message(comment_body, session_id, username, issue_key)
 
             # Send response back to Jira as a comment (handles long responses)
-            await jira_channel.add_comment_long(issue_key, response)
+            await jira_cli.add_comment_long(issue_key, response)
 
             logger.info(f"Processed Jira comment for {issue_key} from {username}")
 
@@ -559,9 +574,8 @@ class Gateway:
         # Run memory bootstrap in background after server starts
         asyncio.create_task(self._run_memory_bootstrap())
 
-        # Jira channel is initialized in __init__ with HTTP client ready
-        if self.jira_enabled and jira_channel.is_configured():
-            logger.info("Jira channel enabled and ready")
+        if self.jira_enabled:
+            logger.info("Jira webhook route enabled; writeback uses external jira CLI")
 
     async def _run_memory_bootstrap(self) -> None:
         """Run memory bootstrap in background."""
@@ -655,17 +669,6 @@ class Gateway:
 
     async def stop(self) -> None:
         """Stop the gateway server."""
-        # Close Jira client if it was initialized
-        if self.jira_enabled:
-            try:
-                await jira_channel.close()
-                logger.info("Jira channel closed")
-            except asyncio.CancelledError:
-                logger.info("[Memory] Periodic check cancelled")
-                raise
-            except Exception as e:
-                logger.warning(f"Error closing Jira channel: {e}")
-
         if self.runner:
             await self.runner.cleanup()
         logger.info("Gateway stopped")

@@ -14,9 +14,9 @@ from src.utils.portal_internal_api import build_portal_internal_api_headers
 @pytest.mark.asyncio
 async def test_execute_adapter_action_runs_registered_jira_action(monkeypatch):
     async def _fake_get_issue(issue_key):
-        return f"Issue {issue_key} details"
+        return {"issue": f"Issue {issue_key} details"}
 
-    monkeypatch.setattr("src.jira.jira_get_issue", _fake_get_issue)
+    monkeypatch.setattr("src.external_cli.jira.get_issue", _fake_get_issue)
 
     result = await execute_adapter_action("adapter:jira:read_issue", {"issue_key": "PROJ-1"})
 
@@ -36,10 +36,10 @@ async def test_execute_adapter_action_unknown_action_returns_error():
 
 @pytest.mark.asyncio
 async def test_execute_jira_workflow_action_transition_issue(monkeypatch):
-    async def _fake_transition(issue_key, to_status, comment=None):
-        return f"{issue_key} transitioned to {to_status}"
+    async def _fake_transition(issue_key, transition=None, comment=None):
+        return {"transitioned": issue_key, "transition": transition, "comment": comment}
 
-    monkeypatch.setattr("src.jira.jira_transition", _fake_transition)
+    monkeypatch.setattr("src.external_cli.jira.transition_issue", _fake_transition)
 
     result = await execute_jira_workflow_action(
         "transition_issue",
@@ -54,9 +54,9 @@ async def test_execute_jira_workflow_action_transition_issue(monkeypatch):
 @pytest.mark.asyncio
 async def test_execute_adapter_action_add_comment(monkeypatch):
     async def _fake_add_comment(issue_key, comment):
-        return f"Comment added to {issue_key}: {comment}"
+        return {"commented": issue_key, "comment": comment}
 
-    monkeypatch.setattr("src.jira.jira_add_comment", _fake_add_comment)
+    monkeypatch.setattr("src.external_cli.jira.add_comment", _fake_add_comment)
 
     result = await execute_adapter_action(
         "adapter:jira:add_comment",
@@ -74,7 +74,7 @@ async def test_execute_adapter_action_jira_export(monkeypatch):
     async def _fake_jira_export_issues_to_markdown(**kwargs):
         return {"success": True, "status": "success", "issues": [], "artifacts": {}, "errors": []}
 
-    monkeypatch.setattr("src.jira.jira_export_issues_to_markdown", _fake_jira_export_issues_to_markdown)
+    monkeypatch.setattr("src.external_cli.jira.export_issues_to_markdown", _fake_jira_export_issues_to_markdown)
     result = await execute_adapter_action("adapter:jira:export_issues_to_markdown", {"input": ["PROJ-1"]})
 
     assert result["success"] is True
@@ -97,7 +97,7 @@ async def test_execute_adapter_action_github_review_pull_request(monkeypatch):
         )
         return {"id": 99, "state": "submitted"}
 
-    monkeypatch.setattr("src.github.github_submit_pr_review", _fake_submit)
+    monkeypatch.setattr("src.external_cli.github.review_pull_request", _fake_submit)
 
     result = await execute_adapter_action(
         "adapter:github:review_pull_request",
@@ -130,6 +130,25 @@ async def test_execute_adapter_action_github_unsupported_action_failed():
     assert result["success"] is False
     assert result["system"] == "github"
     assert "Unsupported adapter action" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_confluence_add_comment_uses_cli_adapter(monkeypatch):
+    captured = {}
+
+    async def _fake_add_comment(page_id, comment):
+        captured.update({"page_id": page_id, "comment": comment})
+        return {"created": True}
+
+    monkeypatch.setattr("src.external_cli.confluence.add_comment", _fake_add_comment)
+    result = await execute_adapter_action(
+        "adapter:confluence:add_comment",
+        {"page_id": "123", "comment": "Looks good"},
+    )
+
+    assert result["success"] is True
+    assert result["system"] == "confluence"
+    assert captured == {"page_id": "123", "comment": "Looks good"}
 
 
 @pytest.mark.asyncio
@@ -480,7 +499,7 @@ async def test_execute_github_reply_review_comment_action_prefers_in_reply_to_id
         captured.update(kwargs)
         return "Review comment reply added"
 
-    monkeypatch.setattr("src.github.github_reply_pr_review_comment", _fake_reply)
+    monkeypatch.setattr("src.external_cli.github.reply_pr_review_comment", _fake_reply)
     result = await execute_adapter_action(
         "adapter:github:reply_review_comment",
         {
@@ -505,7 +524,7 @@ async def test_execute_github_add_commit_comment_action(monkeypatch):
         captured.update(kwargs)
         return "Commit comment added"
 
-    monkeypatch.setattr("src.github.github_add_commit_comment", _fake_add_commit_comment)
+    monkeypatch.setattr("src.external_cli.github.add_commit_comment", _fake_add_commit_comment)
     result = await execute_adapter_action("adapter:github:add_commit_comment", {"owner":"o","repo":"r","commit_sha":"abc","comment":"hi","path":"a.py","line":1,"position":2})
     assert result["success"] is True
     assert captured["commit_sha"] == "abc"
@@ -526,7 +545,7 @@ async def test_execute_github_add_discussion_comment_action(monkeypatch):
         captured.update(kwargs)
         return "Discussion comment added"
 
-    monkeypatch.setattr("src.github.github_add_discussion_comment", _fake_add_discussion_comment)
+    monkeypatch.setattr("src.external_cli.github.add_discussion_comment", _fake_add_discussion_comment)
     result = await execute_adapter_action("adapter:github:add_discussion_comment", {"discussion_id":"D1","comment":"hi","reply_to_id":"DC1"})
     assert result["success"] is True
     assert captured["discussion_id"] == "D1"
@@ -542,7 +561,7 @@ async def test_execute_github_add_discussion_comment_prefers_reply_to_id(monkeyp
         captured.update(kwargs)
         return "Discussion comment added"
 
-    monkeypatch.setattr("src.github.github_add_discussion_comment", _fake_add_discussion_comment)
+    monkeypatch.setattr("src.external_cli.github.add_discussion_comment", _fake_add_discussion_comment)
     result = await execute_adapter_action(
         "adapter:github:add_discussion_comment",
         {"discussion_id": "D1", "comment": "hi", "reply_to_id": "DC_root", "discussion_comment_id": "DC_child", "comment_id": "DC_child"},
@@ -556,7 +575,7 @@ async def test_execute_github_add_discussion_comment_failure_is_not_success(monk
     async def _fake_add_discussion_comment(**_kwargs):
         return "Error adding discussion comment: boom"
 
-    monkeypatch.setattr("src.github.github_add_discussion_comment", _fake_add_discussion_comment)
+    monkeypatch.setattr("src.external_cli.github.add_discussion_comment", _fake_add_discussion_comment)
     result = await execute_adapter_action(
         "adapter:github:add_discussion_comment",
         {"discussion_id": "D1", "comment": "hi", "reply_to_id": "DC1"},

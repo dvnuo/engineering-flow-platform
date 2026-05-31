@@ -190,10 +190,10 @@ class TestGatewayIntegration:
         from src.gateway.server import run_runtime_chat
         assert run_runtime_chat is not None
 
-    def test_gateway_has_jira_channel(self):
-        """Test Gateway imports jira channel."""
-        from src.gateway.server import jira_channel
-        assert jira_channel is not None
+    def test_gateway_uses_external_jira_cli_adapter(self):
+        """Test Gateway imports Jira CLI adapter."""
+        from src.gateway.server import jira_cli
+        assert jira_cli is not None
 
 
 class TestGatewayLifecycle:

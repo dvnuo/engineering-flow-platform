@@ -209,7 +209,10 @@ class Config:
         "github": {
             "enabled": True,
             "api_token": True,
+            "token": True,
+            "access_token": True,
             "base_url": True,
+            "api_base_url": True,
         },
         "git": {
             "user": {
@@ -386,6 +389,9 @@ class Config:
         self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
         self._deep_merge_into(config_document, filtered_overlay)
         self._persist_runtime_config(config_document)
+        from src.external_cli.profile_config import apply_runtime_profile_external_config
+
+        apply_runtime_profile_external_config(filtered_overlay)
 
         self._managed_overlay_meta = {
             "runtime_profile_id": runtime_profile_id,
@@ -409,6 +415,9 @@ class Config:
         self._decrypt_sensitive_fields(config_document)
         self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
         self._persist_runtime_config(config_document)
+        from src.external_cli.profile_config import clear_runtime_profile_external_config
+
+        clear_runtime_profile_external_config()
 
         self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
         self._managed_sections = []
@@ -520,7 +529,7 @@ class Config:
                 "Ensure EFP_CONFIG_KEY is correct and the configuration file contains valid encrypted values."
             ) from e
     
-    SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "secret"}
+    SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "access_token", "secret"}
     
     def _encrypt_sensitive_fields(self, obj: Any) -> None:
         """Recursively encrypt sensitive fields in config."""

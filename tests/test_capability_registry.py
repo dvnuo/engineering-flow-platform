@@ -125,13 +125,12 @@ def test_registry_export_catalog_and_filters():
     assert registry.list_by_type("tool")
 
 
-def test_registry_collects_adapter_channel_tool_skill_types():
+def test_registry_collects_adapter_tool_skill_types():
     registry = build_default_capability_registry()
     types = {item.type for item in registry.list_all()}
     assert "adapter_action" in types
     assert "skill" in types
     assert "tool" in types
-    assert "channel_action" in types
 
 
 def test_registry_export_catalog_snapshot_has_deterministic_version():
@@ -147,7 +146,7 @@ def test_registry_adapter_action_entries_include_alias_and_system():
     registry = build_default_capability_registry()
     adapter_entry = next(item for item in registry.export_catalog() if item["type"] == "adapter_action")
     assert adapter_entry["action_alias"]
-    assert adapter_entry["adapter_system"] in {"github", "jira", "portal"}
+    assert adapter_entry["adapter_system"] in {"github", "jira", "confluence", "portal"}
 
 
 def test_capability_registry_uses_runtime_tool_catalog_even_when_llm_tools_restricted(monkeypatch):

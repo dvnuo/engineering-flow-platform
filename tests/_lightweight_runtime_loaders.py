@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def load_github_url_utils_lightweight():
-    spec = importlib.util.spec_from_file_location("src.github.url_utils", Path("src/github/url_utils.py"))
+    spec = importlib.util.spec_from_file_location("src.external_cli.github", Path("src/external_cli/github.py"))
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -39,7 +39,6 @@ def _load_module_with_stubs(module_name: str, module_path: Path, modules: dict[s
             sys.modules.pop(module_name, None)
 
     return module, _cleanup
-
 
 def load_jira_workflow_review_lightweight():
     src_pkg = types.ModuleType("src")
@@ -95,157 +94,5 @@ def load_jira_workflow_review_lightweight():
             else:
                 sys.modules[name] = old
         sys.modules.pop("src.runtime.jira_workflow_review", None)
-
-    return module, _cleanup
-
-
-def load_confluence_init_lightweight():
-    from tests._lightweight_source_service_loaders import load_confluence_source_service_lightweight
-
-    source_service_module, source_cleanup = load_confluence_source_service_lightweight()
-
-    src_pkg = types.ModuleType("src")
-    src_pkg.__path__ = []
-
-    utils_pkg = types.ModuleType("src.utils")
-    utils_pkg.__path__ = []
-    attachment_mod = types.ModuleType("src.utils.attachment")
-    attachment_mod.download_and_process_attachment = getattr(
-        source_service_module,
-        "_default_download_and_process_attachment",
-        None,
-    )
-
-    api_mod = types.ModuleType("src.confluence.api")
-
-    class _Channel:
-        base_url = "https://c"
-        _auth_header = {}
-        def is_configured(self):
-            return True
-        async def get_attachments(self, page_id):
-            return []
-
-    api_mod.ConfluenceChannel = object
-    api_mod.confluence_channel = _Channel()
-
-    adapter_mod = types.ModuleType("src.confluence.adapter")
-    adapter_mod.ConfluenceFormatAdapter = lambda ch: types.SimpleNamespace()
-    adapter_mod._extract_page_id_from_url = lambda url: "1"
-
-    source_context_mod = types.ModuleType("src.source_context")
-    source_context_mod.persist_confluence_source_bundle_and_digest = lambda **kwargs: {"context_ref": "c", "digest_ref": "d"}
-
-    blob_mod = types.ModuleType("src.context_blob_store")
-    blob_mod.put_text = lambda **kwargs: "ctx://context/s/k/sha"
-
-    modules = {
-        "src": src_pkg,
-        "src.utils": utils_pkg,
-        "src.utils.attachment": attachment_mod,
-        "src.confluence.api": api_mod,
-        "src.confluence.adapter": adapter_mod,
-        "src.source_context": source_context_mod,
-        "src.context_blob_store": blob_mod,
-        "src.confluence.source_service": source_service_module,
-    }
-
-    src_pkg.utils = utils_pkg
-    src_pkg.utils = utils_pkg
-    module, cleanup = _load_module_with_stubs("src.confluence", Path("src/confluence/__init__.py"), modules)
-    src_pkg.confluence = module
-
-    def _cleanup():
-        cleanup()
-        source_cleanup()
-
-    return module, _cleanup
-
-
-def load_jira_init_lightweight():
-    from tests._lightweight_source_service_loaders import load_jira_source_service_lightweight
-
-    source_service_module, source_cleanup = load_jira_source_service_lightweight()
-
-    src_pkg = types.ModuleType("src")
-    src_pkg.__path__ = []
-
-    utils_pkg = types.ModuleType("src.utils")
-    utils_pkg.__path__ = []
-    attachment_mod = types.ModuleType("src.utils.attachment")
-    attachment_mod.download_and_process_attachment = getattr(
-        source_service_module,
-        "_default_download_and_process_attachment",
-        None,
-    )
-
-    source_context_mod = types.ModuleType("src.source_context")
-    source_context_mod.persist_jira_source_bundle_and_digest = lambda **kwargs: {
-        "context_ref": "ctx://jira",
-        "digest_ref": "ctx://jira/d",
-        "source_digest_chunk_count": 0,
-    }
-
-    blob_mod = types.ModuleType("src.context_blob_store")
-    blob_mod.put_text = lambda **kwargs: "ctx://context/s/k/sha"
-    blob_mod.read_ref = lambda ref, **kwargs: '{"raw": true}'
-
-    api_mod = types.ModuleType("src.jira.api")
-
-    class _Channel:
-        api_version = "3"
-        _auth_header = {}
-
-        def is_configured(self):
-            return True
-
-        def get_instance_client(self, **kwargs):
-            return self
-
-    async def _ok(*args, **kwargs):
-        return "ok"
-
-    api_mod.JiraChannel = object
-    api_mod.jira_channel = _Channel()
-    api_mod.jira_search = _ok
-    api_mod.jira_add_attachment = _ok
-    api_mod.jira_transition = _ok
-    api_mod.jira_get_transitions = _ok
-    api_mod.jira_assign_issue = _ok
-    api_mod.jira_get_projects = _ok
-    api_mod.jira_get_components = _ok
-    api_mod.jira_get_versions = _ok
-    api_mod.jira_get_worklog = _ok
-    api_mod.jira_add_worklog = _ok
-    api_mod.jira_get_comments = _ok
-    api_mod.get_tools_schemas = lambda: []
-
-    adapter_mod = types.ModuleType("src.jira.adapter")
-    adapter_mod.JiraFormatAdapter = source_service_module.JiraFormatAdapter
-
-    exporter_mod = types.ModuleType("src.jira.exporter")
-    exporter_mod.jira_export_issues_to_markdown = _ok
-
-    preview_mod = types.ModuleType("src.jira.attachment_preview")
-    preview_mod.render_issue_attachment_previews = _ok
-
-    modules = {
-        "src": src_pkg,
-        "src.utils": utils_pkg,
-        "src.utils.attachment": attachment_mod,
-        "src.source_context": source_context_mod,
-        "src.context_blob_store": blob_mod,
-        "src.jira.source_service": source_service_module,
-        "src.jira.api": api_mod,
-        "src.jira.adapter": adapter_mod,
-        "src.jira.exporter": exporter_mod,
-        "src.jira.attachment_preview": preview_mod,
-    }
-    module, cleanup = _load_module_with_stubs("src.jira", Path("src/jira/__init__.py"), modules)
-    src_pkg.jira = module
-
-    def _cleanup():
-        cleanup()
-        source_cleanup()
 
     return module, _cleanup

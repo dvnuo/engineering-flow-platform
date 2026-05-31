@@ -3725,7 +3725,7 @@ async def test_execution_bus_triggered_event_task_github_secondary_action_blocke
         raise AssertionError("writeback should be blocked by governance gate")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
         execution_type="task",
@@ -3756,7 +3756,7 @@ async def test_execution_bus_triggered_event_task_jira_secondary_action_blocked(
         raise AssertionError("writeback should be blocked by governance gate")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.jira_channel.add_comment", _fake_add_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.jira_cli.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
         execution_type="task",
@@ -3787,7 +3787,7 @@ async def test_execution_bus_triggered_event_task_confluence_secondary_action_bl
         raise AssertionError("writeback should be blocked by governance gate")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.confluence_channel.add_comment", _fake_add_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.confluence_cli.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
         execution_type="task",
@@ -3799,11 +3799,11 @@ async def test_execution_bus_triggered_event_task_confluence_secondary_action_bl
             "space_key": "ENG",
             "body": "@bot",
         },
-        metadata={"denied_capability_ids": ["channel_action:confluence_add_comment"]},
+        metadata={"denied_capability_ids": ["adapter:confluence:add_comment"]},
     )
     result = await build_default_execution_bus().execute(req)
     assert result.status == "error"
-    assert result.output_payload["blocked_secondary_action_ids"] == ["channel_action:confluence_add_comment"]
+    assert result.output_payload["blocked_secondary_action_ids"] == ["adapter:confluence:add_comment"]
     event_types = [evt.get("event_type") for evt in result.runtime_events]
     assert "task.triggered_event.secondary_action.blocked" in event_types
     assert "governance.audit" in event_types
@@ -3818,7 +3818,7 @@ async def test_execution_bus_triggered_event_task_success_includes_secondary_gov
         return {"ok": True}
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
         execution_type="task",
@@ -4068,7 +4068,7 @@ async def test_execution_bus_triggered_event_task_github_review_comment_secondar
         raise AssertionError("writeback should be blocked by governance gate")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.reply_pr_review_comment", _fake_reply)
     req = make_execution_request(
         source_type="task",
         execution_type="task",
@@ -4090,7 +4090,7 @@ async def test_execution_bus_triggered_event_task_github_unsupported_comment_kin
         raise AssertionError("unsupported comment_kind must not fallback to add_comment")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add)
 
     req = make_execution_request(
         source_type="task",
@@ -4114,8 +4114,8 @@ async def test_execution_bus_triggered_event_task_github_unsupported_reply_mode_
         raise AssertionError("unsupported reply_mode must not use reply_review_comment")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.reply_pr_review_comment", _fake_reply)
 
     req = make_execution_request(
         source_type="task",
@@ -4136,7 +4136,7 @@ async def test_execution_bus_triggered_event_task_github_commit_comment_secondar
         raise AssertionError("writeback should be blocked by governance gate")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_commit_comment", _fake_commit_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_commit_comment", _fake_commit_comment)
 
     req = make_execution_request(source_type="task", execution_type="task", input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"commit_comment","reply_mode":"same_surface","owner":"acme","repo":"demo","commit_sha":"abc123","comment_id":2,"body":"@bot","session_id":"sess"}, metadata={"denied_adapter_actions":["adapter:github:add_commit_comment"]})
     result = await build_default_execution_bus().execute(req)
@@ -4154,7 +4154,7 @@ async def test_execution_bus_triggered_event_task_github_commit_comment_success(
         return {"id": 123}
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_commit_comment", _fake_commit_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_commit_comment", _fake_commit_comment)
 
     req = make_execution_request(source_type="task", execution_type="task", input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"commit_comment","reply_mode":"same_surface","owner":"acme","repo":"demo","commit_sha":"abc123","comment_id":2,"body":"@bot","session_id":"sess"})
     result = await build_default_execution_bus().execute(req)
@@ -4170,7 +4170,7 @@ async def test_execution_bus_triggered_event_task_github_discussion_comment_seco
         raise AssertionError("writeback should be blocked by governance gate")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_discussion_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_discussion_comment", _fake_discussion_comment)
     req = make_execution_request(
         source_type="task",
         execution_type="task",
@@ -4190,7 +4190,7 @@ async def test_execution_bus_triggered_event_task_github_notification_metadata_d
         raise AssertionError("writeback should be blocked by governance gate")
 
     monkeypatch.setattr("src.runtime.triggered_event_task._run_agent_response", _fake_triggered_event_agent_response)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
     req = make_execution_request(
         source_type="task",
         execution_type="task",

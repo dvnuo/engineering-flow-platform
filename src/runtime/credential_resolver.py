@@ -9,7 +9,7 @@ from typing import Callable, Dict, Iterable
 from urllib.parse import urlsplit
 
 from src.config import config
-from src.github.url_utils import PUBLIC_GITHUB_API_BASE, normalize_github_api_base_url
+from src.external_cli.github import PUBLIC_GITHUB_API_BASE, normalize_github_api_base_url
 
 REDACTED_SECRET = "[REDACTED_GITHUB_TOKEN]"
 
@@ -42,8 +42,8 @@ def _github_config() -> dict:
 def _github_enabled_and_token() -> tuple[bool, str, str]:
     github_cfg = _github_config()
     enabled = bool(github_cfg.get("enabled"))
-    token = str(github_cfg.get("api_token") or "").strip()
-    base_url = str(github_cfg.get("base_url") or "").strip()
+    token = str(github_cfg.get("api_token") or github_cfg.get("token") or github_cfg.get("access_token") or "").strip()
+    base_url = str(github_cfg.get("api_base_url") or github_cfg.get("base_url") or "").strip()
     return enabled, token, base_url
 
 

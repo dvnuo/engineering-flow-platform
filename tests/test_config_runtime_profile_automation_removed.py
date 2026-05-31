@@ -51,7 +51,8 @@ def test_set_managed_overlay_allows_llm_response_flow_subtree(tmp_path):
     assert effective["llm"]["response_flow"]["plan_policy"] == "explicit_or_complex"
 
 
-def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path):
+def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
 

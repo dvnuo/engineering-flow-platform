@@ -189,13 +189,6 @@ def load_runtime_api_lightweight():
         "src.sessions.usage": _module("src.sessions.usage", usage_tracker=types.SimpleNamespace()),
     }
 
-    # load real github url utils for normalization contract
-    gh_spec = importlib.util.spec_from_file_location("src.github.url_utils", Path("src/github/url_utils.py"))
-    gh_mod = importlib.util.module_from_spec(gh_spec)
-    assert gh_spec and gh_spec.loader
-    gh_spec.loader.exec_module(gh_mod)
-    modules["src.github.url_utils"] = gh_mod
-
     prev = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
     src_pkg.gateway = gateway_pkg

@@ -110,8 +110,8 @@ async def test_load_manifest_read_doc_write_and_context_lightweight(monkeypatch)
             writes.append((path, branch, content))
             return {"commit": {"sha": "sha-1"}}
 
-        monkeypatch.setattr(module.github_channel, "get_file", _fake_get_file)
-        monkeypatch.setattr(module.github_channel, "create_or_update_file", _fake_put_file)
+        monkeypatch.setattr(module.github_cli, "get_file", _fake_get_file)
+        monkeypatch.setattr(module.github_cli, "create_or_update_file", _fake_put_file)
 
         ref, manifest = await module.load_bundle_manifest({"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"})
         assert manifest["bundle_id"] == "rb-1"

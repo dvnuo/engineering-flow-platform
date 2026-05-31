@@ -16,20 +16,15 @@ def load_requirement_bundle_assets_lightweight():
     runtime_pkg = types.ModuleType("src.runtime")
     runtime_pkg.__path__ = []
 
-    github_pkg = types.ModuleType("src.github")
-    github_pkg.__path__ = []
+    external_cli_pkg = types.ModuleType("src.external_cli")
+    external_cli_pkg.__path__ = []
 
-    github_api_mod = types.ModuleType("src.github.api")
-    github_channel = types.SimpleNamespace(
+    github_cli_mod = types.ModuleType("src.external_cli.github")
+    github_cli = types.SimpleNamespace(
         base_url="https://api.github.com",
         get_file=None,
         create_or_update_file=None,
     )
-    github_api_mod.github_channel = github_channel
-
-    github_pkg.github_channel = github_channel
-
-    github_doc_refs_mod = types.ModuleType("src.github.doc_refs")
 
     @dataclass(frozen=True)
     class GitHubDocRef:
@@ -54,20 +49,15 @@ def load_requirement_bundle_assets_lightweight():
                 path="/".join(parts[4:]).strip("/"),
             )
         return GitHubDocRef(
-            owner=default_ref.owner,
-            repo=default_ref.repo,
-            branch=default_ref.branch,
+            owner=getattr(default_ref, "owner", None) or default_ref["owner"],
+            repo=getattr(default_ref, "repo", None) or default_ref["repo"],
+            branch=getattr(default_ref, "branch", None) or default_ref["branch"],
             path=normalized.strip("/"),
         )
 
-    github_doc_refs_mod.GitHubDocRef = GitHubDocRef
-    github_doc_refs_mod.parse_github_doc_ref = parse_github_doc_ref
-
-    github_source_service_mod = types.ModuleType("src.github.source_service")
-
     async def prepare_github_file_source(raw, default_ref, session_id=None):
         doc_ref = parse_github_doc_ref(raw, default_ref)
-        file_data = await github_channel.get_file(doc_ref.owner, doc_ref.repo, doc_ref.path, doc_ref.branch)
+        file_data = await github_cli_mod.get_file(doc_ref.owner, doc_ref.repo, doc_ref.path, doc_ref.branch)
         encoded = file_data.get("content")
         if not isinstance(encoded, str) or not encoded.strip():
             raise ValueError(f"File not found or empty: {doc_ref.path}")
@@ -80,10 +70,17 @@ def load_requirement_bundle_assets_lightweight():
         }
         return {"doc_ref": doc_ref, "bundle": bundle}
 
-    github_source_service_mod.prepare_github_file_source = prepare_github_file_source
+    async def _get_file(*args, **kwargs):
+        return await github_cli.get_file(*args, **kwargs)
 
-    github_url_utils_mod = types.ModuleType("src.github.url_utils")
-    github_url_utils_mod.normalize_github_api_base_url = lambda base_url: str(base_url or "").strip() or "https://api.github.com"
+    async def _create_or_update_file(*args, **kwargs):
+        return await github_cli.create_or_update_file(*args, **kwargs)
+
+    github_cli_mod.GitHubDocRef = GitHubDocRef
+    github_cli_mod.parse_github_doc_ref = parse_github_doc_ref
+    github_cli_mod.prepare_github_file_source = prepare_github_file_source
+    github_cli_mod.get_file = _get_file
+    github_cli_mod.create_or_update_file = _create_or_update_file
 
     bundle_template_registry_mod = types.ModuleType("src.runtime.bundle_template_registry")
 
@@ -173,11 +170,8 @@ def load_requirement_bundle_assets_lightweight():
     modules = {
         "src": src_pkg,
         "src.runtime": runtime_pkg,
-        "src.github": github_pkg,
-        "src.github.api": github_api_mod,
-        "src.github.doc_refs": github_doc_refs_mod,
-        "src.github.source_service": github_source_service_mod,
-        "src.github.url_utils": github_url_utils_mod,
+        "src.external_cli": external_cli_pkg,
+        "src.external_cli.github": github_cli_mod,
         "src.runtime.bundle_template_registry": bundle_template_registry_mod,
         "src.utils.redaction": redaction_mod,
         "src.context_blob_store": context_blob_mod,
@@ -187,7 +181,8 @@ def load_requirement_bundle_assets_lightweight():
     prev = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
     src_pkg.runtime = runtime_pkg
-    src_pkg.github = github_pkg
+    src_pkg.external_cli = external_cli_pkg
+    external_cli_pkg.github = github_cli_mod
 
     spec = importlib.util.spec_from_file_location(
         "src.runtime.requirement_bundle_assets",

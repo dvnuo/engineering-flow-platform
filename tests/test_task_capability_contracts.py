@@ -240,7 +240,7 @@ def test_resolve_task_capability_contract_triggered_event_task_jira_assigned():
 def test_resolve_task_capability_contract_triggered_event_task_confluence_mention():
     plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "confluence.mention"})
     assert plan["primary_capability_id"] == "skill:handle-triggered-event"
-    assert "channel_action:confluence_add_comment" in plan["involved_capability_ids"]
+    assert "adapter:confluence:add_comment" in plan["involved_capability_ids"]
 
 
 def test_resolve_task_capability_contract_triggered_event_task_github_review_comment_reply():

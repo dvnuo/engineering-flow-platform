@@ -7,7 +7,7 @@ import hashlib
 from typing import Any, Callable, Dict, Optional
 import logging
 
-from src.github.api import github_channel
+from src.external_cli import github as github_cli
 from src.runtime.events import build_runtime_event
 from src.runtime.runtime_adapter_execution import execute_adapter_action_via_bus
 
@@ -245,7 +245,7 @@ def _normalize_review_writeback(
 
 
 async def _get_current_pr_head_sha(owner: str, repo: str, pull_number: int) -> str | None:
-    pr_payload = await github_channel.get_pull_request(owner, repo, pull_number)
+    pr_payload = await github_cli.get_pull_request(owner, repo, pull_number)
     head = pr_payload.get("head") if isinstance(pr_payload, dict) else {}
     sha = head.get("sha") if isinstance(head, dict) else None
     if isinstance(sha, str) and sha.strip():

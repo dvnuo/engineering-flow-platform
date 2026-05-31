@@ -260,6 +260,6 @@ def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str,
         elif source_kind in {"jira.assigned", "jira.mention"}:
             involved.append("adapter:jira:add_comment")
         elif source_kind == "confluence.mention":
-            involved.append("channel_action:confluence_add_comment")
+            involved.append("adapter:confluence:add_comment")
         return involved
     return []

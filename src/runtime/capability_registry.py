@@ -10,6 +10,7 @@ import json
 import logging
 
 from src.runtime.capability_adapters import (
+    build_confluence_adapter_capabilities,
     build_github_adapter_capabilities,
     build_jira_adapter_capabilities,
     build_portal_adapter_capabilities,
@@ -126,7 +127,6 @@ class _CapabilityBuilder:
     def populate_defaults(self) -> None:
         self._register_skills()
         self._register_adapter_actions()
-        self._register_channel_actions()
         self._register_tools()
 
     def _register_skills(self) -> None:
@@ -241,6 +241,7 @@ class _CapabilityBuilder:
         adapter_descriptors = [
             *build_github_adapter_capabilities(),
             *build_jira_adapter_capabilities(),
+            *build_confluence_adapter_capabilities(),
             *build_portal_adapter_capabilities(),
         ]
         for adapter_descriptor in adapter_descriptors:
@@ -258,32 +259,6 @@ class _CapabilityBuilder:
                     metadata={"adapter": adapter_descriptor.adapter, **adapter_descriptor.metadata},
                 )
             )
-
-    def _register_channel_actions(self) -> None:
-        try:
-            import src.channels as channels
-
-            for item_name in getattr(channels, "__all__", []):
-                if not item_name or not (item_name.startswith("jira_") or item_name.startswith("confluence_")):
-                    continue
-                item = getattr(channels, item_name, None)
-                if not callable(item):
-                    continue
-                self.registry.register(
-                    CapabilityDescriptor(
-                        capability_id=_format_capability_id("channel_action", item_name),
-                        type="channel_action",
-                        name=item_name,
-                        input_schema={"type": "object"},
-                        output_schema={"type": "object"},
-                        policy_tags=["channel_action"],
-                        requires_identity_binding=True,
-                        source_ref="src.channels",
-                        metadata={"channel_action": item_name},
-                    )
-                )
-        except Exception:
-            logger.debug("Failed to register channel capabilities", exc_info=True)
 
     def _register_tools(self) -> None:
         try:

@@ -1,5 +1,7 @@
+import json
 import os
 
+from ruamel.yaml import YAML
 from src.config import Config
 
 
@@ -282,3 +284,120 @@ def test_runtime_profile_load_removes_legacy_sidecar_on_startup(tmp_path, monkey
 
     assert not runtime_profile_path.exists()
     assert cfg.get_effective_config()["llm"]["provider"] == "openai"
+
+
+def test_runtime_profile_apply_writes_external_cli_configs_and_clear(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("ATLASSIAN_CONFIG", raising=False)
+    monkeypatch.delenv("GH_CONFIG_DIR", raising=False)
+
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_external",
+        1,
+        {
+            "jira": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "jira-main",
+                        "url": "https://jira.example.test/",
+                        "username": "bot",
+                        "api_token": "jira-token",
+                        "project_key": "ENG",
+                        "api_version": "3",
+                        "verify_ssl": False,
+                    },
+                    {"name": "disabled", "url": "https://disabled.example.test", "enabled": False},
+                ],
+            },
+            "confluence": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "docs",
+                        "url": "https://conf.example.test/",
+                        "token": "conf-token",
+                        "space_key": "DOCS",
+                    }
+                ],
+            },
+            "github": {
+                "enabled": True,
+                "access_token": "gh-token",
+                "api_base_url": "https://github.example.test/api/v3",
+            },
+            "git": {"user": {"name": "Runtime Bot", "email": "runtime@example.test"}},
+        },
+    )
+
+    atlassian_path = home / ".config" / "atlassian" / "config.json"
+    atlassian = json.loads(atlassian_path.read_text(encoding="utf-8"))
+    assert atlassian_path.stat().st_mode & 0o777 == 0o600
+    assert atlassian["jira"]["default_instance"] == "jira-main"
+    assert len(atlassian["jira"]["instances"]) == 1
+    jira_instance = atlassian["jira"]["instances"][0]
+    assert jira_instance["base_url"] == "https://jira.example.test"
+    assert jira_instance["api_version"] == "3"
+    assert jira_instance["rest_path"] == "/rest/api/3"
+    assert jira_instance["auth"] == {"type": "basic_api_key", "username": "bot", "api_key": "jira-token"}
+    assert jira_instance["default_project"] == "ENG"
+    assert jira_instance["verify_ssl"] is False
+    conf_instance = atlassian["confluence"]["instances"][0]
+    assert conf_instance["base_url"] == "https://conf.example.test"
+    assert conf_instance["rest_path"] == "/rest/api"
+    assert conf_instance["auth"] == {"type": "bearer_token", "token": "conf-token"}
+    assert conf_instance["default_space"] == "DOCS"
+
+    hosts_path = home / ".config" / "gh" / "hosts.yml"
+    hosts = YAML().load(hosts_path.read_text(encoding="utf-8"))
+    assert hosts_path.stat().st_mode & 0o777 == 0o600
+    assert hosts["github.example.test"]["oauth_token"] == "gh-token"
+    assert hosts["github.example.test"]["git_protocol"] == "https"
+
+    generated_git = home / ".config" / "efp" / "runtime-profile.gitconfig"
+    gitconfig = home / ".gitconfig"
+    assert generated_git.stat().st_mode & 0o777 == 0o600
+    assert gitconfig.stat().st_mode & 0o777 == 0o600
+    assert 'name = "Runtime Bot"' in generated_git.read_text(encoding="utf-8")
+    assert 'email = "runtime@example.test"' in generated_git.read_text(encoding="utf-8")
+    assert "runtime-profile.gitconfig" in gitconfig.read_text(encoding="utf-8")
+
+    cfg.clear_managed_overlay()
+    assert not atlassian_path.exists()
+    assert not hosts_path.exists()
+    assert not generated_git.exists()
+    assert "runtime-profile.gitconfig" not in gitconfig.read_text(encoding="utf-8")
+
+
+def test_runtime_profile_apply_honors_atlassian_config_env(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    custom_atlassian = tmp_path / "custom" / "atlassian.json"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ATLASSIAN_CONFIG", str(custom_atlassian))
+
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_custom_atlassian",
+        1,
+        {
+            "jira": {
+                "enabled": True,
+                "instances": [
+                    {"name": "jira", "url": "https://jira.example.test", "token": "token"},
+                ],
+            }
+        },
+    )
+
+    assert custom_atlassian.exists()
+    assert not (home / ".config" / "atlassian" / "config.json").exists()
