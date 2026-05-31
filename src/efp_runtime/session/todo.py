@@ -1,4 +1,4 @@
-"""Session-level todo state for Runtime v2."""
+"""Session-level todo state for EFP runtime."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ TodosBySession = MutableMapping[str, list[TodoItem]]
 
 
 class SessionTodoStore:
-    """In-memory todo state keyed by Runtime v2 session id."""
+    """In-memory todo state keyed by EFP runtime session id."""
 
     def __init__(self, todos_by_session: TodosBySession | None = None) -> None:
         self.todos_by_session: TodosBySession = (
@@ -51,7 +51,7 @@ class SessionTodoStore:
 
 
 class FileSessionTodoStore(SessionTodoStore):
-    """File-backed todo state keyed by Runtime v2 session id."""
+    """File-backed todo state keyed by EFP runtime session id."""
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).expanduser().resolve()

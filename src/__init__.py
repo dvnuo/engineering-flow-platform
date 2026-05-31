@@ -1,4 +1,4 @@
-"""Compatibility tool surface backed by Runtime v2 built-ins only."""
+"""Tool surface backed by EFP runtime built-ins only."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ class ToolResult:
 
 
 class Tool:
-    """Small compatibility wrapper around a Runtime v2 tool definition."""
+    """Small wrapper around an EFP runtime tool definition."""
 
     def __init__(self, tool_id: str, description: str = "", input_schema: Optional[Dict[str, Any]] = None):
         self.name = tool_id
@@ -81,27 +81,27 @@ TOOLS: Dict[str, Tool] = _tool_wrappers()
 
 
 def get_all_tools() -> List[Dict[str, Any]]:
-    """Get all Runtime v2 builtin tool schemas."""
+    """Get all EFP runtime builtin tool schemas."""
     return get_tools_schema()
 
 
 def get_tool_names() -> List[str]:
-    """Get all Runtime v2 builtin tool names."""
+    """Get all EFP runtime builtin tool names."""
     return [tool.id for tool in _tool_registry().list()]
 
 
 def get_tool(name: str) -> Optional[Dict[str, Any]]:
-    """Get one Runtime v2 builtin tool schema by name."""
+    """Get one EFP runtime builtin tool schema by name."""
     return get_tool_map().get(name)
 
 
 def get_tool_map() -> Dict[str, Dict[str, Any]]:
-    """Get Runtime v2 builtin tool schema map by tool name."""
+    """Get EFP runtime builtin tool schema map by tool name."""
     return {schema["function"]["name"]: schema for schema in get_tools_schema()}
 
 
 def get_tools_schema() -> List[Dict[str, Any]]:
-    """Get OpenAI function-tool schemas for Runtime v2 builtin tools."""
+    """Get OpenAI function-tool schemas for EFP runtime builtin tools."""
     schemas: List[Dict[str, Any]] = []
     for tool in _tool_registry().list():
         schemas.append(
@@ -136,7 +136,7 @@ def _strip_runtime_metadata(kwargs: Dict[str, Any]) -> tuple[Dict[str, Any], Too
 
 
 async def execute_tool(name: str, **kwargs: Any) -> ToolResult:
-    """Execute a Runtime v2 builtin tool by name."""
+    """Execute an EFP runtime builtin tool by name."""
     args, context = _strip_runtime_metadata(dict(kwargs))
     registry = _tool_registry()
     runtime = ToolRuntime(registry)

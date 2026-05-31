@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager as session_manager
+from src.efp_runtime.session.gateway_facade import runtime_session_manager as session_manager
 from src.runtime.context_summary import build_structured_summary
 
 logger = logging.getLogger(__name__)

@@ -1,4 +1,4 @@
-"""Tool definition primitives for EFP Runtime v2."""
+"""Tool definition primitives for EFP runtime."""
 
 from __future__ import annotations
 
@@ -241,7 +241,7 @@ def _is_async_callable(callback: Callable[..., Any]) -> bool:
 
 @dataclass(frozen=True)
 class ToolDef:
-    """A registered runtime v2 tool."""
+    """A registered runtime tool."""
 
     id: str
     description: str

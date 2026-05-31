@@ -97,10 +97,10 @@ def test_prepare_transient_model_message_fallback_on_inject_exception(monkeypatc
 @pytest.mark.asyncio
 async def test_run_chat_via_execution_bus_retains_attachments(monkeypatch):
     captured = {}
-    async def fake_runtime_v2_chat(**kwargs):
+    async def fake_runtime_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "ok"}
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", fake_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", fake_runtime_chat)
 
     await runtime_api._run_chat_via_execution_bus(session_id="s1", message="m", user_name="u", portal_user_id=None, portal_user_name=None, attachments=["f1"])
     assert captured["attachments"] == ["f1"]

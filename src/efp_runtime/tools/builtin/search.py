@@ -1,4 +1,4 @@
-"""Workspace-contained search tools for EFP Runtime v2."""
+"""Workspace-contained search tools for EFP runtime."""
 
 from __future__ import annotations
 

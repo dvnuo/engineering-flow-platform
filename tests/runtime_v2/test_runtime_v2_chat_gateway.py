@@ -4,11 +4,11 @@ import pytest
 
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
-from src.gateway import runtime_v2_chat
+from src.gateway import runtime_chat
 
 
 @pytest.mark.asyncio
-async def test_runtime_v2_chat_applies_trusted_portal_runtime_profile_config(monkeypatch):
+async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkeypatch):
     captured = {}
 
     def _fake_provider(model):
@@ -32,16 +32,16 @@ async def test_runtime_v2_chat_applies_trusted_portal_runtime_profile_config(mon
         async def record_runtime_result(self, *_args, **_kwargs):
             return None
 
-    monkeypatch.setattr(runtime_v2_chat, "_build_github_copilot_provider", _fake_provider)
-    monkeypatch.setattr(runtime_v2_chat, "AgentRuntime", _FakeRuntime)
+    monkeypatch.setattr(runtime_chat, "_build_github_copilot_provider", _fake_provider)
+    monkeypatch.setattr(runtime_chat, "AgentRuntime", _FakeRuntime)
     monkeypatch.setattr(
-        runtime_v2_chat,
-        "get_runtime_v2_session_manager",
+        runtime_chat,
+        "get_runtime_session_manager",
         lambda: _FakeSessionManager(),
     )
-    monkeypatch.setattr(runtime_v2_chat, "get_runtime_v2_session_store", lambda: object())
+    monkeypatch.setattr(runtime_chat, "get_runtime_session_store", lambda: object())
     monkeypatch.setattr(
-        runtime_v2_chat.config,
+        runtime_chat.config,
         "_config",
         {
             "llm": {
@@ -75,7 +75,7 @@ async def test_runtime_v2_chat_applies_trusted_portal_runtime_profile_config(mon
         "unknown_future_key": "ignored",
     }
 
-    await runtime_v2_chat.run_runtime_v2_chat(
+    await runtime_chat.run_runtime_chat(
         message="hello",
         session_id="s-profile",
         request_id="req-profile",
@@ -91,7 +91,7 @@ async def test_runtime_v2_chat_applies_trusted_portal_runtime_profile_config(mon
 
     runtime_config = captured["config"]
     assert captured["provider_model"] == "request-model"
-    assert runtime_config.workspace_root == runtime_v2_chat._runtime_workspace_root()
+    assert runtime_config.workspace_root == runtime_chat._runtime_workspace_root()
     assert runtime_config.default_provider_id == "github-copilot"
     assert runtime_config.default_model == "request-model"
     assert runtime_config.track_usage is False
@@ -111,15 +111,15 @@ async def test_runtime_v2_chat_applies_trusted_portal_runtime_profile_config(mon
     assert not hasattr(runtime_config, "compaction_preserve_recent_turns")
 
 
-def test_runtime_v2_chat_ignores_untrusted_runtime_profile_metadata(monkeypatch):
+def test_runtime_chat_ignores_untrusted_runtime_profile_metadata(monkeypatch):
     monkeypatch.setattr(
-        runtime_v2_chat.config,
+        runtime_chat.config,
         "_config",
         {"session": {"max_iterations": 2}},
         raising=False,
     )
 
-    runtime_config = runtime_v2_chat._runtime_config(
+    runtime_config = runtime_chat._runtime_config(
         "request-model",
         track_usage=True,
         execution_metadata={
@@ -136,7 +136,7 @@ def test_runtime_v2_chat_ignores_untrusted_runtime_profile_metadata(monkeypatch)
     assert runtime_config.track_usage is True
 
 
-def test_runtime_v2_chat_uses_persisted_runtime_v2_config_fields(monkeypatch):
+def test_runtime_chat_uses_persisted_runtime_v2_config_fields(monkeypatch):
     class _FakeConfig:
         @property
         def session(self):
@@ -153,9 +153,9 @@ def test_runtime_v2_chat_uses_persisted_runtime_v2_config_fields(monkeypatch):
                 "compaction_preserve_recent_turns": 8,
             }
 
-    monkeypatch.setattr(runtime_v2_chat, "config", _FakeConfig())
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
 
-    runtime_config = runtime_v2_chat._runtime_config(
+    runtime_config = runtime_chat._runtime_config(
         "request-model",
         track_usage=True,
     )
@@ -163,26 +163,26 @@ def test_runtime_v2_chat_uses_persisted_runtime_v2_config_fields(monkeypatch):
     assert runtime_config.enabled_tools == ["read"]
     assert runtime_config.max_context_tokens == 32000
     assert runtime_config.track_usage is False
-    assert runtime_config.workspace_root == runtime_v2_chat._runtime_workspace_root()
+    assert runtime_config.workspace_root == runtime_chat._runtime_workspace_root()
     assert runtime_config.default_provider_id == "github-copilot"
     assert runtime_config.default_model == "request-model"
     assert not hasattr(runtime_config, "compaction_preserve_recent_turns")
 
 
-def test_runtime_v2_chat_profile_track_usage_overrides_only_when_present(monkeypatch):
+def test_runtime_chat_profile_track_usage_overrides_only_when_present(monkeypatch):
     monkeypatch.setattr(
-        runtime_v2_chat.config,
+        runtime_chat.config,
         "_config",
         {"session": {"max_iterations": 2}},
         raising=False,
     )
 
-    without_profile_track_usage = runtime_v2_chat._runtime_config(
+    without_profile_track_usage = runtime_chat._runtime_config(
         "request-model",
         track_usage=False,
         runtime_profile_config={"enabled_tools": ["read"]},
     )
-    with_profile_track_usage = runtime_v2_chat._runtime_config(
+    with_profile_track_usage = runtime_chat._runtime_config(
         "request-model",
         track_usage=False,
         runtime_profile_config={"track_usage": True},
@@ -226,15 +226,15 @@ async def test_runtime_v2_error_result_raises_sanitized_chat_error_after_recordi
         async def record_runtime_result(self, session_id, runtime_result, *, request_id=None):
             recorded.append((session_id, runtime_result, request_id))
 
-    monkeypatch.setattr(runtime_v2_chat, "AgentRuntime", _FakeRuntime)
+    monkeypatch.setattr(runtime_chat, "AgentRuntime", _FakeRuntime)
     monkeypatch.setattr(
-        runtime_v2_chat,
-        "get_runtime_v2_session_manager",
+        runtime_chat,
+        "get_runtime_session_manager",
         lambda: _FakeSessionManager(),
     )
-    monkeypatch.setattr(runtime_v2_chat, "get_runtime_v2_session_store", lambda: object())
+    monkeypatch.setattr(runtime_chat, "get_runtime_session_store", lambda: object())
     monkeypatch.setattr(
-        runtime_v2_chat.config,
+        runtime_chat.config,
         "_config",
         {
             "llm": {
@@ -247,8 +247,8 @@ async def test_runtime_v2_error_result_raises_sanitized_chat_error_after_recordi
         raising=False,
     )
 
-    with pytest.raises(runtime_v2_chat.RuntimeV2ChatError) as exc_info:
-        await runtime_v2_chat.run_runtime_v2_chat(
+    with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
+        await runtime_chat.run_runtime_chat(
             message="hello",
             session_id="s-error",
             user_name="u1",

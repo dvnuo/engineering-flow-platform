@@ -1,4 +1,4 @@
-"""Persistent workspace file snapshots for Runtime v2."""
+"""Persistent workspace file snapshots for EFP runtime."""
 
 from __future__ import annotations
 

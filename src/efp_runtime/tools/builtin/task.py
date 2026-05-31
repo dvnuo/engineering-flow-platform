@@ -1,4 +1,4 @@
-"""Injectable foreground task tool for EFP Runtime v2."""
+"""Injectable foreground task tool for EFP runtime."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ BACKGROUND_UNSUPPORTED_MESSAGE = (
     "Background task execution is not supported by this runtime yet."
 )
 DEFAULT_TASK_TOOL_DESCRIPTION = (
-    "Delegate a task to an injected Runtime v2 task runner."
+    "Delegate a task to an injected EFP runtime task runner."
 )
 
 TaskToolResponse = Union[str, "TaskToolResult", Mapping[str, Any]]
@@ -72,7 +72,7 @@ def create_task_tool(
     allow_background: bool = False,
     background_manager: "BackgroundTaskManager | None" = None,
 ) -> ToolDef:
-    """Create the Runtime v2 task tool around an injected runner."""
+    """Create the EFP runtime task tool around an injected runner."""
 
     if runner is None:
         raise ValueError("runner is required")

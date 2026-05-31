@@ -1,4 +1,4 @@
-"""Executable Runtime v2 loop runner."""
+"""Executable EFP runtime loop runner."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ class _RuntimeEventLog(list):
 
 
 class RuntimeLoopRunner:
-    """Small iterative Runtime v2 orchestrator."""
+    """Small iterative EFP runtime orchestrator."""
 
     def __init__(
         self,

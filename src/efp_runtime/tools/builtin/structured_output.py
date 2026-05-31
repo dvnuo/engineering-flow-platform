@@ -1,4 +1,4 @@
-"""Per-run structured output terminal tool for Runtime v2."""
+"""Per-run structured output terminal tool for EFP runtime."""
 
 from __future__ import annotations
 

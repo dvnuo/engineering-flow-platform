@@ -1,4 +1,4 @@
-"""In-process event bus for Runtime v2 sessions."""
+"""In-process event bus for EFP runtime sessions."""
 
 from __future__ import annotations
 

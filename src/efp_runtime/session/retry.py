@@ -1,4 +1,4 @@
-"""Minimal retry hooks for the Runtime v2 loop."""
+"""Minimal retry hooks for the EFP runtime loop."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Part-aware deterministic compaction for EFP Runtime v2."""
+"""Part-aware deterministic compaction for EFP runtime."""
 
 from __future__ import annotations
 

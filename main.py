@@ -23,9 +23,9 @@ from src.config import config
 # Apply proxy settings early (before any HTTP clients are created)
 config.apply_proxy()
 
+from src.efp_runtime.session.gateway_facade import runtime_session_manager
 from src.gateway.server import gateway
 from src.sessions.persistence import session_persistence
-from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
 from src.cron.jira_reconciliation import start_reconciliation, stop_reconciliation, is_enabled as is_jira_reconciliation_enabled
 from src.git.api import setup_git_user
@@ -209,8 +209,8 @@ async def main() -> None:
         # Directory already created in __init__
         logger.info(f"Session store initialized | path={session_persistence.storage_dir}")
         logger.info(f"Usage tracker initialized | path={usage_tracker.base_path}")
-        await session_manager.initialize()
-        logger.info("Session manager initialized successfully")
+        await runtime_session_manager.initialize()
+        logger.info("Runtime session manager initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize session/usage tracking | error={e}", exc_info=True)
 

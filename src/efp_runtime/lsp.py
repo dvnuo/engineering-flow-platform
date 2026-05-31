@@ -1,4 +1,4 @@
-"""LSP protocol boundary for Runtime v2 code navigation tools."""
+"""LSP protocol boundary for EFP runtime code navigation tools."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ LSP_OPERATIONS = (
 
 @dataclass(frozen=True)
 class LSPPosition:
-    """A 1-based source position accepted at the Runtime v2 tool boundary."""
+    """A 1-based source position accepted at the EFP runtime tool boundary."""
 
     file_path: str
     line: int
@@ -32,7 +32,7 @@ class LSPPosition:
 
 @dataclass(frozen=True)
 class LSPRequest:
-    """Provider-neutral request sent from the Runtime v2 lsp tool to a client."""
+    """Provider-neutral request sent from the EFP runtime lsp tool to a client."""
 
     operation: str
     file_path: str | None = None
@@ -42,7 +42,7 @@ class LSPRequest:
 
 
 class LSPClient(Protocol):
-    """Injectable Runtime v2 LSP client boundary.
+    """Injectable EFP runtime LSP client boundary.
 
     Implementations may also expose ``is_available(file_path=None)``. The
     helper below treats clients without that method as available.

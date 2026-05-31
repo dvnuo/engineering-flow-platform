@@ -1,4 +1,4 @@
-"""GitHub Copilot Runtime v2 smoke entrypoint."""
+"""GitHub Copilot EFP runtime smoke entrypoint."""
 
 from __future__ import annotations
 
@@ -30,12 +30,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run a Runtime v2 GitHub Copilot provider smoke check.",
+        description="Run a EFP runtime GitHub Copilot provider smoke check.",
     )
     parser.add_argument(
         "--prompt",
         default="Say ok",
-        help="User prompt to send through the Runtime v2 loop.",
+        help="User prompt to send through the EFP runtime loop.",
     )
     parser.add_argument(
         "--model",

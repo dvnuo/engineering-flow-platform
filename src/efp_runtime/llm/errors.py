@@ -1,4 +1,4 @@
-"""Provider-neutral error types for Runtime v2 LLM boundaries."""
+"""Provider-neutral error types for EFP runtime LLM boundaries."""
 
 from __future__ import annotations
 

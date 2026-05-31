@@ -1,12 +1,12 @@
 import pytest
 
-from src.sessions.manager import SessionManager
+from src.efp_runtime.session.gateway_facade import RuntimeSessionManager
 
 
 @pytest.mark.asyncio
 async def test_delete_messages_from_deletes_target_and_following_messages():
     session_id = "s-delete-from"
-    manager = SessionManager()
+    manager = RuntimeSessionManager()
     await manager.clear_history(session_id)
 
     u1 = await manager.add_message(session_id, "user", "first")

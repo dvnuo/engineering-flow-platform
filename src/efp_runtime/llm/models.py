@@ -1,4 +1,4 @@
-"""Copilot-first model context profiles for Runtime v2."""
+"""Copilot-first model context profiles for EFP runtime."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Provider-only system prompt stack for EFP Runtime v2."""
+"""Provider-only system prompt stack for EFP runtime."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 from .session.models import Message, MessagePart, MessageRole
 
 
-DEFAULT_SYSTEM_PROMPT = """You are EFP Runtime v2, an interactive software engineering agent working in a shared workspace.
+DEFAULT_SYSTEM_PROMPT = """You are EFP runtime, an interactive software engineering agent working in a shared workspace.
 
 Core operating rules:
 - Use available tools to inspect files, run commands, and modify code; do not invent command output, file contents, tool results, or runtime state.

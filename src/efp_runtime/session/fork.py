@@ -1,4 +1,4 @@
-"""Fork metadata helpers for Runtime v2 sessions."""
+"""Fork metadata helpers for EFP runtime sessions."""
 
 from __future__ import annotations
 

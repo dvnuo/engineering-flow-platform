@@ -1,4 +1,4 @@
-"""Compatibility re-exports for the canonical Runtime v2 model set."""
+"""Compatibility re-exports for the canonical EFP runtime model set."""
 
 from .events import RuntimeEvent
 from .session.models import (

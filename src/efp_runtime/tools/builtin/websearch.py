@@ -1,4 +1,4 @@
-"""Provider-neutral websearch boundary for Runtime v2."""
+"""Provider-neutral websearch boundary for EFP runtime."""
 
 from __future__ import annotations
 

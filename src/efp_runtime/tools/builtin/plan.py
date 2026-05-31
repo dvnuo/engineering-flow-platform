@@ -1,4 +1,4 @@
-"""Plan-mode terminal tool for Runtime v2."""
+"""Plan-mode terminal tool for EFP runtime."""
 
 from __future__ import annotations
 

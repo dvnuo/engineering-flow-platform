@@ -3,10 +3,10 @@ from pathlib import Path
 
 def test_attachment_context_is_passed_as_runtime_v2_transient_prompt_input():
     runtime_api = Path("src/gateway/runtime_api.py").read_text(encoding="utf-8")
-    runtime_v2_chat = Path("src/gateway/runtime_v2_chat.py").read_text(encoding="utf-8")
+    runtime_chat = Path("src/gateway/runtime_chat.py").read_text(encoding="utf-8")
 
     assert "transient_model_message" in runtime_api
-    assert "transient_model_message" in runtime_v2_chat
+    assert "transient_model_message" in runtime_chat
 
     assert "message=history_message" in runtime_api
     assert "transient_model_message=transient_model_message" in runtime_api
@@ -16,20 +16,20 @@ def test_attachment_context_is_passed_as_runtime_v2_transient_prompt_input():
     assert "message=history_message" in run_call_section
     assert "transient_model_message=transient_model_message" in run_call_section
 
-    compose_section = runtime_v2_chat.split("def _compose_user_prompt(", 1)[1].split("async def _forward_runtime_events", 1)[0]
+    compose_section = runtime_chat.split("def _compose_user_prompt(", 1)[1].split("async def _forward_runtime_events", 1)[0]
     assert "transient_model_message" in compose_section
     assert "parts.append(transient)" in compose_section
 
 
 def test_one_shot_attachment_context_is_represented_by_metadata_not_raw_debug_payloads():
-    runtime_v2_chat = Path("src/gateway/runtime_v2_chat.py").read_text(encoding="utf-8")
+    runtime_chat = Path("src/gateway/runtime_chat.py").read_text(encoding="utf-8")
 
-    metadata_section = runtime_v2_chat.split("def _run_metadata(", 1)[1].split("def _compose_user_prompt(", 1)[0]
+    metadata_section = runtime_chat.split("def _run_metadata(", 1)[1].split("def _compose_user_prompt(", 1)[0]
     assert '"attached_image_count": len(attached_images or [])' in metadata_section
     assert '"has_transient_model_message": bool(transient_model_message)' in metadata_section
     assert '"attachments": list(attachments or [])' in metadata_section
 
-    debug_section = runtime_v2_chat.split('"_llm_debug": {', 1)[1].split("}", 2)[0]
+    debug_section = runtime_chat.split('"_llm_debug": {', 1)[1].split("}", 2)[0]
     assert '"provider": "github-copilot"' in debug_section
     assert '"model": model' in debug_section
     assert "transient_model_message" not in debug_section

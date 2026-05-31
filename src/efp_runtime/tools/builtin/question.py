@@ -1,4 +1,4 @@
-"""Built-in question tool for Runtime v2 interactive pauses."""
+"""Built-in question tool for EFP runtime interactive pauses."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Workspace-contained shell execution tool for EFP Runtime v2."""
+"""Workspace-contained shell execution tool for EFP runtime."""
 
 from __future__ import annotations
 

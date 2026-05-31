@@ -1,4 +1,4 @@
-"""Runtime v2 high-level facade."""
+"""EFP runtime high-level facade."""
 
 from .agent import AgentRuntime
 from .config import RuntimeConfig

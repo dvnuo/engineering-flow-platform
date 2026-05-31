@@ -1,10 +1,11 @@
-"""Gateway-facing facade over the Runtime v2 file session store."""
+"""Gateway-facing facade over the EFP runtime file session store."""
 
 from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
 from datetime import datetime
+import importlib
 import logging
 import os
 from pathlib import Path
@@ -26,26 +27,26 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 JIRA_SESSION_PREFIX = "jira:"
-RUNTIME_V2_SESSION_ROOT_ENV = "EFP_RUNTIME_V2_SESSION_ROOT"
+RUNTIME_SESSION_ROOT_ENV = "EFP_RUNTIME_SESSION_ROOT"
 DEFAULT_MAX_HISTORY = 999999
 DEFAULT_AUTO_SAVE = True
 
 _singleton_lock = RLock()
 _store_singletons: dict[Path, FileSessionStore] = {}
-_manager_singletons: dict[Path, "RuntimeV2SessionManager"] = {}
+_manager_singletons: dict[Path, "RuntimeSessionManager"] = {}
 
 
-def runtime_v2_session_root(root: str | Path | None = None) -> Path:
+def runtime_session_root(root: str | Path | None = None) -> Path:
     if root is not None:
         return Path(root).expanduser().resolve()
-    configured = os.environ.get(RUNTIME_V2_SESSION_ROOT_ENV)
+    configured = os.environ.get(RUNTIME_SESSION_ROOT_ENV)
     if configured:
         return Path(configured).expanduser().resolve()
-    return (Path.home() / ".efp" / "runtime-v2").resolve()
+    return (Path.home() / ".efp" / "runtime").resolve()
 
 
-def get_runtime_v2_session_store(root: str | Path | None = None) -> FileSessionStore:
-    resolved = runtime_v2_session_root(root)
+def get_runtime_session_store(root: str | Path | None = None) -> FileSessionStore:
+    resolved = runtime_session_root(root)
     with _singleton_lock:
         store = _store_singletons.get(resolved)
         if store is None:
@@ -54,17 +55,17 @@ def get_runtime_v2_session_store(root: str | Path | None = None) -> FileSessionS
         return store
 
 
-def get_runtime_v2_session_manager(root: str | Path | None = None) -> "RuntimeV2SessionManager":
-    resolved = runtime_v2_session_root(root)
+def get_runtime_session_manager(root: str | Path | None = None) -> "RuntimeSessionManager":
+    resolved = runtime_session_root(root)
     with _singleton_lock:
         manager = _manager_singletons.get(resolved)
         if manager is None:
-            manager = RuntimeV2SessionManager(store=get_runtime_v2_session_store(resolved))
+            manager = RuntimeSessionManager(store=get_runtime_session_store(resolved))
             _manager_singletons[resolved] = manager
         return manager
 
 
-def reset_runtime_v2_session_singletons() -> None:
+def reset_runtime_session_singletons() -> None:
     with _singleton_lock:
         _store_singletons.clear()
         _manager_singletons.clear()
@@ -92,11 +93,11 @@ def resolve_session_display_name(session: Mapping[str, Any]) -> str:
     return "New Chat"
 
 
-class RuntimeV2SessionArtifacts:
-    """Small compatibility object for non-history artifacts such as chatlogs."""
+class RuntimeSessionArtifacts:
+    """Small artifact helper for non-history files such as chatlogs."""
 
     def __init__(self, root: str | Path | None = None) -> None:
-        self.storage_dir = runtime_v2_session_root(root) / "artifacts"
+        self.storage_dir = runtime_session_root(root) / "artifacts"
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
     async def save_session(
@@ -107,13 +108,13 @@ class RuntimeV2SessionArtifacts:
         messages: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        manager = get_runtime_v2_session_manager(self.storage_dir.parent)
+        manager = get_runtime_session_manager(self.storage_dir.parent)
         await manager.merge_metadata(session_id, metadata or {})
         return True
 
 
-class RuntimeV2SessionManager:
-    """Async gateway API backed by a single Runtime v2 ``FileSessionStore``."""
+class RuntimeSessionManager:
+    """Async gateway API backed by a single runtime ``FileSessionStore``."""
 
     def __init__(
         self,
@@ -124,7 +125,7 @@ class RuntimeV2SessionManager:
         auto_save: bool | None = None,
         delete_file_context: Callable[[str], int | bool] | None = None,
     ) -> None:
-        self.store = store or get_runtime_v2_session_store(root)
+        self.store = store or get_runtime_session_store(root)
         self.root = self.store.root
         self.max_history = max_history or DEFAULT_MAX_HISTORY
         self.auto_save = DEFAULT_AUTO_SAVE if auto_save is None else bool(auto_save)
@@ -132,7 +133,7 @@ class RuntimeV2SessionManager:
         self._initialized = False
         self._cleanup_task: Optional[asyncio.Task] = None
         self._delete_file_context = delete_file_context
-        self.artifacts = RuntimeV2SessionArtifacts(self.root)
+        self.artifacts = RuntimeSessionArtifacts(self.root)
 
     @property
     def sessions(self) -> dict[str, dict[str, Any]]:
@@ -446,6 +447,10 @@ class RuntimeV2SessionManager:
         self.store.update_session(session_id, metadata=metadata, replace_metadata=True)
 
     async def recover_session_state(self, session_id: str) -> dict[str, Any]:
+        pipeline_payload = await _recover_session_via_runtime_pipeline(session_id, self)
+        if pipeline_payload is not None:
+            return pipeline_payload
+
         warnings: list[str] = []
         try:
             session = self.store.get_session(session_id)
@@ -453,7 +458,7 @@ class RuntimeV2SessionManager:
         except KeyError:
             session = self.store.create_session(session_id=session_id)
             recovered = False
-            warnings.append("Session did not exist; created an empty Runtime v2 session.")
+            warnings.append("Session did not exist; created an empty EFP runtime session.")
 
         metadata = deepcopy(session.metadata)
         pending_tool_calls = _pending_tool_call_payloads(session.messages)
@@ -540,19 +545,20 @@ class RuntimeV2SessionManager:
                 path.unlink()
                 return True
         except Exception:
-            logger.debug("Failed to delete runtime v2 chatlog", exc_info=True)
+            logger.debug("Failed to delete runtime chatlog", exc_info=True)
         return False
 
     def _delete_session_file_context(self, session_id: str) -> bool:
-        if self._delete_file_context is None:
+        delete_file_context = self._delete_file_context or _resolve_file_context_delete()
+        if delete_file_context is None:
             return False
         try:
-            deleted = self._delete_file_context(session_id)
+            deleted = delete_file_context(session_id)
             if isinstance(deleted, bool):
                 return deleted
             return deleted > 0
         except Exception:
-            logger.debug("Failed to delete file context for runtime v2 session", exc_info=True)
+            logger.debug("Failed to delete file context for runtime session", exc_info=True)
             return False
 
     def _session_to_legacy(self, session: Session) -> dict[str, Any]:
@@ -568,7 +574,7 @@ class RuntimeV2SessionManager:
             "created_at": session.created_at,
             "updated_at": session.updated_at,
             "_persisted": True,
-            "_runtime_store": "runtime_v2_file",
+            "_runtime_store": "runtime_file",
         }
 
 
@@ -787,6 +793,85 @@ def _runtime_events_from_metadata(metadata: Mapping[str, Any]) -> list[Any]:
     return []
 
 
+async def _recover_session_via_runtime_pipeline(
+    session_id: str,
+    manager: RuntimeSessionManager,
+) -> dict[str, Any] | None:
+    try:
+        module = importlib.import_module("src." + "runtime.recovery_pipeline")
+        get_recovery_pipeline = getattr(module, "get_recovery_pipeline")
+        result = await get_recovery_pipeline().hydrate_session_state(session_id)
+    except Exception:
+        return None
+    if _is_empty_pipeline_miss(result) or _is_pipeline_stale_for_manager(
+        result,
+        manager,
+        session_id,
+    ):
+        return None
+    return _hydration_result_to_payload(result)
+
+
+def _is_empty_pipeline_miss(result: Any) -> bool:
+    warnings = list(getattr(result, "warnings", []) or [])
+    return (
+        getattr(result, "recovered", False) is False
+        and warnings == ["session_not_found"]
+        and not getattr(result, "metadata", None)
+        and not getattr(result, "runtime_state", None)
+        and not getattr(result, "reconstructed_state", None)
+    )
+
+
+def _is_pipeline_stale_for_manager(
+    result: Any,
+    manager: RuntimeSessionManager,
+    session_id: str,
+) -> bool:
+    try:
+        local_session = manager.store.get_session(session_id)
+    except KeyError:
+        return False
+    result_metadata = getattr(result, "metadata", None)
+    result_state = getattr(result, "reconstructed_state", None)
+    if local_session.metadata and not result_metadata:
+        return True
+    if local_session.messages and not (
+        isinstance(result_state, Mapping)
+        and result_state.get("message_count")
+    ):
+        return True
+    return False
+
+
+def _hydration_result_to_payload(result: Any) -> dict[str, Any]:
+    reconstructed_state = deepcopy(dict(getattr(result, "reconstructed_state", {}) or {}))
+    recovery_context_message = reconstructed_state.get("recovery_context_message")
+    return {
+        "session_id": getattr(result, "session_id", None),
+        "recovered": bool(getattr(result, "recovered", False)),
+        "snapshot_version": getattr(result, "snapshot_version", None),
+        "active_skill_session": deepcopy(getattr(result, "active_skill_session", None)),
+        "last_execution_id": getattr(result, "last_execution_id", None),
+        "runtime_state": deepcopy(dict(getattr(result, "runtime_state", {}) or {})),
+        "reconstructed_state": reconstructed_state,
+        "warnings": list(getattr(result, "warnings", []) or []),
+        "runtime_events": deepcopy(list(getattr(result, "runtime_events", []) or [])),
+        "metadata": deepcopy(dict(getattr(result, "metadata", {}) or {})),
+        "recovery_context_message": recovery_context_message,
+    }
+
+
+def _resolve_file_context_delete() -> Callable[[str], int | bool] | None:
+    try:
+        module = importlib.import_module("src." + "hooks.file_context.storage")
+        file_context_storage = getattr(module, "storage")
+        delete_session = getattr(file_context_storage, "delete_session", None)
+        return delete_session if callable(delete_session) else None
+    except Exception:
+        return None
+
+
 def _recovery_context_message(
     session: Session,
     *,
@@ -798,7 +883,7 @@ def _recovery_context_message(
     status = runtime_state.get("status") or "unknown"
     pending_count = len(runtime_state.get("pending_tool_calls") or [])
     return (
-        "Runtime v2 session recovery: "
+        "EFP runtime session recovery: "
         f"status={status}, messages={reconstructed_state.get('message_count', 0)}, "
         f"pending_tool_calls={pending_count}."
     )
@@ -856,20 +941,20 @@ def legacy_messages_to_runtime(session_id: str, messages: Iterable[Mapping[str, 
     return runtime_messages
 
 
-runtime_v2_session_manager = get_runtime_v2_session_manager()
+runtime_session_manager = get_runtime_session_manager()
 
 
 __all__ = [
     "DEFAULT_AUTO_SAVE",
     "DEFAULT_MAX_HISTORY",
     "JIRA_SESSION_PREFIX",
-    "RuntimeV2SessionArtifacts",
-    "RuntimeV2SessionManager",
-    "get_runtime_v2_session_manager",
-    "get_runtime_v2_session_store",
+    "RuntimeSessionArtifacts",
+    "RuntimeSessionManager",
+    "get_runtime_session_manager",
+    "get_runtime_session_store",
     "legacy_messages_to_runtime",
-    "reset_runtime_v2_session_singletons",
+    "reset_runtime_session_singletons",
     "resolve_session_display_name",
-    "runtime_v2_session_manager",
-    "runtime_v2_session_root",
+    "runtime_session_manager",
+    "runtime_session_root",
 ]

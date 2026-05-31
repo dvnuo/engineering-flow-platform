@@ -1,4 +1,4 @@
-"""Provider contracts for the Runtime v2 loop runner."""
+"""Provider contracts for the EFP runtime loop runner."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ ProviderResult = Union[ProviderOutput, Awaitable[ProviderOutput]]
 
 @dataclass(frozen=True)
 class RuntimeRequest:
-    """Structured provider input for one Runtime v2 loop iteration."""
+    """Structured provider input for one EFP runtime loop iteration."""
 
     session_id: str
     messages: List[Message]
@@ -41,7 +41,7 @@ class RuntimeRequest:
 
 
 class LLMProvider(Protocol):
-    """Runtime v2 provider boundary.
+    """EFP runtime provider boundary.
 
     Implementations may return normalized LLM events directly or a
     non-streaming provider response accepted by DefaultLLMEventAdapter.

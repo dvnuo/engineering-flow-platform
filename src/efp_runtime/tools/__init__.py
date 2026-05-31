@@ -1,4 +1,4 @@
-"""Runtime v2 tool definitions, registry, and executor."""
+"""EFP runtime tool definitions, registry, and executor."""
 
 from .definition import OutputPolicy, ToolContext, ToolDef, ValidationError
 from .registry import ToolRegistry

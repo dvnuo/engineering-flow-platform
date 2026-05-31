@@ -17,7 +17,7 @@
 # LLM Configuration (REQUIRED)
 # ============================================
 llm:
-  # Runtime v2 native mode supports GitHub Copilot only.
+  # EFP runtime native mode supports GitHub Copilot only.
   # Accepted aliases: github_copilot, github-copilot, copilot
   provider: "github_copilot"
   api_base: "https://api.githubcopilot.com"
@@ -195,7 +195,7 @@ cost_tracking:
 #   storage_dir: "~/.efp/usage"
 #   retention_days: 30
 
-# Runtime v2 native provider and common models:
+# EFP runtime native provider and common models:
 # - github_copilot: gpt-5.4-mini, gpt-5.4, gpt-5.3-codex, gpt-5-mini, gpt-4.1, gpt-4o, gemini-2.5-pro
 
 # ============================================
@@ -395,31 +395,11 @@ debug:
 # - Agent processing: Messages, tool execution, final responses
 
 # ============================================
-# Bash/Shell Tools Configuration
+# Built-in Tool Configuration
 # ============================================
-# NOTE: The new bash tools (discover_commands, run_command) have
-# built-in security - no configuration needed.
-# 
-# Security features:
-# - Working directory limited to ~/.efp/workspace
-# - Dangerous commands blocked (rm, mkfs, dd, fdisk, etc.)
-# - Absolute path execution blocked
-# - Output size limited to 200KB
-# - Environment PATH override blocked
-#
-# Legacy bash_tools config (deprecated):
-# The old exec tool with allowlist mode is deprecated.
-
-# bash_tools:  # DEPRECATED - using built-in security instead
-  # security: "deny"
-  # allowlist:
-  #   - "/usr/bin/git"
-  #   - "/usr/bin/ls"
-  #   - "/usr/local/bin/python3"
-
-  # Block dangerous environment variables
-  # These are blocked by default (no need to configure):
-  # LD_PRELOAD, NODE_OPTIONS, PYTHONPATH, BASH_ENV, etc.
+# Model-facing tools are the EFP runtime built-ins. The bash tool runs inside
+# the configured workspace and is governed by runtime tool permissions; no old
+# bash_tools package or Python tool loader configuration is supported.
 
 # ============================================
 # Error Logging Configuration

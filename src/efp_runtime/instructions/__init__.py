@@ -1,4 +1,4 @@
-"""Instruction context support for EFP Runtime v2."""
+"""Instruction context support for EFP runtime."""
 
 from .context import InstructionContextBuilder, ReadInstructionResolver
 

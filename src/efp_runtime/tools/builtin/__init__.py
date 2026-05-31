@@ -1,4 +1,4 @@
-"""Core built-in tools for EFP Runtime v2."""
+"""Core built-in tools for EFP runtime."""
 
 from .apply_patch import create_apply_patch_tool
 from .edit import create_edit_tool

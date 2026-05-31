@@ -1,7 +1,7 @@
-"""Runtime v2 parity manifest for the audited opencode dev head.
+"""EFP runtime parity manifest for the audited opencode dev head.
 
-This module is intentionally data-only. Tests compare it with the live Runtime
-v2 tool registry so default and conditional surfaces drift visibly.
+This module is intentionally data-only. Tests compare it with the live runtime
+tool registry so default and conditional surfaces drift visibly.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ OPTIONAL_CONDITIONAL_TOOL_IDS: dict[str, SurfaceEntry] = {
     ),
     "plan_exit": SurfaceEntry(
         status="conditional",
-        reason="Enabled for Runtime v2 plan mode or include_plan_tool.",
+        reason="Enabled for EFP runtime plan mode or include_plan_tool.",
     ),
     "question": SurfaceEntry(
         status="conditional",
@@ -80,14 +80,18 @@ OPTIONAL_CONDITIONAL_TOOL_IDS: dict[str, SurfaceEntry] = {
 EXCLUDED_TOOL_IDS: dict[str, SurfaceEntry] = {
     "external_protocol_tools": SurfaceEntry(
         status="excluded",
-        reason="External protocol tool surfaces are outside the Runtime v2 parity scope.",
+        reason="External protocol tool surfaces are outside the EFP runtime parity scope.",
+    ),
+    "mcp": SurfaceEntry(
+        status="excluded",
+        reason="MCP servers and MCP-hosted tools are explicitly outside this replacement runtime scope.",
     ),
 }
 
 CAPABILITY_GROUPS: dict[str, CapabilityEntry] = {
     "loop": CapabilityEntry(
         status="done",
-        summary="AgentRuntime, RuntimeLoopRunner, terminal tools, resume, and pause statuses are covered by Runtime v2 tests.",
+        summary="AgentRuntime, RuntimeLoopRunner, terminal tools, resume, and pause statuses are covered by EFP runtime tests.",
     ),
     "permissions": CapabilityEntry(
         status="done",
@@ -103,7 +107,7 @@ CAPABILITY_GROUPS: dict[str, CapabilityEntry] = {
     ),
     "commands": CapabilityEntry(
         status="done",
-        summary="Built-in, configured, file-backed, and skill-backed slash commands expand through the Runtime v2 command registry.",
+        summary="Built-in, configured, file-backed, and skill-backed slash commands expand through the EFP runtime command registry.",
     ),
     "context/compaction": CapabilityEntry(
         status="done",
@@ -111,7 +115,7 @@ CAPABILITY_GROUPS: dict[str, CapabilityEntry] = {
     ),
     "Copilot provider": CapabilityEntry(
         status="done",
-        summary="Runtime v2 defaults to the Copilot provider family and uses Copilot model profiles for context budgets.",
+        summary="EFP runtime defaults to the Copilot provider family and uses Copilot model profiles for context budgets.",
     ),
     "session state": CapabilityEntry(
         status="done",
@@ -120,7 +124,7 @@ CAPABILITY_GROUPS: dict[str, CapabilityEntry] = {
     "legacy boundary": CapabilityEntry(
         status="done",
         summary=(
-            "Runtime v2 is independent from legacy core imports, default tool "
+            "EFP runtime is independent from legacy core imports, default tool "
             "surfaces exclude legacy Python tool aliases, and repository-level "
             "deletion of old src/agents, src/runtime, src/sessions, and "
             "src/skills trees remains a separate migration item."

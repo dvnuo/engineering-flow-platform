@@ -1,4 +1,4 @@
-"""Workspace-contained filesystem tools for EFP Runtime v2."""
+"""Workspace-contained filesystem tools for EFP runtime."""
 
 from __future__ import annotations
 

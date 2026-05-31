@@ -1,4 +1,4 @@
-"""Gateway adapter for Runtime v2 native chat execution."""
+"""Gateway adapter for EFP runtime native chat execution."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_V2_FIELDS, config
+from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
 from src.efp_runtime.event_bus import RuntimeEventBus
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.llm.provider import (
@@ -19,9 +19,9 @@ from src.efp_runtime.llm.provider import (
 from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from src.efp_runtime.session.gateway_facade import (
-    get_runtime_v2_session_manager,
-    get_runtime_v2_session_store,
-    runtime_v2_session_root,
+    get_runtime_session_manager,
+    get_runtime_session_store,
+    runtime_session_root,
 )
 from src.efp_runtime.session.models import MessagePartType
 from src.utils.redaction import sanitize_exception_message
@@ -29,21 +29,21 @@ from src.utils.redaction import sanitize_exception_message
 
 SUPPORTED_PROVIDER_KEYS = {"github_copilot", "github-copilot", "copilot"}
 PORTAL_RUNTIME_PROFILE_SOURCE = "portal.runtime_profile"
-RUNTIME_V2_NATIVE_PROVIDER_ERROR = (
-    "Runtime v2 native mode only supports GitHub Copilot. "
+RUNTIME_NATIVE_PROVIDER_ERROR = (
+    "EFP runtime native mode only supports GitHub Copilot. "
     "Set llm.provider to github_copilot, github-copilot, or copilot."
 )
 
 
-class RuntimeV2ChatError(RuntimeError):
-    """Configuration or execution error surfaced by the Runtime v2 adapter."""
+class RuntimeChatError(RuntimeError):
+    """Configuration or execution error surfaced by the runtime adapter."""
 
     def __init__(
         self,
         message: str,
         *,
         status_code: int = 500,
-        error_type: str = "runtime_v2_chat_error",
+        error_type: str = "runtime_chat_error",
         details: Optional[dict[str, Any]] = None,
     ) -> None:
         super().__init__(message)
@@ -53,7 +53,7 @@ class RuntimeV2ChatError(RuntimeError):
         self.details = dict(details or {})
 
 
-async def run_runtime_v2_chat(
+async def run_runtime_chat(
     *,
     message: str,
     session_id: str,
@@ -85,7 +85,7 @@ async def run_runtime_v2_chat(
             track_usage=track_usage,
             execution_metadata=execution_metadata,
         ),
-        store=get_runtime_v2_session_store(),
+        store=get_runtime_session_store(),
         event_bus=event_bus,
         metadata={
             "gateway": "runtime_api",
@@ -128,13 +128,13 @@ async def run_runtime_v2_chat(
             session_id=session_id,
             metadata=run_metadata,
         )
-        await get_runtime_v2_session_manager().record_runtime_result(
+        await get_runtime_session_manager().record_runtime_result(
             session_id,
             result,
             request_id=request_id,
         )
     except ProviderTransportError as exc:
-        raise RuntimeV2ChatError(
+        raise RuntimeChatError(
             str(exc),
             status_code=401 if "token is required" in str(exc).lower() else 502,
             error_type="provider_transport_error",
@@ -152,10 +152,10 @@ async def run_runtime_v2_chat(
         model=runtime_model,
     )
     if result.status == LoopStatus.ERROR:
-        raise RuntimeV2ChatError(
-            payload.get("error") or "Runtime v2 execution failed.",
+        raise RuntimeChatError(
+            payload.get("error") or "EFP runtime execution failed.",
             status_code=_runtime_error_status_code(result),
-            error_type=payload.get("error_type") or "runtime_v2_execution_error",
+            error_type=payload.get("error_type") or "runtime_execution_error",
             details={
                 "provider": "github-copilot",
                 "runtime_status": result.status,
@@ -166,7 +166,7 @@ async def run_runtime_v2_chat(
 
 
 def _runtime_session_root() -> Path:
-    return runtime_v2_session_root()
+    return runtime_session_root()
 
 
 def _runtime_workspace_root() -> Path:
@@ -207,8 +207,8 @@ def _runtime_config(
     try:
         return RuntimeConfig(**kwargs)
     except (TypeError, ValueError) as exc:
-        raise RuntimeV2ChatError(
-            f"Invalid Runtime v2 profile config: {exc}",
+        raise RuntimeChatError(
+            f"Invalid EFP runtime profile config: {exc}",
             status_code=400,
             error_type="invalid_runtime_config",
             details={"provider": "github-copilot"},
@@ -224,8 +224,8 @@ def _active_managed_overlay_runtime_config() -> Mapping[str, Any] | None:
         return None
     # set_managed_overlay persists Portal-managed fields directly into config.yaml.
     # After a process restart the in-memory overlay metadata is empty, but those
-    # safe top-level Runtime v2 fields still need to drive RuntimeConfig.
-    if not any(field in effective_config for field in PORTAL_MANAGED_RUNTIME_V2_FIELDS):
+    # safe top-level runtime fields still need to drive RuntimeConfig.
+    if not any(field in effective_config for field in PORTAL_MANAGED_RUNTIME_FIELDS):
         return None
     return effective_config
 
@@ -278,7 +278,7 @@ def _runtime_config_profile_kwargs(
     return {
         key: deepcopy(value)
         for key, value in profile_config.items()
-        if key in PORTAL_MANAGED_RUNTIME_V2_FIELDS
+        if key in PORTAL_MANAGED_RUNTIME_FIELDS
     }
 
 
@@ -302,8 +302,8 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
     provider_key = str(llm_config.get("provider") or "").strip()
     normalized_provider = provider_key.lower()
     if normalized_provider not in SUPPORTED_PROVIDER_KEYS:
-        raise RuntimeV2ChatError(
-            RUNTIME_V2_NATIVE_PROVIDER_ERROR,
+        raise RuntimeChatError(
+            RUNTIME_NATIVE_PROVIDER_ERROR,
             status_code=400,
             error_type="unsupported_provider",
             details={"configured_provider": provider_key or None},
@@ -315,8 +315,8 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
         or _config_string(llm_config, "api_key")
     )
     if token is None:
-        raise RuntimeV2ChatError(
-            "GitHub Copilot token is required for Runtime v2 native mode; "
+        raise RuntimeChatError(
+            "GitHub Copilot token is required for EFP runtime native mode; "
             "set llm.api_key, EFP_GITHUB_COPILOT_TOKEN, or GITHUB_COPILOT_TOKEN.",
             status_code=401,
             error_type="authentication_error",
@@ -326,7 +326,7 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
     transport = GitHubCopilotHTTPTransport(
         token=token,
         base_url=_env_string("EFP_GITHUB_COPILOT_BASE_URL") or _config_string(llm_config, "api_base"),
-        user_agent="efp-runtime-v2",
+        user_agent="efp-runtime",
         initiator="user",
     )
     return GitHubCopilotProvider(
@@ -373,7 +373,7 @@ def _run_metadata(
     metadata = dict(execution_metadata or {})
     metadata.update(
         {
-            "runtime": "efp_runtime_v2",
+            "runtime": "efp_runtime",
             "runtime_type": "native",
             "path": request_path,
             "request_id": request_id,
@@ -467,7 +467,7 @@ def _result_payload(
             "request": {
                 "provider": "github-copilot",
                 "model": model,
-                "runtime": "efp_runtime_v2",
+                "runtime": "efp_runtime",
             }
         },
     }
@@ -524,7 +524,7 @@ def _runtime_error_message(
             if part.type is MessagePartType.ERROR and part.text:
                 return _sanitize_error_message(part.text)
 
-    return "Runtime v2 execution failed."
+    return "EFP runtime execution failed."
 
 
 def _event_error_text(event: Mapping[str, Any]) -> str:
@@ -556,7 +556,7 @@ def _runtime_error_type(runtime_events: list[dict[str, Any]]) -> str:
                 return error_type.strip()
         if event.get("type") == "llm.error":
             return "provider_error"
-    return "runtime_v2_execution_error"
+    return "runtime_execution_error"
 
 
 def _runtime_error_status_code(result: RuntimeLoopResult) -> int:
@@ -582,8 +582,8 @@ def _event_to_dict(event: Any) -> dict[str, Any]:
 
 
 __all__ = [
-    "RUNTIME_V2_NATIVE_PROVIDER_ERROR",
-    "RuntimeV2ChatError",
+    "RUNTIME_NATIVE_PROVIDER_ERROR",
+    "RuntimeChatError",
     "SUPPORTED_PROVIDER_KEYS",
-    "run_runtime_v2_chat",
+    "run_runtime_chat",
 ]

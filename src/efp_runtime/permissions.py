@@ -1,4 +1,4 @@
-"""Permission primitives for Runtime v2 tool execution."""
+"""Permission primitives for EFP runtime tool execution."""
 
 from __future__ import annotations
 

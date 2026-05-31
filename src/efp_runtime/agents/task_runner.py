@@ -1,4 +1,4 @@
-"""Foreground subagent task runner for Runtime v2."""
+"""Foreground subagent task runner for EFP runtime."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ _MUTATING_FILE_PERMISSION_ALIASES = {
 
 @dataclass(frozen=True)
 class SubagentRunResult:
-    """Summary of a Runtime v2 child run launched by the task runner."""
+    """Summary of a EFP runtime child run launched by the task runner."""
 
     task_id: str
     profile_name: str
@@ -185,7 +185,7 @@ def create_agent_task_tool(
     allow_background: bool = False,
     background_manager: BackgroundTaskManager | None = None,
 ) -> ToolDef:
-    """Create a Runtime v2 task tool backed by the subagent task runner."""
+    """Create a EFP runtime task tool backed by the subagent task runner."""
 
     if provider is None:
         raise ValueError("provider is required")

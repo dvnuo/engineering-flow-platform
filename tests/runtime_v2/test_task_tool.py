@@ -39,7 +39,7 @@ def test_create_task_tool_schema_and_id():
     assert tool.id == "task"
     assert (
         tool.description
-        == "Delegate a task to an injected Runtime v2 task runner."
+        == "Delegate a task to an injected EFP runtime task runner."
     )
     assert tool.input_schema == {
         "type": "object",

@@ -1,4 +1,4 @@
-"""Engineering Flow Platform Runtime v2.
+"""Engineering Flow Platform EFP runtime.
 
 This package is intentionally independent from the legacy agent runtime.
 """

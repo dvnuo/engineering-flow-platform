@@ -113,11 +113,11 @@ def test_resolve_runtime_session_id_avoids_same_second_collisions_without_client
 async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
     from src.gateway import runtime_api
 
-    async def fake_run_runtime_v2_chat(**kwargs):
+    async def fake_run_runtime_chat(**kwargs):
         assert kwargs["portal_user_id"] == "p-1"
         return {"response": "ok", "usage": {"total_tokens": 1}}
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", fake_run_runtime_chat)
     result = await runtime_api._run_chat_via_execution_bus(
         session_id="s-chat",
         message="hello",
@@ -132,12 +132,12 @@ async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
 async def test_chat_execution_bus_adapter_stream(monkeypatch):
     from src.gateway import runtime_api
 
-    async def fake_run_runtime_v2_chat(**kwargs):
+    async def fake_run_runtime_chat(**kwargs):
         stream_callback = kwargs.get("stream_callback")
         await stream_callback.put("{\"type\":\"progress\"}")
         return {"response": "streamed"}
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", fake_run_runtime_chat)
     import asyncio
     queue = asyncio.Queue()
     result = await runtime_api._run_chat_via_execution_bus(
@@ -158,11 +158,11 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
 
     captured = {}
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "ok", "runtime_events": []}
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", _fake_run_runtime_chat)
 
     await runtime_api._run_chat_via_execution_bus(
         session_id="s-chat",
@@ -182,10 +182,10 @@ async def test_chat_execution_bus_adapter_does_not_mutate_execution_output_paylo
 
     original_payload = {"response": "ok"}
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         return original_payload
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", _fake_run_runtime_chat)
 
     result = await runtime_api._run_chat_via_execution_bus(
         session_id="s-chat",
@@ -203,14 +203,14 @@ async def test_chat_execution_bus_adapter_does_not_mutate_execution_output_paylo
 async def test_chat_execution_bus_adapter_backfills_runtime_events_from_execution_result(monkeypatch):
     from src.gateway import runtime_api
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         return {
             "response": "ok",
             "request_id": "req-1",
             "runtime_events": [{"event_type": "context_snapshot"}],
         }
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", _fake_run_runtime_chat)
 
     result = await runtime_api._run_chat_via_execution_bus(
         session_id="s-chat",
@@ -229,11 +229,11 @@ async def test_chat_execution_bus_adapter_forwards_agent_id(monkeypatch):
 
     captured = {}
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "ok", "runtime_events": []}
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", _fake_run_runtime_chat)
 
     await runtime_api._run_chat_via_execution_bus(
         session_id="s-chat",
@@ -252,11 +252,11 @@ async def test_chat_execution_bus_adapter_merges_execution_metadata_without_over
 
     captured = {}
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "ok", "runtime_events": []}
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", _fake_run_runtime_chat)
 
     await runtime_api._run_chat_via_execution_bus(
         session_id="s-chat",
@@ -279,11 +279,11 @@ async def test_chat_execution_bus_handler_uses_execution_request_metadata_for_ag
 
     captured = {}
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "ok"}
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", _fake_run_runtime_chat)
 
     await runtime_api._run_chat_via_execution_bus(
         session_id="s-chat",
@@ -303,11 +303,11 @@ async def test_chat_execution_bus_adapter_generates_runtime_request_id(monkeypat
 
     captured = {}
 
-    async def fake_run_runtime_v2_chat(**kwargs):
+    async def fake_run_runtime_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "ok"}
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", fake_run_runtime_chat)
 
     await runtime_api._run_chat_via_execution_bus(
         session_id="s-meta",
@@ -324,17 +324,17 @@ async def test_chat_execution_bus_adapter_generates_runtime_request_id(monkeypat
 async def test_chat_execution_bus_adapter_propagates_runtime_v2_errors(monkeypatch):
     from src.gateway import runtime_api
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
-        raise runtime_api.RuntimeV2ChatError(
+    async def _fake_run_runtime_chat(**kwargs):
+        raise runtime_api.RuntimeChatError(
             "Model output was truncated because max_output_tokens was reached.",
             status_code=500,
             error_type="truncated_response",
             details={"incomplete_reason": "max_output_tokens"},
         )
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", _fake_run_runtime_chat)
 
-    with pytest.raises(runtime_api.RuntimeV2ChatError) as exc_info:
+    with pytest.raises(runtime_api.RuntimeChatError) as exc_info:
         await runtime_api._run_chat_via_execution_bus(
             session_id="s-chat",
             message="hello",
@@ -350,10 +350,10 @@ async def test_chat_execution_bus_adapter_propagates_runtime_v2_errors(monkeypat
 async def test_chat_execution_bus_adapter_propagates_generic_runtime_errors(monkeypatch):
     from src.gateway import runtime_api
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         raise RuntimeError("runtime failure")
 
-    monkeypatch.setattr(runtime_api, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(runtime_api, "run_runtime_chat", _fake_run_runtime_chat)
 
     with pytest.raises(RuntimeError, match="runtime failure"):
         await runtime_api._run_chat_via_execution_bus(
@@ -577,7 +577,7 @@ async def test_api_chat_resolves_portal_identity_from_headers(monkeypatch):
         return True
 
     monkeypatch.setattr(runtime_api.session_manager, "get_session", _fake_get_session)
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", _fake_save_session)
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", _fake_save_session)
 
     class _Request:
         app = {}
@@ -615,7 +615,7 @@ async def test_api_chat_uses_trusted_portal_agent_name_for_assistant_author(monk
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {"agent_id": "agent-1"}
@@ -660,8 +660,8 @@ async def test_api_chat_chatlog_includes_request_status_runtime_events_and_conte
         "get_session",
         lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}),
     )
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "storage_dir", tmp_path)
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "storage_dir", tmp_path)
 
     class _Request:
         app = {}
@@ -779,7 +779,7 @@ async def test_api_chat_uses_trusted_model_override_when_present(monkeypatch):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -808,7 +808,7 @@ async def test_api_chat_ignores_model_override_for_untrusted_request(monkeypatch
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -920,7 +920,7 @@ async def test_api_chat_usage_tracker_records_actual_override_model(monkeypatch)
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1010,7 +1010,7 @@ async def test_api_chat_forwards_all_attached_images(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
     monkeypatch.setattr(runtime_api, "get_metadata", lambda file_id: metadata_map[file_id])
     monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
 
@@ -1116,7 +1116,7 @@ async def test_api_chat_forwards_all_attached_images_without_local_cap_config(mo
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
     monkeypatch.setattr(runtime_api, "get_metadata", lambda file_id: metadata_map[file_id])
     monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
 
@@ -1147,7 +1147,7 @@ async def test_api_chat_trusted_portal_metadata_passed_to_execution_bus(monkeypa
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1189,7 +1189,7 @@ async def test_api_chat_untrusted_request_ignores_governance_metadata(monkeypatc
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1222,7 +1222,7 @@ async def test_api_chat_flattens_policy_context_derived_runtime_rules(monkeypatc
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1275,7 +1275,7 @@ async def test_api_chat_best_effort_publishes_session_metadata(monkeypatch):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1322,7 +1322,7 @@ async def test_api_chat_trusted_client_request_id_forwarded_and_started_metadata
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1358,7 +1358,7 @@ async def test_api_chat_untrusted_client_request_id_not_accepted(monkeypatch):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1398,7 +1398,7 @@ async def test_api_chat_publish_failure_does_not_break_response(monkeypatch):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -1738,7 +1738,7 @@ async def test_api_chat_untrusted_portal_identity_is_ignored_and_trusted_header_
         return True
 
     monkeypatch.setattr(runtime_api.session_manager, "get_session", _fake_get_session)
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", _fake_save_session)
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", _fake_save_session)
 
     class _UntrustedBodyIdentityRequest:
         app = {}
@@ -1797,7 +1797,7 @@ async def test_api_chat_direct_runtime_user_name_does_not_become_portal_identity
         return True
 
     monkeypatch.setattr(runtime_api.session_manager, "get_session", _fake_get_session)
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", _fake_save_session)
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", _fake_save_session)
 
     class _Request:
         app = {}
@@ -1833,7 +1833,7 @@ async def test_portal_trust_uses_portal_source_header_only(monkeypatch):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -2936,7 +2936,7 @@ async def test_api_chat_returns_display_blocks(monkeypatch):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -3071,7 +3071,7 @@ async def test_api_chat_preserves_structured_display_blocks(monkeypatch):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -3103,7 +3103,7 @@ async def test_api_chat_accepts_legacy_content_payload(monkeypatch):
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}
@@ -3136,7 +3136,7 @@ async def test_api_chat_treats_whitespace_response_as_empty_and_falls_back_to_co
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
-    monkeypatch.setattr(runtime_api.runtime_v2_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
 
     class _Request:
         app = {}

@@ -3,14 +3,14 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_handle_jira_message_uses_runtime_v2_chat(monkeypatch):
+async def test_handle_jira_message_uses_runtime_chat(monkeypatch):
     captured = {}
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "jira-ok"}
 
-    monkeypatch.setattr(gateway_server, "run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr(gateway_server, "run_runtime_chat", _fake_run_runtime_chat)
 
     response = await gateway_server.handle_jira_message(
         message="hello",

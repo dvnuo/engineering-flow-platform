@@ -1,4 +1,4 @@
-"""Provider output normalization for EFP Runtime v2."""
+"""Provider output normalization for EFP runtime."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class LLMEventAdapter(Protocol):
 
 
 class DefaultLLMEventAdapter:
-    """Normalize common provider outputs into Runtime v2 LLM events."""
+    """Normalize common provider outputs into EFP runtime LLM events."""
 
     def normalize_response(self, response: Mapping[str, Any]) -> Iterable[LLMEvent]:
         raw = dict(response)

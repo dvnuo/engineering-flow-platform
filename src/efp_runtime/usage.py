@@ -1,4 +1,4 @@
-"""Provider-neutral usage telemetry helpers for Runtime v2."""
+"""Provider-neutral usage telemetry helpers for EFP runtime."""
 
 from __future__ import annotations
 

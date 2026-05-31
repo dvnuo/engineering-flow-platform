@@ -25,15 +25,17 @@ src/
 │
 ├── gateway/              # API-only runtime HTTP server
 │   ├── server.py        # Main gateway
+│   ├── runtime_chat.py  # EFP runtime chat adapter
 │   ├── runtime_api.py   # Portal/runtime API routes
 │   └── runtime_request_contracts.py
+│
+├── efp_runtime/          # AgentRuntime, loop, provider, sessions, built-in tools
 │
 ├── memory/               # Memory storage
 │   ├── __init__.py
 │   └── sqlite_store.py
 │
-├── sessions/            # Session management
-│   ├── manager.py
+├── sessions/            # Session support modules
 │   ├── persistence.py
 │   ├── pruning.py
 │   └── usage.py
@@ -43,7 +45,6 @@ src/
 ├── jira/                # Jira tool
 ├── confluence/          # Confluence tool
 ├── skill_creator/       # Skill creation tool
-├── bash_tools/          # Shell/bash tools
 ├── config.py           # Configuration
 └── utils/              # Utilities
     └── logger.py
@@ -69,4 +70,4 @@ src/
 - EFP runtime (execution plane) receives dispatched tasks via `/api/tasks/execute`.
 - `github_review_task` remains a runtime execution path.
 - Do **not** add new runtime-side automation polling in EFP.
-- For native runtime HTTP surface, external tools/skills asset directories, capability snapshot shape, and observability fields, see `../docs/runtime_contract.md` and `../docs/observability_contract.md`.
+- For native runtime HTTP surface, design, parity, capability snapshot shape, and observability fields, see `../docs/runtime_contract.md`, `../docs/runtime-design.md`, `../docs/opencode-parity.md`, and `../docs/observability_contract.md`.

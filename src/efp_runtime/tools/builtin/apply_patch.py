@@ -1,4 +1,4 @@
-"""Workspace-contained unified diff application tool for EFP Runtime v2."""
+"""Workspace-contained unified diff application tool for EFP runtime."""
 
 from __future__ import annotations
 

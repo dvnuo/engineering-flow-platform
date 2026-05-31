@@ -65,13 +65,24 @@ def test_production_runtime_paths_do_not_import_legacy_session_sources():
     assert result.returncode == 1, result.stdout + result.stderr
 
 
-def test_runtime_v2_chat_uses_gateway_facade_store_contract():
-    text = (ROOT / "src/gateway/runtime_v2_chat.py").read_text(encoding="utf-8")
+def test_legacy_session_manager_facade_is_removed():
+    assert not (ROOT / "src/sessions/manager.py").exists()
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("src.sessions.manager")
+
+
+def test_gateway_chat_module_uses_direct_runtime_name():
+    assert (ROOT / "src/gateway/runtime_chat.py").exists()
+    assert not (ROOT / "src/gateway/runtime_v2_chat.py").exists()
+
+
+def test_runtime_chat_uses_gateway_facade_store_contract():
+    text = (ROOT / "src/gateway/runtime_chat.py").read_text(encoding="utf-8")
     assert "from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig" in text
     assert "runtime = AgentRuntime(" in text
-    assert "get_runtime_v2_session_store" in text
-    assert "store=get_runtime_v2_session_store()" in text
-    assert "get_runtime_v2_session_manager().record_runtime_result" in text
+    assert "get_runtime_session_store" in text
+    assert "store=get_runtime_session_store()" in text
+    assert "get_runtime_session_manager().record_runtime_result" in text
 
 
 def test_src_init_does_not_aggregate_legacy_python_tools():

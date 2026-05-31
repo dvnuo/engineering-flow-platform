@@ -1,4 +1,4 @@
-"""File-backed persistent session store for Runtime v2."""
+"""File-backed persistent session store for EFP runtime."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from .todo import FileSessionTodoStore
 
 
 class FileSessionStore:
-    """Deterministic JSON file store for Runtime v2 sessions."""
+    """Deterministic JSON file store for EFP runtime sessions."""
 
     def __init__(self, root: Union[str, Path]) -> None:
         self.root = Path(root).expanduser().resolve()

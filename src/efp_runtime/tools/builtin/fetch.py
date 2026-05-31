@@ -1,4 +1,4 @@
-"""HTTP(S) fetch tool for Runtime v2."""
+"""HTTP(S) fetch tool for EFP runtime."""
 
 from __future__ import annotations
 

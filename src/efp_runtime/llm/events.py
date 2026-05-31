@@ -1,4 +1,4 @@
-"""LLM event model for EFP Runtime v2."""
+"""LLM event model for EFP runtime."""
 
 from __future__ import annotations
 

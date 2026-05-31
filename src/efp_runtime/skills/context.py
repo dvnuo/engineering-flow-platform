@@ -1,4 +1,4 @@
-"""Skill package context messages for EFP Runtime v2."""
+"""Skill package context messages for EFP runtime."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def skill_package_to_system_message(
     include_sidecar_content: bool = False,
     max_sidecar_chars: int = 4000,
 ) -> Message:
-    """Convert a discovered skill package into a Runtime v2 system message."""
+    """Convert a discovered skill package into a EFP runtime system message."""
 
     metadata = {
         "kind": "skill_context",

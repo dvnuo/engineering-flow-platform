@@ -1,4 +1,4 @@
-"""Question broker primitives for Runtime v2 interactive tool pauses."""
+"""Question broker primitives for EFP runtime interactive tool pauses."""
 
 from __future__ import annotations
 

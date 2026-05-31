@@ -1,4 +1,4 @@
-"""In-memory session store for EFP Runtime v2."""
+"""In-memory session store for EFP runtime."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ ToolPair = Tuple[MessagePart, Optional[MessagePart]]
 
 
 class InMemorySessionStore:
-    """Small deterministic store for runtime v2 contract tests and prototypes."""
+    """Small deterministic store for runtime contract tests and prototypes."""
 
     def __init__(self) -> None:
         self._sessions: Dict[str, Session] = {}

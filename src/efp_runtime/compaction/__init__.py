@@ -1,4 +1,4 @@
-"""Runtime v2 compaction strategies."""
+"""EFP runtime compaction strategies."""
 
 from .controller import (
     CompactionController,

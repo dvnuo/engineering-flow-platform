@@ -1,4 +1,4 @@
-"""Runtime v2 agent profiles and subagent task runners."""
+"""EFP runtime agent profiles and subagent task runners."""
 
 from .background_tasks import BackgroundTaskManager, BackgroundTaskRecord
 from .discovery import (

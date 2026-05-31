@@ -1,4 +1,4 @@
-"""Uniform tool execution flow for EFP Runtime v2."""
+"""Uniform tool execution flow for EFP runtime."""
 
 from __future__ import annotations
 

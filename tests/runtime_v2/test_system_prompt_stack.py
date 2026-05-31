@@ -54,7 +54,7 @@ async def test_default_runtime_prepends_system_prompt_before_instructions_and_sk
     request = provider.requests[0]
     messages = request.provider_request.messages
     assert messages[0].role == "system"
-    assert "EFP Runtime v2" in messages[0].text
+    assert "EFP runtime" in messages[0].text
 
     environment_index = _message_index(messages, "Environment:")
     instruction_index = _message_index(messages, "Instructions from:")
@@ -299,7 +299,7 @@ def test_environment_inline_and_file_prompts_appear_before_runtime_reminders(
         "file",
         "runtime_reminders",
     ]
-    assert "EFP Runtime v2" in messages[0].parts[0].text
+    assert "EFP runtime" in messages[0].parts[0].text
     assert "Environment:" in messages[1].parts[0].text
     assert messages[2].parts[0].text == "Inline prompt."
     assert messages[3].parts[0].text == "Team file prompt."
@@ -403,7 +403,7 @@ async def test_system_prompt_context_is_not_persisted_or_duplicated_between_runs
 
     second_messages = provider.requests[1].provider_request.messages
     default_prompt_count = sum(
-        1 for message in second_messages if "EFP Runtime v2" in message.text
+        1 for message in second_messages if "EFP runtime" in message.text
     )
     environment_count = sum(
         1 for message in second_messages if "Environment:" in message.text

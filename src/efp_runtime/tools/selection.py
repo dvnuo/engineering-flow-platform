@@ -1,4 +1,4 @@
-"""Tool selection controls for Runtime v2."""
+"""Tool selection controls for EFP runtime."""
 
 from __future__ import annotations
 

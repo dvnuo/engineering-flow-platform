@@ -904,7 +904,7 @@ async def test_execute_review_skill_via_chat_loop_forces_read_only_allowed_capab
 
     captured = {}
 
-    async def fake_run_runtime_v2_chat(**kwargs):
+    async def fake_run_runtime_chat(**kwargs):
         captured["metadata"] = kwargs["execution_metadata"]
         return {
             "status": "success",
@@ -914,7 +914,7 @@ async def test_execute_review_skill_via_chat_loop_forces_read_only_allowed_capab
             ],
         }
 
-    monkeypatch.setattr("src.gateway.runtime_v2_chat.run_runtime_v2_chat", fake_run_runtime_v2_chat)
+    monkeypatch.setattr("src.gateway.runtime_chat.run_runtime_chat", fake_run_runtime_chat)
 
     result = await _execute_review_skill_via_chat_loop(
         payload={"_execution_metadata": {
@@ -947,14 +947,14 @@ async def test_execute_review_skill_via_chat_loop_forces_read_only_allowed_capab
 async def test_execute_review_skill_via_chat_loop_fails_when_skill_not_found(monkeypatch):
     from src.runtime.github_review import _execute_review_skill_via_chat_loop
 
-    async def fake_run_runtime_v2_chat(**_kwargs):
+    async def fake_run_runtime_chat(**_kwargs):
         return {
             "status": "success",
             "response": "Skill not found: review-pull-request",
             "runtime_events": [],
         }
 
-    monkeypatch.setattr("src.gateway.runtime_v2_chat.run_runtime_v2_chat", fake_run_runtime_v2_chat)
+    monkeypatch.setattr("src.gateway.runtime_chat.run_runtime_chat", fake_run_runtime_chat)
 
     result = await _execute_review_skill_via_chat_loop(
         payload={"_execution_metadata": {}},

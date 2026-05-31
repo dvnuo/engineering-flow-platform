@@ -1,4 +1,4 @@
-"""Skill command parsing for EFP Runtime v2."""
+"""Skill command parsing for EFP runtime."""
 
 from __future__ import annotations
 

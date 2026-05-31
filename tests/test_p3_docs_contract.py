@@ -3,12 +3,18 @@ from pathlib import Path
 
 def test_p3_contract_docs_exist_and_are_indexed():
     assert Path("docs/runtime_contract.md").exists()
+    assert Path("docs/runtime-design.md").exists()
+    assert Path("docs/opencode-parity.md").exists()
     assert Path("docs/observability_contract.md").exists()
     docs_index = Path("docs/README.md").read_text(encoding="utf-8")
     assert "runtime_contract.md" in docs_index
+    assert "runtime-design.md" in docs_index
+    assert "opencode-parity.md" in docs_index
     assert "observability_contract.md" in docs_index
     root_readme = Path("README.md").read_text(encoding="utf-8")
     assert "docs/runtime_contract.md" in root_readme
+    assert "docs/runtime-design.md" in root_readme
+    assert "docs/opencode-parity.md" in root_readme
     assert "docs/observability_contract.md" in root_readme
 
 
@@ -25,10 +31,51 @@ def test_runtime_contract_doc_mentions_current_native_contract_surfaces():
         "/api/internal/runtime-profile/apply",
         "EFP_SKILLS_DIR",
         "/app/skills",
-        "Runtime v2 native mode supports GitHub Copilot only",
-        "opencode-style Runtime v2 built-in registry",
+        "EFP runtime native mode supports GitHub Copilot only",
+        "opencode-style EFP runtime built-in registry",
         "Legacy Python tool packages",
+        "MCP servers",
         "tests/fixtures/runtime_contract",
+    ]:
+        assert needle in text
+
+
+def test_runtime_design_doc_matches_removed_tool_and_portal_boundaries():
+    text = Path("docs/runtime-design.md").read_text(encoding="utf-8")
+
+    for needle in [
+        "direct runtime",
+        "Portal is the UI and control plane",
+        "Workspace-local Python tool loaders are not available",
+        "MCP and external protocol tool servers are intentionally excluded",
+        "RuntimeSessionManager",
+        "EFP_RUNTIME_SESSION_ROOT",
+    ]:
+        assert needle in text
+
+    for stale in [
+        "efp_runtime.tools.external remains",
+        "efp_runtime.tools.local` remains",
+        "include_legacy_tool_aliases",
+        "enable_local_python_tools",
+        "toolSurface",
+    ]:
+        assert stale not in text
+
+
+def test_opencode_parity_doc_records_current_gaps():
+    text = Path("docs/opencode-parity.md").read_text(encoding="utf-8")
+
+    for needle in [
+        "Core loop/history/provider request",
+        "Tools: bash/read/write/edit/apply_patch/grep/glob/webfetch/todowrite",
+        "Skills discovery/activation/commands",
+        "Session list/delete/fork/revert/summary/query/todos",
+        "Context and automatic compaction",
+        "Permissions and workspace-full-access defaults",
+        "GitHub Copilot provider/model path",
+        "MCP",
+        "Intentional Remaining Gaps",
     ]:
         assert needle in text
 

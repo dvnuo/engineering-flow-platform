@@ -1,4 +1,4 @@
-"""Runtime v2 event contracts."""
+"""EFP runtime event contracts."""
 
 from __future__ import annotations
 

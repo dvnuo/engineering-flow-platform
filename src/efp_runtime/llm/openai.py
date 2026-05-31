@@ -1,4 +1,4 @@
-"""OpenAI-compatible request projection for Runtime v2.
+"""OpenAI-compatible request projection for EFP runtime.
 
 This module does not call providers. It turns the provider-neutral
 ``ProviderRequest`` contract into plain dictionaries that a later transport can
@@ -35,7 +35,7 @@ def provider_request_to_openai_chat(
     stream: bool = False,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> JsonDict:
-    """Project a Runtime v2 request into an OpenAI Chat Completions payload."""
+    """Project a EFP runtime request into an OpenAI Chat Completions payload."""
 
     messages: List[JsonDict] = []
     if instructions is not None:
@@ -61,7 +61,7 @@ def provider_request_to_openai_responses(
     stream: bool = False,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> JsonDict:
-    """Project a Runtime v2 request into an OpenAI Responses payload."""
+    """Project a EFP runtime request into an OpenAI Responses payload."""
 
     payload: JsonDict = {
         "model": model,
@@ -102,7 +102,7 @@ def request_tool_schema_to_openai_responses_tool(schema: RequestToolSchema) -> J
 
 
 def request_message_to_openai_chat_messages(message: RequestMessage) -> List[JsonDict]:
-    """Project one Runtime v2 message to one or more Chat Completions messages."""
+    """Project one EFP runtime message to one or more Chat Completions messages."""
 
     projected: List[JsonDict] = []
     buffered_parts: List[RequestMessagePart] = []
@@ -155,7 +155,7 @@ def request_tool_call_to_openai_chat_tool_call(tool_call: RequestToolCall) -> Js
 
 
 def request_tool_result_to_openai_chat_message(tool_result: RequestToolResult) -> JsonDict:
-    """Project a Runtime v2 tool result to a Chat Completions tool message."""
+    """Project a EFP runtime tool result to a Chat Completions tool message."""
 
     return {
         "role": "tool",
@@ -166,7 +166,7 @@ def request_tool_result_to_openai_chat_message(tool_result: RequestToolResult) -
 
 
 def request_message_to_openai_responses_input(message: RequestMessage) -> JsonDict:
-    """Project one Runtime v2 message to a typed Responses input message."""
+    """Project one EFP runtime message to a typed Responses input message."""
 
     content: List[JsonDict] = []
     for part in message.parts:
@@ -177,7 +177,7 @@ def request_message_to_openai_responses_input(message: RequestMessage) -> JsonDi
 
 
 def request_part_to_openai_responses_content(part: RequestMessagePart) -> List[JsonDict]:
-    """Project one Runtime v2 message part to typed Responses content items."""
+    """Project one EFP runtime message part to typed Responses content items."""
 
     if part.tool_call is not None:
         return [_tool_call_to_responses_item(part.tool_call)]

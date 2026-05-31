@@ -74,7 +74,7 @@ class TestSessionsList:
         from src.agents.subagent import sessions_list
         
         # Mock session_manager - patch where it's imported from, not where it's used
-        with patch('src.sessions.manager.session_manager') as mock_sm:
+        with patch('src.efp_runtime.session.gateway_facade.runtime_session_manager') as mock_sm:
             mock_sm.get_session_info = AsyncMock(return_value=None)
             
             result = sessions_list()
@@ -87,7 +87,7 @@ class TestSessionsList:
         """Test sessions_list with limit parameter."""
         from src.agents.subagent import sessions_list
         
-        with patch('src.sessions.manager.session_manager') as mock_sm:
+        with patch('src.efp_runtime.session.gateway_facade.runtime_session_manager') as mock_sm:
             mock_sm.get_session_info = AsyncMock(return_value={
                 "updated_at": datetime.now().isoformat()
             })
@@ -105,7 +105,7 @@ class TestSessionsHistory:
         """Test sessions_history with non-existent session."""
         from src.agents.subagent import sessions_history
         
-        with patch('src.sessions.manager.session_manager') as mock_sm:
+        with patch('src.efp_runtime.session.gateway_facade.runtime_session_manager') as mock_sm:
             mock_sm.get_history = AsyncMock(return_value=[])
             
             result = sessions_history("non-existent")

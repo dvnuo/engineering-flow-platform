@@ -1,4 +1,4 @@
-"""Prompt reference resolution for Runtime v2."""
+"""Prompt reference resolution for EFP runtime."""
 
 from .resolve import PromptReference, ResolvedPrompt, resolve_prompt_references
 

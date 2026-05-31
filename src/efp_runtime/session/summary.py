@@ -1,4 +1,4 @@
-"""Session diff collection and summary helpers for Runtime v2."""
+"""Session diff collection and summary helpers for EFP runtime."""
 
 from __future__ import annotations
 

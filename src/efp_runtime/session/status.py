@@ -1,4 +1,4 @@
-"""Runtime v2 session status values."""
+"""EFP runtime session status values."""
 
 from enum import Enum
 

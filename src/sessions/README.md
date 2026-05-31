@@ -1,19 +1,15 @@
-# sessions/ - Session Management
+# sessions/ - Session Support
 
 ## Structure
 
 ```
 sessions/
-├── manager.py      # Session manager
 ├── persistence.py  # Session persistence
 ├── pruning.py      # Session pruning
 └── usage.py        # Usage tracking
 ```
 
 ## Components
-
-### Session Manager
-Manages active sessions with context and history.
 
 ### Persistence
 Persistent storage for sessions.
@@ -23,8 +19,10 @@ Automatic session cleanup based on configuration.
 
 ## Usage
 
-```python
-from src.sessions.manager import session_manager
+The active gateway/session API is the EFP runtime facade:
 
-session = session_manager.get_session(session_id)
+```python
+from src.efp_runtime.session.gateway_facade import runtime_session_manager
+
+session = runtime_session_manager.get_session(session_id)
 ```

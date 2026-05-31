@@ -14,18 +14,18 @@ from src.runtime.jira_workflow_contract import (
 from src.runtime.events import build_runtime_event
 
 
-class _RuntimeV2SkillResult:
+class _RuntimeSkillResult:
     def __init__(self, *, success: bool, output: str = "", error: str | None = None):
         self.success = success
         self.output = output
         self.error = error
 
 
-async def execute_skill(skill_name: str, **kwargs: Any) -> _RuntimeV2SkillResult:
-    return _RuntimeV2SkillResult(
+async def execute_skill(skill_name: str, **kwargs: Any) -> _RuntimeSkillResult:
+    return _RuntimeSkillResult(
         success=False,
         error=(
-            "Legacy Python skill execution is not available in Runtime v2 native mode. "
+            "Legacy Python skill execution is not available in EFP runtime native mode. "
             f"Requested skill: {skill_name}"
         ),
     )

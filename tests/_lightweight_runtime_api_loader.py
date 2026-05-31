@@ -59,22 +59,22 @@ def load_runtime_api_lightweight():
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
-    class _RuntimeV2ChatError(RuntimeError):
-        def __init__(self, message="", *, status_code=500, error_type="runtime_v2_chat_error", details=None):
+    class _RuntimeChatError(RuntimeError):
+        def __init__(self, message="", *, status_code=500, error_type="runtime_chat_error", details=None):
             super().__init__(message)
             self.message = message
             self.status_code = status_code
             self.error_type = error_type
             self.details = dict(details or {})
 
-    class _RuntimeV2SessionArtifacts:
+    class _RuntimeSessionArtifacts:
         def __init__(self):
             self.storage_dir = Path("/tmp/efp-lightweight-runtime-api")
 
         async def save_session(self, *_args, **_kwargs):
             return True
 
-    class _RuntimeV2SessionManager:
+    class _RuntimeSessionManager:
         _initialized = True
 
         async def initialize(self):
@@ -107,9 +107,9 @@ def load_runtime_api_lightweight():
         "src.efp_runtime.session": efp_runtime_session_pkg,
         "src.efp_runtime.session.gateway_facade": _module(
             "src.efp_runtime.session.gateway_facade",
-            RuntimeV2SessionArtifacts=_RuntimeV2SessionArtifacts,
+            RuntimeSessionArtifacts=_RuntimeSessionArtifacts,
             resolve_session_display_name=lambda *_a, **_k: "",
-            runtime_v2_session_manager=_RuntimeV2SessionManager(),
+            runtime_session_manager=_RuntimeSessionManager(),
         ),
         "src.utils.file_parser.storage": _module(
             "src.utils.file_parser.storage",
@@ -171,12 +171,12 @@ def load_runtime_api_lightweight():
             build_runtime_response_payload=lambda *_a, **_k: {},
             normalize_assistant_history_message=lambda x: x,
         ),
-        "src.gateway.runtime_v2_chat": _module(
-            "src.gateway.runtime_v2_chat",
-            RUNTIME_V2_NATIVE_PROVIDER_ERROR="Runtime v2 native mode only supports GitHub Copilot.",
-            RuntimeV2ChatError=_RuntimeV2ChatError,
+        "src.gateway.runtime_chat": _module(
+            "src.gateway.runtime_chat",
+            RUNTIME_NATIVE_PROVIDER_ERROR="EFP runtime native mode only supports GitHub Copilot.",
+            RuntimeChatError=_RuntimeChatError,
             SUPPORTED_PROVIDER_KEYS={"github_copilot", "github-copilot", "copilot"},
-            run_runtime_v2_chat=_noop_async,
+            run_runtime_chat=_noop_async,
         ),
         "src.gateway.runtime_request_contracts": _module(
             "src.gateway.runtime_request_contracts",
@@ -185,14 +185,6 @@ def load_runtime_api_lightweight():
         ),
         "src.runtime.capability_registry": _module("src.runtime.capability_registry", get_capability_registry=lambda: {}),
         "src.gateway.event_bus": _module("src.gateway.event_bus", emit_agent_event=lambda *_a, **_k: None),
-        "src.sessions.manager": _module(
-            "src.sessions.manager",
-            resolve_session_display_name=lambda *_a, **_k: "",
-            session_manager=types.SimpleNamespace(
-                get_context_state=_noop_async,
-                get_active_skill_session=_noop_async,
-            ),
-        ),
         "src.sessions.persistence": _module("src.sessions.persistence", session_persistence=types.SimpleNamespace()),
         "src.sessions.usage": _module("src.sessions.usage", usage_tracker=types.SimpleNamespace()),
     }

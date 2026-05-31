@@ -1,4 +1,4 @@
-"""Custom slash command discovery and prompt expansion for Runtime v2."""
+"""Custom slash command discovery and prompt expansion for EFP runtime."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ TEMPLATE_VARIABLE_RE = re.compile(r"\$(ARGUMENTS|[1-9][0-9]*)(?![A-Za-z0-9_])")
 def builtin_command_definitions(
     workspace_root: str | Path | None,
 ) -> list["CommandDefinition"]:
-    """Return Runtime v2 built-in slash commands in base registration order."""
+    """Return EFP runtime built-in slash commands in base registration order."""
 
     root_text = _builtin_workspace_root_text(workspace_root)
     agents_path = f"{root_text}/AGENTS.md" if root_text != "." else "./AGENTS.md"

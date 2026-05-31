@@ -6,13 +6,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import pytest
-from src.sessions.manager import SessionManager
+from src.efp_runtime.session.gateway_facade import RuntimeSessionManager
 
 
 @pytest.fixture
 def fresh_session_manager():
     """Create a fresh session manager for isolation."""
-    manager = SessionManager()
+    manager = RuntimeSessionManager()
     yield manager
 
 

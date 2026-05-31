@@ -1,4 +1,4 @@
-"""Injectable compaction summarizer control for Runtime v2."""
+"""Injectable compaction summarizer control for EFP runtime."""
 
 from __future__ import annotations
 

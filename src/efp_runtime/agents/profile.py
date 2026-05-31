@@ -1,4 +1,4 @@
-"""Agent profile contracts for Runtime v2."""
+"""Agent profile contracts for EFP runtime."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 @dataclass
 class AgentProfile:
-    """Configuration profile used when selecting a Runtime v2 subagent."""
+    """Configuration profile used when selecting a EFP runtime subagent."""
 
     name: str
     description: str = ""

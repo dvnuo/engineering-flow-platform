@@ -16,7 +16,7 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 ### Core Capabilities
 
 - **Runtime API Chat** - Natural language interaction with the agent over the HTTP API
-- **Runtime v2 Chat** - Portal and Jira chat use Runtime v2 with GitHub Copilot
+- **EFP Runtime Chat** - Portal and Jira chat use the EFP runtime with GitHub Copilot
 - **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash outside the model-visible tool surface
 - **Session Persistence** - Conversations persist across restarts
 - **File Attachments** - Support for Portal-provided transient image and document attachment ids in chat
@@ -29,7 +29,7 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 ### Prerequisites
 
 - Python 3.11+
-- GitHub Copilot token for Runtime v2 native chat
+- GitHub Copilot token for EFP runtime native chat
 
 ### Setup
 
@@ -87,7 +87,7 @@ llm:
   model: "gpt-5.4-mini"
 ```
 
-Runtime v2 native mode does not fall back to OpenAI or Anthropic providers.
+EFP runtime native mode does not fall back to OpenAI or Anthropic providers.
 `EFP_GITHUB_COPILOT_TOKEN` or `GITHUB_COPILOT_TOKEN` may be used instead of
 `llm.api_key`; `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
 Copilot transport base URL.
@@ -165,7 +165,7 @@ engineering-flow-platform/
 ├── config.yaml.example     # Configuration template
 ├── requirements.txt        # Python dependencies
 ├── src/
-│   ├── efp_runtime/         # Runtime v2 AgentRuntime, provider, session, and tools
+│   ├── efp_runtime/         # EFP runtime AgentRuntime, provider, session, and tools
 │   ├── agents/              # Compatibility support modules only; legacy loop removed
 │   ├── gateway/            # API-only HTTP server
 │   │   ├── server.py        # aiohttp server
@@ -192,9 +192,9 @@ engineering-flow-platform/
 
 Business skill assets are maintained in **engineering-flow-platform-skills**. Portal/K8s typically checks out/mounts that skills repository at `/app/skills` (or another path via `EFP_SKILLS_DIR`) for runtime discovery.
 
-EFP native runtime exposes only Runtime v2 opencode-style builtin LLM tools
+EFP native runtime exposes only opencode-style built-in LLM tools
 (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `todowrite`,
-`apply_patch`, plus other Runtime v2 built-ins). Legacy Python tool packages,
+`apply_patch`, plus other EFP runtime built-ins). Legacy Python tool packages,
 including `src/bash_tools`, are not part of the production LLM tool surface.
 
 ## API Endpoints
@@ -234,6 +234,8 @@ For complete control-plane contract details, see `docs/control_plane_contract.md
 
 Additional runtime contracts:
 - `docs/runtime_contract.md`
+- `docs/runtime-design.md`
+- `docs/opencode-parity.md`
 - `docs/observability_contract.md`
 
 ### Portal Control-Plane Integration (Operator Minimum)

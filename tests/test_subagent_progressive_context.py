@@ -7,11 +7,11 @@ from src.agents.subagent import SubAgent
 async def test_subagent_run_uses_run_chat_execution(monkeypatch):
     captured = {}
 
-    async def _fake_run_runtime_v2_chat(**kwargs):
+    async def _fake_run_runtime_chat(**kwargs):
         captured.update(kwargs)
         return {"response": "subagent-result"}
 
-    monkeypatch.setattr("src.agents.subagent.run_runtime_v2_chat", _fake_run_runtime_v2_chat)
+    monkeypatch.setattr("src.agents.subagent.run_runtime_chat", _fake_run_runtime_chat)
 
     subagent = SubAgent(
         session_key="sub-s1",

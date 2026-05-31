@@ -32,12 +32,13 @@ Native runtime must support:
 
 ## Tool Surface
 
-- EFP native runtime uses Runtime v2 (`efp_runtime.runtime.AgentRuntime`) for `/api/chat`, `/api/chat/stream`, and Jira chat handling.
-- Runtime v2 native mode supports GitHub Copilot only. Configure `llm.provider: github_copilot` plus `llm.api_key` or `EFP_GITHUB_COPILOT_TOKEN`.
-- Runtime tool surface comes from the opencode-style Runtime v2 built-in registry only (`src.__init__.get_tools_schema()`).
+- EFP native runtime uses EFP runtime (`efp_runtime.runtime.AgentRuntime`) for `/api/chat`, `/api/chat/stream`, and Jira chat handling.
+- EFP runtime native mode supports GitHub Copilot only. Configure `llm.provider: github_copilot` plus `llm.api_key` or `EFP_GITHUB_COPILOT_TOKEN`.
+- Runtime tool surface comes from the opencode-style EFP runtime built-in registry only (`src.__init__.get_tools_schema()`).
 - Model-visible tool ids include `bash`, `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `todowrite`, and `apply_patch`.
 - Legacy Python tool packages such as `src.bash_tools` are not present, and Jira/GitHub/Confluence/Git Python tools are not exposed as LLM tools.
 - Legacy external-tools envs (`EFP_TOOLS_DIR`, `EFP_EXTERNAL_TOOLS_*`) are ignored by native runtime.
+- MCP servers and external protocol tool providers are intentionally excluded.
 
 ## External Skills Surface
 

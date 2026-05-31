@@ -1,4 +1,4 @@
-"""Workspace bootstrap helpers for Runtime v2."""
+"""Workspace bootstrap helpers for EFP runtime."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ _UNSET = object()
 
 @dataclass
 class RuntimeWorkspace:
-    """Loaded Runtime v2 workspace configuration and registries."""
+    """Loaded EFP runtime workspace configuration and registries."""
 
     workspace_root: Path
     load_result: "RuntimeConfigLoadResult"

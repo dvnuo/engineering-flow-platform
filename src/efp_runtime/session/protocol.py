@@ -1,4 +1,4 @@
-"""Session store protocol for Runtime v2."""
+"""Session store protocol for EFP runtime."""
 
 from __future__ import annotations
 

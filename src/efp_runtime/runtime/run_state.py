@@ -1,4 +1,4 @@
-"""Session-scoped run state for Runtime v2."""
+"""Session-scoped run state for EFP runtime."""
 
 from __future__ import annotations
 

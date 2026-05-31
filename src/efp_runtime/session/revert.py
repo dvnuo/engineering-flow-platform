@@ -1,4 +1,4 @@
-"""Session revert and unrevert helpers for Runtime v2."""
+"""Session revert and unrevert helpers for EFP runtime."""
 
 from __future__ import annotations
 

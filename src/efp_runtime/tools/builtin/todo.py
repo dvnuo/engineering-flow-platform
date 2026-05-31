@@ -1,4 +1,4 @@
-"""Session-local todo planning tool for EFP Runtime v2."""
+"""Session-local todo planning tool for EFP runtime."""
 
 from __future__ import annotations
 

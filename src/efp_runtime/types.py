@@ -1,4 +1,4 @@
-"""Shared data contracts for EFP Runtime v2."""
+"""Shared data contracts for EFP runtime."""
 
 from __future__ import annotations
 

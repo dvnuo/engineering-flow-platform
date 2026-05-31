@@ -1,4 +1,4 @@
-"""Invalid-arguments feedback tool for Runtime v2."""
+"""Invalid-arguments feedback tool for EFP runtime."""
 
 from __future__ import annotations
 

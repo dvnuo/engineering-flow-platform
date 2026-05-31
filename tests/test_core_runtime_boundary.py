@@ -32,16 +32,16 @@ def test_agents_package_does_not_export_legacy_runtime_shims():
 
 
 def test_gateway_chat_entrypoint_uses_runtime_v2_agent_runtime():
-    source = (ROOT / "src/gateway/runtime_v2_chat.py").read_text(encoding="utf-8")
+    source = (ROOT / "src/gateway/runtime_chat.py").read_text(encoding="utf-8")
 
     assert "from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig" in source
     assert "runtime = AgentRuntime(" in source
-    assert "store=get_runtime_v2_session_store()" in source
-    assert "get_runtime_v2_session_manager().record_runtime_result" in source
+    assert "store=get_runtime_session_store()" in source
+    assert "get_runtime_session_manager().record_runtime_result" in source
 
 
 def test_gateway_entrypoints_do_not_import_removed_legacy_runtime_modules():
-    for relative in ("src/gateway/runtime_api.py", "src/gateway/server.py", "src/gateway/runtime_v2_chat.py"):
+    for relative in ("src/gateway/runtime_api.py", "src/gateway/server.py", "src/gateway/runtime_chat.py"):
         source = (ROOT / relative).read_text(encoding="utf-8")
         for module_name in REMOVED_LEGACY_MODULES:
             assert module_name not in source
@@ -56,4 +56,4 @@ def test_runtime_v2_skill_execution_boundary_reports_legacy_skill_disabled():
 
     assert result.success is False
     assert "Legacy Python skill execution is not available" in (result.error or "")
-    assert result.data["runtime"] == "efp_runtime_v2"
+    assert result.data["runtime"] == "efp_runtime"

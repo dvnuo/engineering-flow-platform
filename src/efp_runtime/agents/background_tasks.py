@@ -1,4 +1,4 @@
-"""In-process background subagent task management for Runtime v2."""
+"""In-process background subagent task management for EFP runtime."""
 
 from __future__ import annotations
 

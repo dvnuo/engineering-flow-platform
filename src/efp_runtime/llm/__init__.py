@@ -1,4 +1,4 @@
-"""LLM normalization for EFP Runtime v2."""
+"""LLM normalization for EFP runtime."""
 
 from .adapter import DefaultLLMEventAdapter, LLMEventAdapter
 from .errors import (

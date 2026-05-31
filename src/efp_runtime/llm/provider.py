@@ -1,4 +1,4 @@
-"""Provider transport facade for Runtime v2 OpenAI-compatible clients.
+"""Provider transport facade for EFP runtime OpenAI-compatible clients.
 
 The facade classes in this module do not import an OpenAI SDK. A caller injects
 the transport boundary, which receives the projected payload and returns raw
@@ -58,7 +58,7 @@ class GitHubCopilotHTTPTransport:
         token: str,
         base_url: Optional[str] = None,
         timeout: float = 60,
-        user_agent: str = "efp-runtime-v2",
+        user_agent: str = "efp-runtime",
         initiator: str = "user",
     ) -> None:
         self._token = _required_non_empty_string(token, "token")
@@ -298,7 +298,7 @@ def github_copilot_provider_from_env(
     metadata: Optional[Mapping[str, Any]] = None,
     adapter: Optional[LLMEventAdapter] = None,
     timeout: float = 60,
-    user_agent: str = "efp-runtime-v2",
+    user_agent: str = "efp-runtime",
     initiator: str = "user",
     env: Optional[Mapping[str, str]] = None,
 ) -> GitHubCopilotProvider:

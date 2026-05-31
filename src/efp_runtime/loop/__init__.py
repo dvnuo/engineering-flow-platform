@@ -1,4 +1,4 @@
-"""Runtime v2 loop runner package."""
+"""EFP runtime loop runner package."""
 
 from ..llm.errors import (
     ProviderContextOverflowError,

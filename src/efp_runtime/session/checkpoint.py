@@ -1,4 +1,4 @@
-"""Checkpoint metadata for Runtime v2 session history snapshots."""
+"""Checkpoint metadata for EFP runtime session history snapshots."""
 
 from __future__ import annotations
 

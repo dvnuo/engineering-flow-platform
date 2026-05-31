@@ -1,4 +1,4 @@
-"""Markdown agent discovery for Runtime v2."""
+"""Markdown agent discovery for EFP runtime."""
 
 from __future__ import annotations
 

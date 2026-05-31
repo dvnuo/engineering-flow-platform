@@ -94,6 +94,13 @@ def test_legacy_boundary_manifest_separates_import_independence_from_tree_remova
     assert "separate migration item" in summary
 
 
+def test_manifest_explicitly_excludes_mcp():
+    entry = EXCLUDED_TOOL_IDS["mcp"]
+
+    assert entry.status == "excluded"
+    assert "MCP" in entry.reason
+
+
 def test_remaining_manifest_items_have_concrete_next_actions():
     vague_actions = {"", "todo", "tbd", "follow up", "investigate", "later"}
 

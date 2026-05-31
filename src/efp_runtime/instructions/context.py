@@ -1,4 +1,4 @@
-"""Transient instruction context messages for EFP Runtime v2."""
+"""Transient instruction context messages for EFP runtime."""
 
 from __future__ import annotations
 

@@ -106,7 +106,7 @@ def test_create_agent_task_tool_description_lists_custom_profiles():
         profiles=[
             AgentProfile(
                 name="general",
-                description="General Runtime v2 work.",
+                description="General EFP runtime work.",
             ),
             AgentProfile(
                 name="debugger",
@@ -123,11 +123,11 @@ def test_create_agent_task_tool_description_lists_custom_profiles():
 
     assert tool.description == "\n".join(
         [
-            "Delegate a task to an injected Runtime v2 task runner.",
+            "Delegate a task to an injected EFP runtime task runner.",
             "",
             "Available agent types:",
             "- debugger: Debug failing tests.",
-            "- general: General Runtime v2 work.",
+            "- general: General EFP runtime work.",
             "- reviewer: Review code changes.",
         ]
     )
@@ -138,7 +138,7 @@ def test_agent_task_tool_description_hides_denied_subagent_profiles():
     tool = create_agent_task_tool(
         provider=provider,
         profiles=[
-            AgentProfile(name="general", description="General Runtime v2 work."),
+            AgentProfile(name="general", description="General EFP runtime work."),
             AgentProfile(name="debugger", description="Debug failing tests."),
             AgentProfile(name="reviewer", description="Review code changes."),
         ],
@@ -148,7 +148,7 @@ def test_agent_task_tool_description_hides_denied_subagent_profiles():
     )
 
     assert "- debugger:" not in tool.description
-    assert "- general: General Runtime v2 work." in tool.description
+    assert "- general: General EFP runtime work." in tool.description
     assert "- reviewer: Review code changes." in tool.description
 
 
@@ -182,7 +182,7 @@ def test_agent_task_tool_description_reports_no_permission_visible_subagents():
 
     assert tool.description == "\n".join(
         [
-            "Delegate a task to an injected Runtime v2 task runner.",
+            "Delegate a task to an injected EFP runtime task runner.",
             "",
             "Available agent types:",
             "No subagents are available.",
@@ -244,7 +244,7 @@ def test_agent_task_tool_without_base_config_preserves_visible_profiles():
 
     assert tool.description == "\n".join(
         [
-            "Delegate a task to an injected Runtime v2 task runner.",
+            "Delegate a task to an injected EFP runtime task runner.",
             "",
             "Available agent types:",
             "- debugger: Debug failing tests.",
@@ -266,7 +266,7 @@ def test_agent_task_tool_description_reports_no_available_subagents():
 
     assert tool.description == "\n".join(
         [
-            "Delegate a task to an injected Runtime v2 task runner.",
+            "Delegate a task to an injected EFP runtime task runner.",
             "",
             "Available agent types:",
             "No subagents are available.",
@@ -288,7 +288,7 @@ def test_create_agent_task_tools_background_keeps_task_description_consistent():
     assert [tool.id for tool in tools] == ["task"]
     assert tools[0].description == "\n".join(
         [
-            "Delegate a task to an injected Runtime v2 task runner.",
+            "Delegate a task to an injected EFP runtime task runner.",
             "",
             "Available agent types:",
             "- debugger: Debug failures.",
@@ -315,7 +315,7 @@ def test_create_agent_task_tools_background_uses_filtered_task_description():
     assert [tool.id for tool in tools] == ["task"]
     assert tools[0].description == "\n".join(
         [
-            "Delegate a task to an injected Runtime v2 task runner.",
+            "Delegate a task to an injected EFP runtime task runner.",
             "",
             "Available agent types:",
             "- general: General work.",

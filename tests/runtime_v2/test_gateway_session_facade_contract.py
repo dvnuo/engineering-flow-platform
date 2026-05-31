@@ -14,7 +14,7 @@ from efp_runtime.models import CompactionPart, MessagePart, MessageRole, ToolRes
 from efp_runtime.permissions import PermissionDecision, PermissionMetadata, PermissionRequest
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.file_store import FileSessionStore
-from efp_runtime.session.gateway_facade import RuntimeV2SessionManager
+from efp_runtime.session.gateway_facade import RuntimeSessionManager
 from efp_runtime.session.models import MessagePartType
 from efp_runtime.tools.definition import ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 async def test_gateway_facade_sees_runtime_loop_messages_tool_results_and_compaction(tmp_path: Path):
     (tmp_path / "workspace").mkdir()
     store = FileSessionStore(tmp_path / "store")
-    manager = RuntimeV2SessionManager(store=store)
+    manager = RuntimeSessionManager(store=store)
 
     async def echo(args: dict[str, Any], context: ToolContext) -> str:
         return f"echo:{args['text']}"
@@ -98,7 +98,7 @@ async def test_gateway_facade_sees_runtime_loop_messages_tool_results_and_compac
 async def test_pending_permission_tool_call_survives_facade_metadata_and_resume(tmp_path: Path):
     (tmp_path / "workspace").mkdir()
     store = FileSessionStore(tmp_path / "store")
-    manager = RuntimeV2SessionManager(store=store)
+    manager = RuntimeSessionManager(store=store)
     evaluator = _AskOnceEvaluator()
     executed: list[ToolContext] = []
 
@@ -183,7 +183,7 @@ async def test_pending_permission_tool_call_survives_facade_metadata_and_resume(
 async def test_pending_question_state_is_recorded_on_runtime_v2_session(tmp_path: Path):
     (tmp_path / "workspace").mkdir()
     store = FileSessionStore(tmp_path / "store")
-    manager = RuntimeV2SessionManager(store=store)
+    manager = RuntimeSessionManager(store=store)
 
     async def ask_user(args: dict[str, Any], context: ToolContext) -> ToolResult:
         return ToolResult(
@@ -233,7 +233,7 @@ async def test_delete_session_uses_injected_file_context_cleanup(tmp_path: Path)
         calls.append(session_id)
         return 2
 
-    manager = RuntimeV2SessionManager(
+    manager = RuntimeSessionManager(
         store=store,
         delete_file_context=delete_file_context,
     )
@@ -246,7 +246,7 @@ async def test_delete_session_uses_injected_file_context_cleanup(tmp_path: Path)
 async def test_delete_session_without_file_context_cleanup_returns_false_for_missing_session(
     tmp_path: Path,
 ):
-    manager = RuntimeV2SessionManager(store=FileSessionStore(tmp_path / "store"))
+    manager = RuntimeSessionManager(store=FileSessionStore(tmp_path / "store"))
 
     assert await manager.delete_session("missing-session") is False
 

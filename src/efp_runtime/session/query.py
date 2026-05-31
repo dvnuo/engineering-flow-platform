@@ -1,4 +1,4 @@
-"""Read-only query helpers for Runtime v2 session history."""
+"""Read-only query helpers for EFP runtime session history."""
 
 from __future__ import annotations
 

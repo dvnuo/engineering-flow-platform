@@ -1,4 +1,4 @@
-"""Agent profile registry for Runtime v2."""
+"""Agent profile registry for EFP runtime."""
 
 from __future__ import annotations
 

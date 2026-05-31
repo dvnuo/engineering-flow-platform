@@ -1,4 +1,4 @@
-"""Workspace-contained text editing tool for EFP Runtime v2."""
+"""Workspace-contained text editing tool for EFP runtime."""
 
 from __future__ import annotations
 

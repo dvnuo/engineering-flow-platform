@@ -1,4 +1,4 @@
-"""Repository cache and overview tools for EFP Runtime v2."""
+"""Repository cache and overview tools for EFP runtime."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Built-in Runtime v2 agent profiles."""
+"""Built-in EFP runtime agent profiles."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ _READ_FOCUSED_ASK_PERMISSION = {
 _DEFAULT_AGENT_PROFILE_DATA: tuple[dict[str, Any], ...] = (
     {
         "name": "general",
-        "description": "Balanced default agent for general Runtime v2 work.",
+        "description": "Balanced default agent for general EFP runtime work.",
         "prompt": (
             "Handle the task end to end. Clarify assumptions when needed, use "
             "tools deliberately, and keep the final answer focused on the result."
@@ -91,7 +91,7 @@ _DEFAULT_AGENT_PROFILE_DATA: tuple[dict[str, Any], ...] = (
 
 
 def default_agent_profiles() -> list[AgentProfile]:
-    """Return fresh built-in Runtime v2 agent profiles."""
+    """Return fresh built-in EFP runtime agent profiles."""
 
     return [AgentProfile(**deepcopy(data)) for data in _DEFAULT_AGENT_PROFILE_DATA]
 

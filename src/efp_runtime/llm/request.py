@@ -1,4 +1,4 @@
-"""Provider-neutral request contracts for Runtime v2 LLM clients."""
+"""Provider-neutral request contracts for EFP runtime LLM clients."""
 
 from __future__ import annotations
 

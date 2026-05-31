@@ -1,4 +1,4 @@
-"""Configuration for the Runtime v2 high-level facade."""
+"""Configuration for the EFP runtime high-level facade."""
 
 from __future__ import annotations
 

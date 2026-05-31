@@ -18,11 +18,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.truncate import truncate
 from src.channels.jira import jira_channel
 from src.config import config
-from src.gateway.runtime_v2_chat import run_runtime_v2_chat
+from src.gateway.runtime_chat import run_runtime_chat
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.efp_runtime.session.gateway_facade import (
     JIRA_SESSION_PREFIX,
-    runtime_v2_session_manager as session_manager,
+    runtime_session_manager as session_manager,
 )
 
 
@@ -75,7 +75,7 @@ async def handle_jira_message(
             await jira_channel.send_message(issue_key, "Test case generation feature is temporarily unavailable.")
             return ""
 
-        result = await run_runtime_v2_chat(
+        result = await run_runtime_chat(
             message=message,
             session_id=session_id,
             user_name=user_name,
@@ -586,7 +586,7 @@ class Gateway:
             # Generate long-term memory from recent dailies
             try:
                 if created_daily:
-                    logger.info("[Memory] Long-term memory update skipped in Runtime v2 native mode")
+                    logger.info("[Memory] Long-term memory update skipped in EFP runtime native mode")
             except Exception as e:
                 logger.warning(f"[Memory] Long-term memory update skipped: {e}")
 
@@ -639,7 +639,7 @@ class Gateway:
 
                     # Also update long-term memory
                     try:
-                        logger.info("[Memory] Long-term memory update skipped in Runtime v2 native mode")
+                        logger.info("[Memory] Long-term memory update skipped in EFP runtime native mode")
                     except Exception as e:
                         logger.warning(f"[Memory] Long-term update skipped: {e}")
 

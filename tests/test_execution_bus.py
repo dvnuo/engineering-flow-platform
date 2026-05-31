@@ -1011,7 +1011,7 @@ async def test_execution_bus_task_handler_delegation_task_success(monkeypatch):
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_session_manager", sm)
     bus = build_default_execution_bus(event_emitter=lambda event_type, payload: events.append((event_type, payload)))
     req = make_execution_request(
         source_type="agent",
@@ -1256,7 +1256,7 @@ async def test_execution_bus_task_handler_delegation_task_resolves_shared_contex
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_session_manager", sm)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="agent",
@@ -1524,7 +1524,7 @@ async def test_execution_bus_task_handler_delegation_task_marks_failed_completio
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_session_manager", sm)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="agent",
@@ -1693,7 +1693,7 @@ async def test_execution_bus_task_handler_delegation_task_propagates_leader_sess
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_session_manager", sm)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="agent",
@@ -2024,7 +2024,7 @@ async def test_execution_bus_task_handler_valid_task_agent_context_propagates_me
 
     sm = _SessionManager()
     monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
-    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_v2_session_manager", sm)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_session_manager", sm)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="agent",
@@ -2677,7 +2677,7 @@ async def test_execution_bus_persists_last_execution_id_only_when_opted_in(monke
     async def _record_set_last_execution_id(session_id, request_id):
         calls.append((session_id, request_id))
 
-    monkeypatch.setattr("src.sessions.manager.session_manager.set_last_execution_id", _record_set_last_execution_id)
+    monkeypatch.setattr("src.efp_runtime.session.gateway_facade.runtime_session_manager.set_last_execution_id", _record_set_last_execution_id)
 
     async def _ok(_request):
         return {"response": "ok"}
@@ -3318,7 +3318,7 @@ async def test_run_skill_execution_reports_legacy_python_skills_disabled():
 
     assert result.success is False
     assert "Legacy Python skill execution is not available" in (result.error or "")
-    assert result.data["runtime"] == "efp_runtime_v2"
+    assert result.data["runtime"] == "efp_runtime"
     assert result.data["kwargs"] == {"input": "hello"}
 
 

@@ -1,1 +1,1 @@
-"""Runnable Runtime v2 smoke entrypoints."""
+"""Runnable EFP runtime smoke entrypoints."""

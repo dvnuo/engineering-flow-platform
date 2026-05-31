@@ -24,7 +24,7 @@ _yaml.indent(mapping=2, sequence=4, offset=2)
 DEFAULT_LLM_MODEL = "gpt-5.4-mini"
 DEFAULT_LLM_TEMPERATURE = 0.7
 
-PORTAL_MANAGED_RUNTIME_V2_FIELDS = frozenset(
+PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
     {
         "enabled_tools",
         "disabled_tools",
@@ -171,11 +171,10 @@ class Config:
         "github",
         "git",
         "debug",
-        *PORTAL_MANAGED_RUNTIME_V2_FIELDS,
+        *PORTAL_MANAGED_RUNTIME_FIELDS,
     }
-    RUNTIME_V2_PORTAL_MANAGED_FIELDS = PORTAL_MANAGED_RUNTIME_V2_FIELDS
     PORTAL_MANAGED_FIELD_TREE = {
-        **{field: True for field in sorted(PORTAL_MANAGED_RUNTIME_V2_FIELDS)},
+        **{field: True for field in sorted(PORTAL_MANAGED_RUNTIME_FIELDS)},
         # Keep hidden/deprecated Portal LLM fields in this field tree.
         # Portal may stop rendering temperature/tools/response_flow controls, but
         # set_managed_overlay() must still prune older Portal-managed values from

@@ -1,4 +1,4 @@
-"""Structured Runtime v2 history rendering for provider requests."""
+"""Structured EFP runtime history rendering for provider requests."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def render_history(
     tools: Iterable[ToolDef] | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> ProviderRequest:
-    """Render Runtime v2 history and tools into a provider-neutral request."""
+    """Render EFP runtime history and tools into a provider-neutral request."""
 
     messages, request_metadata = _coerce_history(history)
     request_metadata.update(_copy_mapping(metadata or {}))
@@ -50,7 +50,7 @@ def render_history(
 
 
 def render_messages(history: HistoryInput) -> list[RequestMessage]:
-    """Render Runtime v2 messages into ordered structured request messages.
+    """Render EFP runtime messages into ordered structured request messages.
 
     This renderer preserves the v2 part stream as-is. It does not synthesize,
     reorder, or repair tool call/result pairs.
@@ -64,7 +64,7 @@ def render_messages(history: HistoryInput) -> list[RequestMessage]:
 
 
 def render_tool_schemas(tools: Iterable[ToolDef] | None) -> list[RequestToolSchema]:
-    """Render Runtime v2 tool definitions without depending on legacy schemas."""
+    """Render EFP runtime tool definitions without depending on legacy schemas."""
 
     if tools is None:
         return []

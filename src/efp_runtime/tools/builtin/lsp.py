@@ -1,4 +1,4 @@
-"""Workspace-contained LSP navigation tool for Runtime v2."""
+"""Workspace-contained LSP navigation tool for EFP runtime."""
 
 from __future__ import annotations
 

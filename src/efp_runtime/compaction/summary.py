@@ -1,4 +1,4 @@
-"""Anchored compaction summary rendering for Runtime v2."""
+"""Anchored compaction summary rendering for EFP runtime."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def build_compaction_prompt(
     kept_count = prompt_metadata["kept_message_count"]
     prompt = "\n".join(
         [
-            "You are updating a Runtime v2 session summary for later turns.",
+            "You are updating a EFP runtime session summary for later turns.",
             "",
             "Return only Markdown using this exact section order:",
             *COMPACTION_SUMMARY_HEADINGS,

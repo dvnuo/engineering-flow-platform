@@ -1,4 +1,4 @@
-"""Output helpers for Runtime v2 built-in tools."""
+"""Output helpers for EFP runtime built-in tools."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Runtime v2 context rendering helpers."""
+"""EFP runtime context rendering helpers."""
 
 from .render import (
     prepare_history_for_request,

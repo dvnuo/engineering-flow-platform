@@ -114,7 +114,7 @@ async def parse_image_with_vision(file_path: str, options: Dict) -> ParseResult:
     Returns:
         ParseResult with vision-generated description
     """
-    from src.gateway.runtime_v2_chat import run_runtime_v2_chat
+    from src.gateway.runtime_chat import run_runtime_chat
     import uuid
     
     file_id = Path(file_path).stem.split("_")[0]
@@ -139,7 +139,7 @@ async def parse_image_with_vision(file_path: str, options: Dict) -> ParseResult:
     session_id = f"vision_{uuid.uuid4().hex[:8]}"
     
     try:
-        response = await run_runtime_v2_chat(
+        response = await run_runtime_chat(
             message=prompt,
             session_id=session_id,
             user_name="image-parser",

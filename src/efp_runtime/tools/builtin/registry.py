@@ -1,4 +1,4 @@
-"""Factory for Runtime v2 core built-in tool registries."""
+"""Factory for EFP runtime core built-in tool registries."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def create_core_tool_registry(
     include_repository_tools: bool = False,
     todo_store: SessionTodoStore | None = None,
 ) -> ToolRegistry:
-    """Create a registry containing Runtime v2 core built-in tools."""
+    """Create a registry containing EFP runtime core built-in tools."""
 
     root = normalize_workspace_root(workspace_root)
     resolved_skill_discovery = _resolve_skill_discovery(

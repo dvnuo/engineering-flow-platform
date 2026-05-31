@@ -1,7 +1,7 @@
-"""Workspace configuration loading for Runtime v2.
+"""Workspace configuration loading for EFP runtime.
 
 The loader is intentionally side-effect free: it reads local JSON/JSONC files
-and returns Runtime v2 config objects without starting tool providers or LLM
+and returns EFP runtime config objects without starting tool providers or LLM
 integrations.
 """
 
@@ -132,7 +132,7 @@ def resolve_runtime_workspace_root(
     *,
     include_defaults: bool = True,
 ) -> Path:
-    """Resolve the Runtime v2 project root for a startup path."""
+    """Resolve the EFP runtime project root for a startup path."""
 
     resolved_start = _workspace_root_path(start)
     if not include_defaults:
@@ -150,7 +150,7 @@ def find_runtime_config_files(
     *,
     include_defaults: bool = True,
 ) -> list[Path]:
-    """Return existing default Runtime v2 config files in load order."""
+    """Return existing default EFP runtime config files in load order."""
 
     if not include_defaults:
         return []
@@ -176,7 +176,7 @@ def load_runtime_config(
     paths: Any = None,
     include_defaults: bool = True,
 ) -> RuntimeConfigLoadResult:
-    """Load Runtime v2 config files from a workspace.
+    """Load EFP runtime config files from a workspace.
 
     Multiple files are merged in ``loaded_paths`` order. Later files override
     earlier scalar values, mappings are deep-merged, and lists are appended with

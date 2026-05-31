@@ -1,4 +1,4 @@
-"""Session history models for EFP Runtime v2."""
+"""Session history models for EFP runtime."""
 
 from __future__ import annotations
 

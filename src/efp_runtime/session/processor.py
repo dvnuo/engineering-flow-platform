@@ -1,4 +1,4 @@
-"""Session event processor for EFP Runtime v2."""
+"""Session event processor for EFP runtime."""
 
 from __future__ import annotations
 

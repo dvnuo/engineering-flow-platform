@@ -1,4 +1,4 @@
-"""Registry for EFP Runtime v2 tools."""
+"""Registry for EFP runtime tools."""
 
 from __future__ import annotations
 

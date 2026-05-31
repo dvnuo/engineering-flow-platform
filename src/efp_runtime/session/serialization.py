@@ -1,4 +1,4 @@
-"""JSON serialization helpers for Runtime v2 sessions."""
+"""JSON serialization helpers for EFP runtime sessions."""
 
 from __future__ import annotations
 

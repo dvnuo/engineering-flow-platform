@@ -1,4 +1,4 @@
-"""Skill context-loading tool for EFP Runtime v2."""
+"""Skill context-loading tool for EFP runtime."""
 
 from __future__ import annotations
 

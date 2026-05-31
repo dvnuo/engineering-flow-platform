@@ -1,4 +1,4 @@
-"""Runtime v2 skill discovery, context loading, and command parsing."""
+"""EFP runtime skill discovery, context loading, and command parsing."""
 
 from .commands import (
     SkillCommandResult,

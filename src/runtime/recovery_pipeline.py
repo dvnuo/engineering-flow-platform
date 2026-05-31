@@ -174,11 +174,11 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         return hydration
 
     async def _load_session_info(self, session_id: str, *, hydrate_via_manager: bool) -> Optional[Dict[str, Any]]:
-        from src.efp_runtime.session.gateway_facade import runtime_v2_session_manager
+        from src.efp_runtime.session.gateway_facade import runtime_session_manager
 
-        session_manager = runtime_v2_session_manager
+        session_manager = runtime_session_manager
         session: Optional[Dict[str, Any]] = None
-        source = "runtime_v2_file"
+        source = "runtime_file"
 
         get_existing_session = getattr(session_manager, "get_existing_session", None)
         if callable(get_existing_session):
