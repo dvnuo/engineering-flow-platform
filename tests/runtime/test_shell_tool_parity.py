@@ -283,7 +283,7 @@ async def test_shell_permission_request_includes_usable_metadata(tmp_path: Path)
     assert request["patterns"] == ["printf ok"]
 
 
-def test_shell_tool_source_stays_inside_runtime_v2_boundary():
+def test_shell_tool_source_stays_inside_runtime_boundary():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [

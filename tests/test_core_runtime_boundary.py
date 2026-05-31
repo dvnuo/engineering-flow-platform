@@ -31,7 +31,7 @@ def test_agents_package_does_not_export_legacy_runtime_shims():
         assert not hasattr(agents_pkg, exported_name)
 
 
-def test_gateway_chat_entrypoint_uses_runtime_v2_agent_runtime():
+def test_gateway_chat_entrypoint_uses_runtime_agent_runtime():
     source = (ROOT / "src/gateway/runtime_chat.py").read_text(encoding="utf-8")
 
     assert "from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig" in source
@@ -49,7 +49,7 @@ def test_gateway_entrypoints_do_not_import_removed_legacy_runtime_modules():
         assert "AgentCore" not in source
 
 
-def test_runtime_v2_skill_execution_boundary_reports_legacy_skill_disabled():
+def test_runtime_skill_execution_boundary_reports_legacy_skill_disabled():
     from src.runtime.execution_bus import run_skill_execution
 
     result = asyncio.run(run_skill_execution("demo_skill", input="hello"))

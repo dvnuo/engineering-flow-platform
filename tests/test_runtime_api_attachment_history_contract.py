@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_attachment_context_is_passed_as_runtime_v2_transient_prompt_input():
+def test_attachment_context_is_passed_as_runtime_transient_prompt_input():
     runtime_api = Path("src/gateway/runtime_api.py").read_text(encoding="utf-8")
     runtime_chat = Path("src/gateway/runtime_chat.py").read_text(encoding="utf-8")
 

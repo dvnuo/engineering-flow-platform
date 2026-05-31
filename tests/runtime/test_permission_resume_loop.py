@@ -280,7 +280,7 @@ async def test_loop_runner_append_user_message_false_resumes_existing_session():
     assert history[3].parts[0].text == "Echo complete."
 
 
-def test_permission_resume_sources_stay_inside_runtime_v2_boundary():
+def test_permission_resume_sources_stay_inside_runtime_boundary():
     combined = "\n".join(
         [
             (ROOT / "src/efp_runtime/loop/runner.py").read_text(encoding="utf-8"),

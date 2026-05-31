@@ -34,7 +34,7 @@ def test_chat_projection_keeps_text_context_attachment_and_system_compaction():
                         type="context",
                         context=RequestContext(
                             type="compaction_summary",
-                            text="Earlier work: runtime v2 baseline was created.",
+                            text="Earlier work: EFP runtime baseline was created.",
                             metadata={"source_role": "user", "source_message_ids": ["msg-old"]},
                         ),
                     )
@@ -86,7 +86,7 @@ def test_chat_projection_keeps_text_context_attachment_and_system_compaction():
     compaction = payload["messages"][1]
     assert compaction["role"] == "system"
     assert "[context:compaction_summary]" in compaction["content"]
-    assert "Earlier work: runtime v2 baseline was created." in compaction["content"]
+    assert "Earlier work: EFP runtime baseline was created." in compaction["content"]
 
     user_message = payload["messages"][2]
     assert user_message["role"] == "user"
@@ -143,8 +143,8 @@ def test_chat_projection_projects_assistant_tool_calls():
     tool_call = RequestToolCall(
         call_id="call-1",
         tool_name="search",
-        arguments={"query": "runtime v2"},
-        arguments_text='{"query":"runtime v2"}',
+        arguments={"query": "EFP runtime"},
+        arguments_text='{"query":"EFP runtime"}',
         metadata={"origin": "assistant"},
     )
     request = ProviderRequest(
@@ -170,7 +170,7 @@ def test_chat_projection_projects_assistant_tool_calls():
             "type": "function",
             "function": {
                 "name": "search",
-                "arguments": '{"query":"runtime v2"}',
+                "arguments": '{"query":"EFP runtime"}',
             },
         }
     ]
@@ -187,7 +187,7 @@ def test_chat_projection_projects_tool_results_as_tool_messages():
                         tool_result=RequestToolResult(
                             call_id="call-1",
                             tool_name="search",
-                            content="found runtime v2 notes",
+                            content="found EFP runtime notes",
                             output={"matches": 1},
                         ),
                     )
@@ -203,7 +203,7 @@ def test_chat_projection_projects_tool_results_as_tool_messages():
             "role": "tool",
             "tool_call_id": "call-1",
             "name": "search",
-            "content": "found runtime v2 notes",
+            "content": "found EFP runtime notes",
         }
     ]
 
@@ -217,7 +217,7 @@ def test_responses_projection_preserves_typed_input_items():
                     RequestMessagePart(type="text", text="Use the project notes."),
                     RequestMessagePart(
                         type="context",
-                        context=RequestContext(type="task", text="Find Runtime v2 details."),
+                        context=RequestContext(type="task", text="Find EFP runtime details."),
                     ),
                 ],
             ),
@@ -229,7 +229,7 @@ def test_responses_projection_preserves_typed_input_items():
                         tool_call=RequestToolCall(
                             call_id="call-1",
                             tool_name="search",
-                            arguments={"query": "runtime v2"},
+                            arguments={"query": "EFP runtime"},
                         ),
                     )
                 ],
@@ -242,7 +242,7 @@ def test_responses_projection_preserves_typed_input_items():
                         tool_result=RequestToolResult(
                             call_id="call-1",
                             tool_name="search",
-                            content="found runtime v2 notes",
+                            content="found EFP runtime notes",
                             success=True,
                         ),
                     )
@@ -272,13 +272,13 @@ def test_responses_projection_preserves_typed_input_items():
     assert tool_call["type"] == "function_call"
     assert tool_call["call_id"] == "call-1"
     assert tool_call["name"] == "search"
-    assert tool_call["arguments"] == '{"query":"runtime v2"}'
-    assert tool_call["arguments_json"] == {"query": "runtime v2"}
+    assert tool_call["arguments"] == '{"query":"EFP runtime"}'
+    assert tool_call["arguments_json"] == {"query": "EFP runtime"}
 
     tool_result = payload["input"][2]["content"][0]
     assert tool_result["type"] == "function_call_output"
     assert tool_result["call_id"] == "call-1"
-    assert tool_result["output"] == "found runtime v2 notes"
+    assert tool_result["output"] == "found EFP runtime notes"
 
 
 def test_openai_projection_imports_standalone_with_pythonpath_src():

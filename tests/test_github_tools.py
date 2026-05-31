@@ -229,7 +229,7 @@ async def test_github_wrapper_get_pr_reraises_cancelled_error(monkeypatch, githu
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_is_not_a_runtime_v2_root_dispatch_tool(monkeypatch):
+async def test_github_get_pr_is_not_a_runtime_root_dispatch_tool(monkeypatch):
     from src import execute_tool
 
     async def fake_github_get_pr(owner, repo, pull_number):
@@ -242,7 +242,7 @@ async def test_github_get_pr_is_not_a_runtime_v2_root_dispatch_tool(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_github_get_issue_is_not_a_runtime_v2_root_dispatch_tool(monkeypatch):
+async def test_github_get_issue_is_not_a_runtime_root_dispatch_tool(monkeypatch):
     from src import execute_tool
 
     async def fake_github_get_issue(owner, repo, issue_number):
@@ -255,7 +255,7 @@ async def test_github_get_issue_is_not_a_runtime_v2_root_dispatch_tool(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_file_patch_is_not_a_runtime_v2_root_dispatch_tool(monkeypatch):
+async def test_github_get_pr_file_patch_is_not_a_runtime_root_dispatch_tool(monkeypatch):
     from src import execute_tool
 
     async def fake_github_get_pr_file_patch(owner, repo, pull_number, path):
@@ -632,7 +632,7 @@ async def test_channel_add_pr_review_comment_rejects_non_positive_line_values(gi
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_files_is_not_a_runtime_v2_root_dispatch_tool(monkeypatch):
+async def test_github_get_pr_files_is_not_a_runtime_root_dispatch_tool(monkeypatch):
     from src import execute_tool
 
     async def fake_github_get_pr_files(owner, repo, pull_number):

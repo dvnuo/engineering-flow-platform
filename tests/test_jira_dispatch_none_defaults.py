@@ -2,7 +2,7 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_legacy_jira_tools_are_not_runtime_v2_root_dispatch_tools():
+async def test_legacy_jira_tools_are_not_runtime_root_dispatch_tools():
     from src import execute_tool, get_tool_names
 
     assert "jira_get_issue" not in get_tool_names()

@@ -321,7 +321,7 @@ async def test_chat_execution_bus_adapter_generates_runtime_request_id(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_chat_execution_bus_adapter_propagates_runtime_v2_errors(monkeypatch):
+async def test_chat_execution_bus_adapter_propagates_runtime_errors(monkeypatch):
     from src.gateway import runtime_api
 
     async def _fake_run_runtime_chat(**kwargs):

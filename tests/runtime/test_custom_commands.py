@@ -2194,7 +2194,7 @@ def test_runtime_config_resolution_preserves_command_fields(tmp_path: Path):
     assert child.metadata == {"base": "yes", "task": "yes"}
 
 
-def test_custom_command_imports_do_not_cross_runtime_v2_boundary():
+def test_custom_command_imports_do_not_cross_runtime_boundary():
     code = """
 import json
 import sys

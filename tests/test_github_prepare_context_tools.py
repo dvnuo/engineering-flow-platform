@@ -11,7 +11,7 @@ def test_prepare_context_tools_are_exposed_and_return_manifest_string_contract()
     assert '"name": "github_prepare_pr_context"' in source
 
 
-def test_legacy_github_prepare_tools_are_not_root_runtime_v2_dispatch_tools():
+def test_legacy_github_prepare_tools_are_not_root_runtime_dispatch_tools():
     source = Path("src/github/__init__.py").read_text(encoding="utf-8")
     assert "async def github_get_issue(" in source
     assert "async def github_get_pr(" in source

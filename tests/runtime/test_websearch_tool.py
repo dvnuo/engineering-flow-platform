@@ -56,7 +56,7 @@ async def test_websearch_executes_runner_with_normalized_request(tmp_path: Path)
             id="call-websearch",
             tool_id="websearch",
             args={
-                "query": " runtime v2 ",
+                "query": " EFP runtime ",
                 "numResults": 3,
                 "livecrawl": "preferred",
                 "type": "deep",
@@ -67,7 +67,7 @@ async def test_websearch_executes_runner_with_normalized_request(tmp_path: Path)
 
     assert captured == [
         WebSearchRequest(
-            query="runtime v2",
+            query="EFP runtime",
             num_results=3,
             livecrawl="preferred",
             type="deep",
@@ -75,19 +75,19 @@ async def test_websearch_executes_runner_with_normalized_request(tmp_path: Path)
         )
     ]
     assert result.status == "success"
-    assert result.content == "Found result for runtime v2"
+    assert result.content == "Found result for EFP runtime"
     assert result.output == {
-        "query": "runtime v2",
+        "query": "EFP runtime",
         "num_results": 3,
         "livecrawl": "preferred",
         "type": "deep",
         "context_max_characters": 2048,
-        "content": "Found result for runtime v2",
+        "content": "Found result for EFP runtime",
         "provider": "unit-provider",
     }
     metadata = dict(result.metadata)
     assert isinstance(metadata.pop("duration_ms"), int)
-    assert metadata["query"] == "runtime v2"
+    assert metadata["query"] == "EFP runtime"
     assert metadata["provider"] == "unit-provider"
 
 

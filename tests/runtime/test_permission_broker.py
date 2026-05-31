@@ -252,7 +252,7 @@ print(json.dumps({
     }
 
 
-def test_permission_broker_source_stays_inside_runtime_v2_boundary():
+def test_permission_broker_source_stays_inside_runtime_boundary():
     source = (ROOT / "src/efp_runtime/permissions.py").read_text(encoding="utf-8")
     forbidden_tokens = [
         "from src.efp_runtime",

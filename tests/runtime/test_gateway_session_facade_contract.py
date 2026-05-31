@@ -180,7 +180,7 @@ async def test_pending_permission_tool_call_survives_facade_metadata_and_resume(
 
 
 @pytest.mark.asyncio
-async def test_pending_question_state_is_recorded_on_runtime_v2_session(tmp_path: Path):
+async def test_pending_question_state_is_recorded_on_runtime_session(tmp_path: Path):
     (tmp_path / "workspace").mkdir()
     store = FileSessionStore(tmp_path / "store")
     manager = RuntimeSessionManager(store=store)

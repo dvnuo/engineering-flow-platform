@@ -25,7 +25,7 @@ LEGACY_PYTHON_TOOLS = {
 }
 
 
-def test_src_tool_surface_is_runtime_v2_opencode_builtin_only():
+def test_src_tool_surface_is_runtime_opencode_builtin_only():
     import src
 
     names = set(src.get_tool_names())

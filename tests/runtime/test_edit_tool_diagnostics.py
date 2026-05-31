@@ -374,7 +374,7 @@ async def test_apply_patch_workspace_escape_still_rejected(tmp_path: Path):
     assert "Path escapes workspace root." in result.content
 
 
-def test_diagnostic_tool_sources_stay_inside_runtime_v2_import_boundary():
+def test_diagnostic_tool_sources_stay_inside_runtime_import_boundary():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "src/efp_runtime/tools/builtin").rglob("*.py"))

@@ -136,7 +136,7 @@ def test_runtime_chat_ignores_untrusted_runtime_profile_metadata(monkeypatch):
     assert runtime_config.track_usage is True
 
 
-def test_runtime_chat_uses_persisted_runtime_v2_config_fields(monkeypatch):
+def test_runtime_chat_uses_persisted_runtime_config_fields(monkeypatch):
     class _FakeConfig:
         @property
         def session(self):
@@ -193,7 +193,7 @@ def test_runtime_chat_profile_track_usage_overrides_only_when_present(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_runtime_v2_error_result_raises_sanitized_chat_error_after_recording(monkeypatch):
+async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(monkeypatch):
     result = RuntimeLoopResult(
         session_id="s-error",
         final_assistant_message=None,

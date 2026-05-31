@@ -207,7 +207,7 @@ print(json.dumps({"legacy_core_loaded": "src.agents.core" in sys.modules}))
     assert payload == {"legacy_core_loaded": False}
 
 
-def test_prompt_resolver_source_stays_inside_runtime_v2_boundary():
+def test_prompt_resolver_source_stays_inside_runtime_boundary():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "src/efp_runtime/prompt").rglob("*.py"))

@@ -25,7 +25,7 @@ async def test_legacy_session_manager_module_is_removed_and_runtime_facade_backs
 
 
 @pytest.mark.asyncio
-async def test_runtime_v2_session_facade_recover_session_state_calls_runtime_pipeline(monkeypatch, tmp_path):
+async def test_runtime_session_facade_recover_session_state_calls_runtime_pipeline(monkeypatch, tmp_path):
     calls = []
 
     class _StubPipeline:
@@ -62,7 +62,7 @@ async def test_runtime_v2_session_facade_recover_session_state_calls_runtime_pip
 
 
 @pytest.mark.asyncio
-async def test_runtime_v2_session_facade_pending_delegation_metadata_lifecycle(tmp_path):
+async def test_runtime_session_facade_pending_delegation_metadata_lifecycle(tmp_path):
     manager = RuntimeSessionManager(root=tmp_path, auto_save=False)
     session_id = "session-delegation-metadata"
     await manager.get_session(session_id)
@@ -86,7 +86,7 @@ async def test_runtime_v2_session_facade_pending_delegation_metadata_lifecycle(t
 
 
 @pytest.mark.asyncio
-async def test_runtime_v2_session_facade_metadata_updates_file_store(tmp_path):
+async def test_runtime_session_facade_metadata_updates_file_store(tmp_path):
     manager = RuntimeSessionManager(root=tmp_path, auto_save=True)
     session_id = "session-persist-metadata"
     await manager.get_session(session_id)

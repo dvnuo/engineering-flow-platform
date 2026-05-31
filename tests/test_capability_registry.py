@@ -150,7 +150,7 @@ def test_registry_adapter_action_entries_include_alias_and_system():
     assert adapter_entry["adapter_system"] in {"github", "jira", "portal"}
 
 
-def test_capability_registry_uses_runtime_v2_tool_catalog_even_when_llm_tools_restricted(monkeypatch):
+def test_capability_registry_uses_runtime_tool_catalog_even_when_llm_tools_restricted(monkeypatch):
     monkeypatch.setitem(config._config, "llm", {"tools": ["bash"]})
     from src import get_tools_schema
 

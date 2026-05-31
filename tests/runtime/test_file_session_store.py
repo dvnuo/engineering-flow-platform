@@ -28,7 +28,7 @@ def test_file_store_persists_sessions_across_instances(tmp_path: Path):
     store = FileSessionStore(tmp_path)
     session = store.create_session(
         session_id="session-persist",
-        title="Persistent Runtime v2",
+        title="Persistent EFP runtime",
         metadata={"suite": "file"},
     )
     store.append_message(
@@ -50,7 +50,7 @@ def test_file_store_persists_sessions_across_instances(tmp_path: Path):
     restored = reloaded.get_session(session.session_id)
     history = reloaded.read_history(session.session_id)
 
-    assert restored.title == "Persistent Runtime v2"
+    assert restored.title == "Persistent EFP runtime"
     assert restored.metadata == {"suite": "file"}
     assert [message.message_id for message in history] == ["msg-user", "msg-assistant"]
     assert [message.role for message in history] == [MessageRole.USER, MessageRole.ASSISTANT]
@@ -378,7 +378,7 @@ async def test_agent_runtime_with_file_store_persists_text_only_run(tmp_path: Pa
     assert history[1].parts[0].text == "Persisted through facade."
 
 
-def test_file_session_store_source_stays_inside_runtime_v2_boundary():
+def test_file_session_store_source_stays_inside_runtime_boundary():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [

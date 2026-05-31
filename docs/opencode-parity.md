@@ -29,5 +29,5 @@ only when covered by implementation and tests.
   server installation, startup, or lifecycle management.
 - `websearch` has no bundled provider. Callers must inject a runner so network
   search policy remains explicit.
-- Internal test directories still use `tests/runtime_v2` as a historical stable
-  path. This is not a product/runtime name.
+- Internal runtime tests live under `tests/runtime` and form the current
+  runtime test boundary.

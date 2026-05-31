@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_runtime_v2_imports_standalone_with_pythonpath_src():
+def test_runtime_imports_standalone_with_pythonpath_src():
     code = """
 import json
 import sys
@@ -35,13 +35,13 @@ print(json.dumps({"legacy_core_loaded": "src.agents.core" in sys.modules}))
     assert payload == {"legacy_core_loaded": False}
 
 
-def test_runtime_v2_source_does_not_import_through_src_package():
+def test_runtime_source_does_not_import_through_src_package():
     combined = _combined_v2_source()
     assert "from src.efp_runtime" not in combined
     assert "import src.efp_runtime" not in combined
 
 
-def test_runtime_v2_source_has_no_direct_src_imports():
+def test_runtime_source_has_no_direct_src_imports():
     offenders: list[str] = []
     for path in sorted((ROOT / "src/efp_runtime").rglob("*.py")):
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -54,7 +54,7 @@ def test_runtime_v2_source_has_no_direct_src_imports():
     assert offenders == []
 
 
-def test_runtime_v2_source_does_not_import_legacy_runtime_modules():
+def test_runtime_source_does_not_import_legacy_runtime_modules():
     combined = _combined_v2_source()
     forbidden_imports = [
         "from src.agents.core",

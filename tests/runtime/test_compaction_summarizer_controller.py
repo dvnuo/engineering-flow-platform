@@ -420,7 +420,7 @@ print(json.dumps({
     }
 
 
-def test_compaction_controller_source_stays_inside_runtime_v2_import_boundary():
+def test_compaction_controller_source_stays_inside_runtime_import_boundary():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "src/efp_runtime").rglob("*.py"))

@@ -13,12 +13,12 @@ from efp_runtime import (
 
 def test_store_creates_sessions_appends_messages_and_reads_history():
     store = InMemorySessionStore()
-    session = store.create_session(session_id="session-1", title="Runtime v2")
+    session = store.create_session(session_id="session-1", title="EFP runtime")
 
     user_message = store.append_message(
         session.session_id,
         role="user",
-        parts=[MessagePart.text_part("Build the runtime v2 foundation.")],
+        parts=[MessagePart.text_part("Build the EFP runtime foundation.")],
     )
     assistant_message = store.append_message(session.session_id, role="assistant")
     store.append_part(
@@ -31,7 +31,7 @@ def test_store_creates_sessions_appends_messages_and_reads_history():
         assistant_message.message_id,
         MessagePart.compaction_part(
             CompactionPart(
-                summary="Runtime v2 scope is contracts and store only.",
+                summary="EFP runtime scope is contracts and store only.",
                 source_message_ids=[user_message.message_id],
                 auto=False,
             )

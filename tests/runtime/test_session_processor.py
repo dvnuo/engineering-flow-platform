@@ -40,7 +40,7 @@ async def test_non_streaming_two_tool_calls_become_assistant_parts():
             {
                 "id": "call_a",
                 "type": "function",
-                "function": {"name": "search", "arguments": '{"query": "runtime v2"}'},
+                "function": {"name": "search", "arguments": '{"query": "EFP runtime"}'},
             },
             {
                 "id": "call_b",
@@ -58,7 +58,7 @@ async def test_non_streaming_two_tool_calls_become_assistant_parts():
     assert [part.type.value for part in message.parts] == ["tool_call", "tool_call"]
     assert message.parts[0].tool_call.call_id == "call_a"
     assert message.parts[0].tool_call.tool_name == "search"
-    assert message.parts[0].tool_call.arguments == {"query": "runtime v2"}
+    assert message.parts[0].tool_call.arguments == {"query": "EFP runtime"}
     assert message.parts[1].tool_call.call_id == "call_b"
     assert message.parts[1].tool_call.tool_name == "read_file"
     assert message.parts[1].tool_call.arguments == {"path": "src/README.md"}

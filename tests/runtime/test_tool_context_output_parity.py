@@ -363,7 +363,7 @@ async def test_bash_truncates_visible_content_but_saves_complete_output(
     assert Path(output_path).stem == "call-shell-truncated"
 
 
-def test_tool_context_output_parity_sources_stay_inside_runtime_v2_boundary():
+def test_tool_context_output_parity_sources_stay_inside_runtime_boundary():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [

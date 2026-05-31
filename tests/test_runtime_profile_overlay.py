@@ -3,7 +3,7 @@ import os
 from src.config import Config
 
 
-RUNTIME_V2_OVERLAY_FIELDS = {
+RUNTIME_OVERLAY_FIELDS = {
     "enabled_tools": ["read"],
     "disabled_tools": ["write"],
     "tool_permissions": {"bash": "ask"},
@@ -115,7 +115,7 @@ def test_runtime_profile_apply_writes_config_yaml_without_sidecar(tmp_path):
     assert meta["managed_sections"] == ["jira", "llm"]
 
 
-def test_runtime_profile_apply_preserves_and_clears_runtime_v2_top_level_fields(tmp_path):
+def test_runtime_profile_apply_preserves_and_clears_runtime_top_level_fields(tmp_path):
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
     with config_path.open("a", encoding="utf-8") as handle:
@@ -123,10 +123,10 @@ def test_runtime_profile_apply_preserves_and_clears_runtime_v2_top_level_fields(
 
     cfg = Config(str(config_path))
     cfg.set_managed_overlay(
-        "rp_runtime_v2",
+        "rp_runtime",
         4,
         {
-            **RUNTIME_V2_OVERLAY_FIELDS,
+            **RUNTIME_OVERLAY_FIELDS,
             "workspace_root": "/portal/workspace",
             "default_provider_id": "openai",
             "default_model": "gpt-other",
@@ -137,7 +137,7 @@ def test_runtime_profile_apply_preserves_and_clears_runtime_v2_top_level_fields(
 
     cfg.load()
     effective = cfg.get_effective_config()
-    for field, expected in RUNTIME_V2_OVERLAY_FIELDS.items():
+    for field, expected in RUNTIME_OVERLAY_FIELDS.items():
         assert effective[field] == expected
     assert effective["workspace_root"] == "/user/workspace"
     assert "default_provider_id" not in effective
@@ -148,7 +148,7 @@ def test_runtime_profile_apply_preserves_and_clears_runtime_v2_top_level_fields(
     cfg.clear_managed_overlay()
     cfg.load()
     cleared = cfg.get_effective_config()
-    for field in RUNTIME_V2_OVERLAY_FIELDS:
+    for field in RUNTIME_OVERLAY_FIELDS:
         assert field not in cleared
     assert cleared["workspace_root"] == "/user/workspace"
 

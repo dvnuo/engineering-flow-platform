@@ -372,7 +372,7 @@ print(json.dumps({
     assert payload["legacy_loaded"] == []
 
 
-def test_question_sources_stay_inside_runtime_v2_boundary():
+def test_question_sources_stay_inside_runtime_boundary():
     combined = "\n".join(
         [
             (ROOT / "src/efp_runtime/questions.py").read_text(encoding="utf-8"),

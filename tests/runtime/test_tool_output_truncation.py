@@ -204,7 +204,7 @@ async def test_agent_runtime_uses_task_hint_when_task_tool_is_enabled(tmp_path: 
     assert "read or grep" not in tool_result.content
 
 
-def test_tool_output_truncation_sources_stay_inside_runtime_v2_boundary():
+def test_tool_output_truncation_sources_stay_inside_runtime_boundary():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [

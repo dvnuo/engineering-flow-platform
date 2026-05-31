@@ -4,9 +4,8 @@ This document describes the Python EFP runtime as the direct runtime for the
 service. It is not a compatibility layer for an older agent loop.
 
 The implementation package is `src/efp_runtime` and imports as `efp_runtime`
-with `PYTHONPATH=src`. Some historical internal test paths still use
-`runtime_v2` in their directory names; those names are not the product name and
-are treated as a stable test boundary only.
+with `PYTHONPATH=src`. Internal runtime tests live under `tests/runtime`
+and form the current runtime test boundary.
 
 ## Runtime Boundary
 

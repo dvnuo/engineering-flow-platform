@@ -42,13 +42,13 @@ def test_text_only_history_renders_request_messages():
             ),
             Message.from_text(
                 "user",
-                "Summarize runtime v2.",
+                "Summarize EFP runtime.",
                 session_id="session-1",
                 message_id="msg-user",
             ),
             Message.from_text(
                 "assistant",
-                "Runtime v2 keeps typed history.",
+                "EFP runtime keeps typed history.",
                 session_id="session-1",
                 message_id="msg-assistant",
             ),
@@ -62,8 +62,8 @@ def test_text_only_history_renders_request_messages():
     assert [message.role for message in request.messages] == ["system", "user", "assistant"]
     assert [message.text for message in request.messages] == [
         "You are precise.",
-        "Summarize runtime v2.",
-        "Runtime v2 keeps typed history.",
+        "Summarize EFP runtime.",
+        "EFP runtime keeps typed history.",
     ]
     assert request.messages[1].parts[0].metadata["source_message_id"] == "msg-user"
 
@@ -71,7 +71,7 @@ def test_text_only_history_renders_request_messages():
 def test_assistant_tool_call_and_tool_result_render_as_structured_parts():
     call = ToolCall(
         tool_name="search",
-        arguments={"query": "runtime v2"},
+        arguments={"query": "EFP runtime"},
         call_id="call-1",
         metadata={"origin": "assistant"},
     )
@@ -79,7 +79,7 @@ def test_assistant_tool_call_and_tool_result_render_as_structured_parts():
         call_id="call-1",
         tool_name="search",
         status="success",
-        content="found runtime v2 notes",
+        content="found EFP runtime notes",
         output={"matches": 1},
     )
     messages = [
@@ -107,20 +107,20 @@ def test_assistant_tool_call_and_tool_result_render_as_structured_parts():
     assert assistant.reasoning[0].text == "Need current notes."
     assert assistant.tool_calls[0].call_id == "call-1"
     assert assistant.tool_calls[0].tool_name == "search"
-    assert assistant.tool_calls[0].arguments == {"query": "runtime v2"}
+    assert assistant.tool_calls[0].arguments == {"query": "EFP runtime"}
     assert assistant.tool_calls[0].metadata["tool_call_metadata"] == {"origin": "assistant"}
 
     tool = rendered[1]
     assert tool.role == "tool"
     assert tool.tool_results[0].call_id == "call-1"
     assert tool.tool_results[0].tool_name == "search"
-    assert tool.tool_results[0].content == "found runtime v2 notes"
+    assert tool.tool_results[0].content == "found EFP runtime notes"
     assert tool.tool_results[0].output == {"matches": 1}
 
 
 def test_compaction_part_renders_as_system_context_summary():
     compaction = CompactionPart(
-        summary="Earlier work: runtime v2 baseline was created.",
+        summary="Earlier work: EFP runtime baseline was created.",
         source_message_ids=["msg-old"],
         auto=True,
         original_part_count=3,
@@ -140,7 +140,7 @@ def test_compaction_part_renders_as_system_context_summary():
     assert rendered[0].metadata["rendered_as"] == "system_context"
     context = rendered[0].context[0]
     assert context.type == "compaction_summary"
-    assert context.text == "Earlier work: runtime v2 baseline was created."
+    assert context.text == "Earlier work: EFP runtime baseline was created."
     assert context.metadata["source_role"] == "user"
     assert context.metadata["compaction"]["source_message_ids"] == ["msg-old"]
 

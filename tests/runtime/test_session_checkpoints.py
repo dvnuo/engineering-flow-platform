@@ -258,7 +258,7 @@ def test_agent_runtime_rejects_store_without_checkpoint_methods():
         runtime.create_checkpoint("session-missing")
 
 
-def test_checkpoint_source_stays_inside_runtime_v2_boundary():
+def test_checkpoint_source_stays_inside_runtime_boundary():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [

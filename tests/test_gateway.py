@@ -186,7 +186,7 @@ class TestGatewayIntegration:
         assert JIRA_SESSION_PREFIX == "jira:"
 
     def test_gateway_has_runtime_chat_entrypoint(self):
-        """Test Gateway imports Runtime v2 chat entrypoint."""
+        """Test Gateway imports EFP runtime chat entrypoint."""
         from src.gateway.server import run_runtime_chat
         assert run_runtime_chat is not None
 

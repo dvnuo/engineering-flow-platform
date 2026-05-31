@@ -20,8 +20,8 @@ def test_message_part_factories_create_structured_parts(tmp_path):
     attachment = Attachment(mime_type="text/plain", filename="notes.txt", text_ref="blob:1")
     call = ToolCall(tool_name="read_file", arguments={"path": "README.md"}, call_id="call-1")
     result = ToolResult(call_id=call.call_id, tool_name=call.tool_name, output="contents")
-    compaction = CompactionPart(summary="User asked for a runtime v2 foundation.", auto=True)
-    task = TaskPart(prompt="Create runtime v2 contracts", task_id="task-1", status="running")
+    compaction = CompactionPart(summary="User asked for a EFP runtime foundation.", auto=True)
+    task = TaskPart(prompt="Create EFP runtime contracts", task_id="task-1", status="running")
 
     parts = [
         MessagePart.text_part("hello"),
@@ -74,7 +74,7 @@ def test_tool_call_and_result_keep_canonical_fields_and_aliases():
     assert result.to_dict()["content"] == "ok"
 
 
-def test_runtime_v2_event_and_supporting_contracts_are_lightweight_data():
+def test_runtime_event_and_supporting_contracts_are_lightweight_data():
     call = ToolCall(tool_name="skill", arguments={"name": "requirements"}, call_id="call-skill")
     permission = PermissionRequest.create(
         tool_id=call.tool_name,
@@ -93,9 +93,9 @@ def test_runtime_v2_event_and_supporting_contracts_are_lightweight_data():
         payload={"request_id": permission.request_id, "tool": call.tool_name},
     )
 
-    message = Message.from_text("user", "Build runtime v2.", session_id="session-1")
+    message = Message.from_text("user", "Build EFP runtime.", session_id="session-1")
 
     assert llm_event.tool_call.call_id == "call-skill"
     assert runtime_event.payload["tool"] == "skill"
     assert permission.tool_id == call.tool_name
-    assert message.parts[0].text == "Build runtime v2."
+    assert message.parts[0].text == "Build EFP runtime."

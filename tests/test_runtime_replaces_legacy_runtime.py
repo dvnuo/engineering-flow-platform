@@ -23,7 +23,7 @@ def test_removed_legacy_runtime_modules_are_absent_and_not_importable():
             importlib.import_module(module_name)
 
 
-def test_src_tool_surface_is_runtime_v2_opencode_only():
+def test_src_tool_surface_is_runtime_opencode_only():
     import src
 
     names = set(src.get_tool_names())
@@ -72,8 +72,8 @@ def test_legacy_session_manager_facade_is_removed():
 
 
 def test_gateway_chat_module_uses_direct_runtime_name():
-    assert (ROOT / "src/gateway/runtime_chat.py").exists()
-    assert not (ROOT / "src/gateway/runtime_v2_chat.py").exists()
+    chat_modules = {path.name for path in (ROOT / "src/gateway").glob("*chat.py")}
+    assert chat_modules == {"runtime_chat.py"}
 
 
 def test_runtime_chat_uses_gateway_facade_store_contract():
