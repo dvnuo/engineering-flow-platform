@@ -56,6 +56,17 @@ jobs:
     needs: native-runtime-tests
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout runtime tools source
+        uses: actions/checkout@v4
+        with:
+          repository: dvnuo/engineering-flow-platform-tools
+          path: engineering-flow-platform-tools
+      - name: Set up Go for runtime tools
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: engineering-flow-platform-tools/go.mod
+      - name: Prepare runtime tool binaries
+        run: EFP_TOOLS_REPO_DIR=engineering-flow-platform-tools scripts/prepare-runtime-tools.sh
       - run: docker build -t efp-native-runtime-ci .
       - run: |
           set -euo pipefail
