@@ -52,18 +52,6 @@ def test_normalize_invalid_blocks_falls_back_to_markdown():
     assert blocks == [{"type": "markdown", "content": "hello"}]
 
 
-def test_render_code_block_uses_block_text_fallback():
-    repo_root = Path(__file__).parent.parent
-    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
-
-    anchor = "function renderCodeBlock(block)"
-    start = js.find(anchor)
-    assert start != -1
-    chunk = js[start:start + 500]
-
-    assert "getBlockText(block, true)" in chunk or "block.text" in chunk
-
-
 def test_normalize_tool_result_output_alias_to_content():
     mod = _load_display_blocks_module()
 

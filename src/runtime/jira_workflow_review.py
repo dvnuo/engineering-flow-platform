@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from src.agents.executor import execute_skill
 from src.runtime.runtime_adapter_execution import execute_adapter_action_via_bus
 from src.runtime.jira_workflow_contract import (
     JiraWorkflowReviewOutcome,
@@ -13,6 +12,23 @@ from src.runtime.jira_workflow_contract import (
     normalize_workflow_review_payload,
 )
 from src.runtime.events import build_runtime_event
+
+
+class _RuntimeSkillResult:
+    def __init__(self, *, success: bool, output: str = "", error: str | None = None):
+        self.success = success
+        self.output = output
+        self.error = error
+
+
+async def execute_skill(skill_name: str, **kwargs: Any) -> _RuntimeSkillResult:
+    return _RuntimeSkillResult(
+        success=False,
+        error=(
+            "Legacy Python skill execution is not available in EFP runtime native mode. "
+            f"Requested skill: {skill_name}"
+        ),
+    )
 
 
 async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:

@@ -24,7 +24,8 @@ The runtime log context includes:
 
 ## Where Context Is Bound
 
-- Gateway chat endpoints bind path/request/session/agent/runtime/execution/source context.
+- Gateway chat endpoints bind path/request/session/agent/runtime/execution/source context before handing the LLM loop to EFP runtime.
+- EFP runtime chat events are returned in `runtime_events` through runtime API payloads for request correlation.
 - `/api/tasks/execute` continues binding task and portal trace context.
 - `ExecutionBus` binds request-scoped context via `set_log_context()` and always resets via `reset_log_context()` in a `finally` block.
 

@@ -4,6 +4,8 @@
 
 This document defines the native Engineering Flow Platform (EFP) runtime contract exposed to Portal and integration smoke suites.
 
+The native runtime is an API-only service. It does not serve a built-in browser page, root HTML route, bundled asset routes, template files, or frontend assets; Portal is the UI.
+
 ## Required HTTP Surface
 
 Native runtime must support:
@@ -30,9 +32,13 @@ Native runtime must support:
 
 ## Tool Surface
 
-- EFP native runtime **does not support External tools subsystem**.
-- Runtime tool surface comes from built-in/native tools only (`src.__init__.get_tools_schema()`).
+- EFP native runtime uses EFP runtime (`efp_runtime.runtime.AgentRuntime`) for `/api/chat`, `/api/chat/stream`, and Jira chat handling.
+- EFP runtime native mode supports GitHub Copilot only. Configure `llm.provider: github_copilot` plus `llm.api_key` or `EFP_GITHUB_COPILOT_TOKEN`.
+- Runtime tool surface comes from the opencode-style EFP runtime built-in registry only (`src.__init__.get_tools_schema()`).
+- Model-visible tool ids include `bash`, `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `todowrite`, and `apply_patch`.
+- Legacy Python tool packages such as `src.bash_tools` are not present, and Jira/GitHub/Confluence/Git Python tools are not exposed as LLM tools.
 - Legacy external-tools envs (`EFP_TOOLS_DIR`, `EFP_EXTERNAL_TOOLS_*`) are ignored by native runtime.
+- MCP servers and external protocol tool providers are intentionally excluded.
 
 ## External Skills Surface
 

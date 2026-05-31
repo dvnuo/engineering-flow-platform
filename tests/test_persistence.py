@@ -23,7 +23,7 @@ class TestSessionPersistence:
         session_id = "test_session_001"
         result = await store.save_session(
             session_id=session_id,
-            channel="webchat",
+            channel="runtime_api",
             messages=[{"role": "user", "content": "Hello"}],
             metadata={"user_id": "123"}
         )
@@ -33,7 +33,7 @@ class TestSessionPersistence:
         # Load and verify
         info = await store.load_session(session_id)
         assert info is not None
-        assert info["channel"] == "webchat"
+        assert info["channel"] == "runtime_api"
         assert info["metadata"]["user_id"] == "123"
     
     @pytest.mark.asyncio
@@ -65,7 +65,7 @@ class TestSessionPersistence:
         for i in range(3):
             await store.save_session(
                 session_id=f"list_test_{i}",
-                channel="webchat",
+                channel="runtime_api",
                 messages=[{"role": "user", "content": f"Message {i}"}],
                 metadata={}
             )
@@ -79,7 +79,7 @@ class TestSessionPersistence:
         session_id = "delete_test_session"
         await store.save_session(
             session_id=session_id,
-            channel="webchat",
+            channel="runtime_api",
             messages=[{"role": "user", "content": "To be deleted"}],
             metadata={}
         )
@@ -109,7 +109,7 @@ class TestSessionPersistence:
         for i in range(5):
             await store.save_session(
                 session_id=f"clear_test_{i}",
-                channel="webchat",
+                channel="runtime_api",
                 messages=[{"role": "user", "content": f"Message {i}"}],
                 metadata={}
             )
@@ -136,7 +136,7 @@ class TestSessionPersistence:
         
         await store.save_session(
             session_id=session_id,
-            channel="webchat",
+            channel="runtime_api",
             messages=messages,
             metadata={}
         )
@@ -158,7 +158,7 @@ class TestSessionPersistence:
         
         await store.save_session(
             session_id=session_id,
-            channel="webchat",
+            channel="runtime_api",
             messages=[{"role": "user", "content": "Test"}],
             metadata=metadata
         )
@@ -173,7 +173,7 @@ class TestSessionPersistence:
         session_id = "custom_name_roundtrip"
         await store.save_session(
             session_id=session_id,
-            channel="webchat",
+            channel="runtime_api",
             messages=[{"role": "user", "content": "hello"}],
             metadata={"custom_session_name": "Runtime Custom Session"},
         )

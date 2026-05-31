@@ -5,8 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
-import json
+from unittest.mock import patch, MagicMock
 
 from src.gateway.server import Gateway
 
@@ -69,7 +68,7 @@ class TestGatewayInit:
 
         monkeypatch.setattr(gateway_server, "config", _FakeConfig())
         monkeypatch.setattr(gateway_server, "bootstrap_runtime_profile_sync", _bootstrap)
-        monkeypatch.setattr(gateway_server, "setup_webchat_routes", lambda app: None)
+        monkeypatch.setattr(gateway_server, "setup_runtime_api_routes", lambda app: None)
         gateway = gateway_server.Gateway()
         assert gateway.jira_enabled is True
 
@@ -113,7 +112,7 @@ class TestGatewayRoutes:
             server = {"host": "0.0.0.0", "port": 8000}
 
         monkeypatch.setattr(gateway_server, "config", _FakeConfig())
-        monkeypatch.setattr(gateway_server, "setup_webchat_routes", lambda app: None)
+        monkeypatch.setattr(gateway_server, "setup_runtime_api_routes", lambda app: None)
 
         gateway = gateway_server.Gateway()
         routes = list(gateway.app.router.routes())
@@ -186,15 +185,15 @@ class TestGatewayIntegration:
         from src.gateway.server import JIRA_SESSION_PREFIX
         assert JIRA_SESSION_PREFIX == "jira:"
 
-    def test_gateway_has_agent(self):
-        """Test Gateway imports agent."""
-        from src.gateway.server import agent
-        assert agent is not None
+    def test_gateway_has_runtime_chat_entrypoint(self):
+        """Test Gateway imports EFP runtime chat entrypoint."""
+        from src.gateway.server import run_runtime_chat
+        assert run_runtime_chat is not None
 
-    def test_gateway_has_jira_channel(self):
-        """Test Gateway imports jira channel."""
-        from src.gateway.server import jira_channel
-        assert jira_channel is not None
+    def test_gateway_uses_external_jira_cli_adapter(self):
+        """Test Gateway imports Jira CLI adapter."""
+        from src.gateway.server import jira_cli
+        assert jira_cli is not None
 
 
 class TestGatewayLifecycle:

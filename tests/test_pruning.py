@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime
 
 from src.sessions.pruning import SessionPruner, SessionCompactor
-from src.sessions.manager import session_manager
+from src.efp_runtime.session.gateway_facade import runtime_session_manager as session_manager
 
 
 @pytest.fixture(autouse=True)

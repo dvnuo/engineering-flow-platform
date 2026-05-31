@@ -6,35 +6,6 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_executor_execute_skill_uses_execute_skill_orchestration(monkeypatch):
-    from src.agents import executor
-
-    called = {}
-
-    async def _fake_execute_skill_orchestration(**kwargs):
-        called.update(kwargs)
-        return type(
-            "R",
-            (),
-            {
-                "status": "success",
-                "output_payload": {"output": "ok", "error": None, "data": {"k": "v"}},
-            },
-        )()
-
-    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _fake_execute_skill_orchestration)
-
-    result = await executor.execute_skill("skill_x", session_id="s-1", foo="bar")
-
-    assert result.success is True
-    assert result.output == "ok"
-    assert called["source_ref"] == "executor.execute_skill"
-    assert called["session_id"] == "s-1"
-    assert called["input_payload"]["skill_name"] == "skill_x"
-    assert called["input_payload"]["kwargs"]["foo"] == "bar"
-
-
-@pytest.mark.asyncio
 async def test_skill_mode_generate_initial_skill_plan_uses_execute_skill_orchestration(monkeypatch):
     from src.agents import skill_mode
     from src.skills.registry import Skill
@@ -113,9 +84,9 @@ def test_subagent_sessions_spawn_uses_execute_subagent_orchestration(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypatch):
-    from src.gateway import webchat
-    webchat.runtime_task_tracker.reset()
+async def test_runtime_api_tasks_execute_uses_execute_runtime_task_request(monkeypatch):
+    from src.gateway import runtime_api
+    runtime_api.runtime_task_tracker.reset()
 
     captured = {}
     spawned = []
@@ -136,8 +107,8 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
             },
         )()
 
-    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
-    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     class _Request:
         headers = {}
@@ -149,7 +120,7 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
                 "input_payload": {"action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "PROJ-1"}},
             }
 
-    response = await webchat.api_tasks_execute(_Request())
+    response = await runtime_api.api_tasks_execute(_Request())
     payload = json.loads(response.body)
     await spawned[0]
 
@@ -162,14 +133,13 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
 
 
 def test_entrypoints_do_not_reintroduce_direct_bus_construction():
-    from src.agents import executor, skill_mode, subagent
-    from src.gateway import webchat
+    from src.agents import skill_mode, subagent
+    from src.gateway import runtime_api
 
     sources = {
-        "executor": inspect.getsource(executor),
         "skill_mode": inspect.getsource(skill_mode),
         "subagent": inspect.getsource(subagent),
-        "webchat": inspect.getsource(webchat),
+        "runtime_api": inspect.getsource(runtime_api),
     }
     forbidden = ("build_default_execution_bus(", "make_execution_request(")
     for name, source in sources.items():
@@ -188,12 +158,3 @@ def test_runtime_helper_modules_do_not_import_adapter_executor_directly():
     forbidden = "from src.runtime.adapter_executor import"
     for name, source in sources.items():
         assert forbidden not in source, f"{name} unexpectedly imports low-level adapter executor"
-
-
-def test_agent_core_no_longer_calls_apply_skill_hooks_directly():
-    from src.agents import core
-
-    source = inspect.getsource(core)
-    assert "apply_skill_hooks(" not in source
-    assert "_run_pre_tool_hooks_via_governance(" in source
-    assert "_run_post_tool_hooks_via_governance(" in source

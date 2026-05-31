@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from ruamel.yaml import YAML
 
-from src.github import github_channel
-from src.github.doc_refs import GitHubDocRef, parse_github_doc_ref as _parse_github_doc_ref
-from src.github.source_service import prepare_github_file_source
-from src.github.url_utils import normalize_github_api_base_url
+from src.external_cli import github as github_cli
+from src.external_cli.github import GitHubDocRef, parse_github_doc_ref as _parse_github_doc_ref
+from src.external_cli.github import prepare_github_file_source
 from src.runtime.bundle_template_registry import require_bundle_template, resolve_bundle_template_id_from_manifest
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
@@ -108,7 +107,7 @@ async def read_repo_text(ref: BundleRef, repo_relative_file: str) -> str:
     file_path = str(repo_relative_file or "").strip().strip("/")
     if not file_path:
         raise RequirementBundleError("repo_relative_file is required")
-    file_data = await github_channel.get_file(ref.owner, ref.repo, file_path, ref.branch)
+    file_data = await github_cli.get_file(ref.owner, ref.repo, file_path, ref.branch)
     content = file_data.get("content")
     if not isinstance(content, str) or not content.strip():
         raise RequirementBundleError(f"File not found or empty: {file_path}")
@@ -320,7 +319,7 @@ async def write_bundle_yaml(ref: BundleRef, relative_file: str, payload: Dict[st
     _yaml.dump(payload, stream)
     file_path = f"{ref.path}/{relative_file}".strip("/")
     try:
-        result = await github_channel.create_or_update_file(
+        result = await github_cli.create_or_update_file(
             ref.owner,
             ref.repo,
             file_path,

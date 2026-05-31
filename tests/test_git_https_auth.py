@@ -4,7 +4,6 @@ import pytest
 
 import src.git as git_module
 from src.git.api import GitClient, setup_git_user_sync
-from src.gateway.webchat import _remove_legacy_ssh_config
 
 
 @pytest.mark.parametrize(
@@ -77,17 +76,6 @@ async def test_push_and_pull_convert_origin_to_https_before_execution(monkeypatc
     assert ["remote", "set-url", "origin", "https://github.com/owner/repo.git"] in client.calls
     assert ["push"] in client.calls
     assert ["pull"] in client.calls
-
-
-def test_remove_legacy_ssh_config_removes_top_level_ssh():
-    config = {
-        "github": {"enabled": True},
-        "ssh": {"enabled": True, "private_key_path": "/tmp/id_rsa"},
-    }
-
-    _remove_legacy_ssh_config(config)
-
-    assert "ssh" not in config
 
 
 def test_git_module_public_surface_includes_expected_tools():

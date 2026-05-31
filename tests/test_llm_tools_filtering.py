@@ -114,24 +114,6 @@ def test_is_internal_support_tool_name_case_insensitive():
     assert is_internal_support_tool_name("jira_get_issue") is False
 
 
-@pytest.mark.asyncio
-async def test_execute_tool_by_name_allows_context_read_ref_under_pattern_mode(monkeypatch):
-    from src.agents import executor as executor_module
-
-    class _Cfg:
-        llm = {"tools": ["jira_*"]}
-
-    async def _fake_execute_tool(name, **kwargs):
-        assert name == "context_read_ref"
-        return executor_module.ToolResult(success=True, content="ok")
-
-    monkeypatch.setattr(executor_module, "config", _Cfg())
-    monkeypatch.setattr(executor_module, "execute_tool", _fake_execute_tool)
-
-    result = await executor_module.execute_tool_by_name("context_read_ref", ref="ctx://context/s/k/aaaaaaaaaaaa")
-    assert result.success is True
-
-
 def test_normalize_list_non_string_raises():
     with pytest.raises(ValueError):
         normalize_llm_tools_spec({"tools": ["jira_*", 1]})

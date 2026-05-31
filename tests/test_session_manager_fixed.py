@@ -5,13 +5,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import pytest
-from src.sessions.manager import SessionManager
+from src.efp_runtime.session.gateway_facade import RuntimeSessionManager
 
 
 @pytest.fixture
 def fresh_session_manager():
     """Create a fresh session manager for isolation."""
-    manager = SessionManager()
+    manager = RuntimeSessionManager()
     yield manager
 
 
@@ -106,6 +106,7 @@ class TestSessionManagerHistory:
         """Test history size limit."""
         import uuid
         session_id = f"limit_test_{uuid.uuid4().hex[:8]}"
+        fresh_session_manager.max_history = 5
         
         await fresh_session_manager.clear_history(session_id)
         for i in range(10):

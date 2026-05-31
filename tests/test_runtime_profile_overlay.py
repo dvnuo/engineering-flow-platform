@@ -1,6 +1,70 @@
+import json
 import os
 
+from ruamel.yaml import YAML
 from src.config import Config
+
+
+RUNTIME_OVERLAY_FIELDS = {
+    "enabled_tools": ["read"],
+    "disabled_tools": ["write"],
+    "tool_permissions": {"bash": "ask"},
+    "max_iterations": 12,
+    "doom_loop_threshold": 4,
+    "max_context_parts": 40,
+    "max_context_chars": 120000,
+    "max_context_tokens": 64000,
+    "context_reserve_chars": 2000,
+    "context_reserve_tokens": 1000,
+    "compaction_auto": False,
+    "compaction_prune": True,
+    "compaction_tail_turns": 3,
+    "compaction_preserve_recent_chars": 3000,
+    "compaction_preserve_recent_tokens": 1500,
+    "compaction_reserved_chars": 4000,
+    "compaction_tool_output_max_chars": 5000,
+    "compaction_prune_min_chars": 20000,
+    "compaction_prune_protect_chars": 40000,
+    "enable_compaction_summarizer": True,
+    "enable_context_overflow_retry": False,
+    "enable_session_revert_snapshots": False,
+    "skill_directories": ["/workspace/.efp/skills"],
+    "active_skills": ["review"],
+    "command_directories": ["/workspace/.efp/commands"],
+    "enable_command_expansion": False,
+    "system_prompt_texts": ["system"],
+    "system_prompt_paths": ["/workspace/system.md"],
+    "include_default_system_prompt": False,
+    "include_environment_context": False,
+    "max_system_prompt_chars": 10000,
+    "include_runtime_reminders": False,
+    "instruction_texts": ["instruction"],
+    "instruction_paths": ["/workspace/instructions.md"],
+    "include_default_instructions": False,
+    "attach_read_instructions": False,
+    "max_instruction_chars": 9000,
+    "include_skill_sidecar_content": True,
+    "max_skill_sidecar_chars": 8000,
+    "max_command_chars": 7000,
+    "resolve_prompt_references": False,
+    "max_prompt_reference_chars": 6000,
+    "max_prompt_directory_entries": 50,
+    "runtime_mode": "plan",
+    "enable_plan_tool": True,
+    "plan_mode_read_only": False,
+    "enable_question_tool": True,
+    "enable_lsp_tool": True,
+    "inject_background_task_results": False,
+    "model_aware_tool_selection": False,
+    "structured_output_schema": {"type": "object", "properties": {}},
+    "tool_output_max_lines": 100,
+    "tool_output_max_bytes": 4096,
+    "tool_output_truncation_direction": "tail",
+    "archive_truncated_tool_outputs": False,
+    "tool_output_dir": "/workspace/.efp/tool-output",
+    "emit_llm_stream_events": False,
+    "track_usage": False,
+}
 
 
 def _write_base_config(path):
@@ -51,6 +115,44 @@ def test_runtime_profile_apply_writes_config_yaml_without_sidecar(tmp_path):
     assert meta["runtime_profile_id"] == "rp_1"
     assert meta["revision"] == 3
     assert meta["managed_sections"] == ["jira", "llm"]
+
+
+def test_runtime_profile_apply_preserves_and_clears_runtime_top_level_fields(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write("workspace_root: /user/workspace\n")
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_runtime",
+        4,
+        {
+            **RUNTIME_OVERLAY_FIELDS,
+            "workspace_root": "/portal/workspace",
+            "default_provider_id": "openai",
+            "default_model": "gpt-other",
+            "compaction_preserve_recent_turns": 10,
+            "mcp_servers": {"filesystem": {}},
+        },
+    )
+
+    cfg.load()
+    effective = cfg.get_effective_config()
+    for field, expected in RUNTIME_OVERLAY_FIELDS.items():
+        assert effective[field] == expected
+    assert effective["workspace_root"] == "/user/workspace"
+    assert "default_provider_id" not in effective
+    assert "default_model" not in effective
+    assert "compaction_preserve_recent_turns" not in effective
+    assert "mcp_servers" not in effective
+
+    cfg.clear_managed_overlay()
+    cfg.load()
+    cleared = cfg.get_effective_config()
+    for field in RUNTIME_OVERLAY_FIELDS:
+        assert field not in cleared
+    assert cleared["workspace_root"] == "/user/workspace"
 
 
 def test_runtime_profile_apply_preserves_unmanaged_llm_subtree(tmp_path):
@@ -182,3 +284,120 @@ def test_runtime_profile_load_removes_legacy_sidecar_on_startup(tmp_path, monkey
 
     assert not runtime_profile_path.exists()
     assert cfg.get_effective_config()["llm"]["provider"] == "openai"
+
+
+def test_runtime_profile_apply_writes_external_cli_configs_and_clear(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("ATLASSIAN_CONFIG", raising=False)
+    monkeypatch.delenv("GH_CONFIG_DIR", raising=False)
+
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_external",
+        1,
+        {
+            "jira": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "jira-main",
+                        "url": "https://jira.example.test/",
+                        "username": "bot",
+                        "api_token": "jira-token",
+                        "project_key": "ENG",
+                        "api_version": "3",
+                        "verify_ssl": False,
+                    },
+                    {"name": "disabled", "url": "https://disabled.example.test", "enabled": False},
+                ],
+            },
+            "confluence": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "docs",
+                        "url": "https://conf.example.test/",
+                        "token": "conf-token",
+                        "space_key": "DOCS",
+                    }
+                ],
+            },
+            "github": {
+                "enabled": True,
+                "access_token": "gh-token",
+                "api_base_url": "https://github.example.test/api/v3",
+            },
+            "git": {"user": {"name": "Runtime Bot", "email": "runtime@example.test"}},
+        },
+    )
+
+    atlassian_path = home / ".config" / "atlassian" / "config.json"
+    atlassian = json.loads(atlassian_path.read_text(encoding="utf-8"))
+    assert atlassian_path.stat().st_mode & 0o777 == 0o600
+    assert atlassian["jira"]["default_instance"] == "jira-main"
+    assert len(atlassian["jira"]["instances"]) == 1
+    jira_instance = atlassian["jira"]["instances"][0]
+    assert jira_instance["base_url"] == "https://jira.example.test"
+    assert jira_instance["api_version"] == "3"
+    assert jira_instance["rest_path"] == "/rest/api/3"
+    assert jira_instance["auth"] == {"type": "basic_api_key", "username": "bot", "api_key": "jira-token"}
+    assert jira_instance["default_project"] == "ENG"
+    assert jira_instance["verify_ssl"] is False
+    conf_instance = atlassian["confluence"]["instances"][0]
+    assert conf_instance["base_url"] == "https://conf.example.test"
+    assert conf_instance["rest_path"] == "/rest/api"
+    assert conf_instance["auth"] == {"type": "bearer_token", "token": "conf-token"}
+    assert conf_instance["default_space"] == "DOCS"
+
+    hosts_path = home / ".config" / "gh" / "hosts.yml"
+    hosts = YAML().load(hosts_path.read_text(encoding="utf-8"))
+    assert hosts_path.stat().st_mode & 0o777 == 0o600
+    assert hosts["github.example.test"]["oauth_token"] == "gh-token"
+    assert hosts["github.example.test"]["git_protocol"] == "https"
+
+    generated_git = home / ".config" / "efp" / "runtime-profile.gitconfig"
+    gitconfig = home / ".gitconfig"
+    assert generated_git.stat().st_mode & 0o777 == 0o600
+    assert gitconfig.stat().st_mode & 0o777 == 0o600
+    assert 'name = "Runtime Bot"' in generated_git.read_text(encoding="utf-8")
+    assert 'email = "runtime@example.test"' in generated_git.read_text(encoding="utf-8")
+    assert "runtime-profile.gitconfig" in gitconfig.read_text(encoding="utf-8")
+
+    cfg.clear_managed_overlay()
+    assert not atlassian_path.exists()
+    assert not hosts_path.exists()
+    assert not generated_git.exists()
+    assert "runtime-profile.gitconfig" not in gitconfig.read_text(encoding="utf-8")
+
+
+def test_runtime_profile_apply_honors_atlassian_config_env(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    custom_atlassian = tmp_path / "custom" / "atlassian.json"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ATLASSIAN_CONFIG", str(custom_atlassian))
+
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_custom_atlassian",
+        1,
+        {
+            "jira": {
+                "enabled": True,
+                "instances": [
+                    {"name": "jira", "url": "https://jira.example.test", "token": "token"},
+                ],
+            }
+        },
+    )
+
+    assert custom_atlassian.exists()
+    assert not (home / ".config" / "atlassian" / "config.json").exists()

@@ -38,7 +38,7 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"summary": {"type": "string"}}},
             policy_tags=["github", "read", "review"],
             requires_identity_binding=True,
-            source_ref="src.github",
+            source_ref="src.external_cli.github",
         ),
         AdapterActionDescriptor(
             action_id="adapter:github:add_comment",
@@ -48,7 +48,7 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
             policy_tags=["github", "write", "comment"],
             requires_identity_binding=True,
-            source_ref="src.github",
+            source_ref="src.external_cli.github",
         ),
         AdapterActionDescriptor(
             action_id="adapter:github:reply_review_comment",
@@ -68,7 +68,7 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
             policy_tags=["github", "write", "comment", "review_comment"],
             requires_identity_binding=True,
-            source_ref="src.github",
+            source_ref="src.external_cli.github",
         ),
         AdapterActionDescriptor(
             action_id="adapter:github:add_commit_comment",
@@ -90,7 +90,7 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
             policy_tags=["github", "write", "comment", "commit_comment"],
             requires_identity_binding=True,
-            source_ref="src.github",
+            source_ref="src.external_cli.github",
         ),
         AdapterActionDescriptor(
             action_id="adapter:github:add_discussion_comment",
@@ -108,7 +108,7 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
             policy_tags=["github", "write", "comment", "discussion_comment"],
             requires_identity_binding=True,
-            source_ref="src.github",
+            source_ref="src.external_cli.github",
         ),
     ])
 
@@ -123,7 +123,7 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"issue": {"type": "string"}}},
             policy_tags=["jira", "read"],
             requires_identity_binding=True,
-            source_ref="src.jira",
+            source_ref="src.external_cli.jira",
         ),
         AdapterActionDescriptor(
             action_id="adapter:jira:update_issue",
@@ -133,7 +133,7 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
             policy_tags=["jira", "write", "update"],
             requires_identity_binding=True,
-            source_ref="src.jira",
+            source_ref="src.external_cli.jira",
         ),
         AdapterActionDescriptor(
             action_id="adapter:jira:assign_issue",
@@ -143,7 +143,7 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
             policy_tags=["jira", "write", "assign"],
             requires_identity_binding=True,
-            source_ref="src.jira",
+            source_ref="src.external_cli.jira",
         ),
         AdapterActionDescriptor(
             action_id="adapter:jira:transition_issue",
@@ -153,7 +153,7 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
             policy_tags=["jira", "write", "transition"],
             requires_identity_binding=True,
-            source_ref="src.jira",
+            source_ref="src.external_cli.jira",
         ),
         AdapterActionDescriptor(
             action_id="adapter:jira:add_comment",
@@ -170,7 +170,7 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
             policy_tags=["jira", "write", "comment"],
             requires_identity_binding=True,
-            source_ref="src.jira",
+            source_ref="src.external_cli.jira",
         ),
         AdapterActionDescriptor(
             action_id="adapter:jira:export_issues_to_markdown",
@@ -199,7 +199,29 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             },
             policy_tags=["jira", "read", "export", "artifact_write", "filesystem_write", "attachment_download"],
             requires_identity_binding=True,
-            source_ref="src.jira.exporter",
+            source_ref="src.external_cli.jira",
+        ),
+    ])
+
+
+def build_confluence_adapter_capabilities() -> List[AdapterActionDescriptor]:
+    return _with_adapter_metadata([
+        AdapterActionDescriptor(
+            action_id="adapter:confluence:add_comment",
+            adapter="confluence",
+            name="add_comment",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "page_id": {"type": "string"},
+                    "comment": {"type": "string"},
+                },
+                "required": ["page_id", "comment"],
+            },
+            output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+            policy_tags=["confluence", "write", "comment"],
+            requires_identity_binding=True,
+            source_ref="src.external_cli.confluence",
         ),
     ])
 

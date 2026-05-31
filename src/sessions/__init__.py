@@ -1,5 +1,7 @@
-"""Session package for Engineering Flow Platform."""
+"""Session support modules.
 
-from .manager import session_manager, SessionManager
+The active gateway session facade lives in
+``src.efp_runtime.session.gateway_facade``.
+"""
 
-__all__ = ["session_manager", "SessionManager"]
+__all__: list[str] = []

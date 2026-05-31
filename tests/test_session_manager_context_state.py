@@ -1,11 +1,11 @@
 import pytest
 
-from src.sessions.manager import SessionManager
+from src.efp_runtime.session.gateway_facade import RuntimeSessionManager
 
 
 @pytest.mark.asyncio
 async def test_set_context_state_persists_budget_preview_metadata_keys():
-    manager = SessionManager(auto_save=False)
+    manager = RuntimeSessionManager(auto_save=False)
     manager.persistence_enabled = False
 
     await manager.set_context_state(

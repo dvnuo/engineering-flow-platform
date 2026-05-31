@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from efp_runtime.opencode_parity import (
+    CAPABILITY_GROUPS,
+    DEFAULT_CORE_TOOL_IDS,
+    EXCLUDED_TOOL_IDS,
+    OPENCODE_AUDITED_AT,
+    OPENCODE_DEV_HEAD,
+    OPENCODE_DEV_TREE,
+    OPENCODE_UPSTREAM_REPO,
+    OPTIONAL_CONDITIONAL_TOOL_IDS,
+)
+from efp_runtime.skills.discovery import SkillDiscovery
+from efp_runtime.tools.builtin import WebSearchRequest, create_core_tool_registry
+from efp_runtime.tools.builtin.task import TaskToolRequest
+
+
+ALLOWED_STATUSES = {"done", "conditional", "excluded", "remaining"}
+
+
+async def _task_runner(request: TaskToolRequest) -> str:
+    return f"completed {request.description}"
+
+
+def _websearch_runner(request: WebSearchRequest) -> str:
+    return f"results for {request.query}"
+
+
+def test_default_registry_matches_manifest_default_core_ids(tmp_path: Path):
+    registry = create_core_tool_registry(tmp_path)
+
+    assert tuple(registry.ids()) == DEFAULT_CORE_TOOL_IDS
+
+
+def test_conditional_manifest_tool_ids_are_registrable(tmp_path: Path):
+    registry = create_core_tool_registry(
+        tmp_path,
+        task_runner=_task_runner,
+        allow_background_task=True,
+        include_question_tool=True,
+        skill_discovery=SkillDiscovery([]),
+        include_lsp_tool=True,
+        include_plan_tool=True,
+        include_repository_tools=True,
+        websearch_runner=_websearch_runner,
+    )
+
+    assert "websearch" in OPTIONAL_CONDITIONAL_TOOL_IDS
+    assert set(OPTIONAL_CONDITIONAL_TOOL_IDS).issubset(registry.ids())
+
+
+def test_capability_group_statuses_are_explicit_and_known():
+    expected_groups = {
+        "loop",
+        "permissions",
+        "tool lifecycle",
+        "skills",
+        "commands",
+        "context/compaction",
+        "Copilot provider",
+        "session state",
+        "legacy boundary",
+    }
+
+    assert expected_groups.issubset(CAPABILITY_GROUPS)
+    for name, entry in CAPABILITY_GROUPS.items():
+        assert name.strip()
+        assert entry.status in ALLOWED_STATUSES
+        assert entry.summary.strip()
+
+
+def test_opencode_upstream_baseline_is_exact():
+    assert OPENCODE_UPSTREAM_REPO == "https://github.com/anomalyco/opencode"
+    assert OPENCODE_DEV_HEAD == "16cae9a32329b65116869d2fd3c1fac27c4adcb6"
+    assert OPENCODE_DEV_TREE == "754a57c6f0e0413c1541b320a482f85708cffb88"
+    assert OPENCODE_AUDITED_AT == "2026-05-29T15:52:46Z"
+
+
+def test_session_state_manifest_mentions_summary_and_revert():
+    summary = CAPABILITY_GROUPS["session state"].summary
+
+    assert "summary diffs" in summary
+    assert "revert/unrevert" in summary
+
+
+def test_legacy_boundary_manifest_separates_import_independence_from_tree_removal():
+    summary = CAPABILITY_GROUPS["legacy boundary"].summary
+
+    assert "independent from legacy core imports" in summary
+    assert "repository-level deletion" in summary
+    assert "separate migration item" in summary
+
+
+def test_manifest_explicitly_excludes_mcp():
+    entry = EXCLUDED_TOOL_IDS["mcp"]
+
+    assert entry.status == "excluded"
+    assert "MCP" in entry.reason
+
+
+def test_remaining_manifest_items_have_concrete_next_actions():
+    vague_actions = {"", "todo", "tbd", "follow up", "investigate", "later"}
+
+    for name, entry in _manifest_entries():
+        if entry.status != "remaining":
+            continue
+        action = (entry.next_action or "").strip()
+        assert action.lower() not in vague_actions, name
+        assert len(action.split()) >= 8, name
+
+
+def test_manifest_has_no_remaining_items():
+    assert [
+        name for name, entry in _manifest_entries() if entry.status == "remaining"
+    ] == []
+
+
+def _manifest_entries() -> list[tuple[str, Any]]:
+    entries: list[tuple[str, Any]] = []
+    entries.extend(CAPABILITY_GROUPS.items())
+    entries.extend(OPTIONAL_CONDITIONAL_TOOL_IDS.items())
+    entries.extend(EXCLUDED_TOOL_IDS.items())
+    return entries

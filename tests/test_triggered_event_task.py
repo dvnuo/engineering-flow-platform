@@ -1,6 +1,20 @@
 import pytest
 
 
+def _patch_runtime_chat(monkeypatch, handler):
+    async def _runtime_chat_adapter(**kwargs):
+        return await handler(
+            agent=None,
+            message=kwargs.get("message"),
+            session_id=kwargs.get("session_id"),
+            user_name=kwargs.get("user_name"),
+            track_usage=kwargs.get("track_usage"),
+            execution_metadata=kwargs.get("execution_metadata"),
+        )
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_runtime_chat", _runtime_chat_adapter)
+
+
 @pytest.mark.asyncio
 async def test_run_triggered_event_task_github_mention_passes_session_id_to_agent(monkeypatch):
     from src.runtime.triggered_event_task import run_triggered_event_task
@@ -24,8 +38,8 @@ async def test_run_triggered_event_task_github_mention_passes_session_id_to_agen
         assert "ok" in body
         assert "<!-- efp:auto-reply source=github-comment-mention" in body
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
         {
@@ -63,8 +77,8 @@ async def test_run_triggered_event_task_jira_assigned_passes_session_id_to_agent
         assert issue_key == "ENG-1"
         assert body == "looks good"
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.jira_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.jira_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
         {
@@ -97,8 +111,8 @@ async def test_run_triggered_event_task_github_mention_blocked_does_not_writebac
     def _blocked_gate(action_id, _kwargs):
         return {"blocked": True, "reason": "policy_blocked", "error": f"capability policy blocked for secondary action: {action_id}"}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
         {
@@ -134,8 +148,8 @@ async def test_run_triggered_event_task_jira_assigned_blocked_does_not_writeback
     def _blocked_gate(action_id, _kwargs):
         return {"blocked": True, "reason": "policy_blocked", "error": f"capability policy blocked for secondary action: {action_id}"}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.jira_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.jira_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
         {
@@ -171,8 +185,8 @@ async def test_run_triggered_event_task_confluence_mention_blocked_does_not_writ
     def _blocked_gate(action_id, _kwargs):
         return {"blocked": True, "reason": "policy_blocked", "error": f"capability policy blocked for secondary action: {action_id}"}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.confluence_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.confluence_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
         {
@@ -188,8 +202,8 @@ async def test_run_triggered_event_task_confluence_mention_blocked_does_not_writ
 
     assert called["comment"] == 0
     assert result["success"] is False
-    assert result["secondary_action_id"] == "channel_action:confluence_add_comment"
-    assert result["secondary_action_capability_type"] == "channel_action"
+    assert result["secondary_action_id"] == "adapter:confluence:add_comment"
+    assert result["secondary_action_capability_type"] == "adapter_action"
     assert result["blocked"] is True
 
 
@@ -222,8 +236,8 @@ async def test_triggered_event_task_forwards_execution_metadata_to_agent(monkeyp
     async def _fake_add_comment(owner, repo, issue_number, body):
         return None
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
         {
@@ -263,8 +277,8 @@ async def test_run_triggered_event_task_github_issue_comment_appends_marker(monk
     async def _fake_add_comment(owner, repo, issue_number, body):
         captured.update({"owner": owner, "repo": repo, "issue_number": issue_number, "body": body})
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","owner":"octo","repo":"portal","issue_number":2,"comment_id":9,"comment_kind":"issue_comment","automation_rule_id":"r1","body":"@agent hi"})
     assert "ok" in captured["body"]
@@ -288,9 +302,9 @@ async def test_run_triggered_event_task_github_review_comment_replies_same_surfa
     async def _fake_add_comment(*args, **kwargs):
         called["add"] += 1
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.reply_pr_review_comment", _fake_reply)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"pull_request_review_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","pull_number":7,"comment_id":100,"in_reply_to_id":99,"body":"@agent check","path":"src/a.py","line":10,"diff_hunk":"@@"})
     assert captured["comment_id"] == 99
@@ -310,8 +324,8 @@ async def test_run_triggered_event_task_github_review_comment_timeline_fallback(
     async def _fake_add_comment(owner, repo, issue_number, body):
         captured.update({"owner": owner, "repo": repo, "issue_number": issue_number, "body": body})
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"pull_request_review_comment","reply_mode":"timeline","owner":"octo","repo":"portal","pull_number":7,"comment_id":100,"body":"@agent check"})
     assert captured["issue_number"] == 7
@@ -333,9 +347,9 @@ async def test_run_triggered_event_task_github_review_comment_blocked_does_not_w
     async def _fake_add_comment(*args, **kwargs):
         called["add"] += 1
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.reply_pr_review_comment", _fake_reply)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"pull_request_review_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","pull_number":7,"comment_id":100,"body":"@agent check","_action_gate":lambda action_id,_kwargs:{"blocked":True,"reason":"policy"}})
     assert result["blocked"] is True
@@ -358,9 +372,9 @@ async def test_run_triggered_event_task_github_unsupported_comment_kind_fails(mo
     async def _fake_add_comment(*args, **kwargs):
         called["add"] += 1
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.reply_pr_review_comment", _fake_reply)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
 
     with pytest.raises(ValueError, match="Unsupported GitHub mention comment_kind"):
         await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"unknown_comment","owner":"octo","repo":"portal","comment_id":100,"body":"@agent check"})
@@ -382,9 +396,9 @@ async def test_run_triggered_event_task_github_unsupported_reply_mode_fails(monk
     async def _should_not_reply_comment(*args, **kwargs):
         raise AssertionError("reply_pr_review_comment should not be called for invalid reply_mode")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _should_not_run_chat)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _should_not_add_comment)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _should_not_reply_comment)
+    _patch_runtime_chat(monkeypatch, _should_not_run_chat)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _should_not_add_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.reply_pr_review_comment", _should_not_reply_comment)
 
     with pytest.raises(ValueError, match="Unsupported GitHub mention reply_mode"):
         await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"issue_comment","reply_mode":"foo","owner":"octo","repo":"portal","issue_number":1,"comment_id":100,"body":"@agent check"})
@@ -399,8 +413,8 @@ async def test_run_triggered_event_task_github_commit_comment_adds_commit_commen
     async def _fake_run_chat_execution(**_kwargs):
         return {"response": "ok"}
 
-    async def _fake_add_commit_comment(owner, repo, commit_sha, body, path=None, line=None, position=None):
-        captured.update({"owner": owner, "repo": repo, "commit_sha": commit_sha, "body": body, "path": path, "line": line, "position": position})
+    async def _fake_add_commit_comment(*, owner, repo, commit_sha, comment, path=None, line=None, position=None):
+        captured.update({"owner": owner, "repo": repo, "commit_sha": commit_sha, "body": comment, "path": path, "line": line, "position": position})
 
     async def _should_not_add_comment(*args, **kwargs):
         raise AssertionError("add_comment should not be called")
@@ -408,10 +422,10 @@ async def test_run_triggered_event_task_github_commit_comment_adds_commit_commen
     async def _should_not_reply(*args, **kwargs):
         raise AssertionError("reply_pr_review_comment should not be called")
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_commit_comment", _fake_add_commit_comment)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _should_not_add_comment)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _should_not_reply)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_commit_comment", _fake_add_commit_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _should_not_add_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.reply_pr_review_comment", _should_not_reply)
 
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"commit_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","commit_id":"abc123","commit_sha":"abc123","comment_id":100,"body":"@agent check","path":"src/a.py","line":10,"position":5})
     assert result["secondary_action_id"] == "adapter:github:add_commit_comment"
@@ -431,8 +445,8 @@ async def test_run_triggered_event_task_github_commit_comment_blocked_does_not_w
     async def _fake_add_commit_comment(*args, **kwargs):
         called["commit"] += 1
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_commit_comment", _fake_add_commit_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_commit_comment", _fake_add_commit_comment)
 
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"commit_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","commit_sha":"abc123","comment_id":100,"body":"@agent check","_action_gate":lambda action_id,_kwargs:{"blocked":True,"reason":"policy"}})
     assert result["blocked"] is True
@@ -452,8 +466,8 @@ async def test_run_triggered_event_task_github_discussion_comment_adds_discussio
         captured.update({"discussion_id": discussion_id, "body": body, "reply_to_id": reply_to_id})
         return {"id": "DC_2"}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_add_discussion_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_discussion_comment", _fake_add_discussion_comment)
 
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","discussion_id":"D_123","discussion_comment_id":"DC_1","comment_id":"DC_1","body":"@agent check"})
     assert result["secondary_action_id"] == "adapter:github:add_discussion_comment"
@@ -472,8 +486,8 @@ async def test_run_triggered_event_task_github_discussion_comment_blocked_does_n
     async def _fake_add_discussion_comment(*_args, **_kwargs):
         called["discussion"] += 1
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_add_discussion_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_discussion_comment", _fake_add_discussion_comment)
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","discussion_id":"D_123","discussion_comment_id":"DC_1","comment_id":"DC_1","body":"@agent check","_action_gate":lambda action_id,_kwargs:{"blocked":True,"reason":"policy"}})
     assert result["blocked"] is True
     assert called["discussion"] == 0
@@ -491,8 +505,8 @@ async def test_run_triggered_event_task_github_discussion_comment_prefers_reply_
         captured.update({"discussion_id": discussion_id, "body": body, "reply_to_id": reply_to_id})
         return {"id": "DC_2"}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_add_discussion_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_discussion_comment", _fake_add_discussion_comment)
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","discussion_id":"D_123","reply_to_id":"DC_root","discussion_comment_id":"DC_child","comment_id":"DC_child","body":"@agent check"})
     assert result["secondary_action_id"] == "adapter:github:add_discussion_comment"
     assert captured["reply_to_id"] == "DC_root"
@@ -510,8 +524,8 @@ async def test_run_triggered_event_task_github_discussion_comment_missing_discus
     async def _fake_add_discussion_comment(*_args, **_kwargs):
         called["discussion"] += 1
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_add_discussion_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_discussion_comment", _fake_add_discussion_comment)
 
     with pytest.raises(ValueError, match="Missing required field: discussion_id"):
         await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","discussion_comment_id":"DC_1","comment_id":"DC_1","body":"@agent check"})
@@ -534,8 +548,8 @@ async def test_run_triggered_event_task_github_issue_comment_with_notification_m
         captured["issue_number"] = issue_number
         captured["body"] = body
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
-    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    _patch_runtime_chat(monkeypatch, _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_cli.add_comment", _fake_add_comment)
     result = await run_triggered_event_task({
         "source_kind":"github.mention",
         "session_id":"s1",

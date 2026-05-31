@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from src.sessions.manager import session_manager
+from src.efp_runtime.session.gateway_facade import runtime_session_manager as session_manager
 from src.runtime.context_summary import build_structured_summary
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ async def save_session_summary(
             summary = "Session completed."
         
         # Get source channel
-        channel = session.get("channel", "webchat")
+        channel = session.get("channel", "runtime_api")
         
         # Get session metadata
         created_at = session.get("created_at", datetime.now().isoformat())
@@ -215,7 +215,7 @@ def _build_session_entry(
     
     Args:
         session_id: Session ID
-        channel: Source channel (webchat, jira, etc.)
+        channel: Source channel (runtime_api, jira, etc.)
         created_at: Session creation timestamp
         summary: Heuristic-based summary
         

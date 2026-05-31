@@ -125,13 +125,12 @@ def test_registry_export_catalog_and_filters():
     assert registry.list_by_type("tool")
 
 
-def test_registry_collects_adapter_channel_tool_skill_types():
+def test_registry_collects_adapter_tool_skill_types():
     registry = build_default_capability_registry()
     types = {item.type for item in registry.list_all()}
     assert "adapter_action" in types
     assert "skill" in types
     assert "tool" in types
-    assert "channel_action" in types
 
 
 def test_registry_export_catalog_snapshot_has_deterministic_version():
@@ -147,11 +146,11 @@ def test_registry_adapter_action_entries_include_alias_and_system():
     registry = build_default_capability_registry()
     adapter_entry = next(item for item in registry.export_catalog() if item["type"] == "adapter_action")
     assert adapter_entry["action_alias"]
-    assert adapter_entry["adapter_system"] in {"github", "jira", "portal"}
+    assert adapter_entry["adapter_system"] in {"github", "jira", "confluence", "portal"}
 
 
-def test_capability_registry_uses_full_tool_catalog_even_when_llm_tools_restricted(monkeypatch):
-    monkeypatch.setitem(config._config, "llm", {"tools": ["git_clone"]})
+def test_capability_registry_uses_runtime_tool_catalog_even_when_llm_tools_restricted(monkeypatch):
+    monkeypatch.setitem(config._config, "llm", {"tools": ["bash"]})
     from src import get_tools_schema
 
     all_tool_names = {
@@ -187,17 +186,18 @@ def test_capability_registry_tool_schema_supports_function_nested_parameters(mon
     tool_schema = {
         "type": "function",
         "function": {
-            "name": "github_get_pr",
+            "name": "bash",
             "description": "x",
-            "parameters": {"type": "object", "properties": {"owner": {"type": "string"}}},
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
         },
-        "metadata": {"tool_id": "efp.tool.github.get_pull_request"},
+        "metadata": {"tool_id": "bash", "tool_source": "efp_runtime"},
     }
 
     monkeypatch.setattr("src.get_tools_schema", lambda: [tool_schema])
     builder = _CapabilityBuilder(DefaultCapabilityRegistry())
     builder._register_tools()
-    descriptor = builder.registry.get("tool:github_get_pr")
+    descriptor = builder.registry.get("tool:bash")
     assert descriptor is not None
-    assert descriptor.input_schema.get("properties", {}).get("owner", {}).get("type") == "string"
-    assert descriptor.metadata.get("tool_id") == "efp.tool.github.get_pull_request"
+    assert descriptor.input_schema.get("properties", {}).get("command", {}).get("type") == "string"
+    assert descriptor.metadata.get("tool_id") == "bash"
+    assert descriptor.metadata.get("tool_source") == "efp_runtime"

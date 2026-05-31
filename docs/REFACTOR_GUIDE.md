@@ -1,6 +1,6 @@
 # Engineering Flow Platform 重构指引 - 学习现代 Agent 框架架构
 
-> **Note（历史文档）**：本文件主要是历史性重构草图/设计记录。当前已落地实现请以 `src/git/api.py`、`src/github/api.py`、`config.yaml.example` 为准：Git transport 已收口为 HTTPS + `github.api_token`（askpass），runtime 不依赖 `gh` CLI auth，也不依赖 SSH setup。
+> **Note（历史文档）**：本文件主要是历史性重构草图/设计记录。当前已落地实现请以 `src/external_cli/`、`src/git/api.py`、`config.yaml.example` 为准：Jira/Confluence 使用外部 CLI，GitHub 使用 `gh`/`git`。
 
 > **Note**: This is a historical refactor guide. It predates the external engineering-flow-platform-skills repository. Runtime skill metadata now uses lowercase skill.md, and business skill assets are loaded from /app/skills or EFP_SKILLS_DIR.
 
@@ -22,8 +22,8 @@
 4. Confluence: channel/confluence.py + tools/integration.py 重复
 
 说明（当前设计收口）：
-- Git transport 已统一到 `src/git/api.py`，使用 HTTPS + `github.api_token`（askpass）。
-- `src/github/api.py` 是 GitHub runtime 主路径。
+- Jira/Confluence 已统一到外部 `jira`/`confluence` CLI。
+- GitHub runtime 写回和读取已统一到 `src/external_cli/github.py`，由 `gh`/`git` 执行。
 ```
 
 ---
@@ -200,142 +200,25 @@ class GitHubClient:
     # ... 其他方法
 ```
 
-#### 2.3 创建 `src/tools/github.py`
+#### 2.3 当前替代路径
 
-```python
-"""GitHub Tools - Agent 调用入口。
+上面的历史草图已经被 runtime-v2 替代。当前分层不再保留 Python 侧
+Jira/GitHub/Confluence API client 或 channel 兼容层：
 
-调用 src/github/api.py（REST 主路径）
-"""
-
-from src.github import GitHubClient
-
-# 全局实例
-github_client = GitHubClient()
-
-# ========== 工具函数 (OpenAI Functions Schema) ==========
-
-async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
-    """Get GitHub issue or PR details."""
-    try:
-        issue = await github_client.get_issue(owner, repo, issue_number)
-        # ... 格式化输出
-        return formatted
-    except Exception as e:
-        return f"Error: {e}"
-
-def get_tools_schemas() -> list:
-    """返回 GitHub 工具的 OpenAI Schema。"""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "github_get_issue",
-                "description": "Get GitHub issue or PR details",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "owner": {"type": "string", "description": "Repository owner"},
-                        "repo": {"type": "string", "description": "Repository name"},
-                        "issue_number": {"type": "integer", "description": "Issue or PR number"}
-                    },
-                    "required": ["owner", "repo", "issue_number"]
-                }
-            }
-        },
-        # ... 其他工具
-    ]
-```
-
-#### 2.5 更新 `channel/github.py` (保持 API 兼容)
-
-```python
-"""GitHub Channel - 保持向后兼容。
-
-导入 src/integrations/github/api.py 实现。
-"""
-
-from src.integrations.github.api import GitHubClient
-
-# 保持原有 API
-github_channel = GitHubClient()
-
-# 原有函数别名
-async def github_get_issue(owner: str, repo: str, issue_number: int):
-    return await github_channel.get_issue(owner, repo, issue_number)
-```
+- Jira/Confluence 运行时行为通过 `src/external_cli/jira.py` 和
+  `src/external_cli/confluence.py` 调用外部 CLI。
+- GitHub 运行时读写通过 `src/external_cli/github.py` 调用 `gh`，Git
+  操作继续使用 `git`。
+- Runtime profile 应用时由 `src/external_cli/profile_config.py` 投影到
+  Atlassian CLI 配置、`gh` hosts 配置和 Git 用户配置。
 
 ---
 
-## 复用关系图
-
-```
-                    ┌─────────────────────┐
-                    │  src/integrations/  │  ← 核心实现 (单一数据源)
-                    │     github/         │
-                    │     jira/          │
-                    │     git/           │
-                    │     confluence/     │
-                    └─────────┬───────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              │               │               │
-              ▼               ▼               ▼
-    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-    │  channel/   │ │   tools/    │ │   skills/   │
-    │ github.py    │ │ github.py   │ │ github/     │
-    │ jira.py      │ │ jira.py     │ │ skill.py    │
-    │ confluence.py│ │ confluence.py│ │ cron/       │
-    └─────────────┘ └─────────────┘ └─────────────┘
-              │               │               │
-              └───────────────┴───────────────┘
-                              │
-                              ▼
-                    ┌─────────────────────┐
-                    │      cron/          │
-                    │  mention_poller.py  │
-                    └─────────────────────┘
-```
-
----
-
-## 文件迁移清单
-
-| 源文件 | 目标文件 | 说明 |
-|--------|----------|------|
-| `channel/github.py` | `src/integrations/github/api.py` | REST API 实现 |
-| `channel/jira.py` | `src/integrations/jira/api.py` | REST API 实现 |
-| `channel/confluence.py` | `src/integrations/confluence/api.py` | REST API 实现 |
-| `skills/github/skill.py` | `src/github/api.py` | GitHub REST API 工作流 |
-| `skills/git/skill.py` | `src/integrations/git/api.py` | Git 命令封装 |
-| `tools/integration.py` | `src/tools/*.py` | 拆分为独立文件 |
-| `skills/git/tools.py` | `src/git/api.py` | Git transport（HTTPS + github.api_token） |
-
----
-
-## 关键原则
-
-1. **单一数据源**: 每个集成 (GitHub, Jira, etc.) 只有一份实现
-2. **复用优先**: channel, tools, skills 都调用 src/integrations/*
-3. **向后兼容**: 保持原有导入路径，添加重导出
-4. **类型安全**: 添加 Type Hints
-5. **测试覆盖**: 每个集成有对应的测试文件
-
----
-
-## 验证步骤
+## 当前验证步骤
 
 ```bash
-# 1. 运行现有测试
-pytest tests/ -v
-
-# 2. 验证导入路径
-python -c "from channel.github import github_channel; print('OK')"
-python -c "from skills.github.skill import github; print('OK')"
-python -c "from tools.integration import JIRA_TOOLS; print('OK')"
-
-# 3. 运行 Agent
-python main.py --test
+python3.11 -m pytest -q
+git diff --check
 ```
 
 ---

@@ -56,7 +56,7 @@ async def test_jira_reconciliation_consumes_portal_contract_and_posts_ingress_pa
 
     monkeypatch.setattr(runner, "_get_json", _fake_get_json)
     monkeypatch.setattr(runner, "_post_json", _fake_post_json)
-    monkeypatch.setattr("src.cron.jira_reconciliation.jira_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.jira_reconciliation.jira_cli.search_issues", _fake_search_issues)
     monkeypatch.setattr(runner, "_base_url", lambda: "https://portal.internal")
 
     await runner.reconcile_once()
@@ -128,7 +128,7 @@ async def test_jira_reconciliation_ignores_portal_self_service_metadata_and_post
 
     monkeypatch.setattr(runner, "_get_json", _fake_get_json)
     monkeypatch.setattr(runner, "_post_json", _fake_post_json)
-    monkeypatch.setattr("src.cron.jira_reconciliation.jira_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.jira_reconciliation.jira_cli.search_issues", _fake_search_issues)
     monkeypatch.setattr(runner, "_base_url", lambda: "https://portal.internal")
 
     await runner.reconcile_once()
@@ -183,7 +183,7 @@ async def test_jira_reconciliation_issue_failure_does_not_break_loop(monkeypatch
 
     monkeypatch.setattr(runner, "_get_json", _fake_get_json)
     monkeypatch.setattr(runner, "_post_json", _fake_post_json)
-    monkeypatch.setattr("src.cron.jira_reconciliation.jira_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.jira_reconciliation.jira_cli.search_issues", _fake_search_issues)
     monkeypatch.setattr(runner, "_base_url", lambda: "https://portal.internal")
 
     await runner.reconcile_once()
@@ -244,7 +244,7 @@ async def test_jira_reconciliation_reuses_single_client_session_per_run(monkeypa
     monkeypatch.setattr("src.cron.jira_reconciliation.ClientSession", _fake_client_session)
     monkeypatch.setattr(runner, "_get_json", _fake_get_json)
     monkeypatch.setattr(runner, "_post_json", _fake_post_json)
-    monkeypatch.setattr("src.cron.jira_reconciliation.jira_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.jira_reconciliation.jira_cli.search_issues", _fake_search_issues)
     monkeypatch.setattr(runner, "_base_url", lambda: "https://portal.internal")
 
     await runner.reconcile_once()

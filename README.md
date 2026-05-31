@@ -15,11 +15,12 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 
 ### Core Capabilities
 
-- **AI Chat Interface** - Natural language interaction with the agent
-- **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash
+- **Runtime API Chat** - Natural language interaction with the agent over the HTTP API
+- **EFP Runtime Chat** - Portal and Jira chat use the EFP runtime with GitHub Copilot
+- **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash outside the model-visible tool surface
 - **Session Persistence** - Conversations persist across restarts
-- **File Attachments** - Support for images in chat (documents via file-parse)
-- **Settings Panel** - Web-based configuration for LLM and integrations
+- **File Attachments** - Support for Portal-provided transient image and document attachment ids in chat
+- **Runtime Operations APIs** - Configuration reload and runtime metadata endpoints for operations
 
 ---
 
@@ -28,7 +29,7 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 ### Prerequisites
 
 - Python 3.11+
-- API keys for LLM provider (OpenAI, GitHub Copilot, or Anthropic)
+- GitHub Copilot token for EFP runtime native chat
 
 ### Setup
 
@@ -63,7 +64,15 @@ python main.py
 EFP_CONFIG_KEY="your-secret-passphrase" python main.py
 ```
 
-Access the web UI at `http://localhost:8000/`
+The native runtime is API-only. Check health and call chat endpoints directly:
+
+```bash
+curl http://localhost:8000/health
+
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Hello","session_id":"local-dev"}'
+```
 
 ---
 
@@ -73,10 +82,15 @@ Access the web UI at `http://localhost:8000/`
 
 ```yaml
 llm:
-  provider: "openai"  # openai (default), github_copilot
-  api_key: "sk-..."
+  provider: "github_copilot"
+  api_key: "ghu_..."
   model: "gpt-5.4-mini"
 ```
+
+EFP runtime native mode does not fall back to OpenAI or Anthropic providers.
+`EFP_GITHUB_COPILOT_TOKEN` or `GITHUB_COPILOT_TOKEN` may be used instead of
+`llm.api_key`; `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
+Copilot transport base URL.
 
 ### Control-Plane Runtime Settings
 
@@ -151,27 +165,23 @@ engineering-flow-platform/
 ├── config.yaml.example     # Configuration template
 ├── requirements.txt        # Python dependencies
 ├── src/
-│   ├── agents/             # Agent core logic
-│   │   ├── core.py          # Main agent loop
-│   │   ├── llm.py          # LLM client
-│   │   ├── executor.py     # Tool execution
-│   │   └── memory.py       # Agent memory
-│   ├── gateway/            # HTTP server & WebChat
+│   ├── efp_runtime/         # EFP runtime AgentRuntime, provider, session, and tools
+│   ├── agents/              # Compatibility support modules only; legacy loop removed
+│   ├── gateway/            # API-only HTTP server
 │   │   ├── server.py        # aiohttp server
-│   │   ├── webchat.py       # Chat API & UI
-│   │   ├── static/          # Web assets
-│   │   └── templates/       # HTML templates
+│   │   ├── runtime_api.py   # Portal/runtime API routes
+│   │   └── runtime_request_contracts.py
 │   ├── channels/           # Channel adapters
 │   ├── jira/               # Jira integration
 │   ├── confluence/         # Confluence integration
 │   ├── github/             # GitHub integration
-│   ├── git/                # Git tools
+│   ├── git/                # Git integration helpers
 │   ├── memory/             # Memory system
 │   ├── sessions/           # Session persistence
-│   ├── tools/              # Built-in tools
+│   ├── runtime/            # Runtime task/control-plane orchestration
 │   ├── hooks/              # Lifecycle hooks
 │   └── utils/              # Utilities
-│       └── file_parser/     # File upload & storage
+│       └── file_parser/     # Attachment parsing/storage helpers
 ├── src/skills/             # Runtime skill registry/loading infrastructure
 ├── tests/                  # Test suite
 └── workspace/               # Workspace files (for local dev)
@@ -182,7 +192,10 @@ engineering-flow-platform/
 
 Business skill assets are maintained in **engineering-flow-platform-skills**. Portal/K8s typically checks out/mounts that skills repository at `/app/skills` (or another path via `EFP_SKILLS_DIR`) for runtime discovery.
 
-EFP native runtime no longer supports the External tools subsystem. Runtime tool surface is built-in/native only; Portal provisions skills assets (for example via `/app/skills` or `EFP_SKILLS_DIR`).
+EFP native runtime exposes only opencode-style built-in LLM tools
+(`bash`, `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `todowrite`,
+`apply_patch`, plus other EFP runtime built-ins). Legacy Python tool packages,
+including `src/bash_tools`, are not part of the production LLM tool surface.
 
 ## API Endpoints
 
@@ -221,6 +234,8 @@ For complete control-plane contract details, see `docs/control_plane_contract.md
 
 Additional runtime contracts:
 - `docs/runtime_contract.md`
+- `docs/runtime-design.md`
+- `docs/opencode-parity.md`
 - `docs/observability_contract.md`
 
 ### Portal Control-Plane Integration (Operator Minimum)
@@ -243,24 +258,12 @@ Additional runtime contracts:
 | `/api/sessions/{id}/rename` | POST | Rename session |
 | `/api/sessions/{id}` | DELETE | Delete session |
 | `/api/sessions/{id}/clear` | POST | Clear session history |
-| `/api/clear` | POST | Clear all sessions |
-
-### Files
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/files/upload` | POST | Upload file (multipart) |
-| `/api/files` | GET | List files |
-| `/api/files/{id}` | GET | Download file |
-| `/api/files/parse` | POST | Parse file content (body: {file_id}) |
-| `/api/files/{id}/preview` | GET | Get file preview |
 
 ### Settings
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/config` | GET | Get current config |
-| `/api/config/save` | POST | Save config |
+| `/api/config/reload` | POST | Reload runtime config |
 | `/api/git-info` | GET | Git repository info |
 
 ---
@@ -269,43 +272,16 @@ Additional runtime contracts:
 
 ### Sending Attachments
 
-The chat API supports file attachments in two ways:
+Portal can pass runtime-known transient attachment ids in the `attachments` array:
 
-1. **New format** (recommended): Send `attachments` array in JSON body
-   ```json
-   {
-     "message": "Analyze this image",
-     "attachments": ["file_id1", "file_id2"]
-   }
-   ```
-
-2. **Legacy format**: Include `@file_<id>` in message text
-   ```
-   What is in @file_abc12345?
-   ```
-
-Only the first image attachment is processed to avoid large payloads.
-
-### Uploading Files
-
-```
-POST /api/files/upload
-Content-Type: multipart/form-data
-
-file: <binary>
-```
-
-Returns:
 ```json
 {
-  "success": true,
-  "file_id": "uuid...",
-  "filename": "example.png",
-  "content_type": "image/png",
-  "size": 12345,
-  "uploaded_at": "2024-01-01T00:00:00Z"
+  "message": "Analyze this image",
+  "attachments": ["file_id1", "file_id2"]
 }
 ```
+
+Attachment bytes are provided by Portal and resolved by runtime storage helpers.
 
 ---
 
@@ -379,7 +355,7 @@ Create test files in `tests/` following `test_*.py` pattern.
 1. Create module in `src/{integration}/`
 2. Implement API client
 3. Add config schema to `config.py`
-4. Add tools in `src/tools/`
+4. Add model-visible tools through `src/efp_runtime/tools/builtin/`
 5. Document in README
 
 ---
@@ -397,14 +373,6 @@ Create test files in `tests/` following `test_*.py` pattern.
 1. Check LLM configuration is correct
 2. Verify API key has sufficient credits
 3. Check server logs for errors
-
-### File Upload Fails
-
-1. Ensure upload directory exists: `~/.efp/workspace/uploads/`
-2. Check file size limits
-3. Verify file type is allowed
-
----
 
 ## License
 

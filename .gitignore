@@ -138,6 +138,10 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Runtime image build inputs generated from engineering-flow-platform-tools.
+runtime-tools/jira
+runtime-tools/confluence
+
 # Local config - NEVER commit
 config.yaml
 *.log

@@ -6,7 +6,6 @@ import logging
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Dict
 
 from aiohttp import web
 from aiohttp.web import Request
@@ -17,18 +16,21 @@ import re
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.truncate import truncate
-from src.agents.core import agent, run_chat_execution
-from src.channels.jira import jira_channel
 from src.config import config
+from src.external_cli import jira as jira_cli
+from src.gateway.runtime_chat import run_runtime_chat
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
-from src.sessions.manager import JIRA_SESSION_PREFIX
+from src.efp_runtime.session.gateway_facade import (
+    JIRA_SESSION_PREFIX,
+    runtime_session_manager as session_manager,
+)
 
 
-# Lazy import webchat to avoid circular dependency
+# Lazy import runtime API route registration to avoid circular dependency
 try:
-    from .webchat import setup_webchat_routes
+    from .runtime_api import setup_runtime_api_routes
 except ImportError:
-    setup_webchat_routes = None
+    setup_runtime_api_routes = None
 
 logger = logging.getLogger(__name__)
 
@@ -66,19 +68,12 @@ async def handle_jira_message(
     try:
         logger.info(f"Processing Jira message | issue_key={issue_key} | session_id={session_id}")
 
-        # Check for test case generation command
-        if jira_channel.is_test_case_command(message):
-            # Test case generation feature removed in PR #131
-            # Inform user and skip
-            await jira_channel.send_message(issue_key, "Test case generation feature is temporarily unavailable.")
-            return ""
-
-        # Normal conversation
-        result = await run_chat_execution(
-            agent=agent,
+        result = await run_runtime_chat(
             message=message,
             session_id=session_id,
             user_name=user_name,
+            request_path="jira",
+            execution_metadata={"issue_key": issue_key, "source": "jira"},
         )
         response = result["response"]
         logger.info(f"Jira message processed successfully | issue_key={issue_key}")
@@ -92,6 +87,29 @@ async def handle_jira_message(
         tb_str = get_traceback_str()
         logger.error(f"Error processing Jira comment | issue_key={issue_key} | error={e}", exc_info=True)
         return f"Sorry, I encountered an error: {str(e)}"
+
+
+def _extract_jira_comment_event(payload: dict) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    issue = payload.get("issue") if isinstance(payload.get("issue"), dict) else {}
+    comment = payload.get("comment") if isinstance(payload.get("comment"), dict) else {}
+    issue_key = str(issue.get("key") or payload.get("issue_key") or "").strip()
+    body = str(comment.get("body") or payload.get("body") or "").strip()
+    if not issue_key or not body:
+        return None
+    author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+    username = (
+        str(author.get("displayName") or author.get("name") or author.get("accountId") or "").strip()
+        or str(payload.get("username") or "").strip()
+        or "unknown"
+    )
+    return {
+        "issue_key": issue_key,
+        "body": body,
+        "username": username,
+        "comment_id": str(comment.get("id") or payload.get("comment_id") or "").strip(),
+    }
 
 
 class Gateway:
@@ -111,18 +129,9 @@ class Gateway:
         self.app.router.add_get("/actuator/health", self.handle_health)
         self.app.router.add_get("/api/git-info", self.handle_git_info)
         self.app.router.add_get("/api/skill-git-info", self.handle_skill_git_info)
-        self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
-        self.app.router.add_post("/api/test", self.handle_test_message)
         self.app.router.add_post("/api/config/reload", self.handle_config_reload)
         self.app.router.add_get("/api/queue/status", self.handle_queue_status)
-
-        # Settings routes
-        self.app.router.add_get("/api/settings", self.handle_settings_get)
-        self.app.router.add_post("/api/settings", self.handle_settings_post)
-        self.app.router.add_get("/api/settings/providers", self.handle_settings_providers)
-        self.app.router.add_get("/api/settings/ollama/models", self.handle_ollama_models)
-        self.app.router.add_post("/api/settings/ollama/pull", self.handle_ollama_pull)
 
         # System prompt config routes
         self.app.router.add_get("/api/agent/system-prompt/config", self.handle_system_prompt_config_get)
@@ -134,9 +143,9 @@ class Gateway:
         if self.jira_enabled:
             self.app.router.add_post("/webhook/jira", self.handle_jira_webhook)
 
-        # WebChat routes (if available)
-        if setup_webchat_routes:
-            setup_webchat_routes(self.app)
+        # Runtime API routes (if available)
+        if setup_runtime_api_routes:
+            setup_runtime_api_routes(self.app)
 
         # Setup event routes (WebSocket for real-time events)
         try:
@@ -148,7 +157,7 @@ class Gateway:
             raise
         except Exception as e:
             logger.warning(f"Could not setup event routes: {e}")
-            logger.info("WebChat UI enabled at /")
+            logger.info("Runtime event routes are unavailable")
 
     async def handle_health(self, request: Request) -> web.Response:
         """Health check endpoint."""
@@ -271,95 +280,8 @@ class Gateway:
 
         return web.json_response({"commit_id": commit_id, "repo_url": _clean_repo_url(repo_url)})
 
-    async def handle_list_sessions(self, request: Request) -> web.Response:
-        """List all active sessions with details.
-
-        GET /api/sessions?limit=10
-        Returns: List of sessions with name, last message, timestamp
-        """
-        from datetime import datetime
-        from src.sessions.manager import resolve_session_display_name, session_manager
-
-        logger.info(f"[handle_list_sessions] ENTERING - listing sessions")
-
-        try:
-            # Initialize session manager if needed
-            if not session_manager._initialized:
-                logger.info("[handle_list_sessions] Initializing session manager")
-                await session_manager.initialize()
-
-            # Pagination parameters
-            limit = int(request.query.get("limit", 20))
-            offset = int(request.query.get("offset", 0))
-
-            session_ids = await session_manager.list_sessions()
-            logger.info(f"[handle_list_sessions] Found {len(session_ids)} sessions")
-
-            # Get all sessions with their details first
-            sessions_with_details = []
-            for session_id in session_ids:
-                # Get session with full history (not get_session_info which excludes history)
-                session = await session_manager.get_session(session_id)
-
-                if not session:
-                    logger.warning(f"[handle_list_sessions] No session: {session_id}")
-                    continue
-
-                history = session.get("history", [])
-
-                # Skip empty sessions (no user messages)
-                user_messages = [msg for msg in history if msg.get("role") == "user"]
-                if not user_messages:
-                    continue
-
-                session_name = resolve_session_display_name(session)
-
-                # Get last message preview
-                last_message = ""
-                for msg in reversed(history):
-                    if msg.get("role") in ("user", "assistant"):
-                        last_message = truncate(msg.get("content", "") or "", 50)
-                        break
-
-                updated_at = session.get("updated_at", datetime.utcnow().isoformat())
-
-                sessions_with_details.append(
-                    {
-                        "session_id": session_id,
-                        "name": session_name,
-                        "last_message": last_message,
-                        "updated_at": updated_at,
-                        "message_count": len(user_messages),
-                    }
-                )
-
-            # Sort by updated_at descending (newest first)
-            sessions_with_details.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-
-            # Apply pagination
-            total_count = len(sessions_with_details)
-            detailed_sessions = sessions_with_details[offset : offset + limit]
-            has_more = offset + limit < total_count
-
-            for s in detailed_sessions:
-                logger.info(f"[handle_list_sessions] Added session: {s['session_id']} -> name='{s['name']}'")
-
-            logger.info(
-                f"[handle_list_sessions] Returning {len(detailed_sessions)} sessions (offset={offset}, has_more={has_more})"
-            )
-            return web.json_response({"sessions": detailed_sessions, "has_more": has_more, "total": total_count})
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            logger.error(f"[handle_list_sessions] ERROR: {e}", exc_info=True)
-            return web.json_response({"error": str(e)}, status=500)
-
     async def handle_clear_session(self, request: Request) -> web.Response:
         """Clear a session's history."""
-        from src.sessions.manager import session_manager
-
         session_id = request.match_info.get("session_id", "")
 
         if session_id:
@@ -557,97 +479,6 @@ class Gateway:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
 
-    async def handle_settings_get(self, request: Request) -> web.Response:
-        """Get current settings.
-
-        GET /api/settings
-        Returns: {...config}
-        """
-        from src.config import config as runtime_config
-
-        return web.json_response(
-            {
-                "llm": {
-                    "provider": runtime_config.llm.get("provider"),
-                    "model": runtime_config.llm.get("model"),
-                    "api_base": runtime_config.llm.get("api_base"),
-                    "temperature": runtime_config.llm.get("temperature"),
-                    "max_tokens": runtime_config.llm.get("max_tokens"),
-                },
-                "jira": {
-                    "enabled": bool(runtime_config.jira.get("webhook_url")),
-                },
-            }
-        )
-
-    async def handle_settings_post(self, request: Request) -> web.Response:
-        """Update settings.
-
-        POST /api/settings
-        Body: {"llm": {...}, ...}
-        Returns: {"status": "ok"}
-        """
-        try:
-            data = await request.json()
-            # For now, just validate the settings
-            if "llm" in data:
-                llm = data["llm"]
-                if "provider" in llm and llm["provider"] not in ["openai", "github_copilot", "claude", "ollama"]:
-                    return web.json_response({"status": "error", "message": "Invalid provider"}, status=400)
-            return web.json_response({"status": "ok", "message": "Settings validated. Restart required to apply."})
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            return web.json_response({"status": "error", "message": str(e)}, status=400)
-
-    async def handle_settings_providers(self, request: Request) -> web.Response:
-        """Get provider information.
-
-        GET /api/settings/providers
-        Returns: {provider: {name, default_model, models: [...]}}
-        """
-        from src.agents.llm import llm_client
-
-        return web.json_response(llm_client.get_provider_info())
-
-    async def handle_ollama_models(self, request: Request) -> web.Response:
-        """Get Ollama models.
-
-        GET /api/settings/ollama/models
-        Returns: {"status": "healthy", "models": [...]}
-        """
-        from src.agents.llm import llm_client
-
-        return web.json_response(await llm_client.check_provider_health("ollama"))
-
-    async def handle_ollama_pull(self, request: Request) -> web.Response:
-        """Pull an Ollama model.
-
-        POST /api/settings/ollama/pull
-        Body: {"model": "llama3"}
-        """
-        try:
-            data = await request.json()
-            model = data.get("model")
-            if not model:
-                return web.json_response({"status": "error", "message": "model required"}, status=400)
-
-            from src.agents.llm import llm_client
-
-            if "ollama" not in llm_client.providers:
-                return web.json_response({"status": "error", "message": "Ollama not configured"}, status=400)
-
-            result = await llm_client.providers["ollama"].pull_model(model)
-            return web.json_response({"status": "success", "result": result})
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
-
     async def handle_config_reload(self, request: Request) -> web.Response:
         """Reload configuration from config.yaml.
 
@@ -690,65 +521,12 @@ class Gateway:
             logger.error(f"Queue status error: {e}")
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
-    async def handle_test_message(self, request: Request) -> web.Response:
-        """Test endpoint for sending a message to the agent via HTTP.
-
-        POST /api/test
-        Body: {"message": "your message here", "session_id": "optional-session-id", "reasoning_replay": false}
-        """
-        try:
-            data = await request.json()
-            message = data.get("message", "")
-            session_id = data.get("session_id", "test-session")
-            reasoning_replay = data.get("reasoning_replay", None)
-
-            if not message:
-                return web.json_response({"status": "error", "message": "message required"}, status=400)
-
-            # Process message through agent
-            result = await run_chat_execution(
-                agent=agent,
-                message=message,
-                session_id=session_id,
-                user_name="http-tester",
-                reasoning_replay=reasoning_replay,
-            )
-
-            if result is None:
-                return web.json_response({"status": "error", "message": "Agent returned None"}, status=500)
-
-            response_data = {
-                "status": "ok",
-                "message": message,
-                "response": result.get("response", ""),
-                "session_id": session_id,
-            }
-
-            # Include reasoning if available
-            if "reasoning" in result:
-                response_data["reasoning"] = result["reasoning"]
-
-            # Include usage if available
-            if "usage" in result:
-                response_data["usage"] = result["usage"]
-
-            return web.json_response(response_data)
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            tb = traceback.format_exc()
-            logger.error(f"Test message error: {e}\nTraceback:\n{tb}")
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
-
     async def handle_jira_webhook(self, request: Request) -> web.Response:
         """Handle Jira webhook events."""
         try:
             payload = await request.json()
 
-            # Handle Jira webhook
-            result = jira_channel.handle_webhook_payload(payload)
+            result = _extract_jira_comment_event(payload)
 
             if not result:
                 # Not a comment event or filtered out
@@ -769,7 +547,7 @@ class Gateway:
             response = await handle_jira_message(comment_body, session_id, username, issue_key)
 
             # Send response back to Jira as a comment (handles long responses)
-            await jira_channel.add_comment_long(issue_key, response)
+            await jira_cli.add_comment_long(issue_key, response)
 
             logger.info(f"Processed Jira comment for {issue_key} from {username}")
 
@@ -796,9 +574,8 @@ class Gateway:
         # Run memory bootstrap in background after server starts
         asyncio.create_task(self._run_memory_bootstrap())
 
-        # Jira channel is initialized in __init__ with HTTP client ready
-        if self.jira_enabled and jira_channel.is_configured():
-            logger.info("Jira channel enabled and ready")
+        if self.jira_enabled:
+            logger.info("Jira webhook route enabled; writeback uses external jira CLI")
 
     async def _run_memory_bootstrap(self) -> None:
         """Run memory bootstrap in background."""
@@ -822,15 +599,8 @@ class Gateway:
 
             # Generate long-term memory from recent dailies
             try:
-                from src.agents.llm import llm_client as runtime_llm_client
-                if runtime_llm_client and created_daily:
-                    logger.info("[Memory] Generating long-term memory from daily files...")
-                    await update_long_term_memory_from_daily(
-                        workspace=workspace,
-                        llm_client=runtime_llm_client,
-                        daily_paths=created_daily,
-                    )
-                    logger.info("[Memory] Long-term memory updated")
+                if created_daily:
+                    logger.info("[Memory] Long-term memory update skipped in EFP runtime native mode")
             except Exception as e:
                 logger.warning(f"[Memory] Long-term memory update skipped: {e}")
 
@@ -883,15 +653,7 @@ class Gateway:
 
                     # Also update long-term memory
                     try:
-                        from src.agents.llm import llm_client as runtime_llm_client
-                        if runtime_llm_client:
-                            logger.info("[Memory] Updating long-term memory...")
-                            await update_long_term_memory_from_daily(
-                                workspace=workspace,
-                                llm_client=runtime_llm_client,
-                                daily_paths=created_daily,
-                            )
-                            logger.info("[Memory] Long-term memory updated")
+                        logger.info("[Memory] Long-term memory update skipped in EFP runtime native mode")
                     except Exception as e:
                         logger.warning(f"[Memory] Long-term update skipped: {e}")
 
@@ -907,17 +669,6 @@ class Gateway:
 
     async def stop(self) -> None:
         """Stop the gateway server."""
-        # Close Jira client if it was initialized
-        if self.jira_enabled:
-            try:
-                await jira_channel.close()
-                logger.info("Jira channel closed")
-            except asyncio.CancelledError:
-                logger.info("[Memory] Periodic check cancelled")
-                raise
-            except Exception as e:
-                logger.warning(f"Error closing Jira channel: {e}")
-
         if self.runner:
             await self.runner.cleanup()
         logger.info("Gateway stopped")

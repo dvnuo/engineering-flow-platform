@@ -7,8 +7,7 @@ import logging
 import os
 from datetime import datetime
 
-from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
-from src.agents.subagent import run_subagent_execution
+from src import ToolResult, execute_tool
 from src.agents.tasks import task_manager
 from src.runtime.adapter_executor import execute_adapter_action
 from src.runtime.capability_registry import get_capability_registry
@@ -40,6 +39,52 @@ from src.utils.logger import reset_log_context, set_log_context
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
 logger = logging.getLogger(__name__)
+
+
+class SkillResult:
+    """Small compatibility result for disabled legacy skill execution paths."""
+
+    def __init__(
+        self,
+        success: bool,
+        output: str = "",
+        error: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ):
+        self.success = success
+        self.output = output
+        self.error = error
+        self.data = data or {}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "success": self.success,
+            "output": self.output,
+            "error": self.error,
+            "data": self.data,
+        }
+
+
+async def execute_tool_by_name(tool_name: str, **kwargs: Any) -> ToolResult:
+    """Execute through the EFP runtime built-in tool surface."""
+    return await execute_tool(tool_name, **kwargs)
+
+
+async def run_skill_execution(skill_name: str, **kwargs: Any) -> SkillResult:
+    return SkillResult(
+        success=False,
+        error=(
+            "Legacy Python skill execution is not available in EFP runtime native mode. "
+            f"Requested skill: {skill_name}"
+        ),
+        data={"runtime": "efp_runtime", "kwargs": dict(kwargs or {})},
+    )
+
+
+async def run_subagent_execution(**kwargs: Any) -> Dict[str, Any]:
+    from src.agents.subagent import run_subagent_execution as run_runtime_subagent_execution
+
+    return await run_runtime_subagent_execution(**kwargs)
 
 def _first_non_empty(*values: Any) -> Optional[str]:
     for value in values:
@@ -228,10 +273,9 @@ class ExecutionBus:
         if not self._should_persist_last_execution_id(request):
             return
         try:
-            # local import keeps runtime dependency light and avoids import cycles at module load.
-            from src.sessions.manager import session_manager
+            from src.efp_runtime.session.gateway_facade import runtime_session_manager
 
-            await session_manager.set_last_execution_id(request.session_id, request.request_id)
+            await runtime_session_manager.set_last_execution_id(request.session_id, request.request_id)
         except Exception:
             logger.debug("ExecutionBus failed to persist last_execution_id", exc_info=True)
 
@@ -1129,8 +1173,8 @@ def _triggered_event_secondary_action_descriptor(
             "event_prefix": "task.triggered_event.secondary_action",
         },
         "confluence.mention": {
-            "action_id": "channel_action:confluence_add_comment",
-            "capability_type": "channel_action",
+            "action_id": "adapter:confluence:add_comment",
+            "capability_type": "adapter_action",
             "event_prefix": "task.triggered_event.secondary_action",
         },
     }
@@ -1334,7 +1378,7 @@ def build_default_execution_bus(
     bus = ExecutionBus(event_emitter=event_emitter, governance=governance or build_default_governance_bus())
 
     if chat_handler is not None:
-        # Chat is intentionally optional and injected by caller (e.g., webchat/gateway path).
+        # Chat is intentionally optional and injected by caller (e.g., runtime API/gateway path).
         bus.register_handler("chat", chat_handler)
 
     execute_tool_callable = execute_tool_func or execute_tool_by_name
@@ -1860,9 +1904,9 @@ def build_default_execution_bus(
             }
             if request.session_id:
                 try:
-                    from src.sessions.manager import session_manager
+                    from src.efp_runtime.session.gateway_facade import runtime_session_manager
 
-                    await session_manager.add_pending_delegation(request.session_id, pending_record)
+                    await runtime_session_manager.add_pending_delegation(request.session_id, pending_record)
                 except Exception:
                     logger.debug("ExecutionBus failed to add pending delegation metadata", exc_info=True)
 
@@ -2071,9 +2115,9 @@ def build_default_execution_bus(
             finally:
                 if request.session_id:
                     try:
-                        from src.sessions.manager import session_manager
+                        from src.efp_runtime.session.gateway_facade import runtime_session_manager
 
-                        await session_manager.complete_pending_delegation(
+                        await runtime_session_manager.complete_pending_delegation(
                             request.session_id,
                             delegation_id,
                             status="completed" if skill_success else "failed",

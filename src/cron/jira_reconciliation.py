@@ -9,8 +9,8 @@ from typing import Any, Dict, List
 
 from aiohttp import ClientSession
 
-from src.channels.jira import jira_channel
 from src.config import config
+from src.external_cli import jira as jira_cli
 from src.utils.portal_internal_api import build_portal_internal_api_headers, get_portal_internal_base_url
 
 logger = logging.getLogger(__name__)
@@ -213,7 +213,7 @@ class JiraReconciliationRunner:
                         jql = f"{jql} AND status IN ({quoted})"
 
                     try:
-                        search_result = await jira_channel.search_issues(jql, max_results=50)
+                        search_result = await jira_cli.search_issues(jql, max_results=50)
                     except Exception as exc:
                         logger.warning("Jira reconciliation search failed for rule=%s: %s", rule.get("id"), exc)
                         continue

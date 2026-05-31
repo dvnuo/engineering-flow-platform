@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from src.agents.core import agent, run_chat_execution
-from src.channels.confluence import confluence_channel
-from src.channels.github import github_channel
-from src.channels.jira import jira_channel
+from src.external_cli import confluence as confluence_cli
+from src.external_cli import github as github_cli
+from src.external_cli import jira as jira_cli
+from src.gateway.runtime_chat import run_runtime_chat
 
 
 def _require(payload: Dict[str, Any], key: str) -> Any:
@@ -22,11 +22,11 @@ async def _run_agent_response(
     session_id: str,
     execution_metadata: Dict[str, Any] | None = None,
 ) -> str:
-    result = await run_chat_execution(
-        agent=agent,
+    result = await run_runtime_chat(
         message=message,
         session_id=session_id,
         user_name="triggered-event",
+        request_path="triggered_event",
         track_usage=False,
         execution_metadata=execution_metadata if isinstance(execution_metadata, dict) else None,
     )
@@ -59,7 +59,7 @@ def _resolve_secondary_action(source_kind: str, payload: Dict[str, Any] | None =
     mapping = {
         "jira.assigned": ("adapter:jira:add_comment", "adapter_action"),
         "jira.mention": ("adapter:jira:add_comment", "adapter_action"),
-        "confluence.mention": ("channel_action:confluence_add_comment", "channel_action"),
+        "confluence.mention": ("adapter:confluence:add_comment", "adapter_action"),
     }
     resolved = mapping.get(normalized_source_kind)
     if not resolved:
@@ -184,11 +184,11 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             if not commit_sha:
                 raise ValueError("Missing required field: commit_sha")
             position = payload.get("position")
-            await github_channel.add_commit_comment(
-                owner,
-                repo,
-                commit_sha,
-                response_to_post,
+            await github_cli.add_commit_comment(
+                owner=owner,
+                repo=repo,
+                commit_sha=commit_sha,
+                comment=response_to_post,
                 path=str(path).strip() if isinstance(path, str) and path.strip() else None,
                 line=int(line) if isinstance(line, int) or (isinstance(line, str) and str(line).strip().isdigit()) else None,
                 position=int(position) if isinstance(position, int) or (isinstance(position, str) and str(position).strip().isdigit()) else None,
@@ -198,7 +198,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             if not discussion_id:
                 raise ValueError("Missing required field: discussion_id")
             reply_to_id = payload.get("reply_to_id") or payload.get("discussion_comment_id") or payload.get("comment_id")
-            await github_channel.add_discussion_comment(
+            await github_cli.add_discussion_comment(
                 discussion_id,
                 response_to_post,
                 reply_to_id=str(reply_to_id) if reply_to_id else None,
@@ -210,12 +210,12 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             )
             if source_comment_id <= 0:
                 raise ValueError("Missing required field: comment_id for review comment reply")
-            await github_channel.reply_pr_review_comment(owner, repo, pull_number_value, source_comment_id, response_to_post)
+            await github_cli.reply_pr_review_comment(owner, repo, pull_number_value, source_comment_id, response_to_post)
         else:
             issue_number_value = int(payload.get("issue_number") or payload.get("pull_number") or 0)
             if issue_number_value <= 0:
                 raise ValueError("Missing required field: issue_number")
-            await github_channel.add_comment(owner, repo, issue_number_value, response_to_post)
+            await github_cli.add_comment(owner, repo, issue_number_value, response_to_post)
         return {
             "success": True,
             "source_kind": source_kind,
@@ -264,7 +264,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "blocked": True,
                 "blocked_reason": blocked_reason,
             }
-        await jira_channel.add_comment(issue_key, response_text)
+        await jira_cli.add_comment(issue_key, response_text)
         return {
             "success": True,
             "source_kind": source_kind,
@@ -310,7 +310,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "blocked": True,
                 "blocked_reason": blocked_reason,
             }
-        await jira_channel.add_comment(issue_key, response_text)
+        await jira_cli.add_comment(issue_key, response_text)
         return {
             "success": True,
             "source_kind": source_kind,
@@ -359,7 +359,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "blocked": True,
                 "blocked_reason": blocked_reason,
             }
-        await confluence_channel.add_comment(page_id, response_text)
+        await confluence_cli.add_comment(page_id, response_text)
         return {
             "success": True,
             "source_kind": source_kind,

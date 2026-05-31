@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
-from src.agents.core import run_chat_execution
+from src.gateway.runtime_chat import run_runtime_chat
 
 # Import Agent lazily to avoid circular imports
 _subagent_sessions: Dict[str, Dict[str, Any]] = {}
@@ -47,18 +47,8 @@ class SubAgent:
     
     @property
     def agent(self):
-        """Get the agent instance (lazy initialization)."""
-        if self._agent is None:
-            from src.agents.core import Agent
-            self._agent = Agent(
-                session_id=self.session_key,
-                think_level=self.thinking,
-                model=self.model,
-            )
-            # Disable tools if requested
-            if self.disable_tools:
-                self._agent.tools = []
-        return self._agent
+        """Legacy agent object is no longer created in EFP runtime native mode."""
+        return None
     
     async def start(self):
         """Start the sub-agent task."""
@@ -70,12 +60,13 @@ class SubAgent:
             logger.info(f"Sub-agent {self.session_key} started - think_level={self.thinking}, model={self.model}")
             logger.debug(f"Task: {truncate(self.task, 200)}")
             
-            result = await run_chat_execution(
-                agent=self.agent,
+            result = await run_runtime_chat(
                 message=self.task,
                 session_id=self.session_key,
                 user_name=self.session_key,
                 track_usage=False,
+                model=self.model,
+                request_path="subagent",
             )
             
             self.result = result.get("response", "")
@@ -238,12 +229,12 @@ def sessions_list(
         JSON string with session list
     """
     import asyncio
-    from src.sessions.manager import session_manager
+    from src.efp_runtime.session.gateway_facade import runtime_session_manager
     
     sessions = []
     
     # Get main session info
-    main_info = asyncio.run(session_manager.get_session_info("main"))
+    main_info = asyncio.run(runtime_session_manager.get_session_info("main"))
     if main_info:
         sessions.append({
             "key": "main",
@@ -298,9 +289,9 @@ def sessions_history(
         JSON string with message history
     """
     import asyncio
-    from src.sessions.manager import session_manager
+    from src.efp_runtime.session.gateway_facade import runtime_session_manager
     
-    messages = asyncio.run(session_manager.get_history(session_key))
+    messages = asyncio.run(runtime_session_manager.get_history(session_key))
     
     if limit and len(messages) > limit:
         messages = messages[-limit:]
@@ -476,10 +467,10 @@ def cleanup_subagent(session_key: str) -> bool:
         True if cleaned up, False if not found
     """
     import asyncio
-    from src.sessions.manager import session_manager
+    from src.efp_runtime.session.gateway_facade import runtime_session_manager
     
     if session_key in _subagent_sessions:
         del _subagent_sessions[session_key]
-        asyncio.run(session_manager.clear_history(session_key))
+        asyncio.run(runtime_session_manager.clear_history(session_key))
         return True
     return False
