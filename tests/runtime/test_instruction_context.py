@@ -18,7 +18,7 @@ from efp_runtime.session.store import InMemorySessionStore
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_builder_loads_first_workspace_default_file(tmp_path: Path):
+def test_builder_loads_agents_as_only_workspace_default_file(tmp_path: Path):
     (tmp_path / "CONTEXT.md").write_text("Context instructions.", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("Agent instructions.", encoding="utf-8")
     (tmp_path / "CLAUDE.md").write_text("Claude instructions.", encoding="utf-8")
@@ -40,9 +40,11 @@ def test_builder_loads_first_workspace_default_file(tmp_path: Path):
         "original_chars": len("Agent instructions."),
     }
     assert messages[0].parts[0].metadata == messages[0].metadata
+    assert "Claude instructions." not in messages[0].parts[0].text
+    assert "Context instructions." not in messages[0].parts[0].text
 
 
-def test_nested_cwd_loads_only_nearest_default_instruction(tmp_path: Path):
+def test_nested_cwd_ignores_claude_and_context_by_default(tmp_path: Path):
     nested = tmp_path / "src" / "pkg"
     nested.mkdir(parents=True)
     (tmp_path / "AGENTS.md").write_text("Workspace agents.", encoding="utf-8")
@@ -54,11 +56,11 @@ def test_nested_cwd_loads_only_nearest_default_instruction(tmp_path: Path):
     )
 
     assert len(messages) == 1
-    assert messages[0].metadata["path"] == str((nested / "CONTEXT.md").resolve())
+    assert messages[0].metadata["path"] == str((tmp_path / "AGENTS.md").resolve())
     text = messages[0].parts[0].text
-    assert "Package context." in text
+    assert "Workspace agents." in text
     assert "Source claude." not in text
-    assert "Workspace agents." not in text
+    assert "Package context." not in text
 
 
 def test_explicit_instruction_paths_support_relative_absolute_and_home(

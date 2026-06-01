@@ -212,10 +212,10 @@ async def test_github_copilot_provider_defaults_metadata_and_model_payload():
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5-mini"
+    assert provider.model == "gpt-5.4-mini"
     assert provider.metadata["provider_id"] == "github-copilot"
     payload = transport.payloads[0]
-    assert payload["model"] == "gpt-5-mini"
+    assert payload["model"] == "gpt-5.4-mini"
     assert payload["metadata"]["provider"] == "github-copilot"
     assert payload["metadata"]["provider_id"] == "github-copilot"
     assert payload["metadata"]["trace_id"] == "trace-copilot"
@@ -238,7 +238,7 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5-mini"
+    assert provider.model == "gpt-5.4-mini"
     assert transport.payloads[0]["model"] == "gpt-5"
     assert transport.payloads[0]["metadata"]["provider_id"] == "github-copilot"
 
@@ -445,7 +445,7 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
         }
     )
 
-    assert provider.model == "gpt-5-mini"
+    assert provider.model == "gpt-5.4-mini"
     assert provider.metadata["provider_id"] == "github-copilot"
     assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
     assert (

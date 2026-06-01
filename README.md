@@ -92,6 +92,9 @@ EFP runtime native mode does not fall back to OpenAI or Anthropic providers.
 `llm.api_key`; `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
 Copilot transport base URL.
 
+Common GitHub Copilot models include `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`,
+`gpt-5.3-codex`, `gpt-5-mini`, `gpt-4.1`, `gpt-4o`, and `gemini-2.5-pro`.
+
 ### Control-Plane Runtime Settings
 
 ```yaml
@@ -292,11 +295,11 @@ Attachment bytes are provided by Portal and resolved by runtime storage helpers.
 
 ## Session Management
 
-Sessions are automatically persisted to `~/.efp/workspace/sessions/`.
+Sessions are automatically persisted to `/workspace/sessions/` by default.
 
 ### Session Structure
 ```
-~/.efp/workspace/sessions/
+/workspace/sessions/
 ├── {session_id}_{hash}.jsonl  # Session conversation history
 └── archive/                   # Archived sessions
 ```
@@ -308,7 +311,7 @@ session:
   max_iterations: 30    # Max tool calls per turn
   persistence:
     enabled: true
-    storage_dir: "~/.efp/workspace/sessions"
+    storage_dir: "/workspace/sessions"
     ttl_seconds: 2592000  # 30 days
 ```
 
@@ -318,7 +321,7 @@ session:
 
 ### Workspace Files
 
-Located at `~/.efp/workspace/`:
+Located at `/workspace/` by default:
 
 | File | Purpose |
 |------|---------|

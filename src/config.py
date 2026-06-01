@@ -808,7 +808,17 @@ DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
         "max_prompt_tokens": 272000,
         "max_output_tokens": 128000,
     },
+    "gpt-5.4": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
     "gpt-5.4-mini": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
+    "gpt-5.5": {
         "max_context_window_tokens": 400000,
         "max_prompt_tokens": 272000,
         "max_output_tokens": 128000,

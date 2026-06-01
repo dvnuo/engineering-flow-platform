@@ -1,5 +1,7 @@
 """Gateway server for Engineering Flow Platform."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -17,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.truncate import truncate
 from src.config import config
+from src.workspace_defaults import resolve_runtime_workspace
 from src.external_cli import jira as jira_cli
 from src.gateway.runtime_chat import run_runtime_chat
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
@@ -37,7 +40,11 @@ logger = logging.getLogger(__name__)
 
 def _runtime_workspace_root() -> Path:
     """Canonical runtime workspace root."""
-    return (Path.home() / ".efp" / "workspace").resolve()
+    try:
+        config_data = config.get_effective_config()
+    except Exception:
+        config_data = getattr(config, "_config", None)
+    return resolve_runtime_workspace(config_data).resolve()
 
 
 

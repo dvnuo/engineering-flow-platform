@@ -13,8 +13,14 @@ from efp_runtime.llm.models import (
 @pytest.mark.parametrize(
     ("model", "expected_model"),
     [
+        ("github-copilot/gpt-5.5", "gpt-5.5"),
+        ("github-copilot/gpt-5.4-mini", "gpt-5.4-mini"),
+        ("github-copilot/gpt-5.4", "gpt-5.4"),
         ("github-copilot/gpt-5", "gpt-5"),
         ("github-copilot/gpt-5-mini", "gpt-5-mini"),
+        ("gpt-5.5", "gpt-5.5"),
+        ("gpt-5.4-mini", "gpt-5.4-mini"),
+        ("gpt-5.4", "gpt-5.4"),
         ("gpt-5", "gpt-5"),
         ("gpt-5-mini", "gpt-5-mini"),
     ],
@@ -25,8 +31,12 @@ def test_github_copilot_profile_resolution(model: str, expected_model: str):
     assert isinstance(profile, ModelContextProfile)
     assert profile.provider_id == DEFAULT_PROVIDER_ID
     assert profile.model_id == expected_model
-    assert profile.context_window_tokens == 128_000
-    assert profile.default_reserve_tokens == 8_000
+    if expected_model in {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}:
+        assert profile.context_window_tokens == 400_000
+        assert profile.default_reserve_tokens == 128_000
+    else:
+        assert profile.context_window_tokens == 128_000
+        assert profile.default_reserve_tokens == 8_000
     assert profile.default_preserve_recent_tokens == 8_000
     assert profile.tokens_to_chars(100) == 400
 

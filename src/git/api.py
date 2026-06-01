@@ -14,18 +14,16 @@ from typing import Callable, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from src.config import config, service_reload_manager
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
 
 logger = logging.getLogger(__name__)
-
-# Default workspace path using home directory
-DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
 
 
 class GitClient:
     """Git client for repository operations."""
 
     def __init__(self, workspace: str = None):
-        self.workspace = workspace or str(DEFAULT_WORKSPACE)
+        self.workspace = workspace or str(DEFAULT_RUNTIME_WORKSPACE)
 
     async def run(self, args: list, cwd: str = None, env: dict = None) -> str:
         """Run a git command and return output."""

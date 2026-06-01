@@ -9,7 +9,7 @@ from typing import Any
 from ..session.models import Message, MessagePart, MessageRole
 
 
-DEFAULT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "CONTEXT.md")
+DEFAULT_INSTRUCTION_FILES = ("AGENTS.md",)
 _TRUNCATION_NOTICE = "[Instruction content truncated to {kept} of {original} chars.]"
 
 

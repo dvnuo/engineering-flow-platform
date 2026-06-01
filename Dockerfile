@@ -72,10 +72,8 @@ RUN set -eux; \
     && browser commands --json >/dev/null \
     && browser schema probe --json >/dev/null
 
-# Create the workspace directory for this container image's default runtime user (root).
-# Note: the canonical runtime workspace model is user-home-based (`~/.efp/workspace`);
-# in this image, `~` resolves to `/root`.
-RUN mkdir -p /app/skills /root/.efp/workspace /root/.efp/skills
+# Create the runtime workspace and external skills directories.
+RUN mkdir -p /app/skills /workspace
 
 EXPOSE 8000
 

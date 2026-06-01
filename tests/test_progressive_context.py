@@ -478,7 +478,9 @@ def test_resolve_prompt_budget_skill_generation_uses_model_limit(monkeypatch):
         ("gpt-4o", (128000, 64000, 16384, 64000)),
         ("gpt-4.1", (128000, 128000, 16384, 105216)),
         ("gpt-5.3-codex", (400000, 272000, 128000, 264000)),
+        ("gpt-5.4", (400000, 272000, 128000, 264000)),
         ("gpt-5.4-mini", (400000, 272000, 128000, 264000)),
+        ("gpt-5.5", (400000, 272000, 128000, 264000)),
         ("gpt-5-mini", (264000, 128000, 64000, 128000)),
         ("gemini-2.5-pro", (128000, 128000, 64000, 57600)),
     ],
@@ -498,7 +500,9 @@ def test_resolve_prompt_budget_respects_authoritative_model_table(model, expecte
         ("gpt-4.1", (128000, 128000, 16384)),
         ("gpt-5-mini", (264000, 128000, 64000)),
         ("gpt-5.3-codex", (400000, 272000, 128000)),
+        ("gpt-5.4", (400000, 272000, 128000)),
         ("gpt-5.4-mini", (400000, 272000, 128000)),
+        ("gpt-5.5", (400000, 272000, 128000)),
         ("gemini-2.5-pro", (128000, 128000, 64000)),
     ],
 )
@@ -537,6 +541,8 @@ def test_resolve_context_window_tokens_uses_configured_model_limit(monkeypatch):
     ("model", "expected_window"),
     [
         ("gpt-5.4-mini", 400000),
+        ("gpt-5.4", 400000),
+        ("gpt-5.5", 400000),
         ("gpt-5.3-codex", 400000),
         ("gpt-5-mini", 264000),
         ("gemini-2.5-pro", 128000),

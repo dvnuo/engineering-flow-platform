@@ -371,7 +371,7 @@ def _child_config(
             else base_config.default_provider_id
         ),
         default_model=(
-            "gpt-5-mini" if base_config is None else base_config.default_model
+            "gpt-5.4-mini" if base_config is None else base_config.default_model
         ),
         compaction_auto=(
             True if base_config is None else base_config.compaction_auto
@@ -483,12 +483,12 @@ def _child_config(
         ),
         metadata=base_metadata,
         include_default_system_prompt=(
-            True
+            False
             if base_config is None
             else base_config.include_default_system_prompt
         ),
         include_environment_context=(
-            True
+            False
             if base_config is None
             else base_config.include_environment_context
         ),
@@ -502,7 +502,7 @@ def _child_config(
             20000 if base_config is None else base_config.max_system_prompt_chars
         ),
         include_runtime_reminders=(
-            True if base_config is None else base_config.include_runtime_reminders
+            False if base_config is None else base_config.include_runtime_reminders
         ),
         instruction_paths=(
             [] if base_config is None else list(base_config.instruction_paths)

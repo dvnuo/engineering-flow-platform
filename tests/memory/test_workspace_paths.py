@@ -5,26 +5,84 @@ import pytest
 from pathlib import Path
 from datetime import datetime
 from src.memory import (
+    MemoryConfig,
     get_memory_dir,
     get_memory_path,
     get_long_term_memory_path,
     write_daily_memory,
     write_long_term_memory,
 )
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE, resolve_runtime_workspace
 
 
 class TestWorkspacePaths:
     """Tests for workspace-aware path functions."""
-    
+
+    @pytest.mark.parametrize(
+        "config_data",
+        [
+            None,
+            {},
+            {"workspace": {"path": None}},
+            {"workspace": {"path": ""}},
+            {"workspace": ""},
+        ],
+    )
+    def test_resolve_runtime_workspace_defaults_to_runtime_workspace(self, config_data):
+        assert resolve_runtime_workspace(config_data) == DEFAULT_RUNTIME_WORKSPACE
+
+    @pytest.mark.parametrize(
+        "legacy_path",
+        [
+            "~/.efp/workspace",
+            "~/.efp/workspace/",
+            Path.home() / ".efp" / "workspace",
+            "/root/.efp/workspace",
+        ],
+    )
+    def test_resolve_runtime_workspace_treats_legacy_default_as_alias(self, legacy_path):
+        assert (
+            resolve_runtime_workspace({"workspace": {"path": legacy_path}})
+            == DEFAULT_RUNTIME_WORKSPACE
+        )
+
+    def test_resolve_runtime_workspace_preserves_custom_override(self, tmp_path):
+        custom_workspace = tmp_path / "custom-workspace"
+
+        assert (
+            resolve_runtime_workspace({"workspace": {"path": str(custom_workspace)}})
+            == custom_workspace
+        )
+
+    def test_memory_config_uses_runtime_workspace_for_legacy_workspace_path(self, tmp_path):
+        cfg = MemoryConfig(
+            {
+                "path": str(tmp_path / "memory-store"),
+                "workspace": {"path": "/root/.efp/workspace"},
+            }
+        )
+
+        assert cfg.workspace_dir == DEFAULT_RUNTIME_WORKSPACE
+
+    def test_memory_config_preserves_custom_workspace_path(self, tmp_path):
+        custom_workspace = tmp_path / "custom-workspace"
+        cfg = MemoryConfig(
+            {
+                "path": str(tmp_path / "memory-store"),
+                "workspace": {"path": str(custom_workspace)},
+            }
+        )
+
+        assert cfg.workspace_dir == custom_workspace
+
     def test_get_memory_dir_default(self):
-        """Should use DEFAULT_WORKSPACE if not specified."""
-        from src.memory import DEFAULT_WORKSPACE
-        
-        # Test that the function returns DEFAULT_WORKSPACE / "memory"
+        """Should use the runtime workspace if not specified."""
+
+        # Test that the function returns the runtime workspace memory directory
         # without actually creating it
         result = get_memory_dir()
-        
-        assert result == DEFAULT_WORKSPACE / "memory"
+
+        assert result == DEFAULT_RUNTIME_WORKSPACE / "memory"
     
     def test_get_memory_dir_custom_workspace(self):
         """Should use custom workspace when provided."""

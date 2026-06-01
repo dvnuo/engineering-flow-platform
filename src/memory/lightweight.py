@@ -4,6 +4,8 @@ This module provides semantic-like search without heavy ML dependencies.
 Uses TF-IDF inspired scoring with keyword matching.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
@@ -12,6 +14,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +72,7 @@ class LightweightMemory:
     
     def __init__(
         self,
-        storage_dir: str = "~/.efp/workspace/memory_search",
+        storage_dir: str | Path = DEFAULT_RUNTIME_WORKSPACE / "memory_search",
         score_threshold: float = 0.1,
         preview_length: int = DEFAULT_PREVIEW_LENGTH,
     ):

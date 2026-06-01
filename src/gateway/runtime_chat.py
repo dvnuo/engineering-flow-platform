@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
+from src.workspace_defaults import resolve_runtime_workspace
 from src.efp_runtime.event_bus import RuntimeEventBus
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.llm.provider import (
@@ -170,7 +171,11 @@ def _runtime_session_root() -> Path:
 
 
 def _runtime_workspace_root() -> Path:
-    return Path.home() / ".efp" / "workspace"
+    try:
+        config_data = config.get_effective_config()
+    except Exception:
+        config_data = getattr(config, "_config", None)
+    return resolve_runtime_workspace(config_data).resolve()
 
 
 def _runtime_config(

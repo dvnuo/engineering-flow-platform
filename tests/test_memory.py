@@ -155,10 +155,9 @@ class TestMemorySystemIntegration:
     """Integration tests for memory system."""
     
     def test_default_workspace(self):
-        """Test that default workspace is ~/.efp/workspace."""
+        """Test that default workspace is the runtime workspace."""
         memory = MemorySystem()
-        expected = Path.home() / ".efp" / "workspace"
-        assert memory.workspace == expected
+        assert memory.workspace == Path("/workspace")
     
     def test_workspace_not_exists(self):
         """Test handling of non-existent workspace."""
@@ -199,4 +198,3 @@ class TestMemorySystemIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

@@ -40,12 +40,41 @@ class TestGatewayInit:
         assert hasattr(gateway, 'host')
         assert hasattr(gateway, 'port')
 
-    def test_runtime_workspace_root_uses_home_directory(self, monkeypatch, tmp_path):
-        """Workspace root helper should derive from the runtime user's home path."""
+    def test_runtime_workspace_root_uses_runtime_default(self, monkeypatch):
+        """Workspace root helper should use the container runtime default."""
         from src.gateway import server as gateway_server
 
-        monkeypatch.setattr(gateway_server.Path, "home", classmethod(lambda cls: tmp_path))
-        assert gateway_server._runtime_workspace_root() == (tmp_path / ".efp" / "workspace").resolve()
+        class _FakeConfig:
+            def get_effective_config(self):
+                return {}
+
+        monkeypatch.setattr(gateway_server, "config", _FakeConfig())
+
+        assert gateway_server._runtime_workspace_root() == Path("/workspace").resolve()
+
+    def test_runtime_workspace_root_allows_config_override(self, monkeypatch, tmp_path):
+        """Workspace root helper should honor explicit workspace.path config."""
+        from src.gateway import server as gateway_server
+
+        class _FakeConfig:
+            def get_effective_config(self):
+                return {"workspace": {"path": str(tmp_path)}}
+
+        monkeypatch.setattr(gateway_server, "config", _FakeConfig())
+
+        assert gateway_server._runtime_workspace_root() == tmp_path.resolve()
+
+    def test_runtime_workspace_root_treats_legacy_config_as_default(self, monkeypatch):
+        """Legacy default workspace.path values should not override /workspace."""
+        from src.gateway import server as gateway_server
+
+        class _FakeConfig:
+            def get_effective_config(self):
+                return {"workspace": {"path": "/root/.efp/workspace"}}
+
+        monkeypatch.setattr(gateway_server, "config", _FakeConfig())
+
+        assert gateway_server._runtime_workspace_root() == Path("/workspace").resolve()
 
     def test_gateway_bootstrap_runtime_profile_before_jira_derived_state(self, monkeypatch):
         from src.gateway import server as gateway_server

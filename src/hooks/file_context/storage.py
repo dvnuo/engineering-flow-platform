@@ -1,10 +1,14 @@
 """File context storage implementation."""
 
+from __future__ import annotations
+
 import json
 import hashlib
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
+
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
 
 from .models import SessionContext, SessionFileMeta, Chunk
 
@@ -12,7 +16,7 @@ from .models import SessionContext, SessionFileMeta, Chunk
 class FileContextStorage:
     """File context storage handler."""
     
-    def __init__(self, base_dir: str = "~/.efp/workspace/file_context"):
+    def __init__(self, base_dir: str | Path = DEFAULT_RUNTIME_WORKSPACE / "file_context"):
         self.base_dir = Path(base_dir).expanduser()
         self.sessions_dir = self.base_dir / "sessions"
         self.chunks_dir = self.base_dir / "chunks"

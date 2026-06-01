@@ -27,8 +27,8 @@ Native runtime must support:
 ## Runtime Asset Directories
 
 - External skills directory resolves from `EFP_SKILLS_DIR` first, then `/app/skills`.
-- Default workspace directory is `~/.efp/workspace`.
-- Docker image provisioning creates `/app/skills`, `/root/.efp/workspace`, and `/root/.efp/skills`.
+- Default workspace directory is `/workspace`.
+- Docker image provisioning creates `/app/skills` and `/workspace`.
 
 ## Tool Surface
 

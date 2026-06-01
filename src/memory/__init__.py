@@ -27,18 +27,19 @@ memory:
 1. Daily Notes: memory/YYYY-MM-DD.md
 2. Long-term Memory: MEMORY.md
 3. Workspace Files: SOUL.md, USER.md, AGENTS.md, TOOLS.md
-3. Session Transcripts: ~/.efp/sessions/*.jsonl (future)
+3. Session Transcripts: session storage JSONL files (future)
 """
 
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE, resolve_runtime_workspace
+
 logger = logging.getLogger(__name__)
 
 # Default memory paths
 DEFAULT_MEMORY_DIR = Path.home() / ".efp/memory"
-DEFAULT_WORKSPACE = Path.home() / ".efp/workspace"
 
 
 class MemoryConfig:
@@ -66,13 +67,11 @@ class MemoryConfig:
         if memory_workspace:
             # Legacy config: memory.workspace (deprecated)
             logger.warning("memory.workspace is deprecated, use workspace.path instead")
-            self.workspace_dir = Path(memory_workspace)
-        elif isinstance(workspace_config, dict):
-            # New config: workspace.path
-            self.workspace_dir = Path(workspace_config.get("path", str(DEFAULT_WORKSPACE)))
+            self.workspace_dir = resolve_runtime_workspace({"workspace": {"path": memory_workspace}})
+        elif workspace_config is not None:
+            self.workspace_dir = resolve_runtime_workspace(config)
         else:
-            # Fallback
-            self.workspace_dir = Path(DEFAULT_WORKSPACE)
+            self.workspace_dir = resolve_runtime_workspace()
         
         # Ensure memory directory exists
         self.memory_dir.mkdir(parents=True, exist_ok=True)
@@ -117,13 +116,13 @@ def get_memory_dir(workspace_dir: Path = None) -> Path:
     """Get the memory directory path.
     
     Args:
-        workspace_dir: Workspace directory. Uses DEFAULT_WORKSPACE if not provided.
+        workspace_dir: Workspace directory. Uses the runtime default if not provided.
         
     Returns:
         Path to the memory directory.
     """
     if workspace_dir is None:
-        workspace_dir = DEFAULT_WORKSPACE
+        workspace_dir = DEFAULT_RUNTIME_WORKSPACE
     
     memory_dir = workspace_dir / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -135,7 +134,7 @@ def get_memory_path(workspace_dir: Path = None, date_str: str = None) -> Path:
     """Get the path for daily memory file.
     
     Args:
-        workspace_dir: Workspace directory. Uses DEFAULT_WORKSPACE if not provided.
+        workspace_dir: Workspace directory. Uses the runtime default if not provided.
         date_str: Date string in YYYY-MM-DD format. Uses today if not provided.
         
     Returns:
@@ -155,13 +154,13 @@ def get_long_term_memory_path(workspace_dir: Path = None) -> Path:
     """Get the path for long-term memory file.
     
     Args:
-        workspace_dir: Workspace directory. Uses DEFAULT_WORKSPACE if not provided.
+        workspace_dir: Workspace directory. Uses the runtime default if not provided.
         
     Returns:
         Path to MEMORY.md
     """
     if workspace_dir is None:
-        workspace_dir = DEFAULT_WORKSPACE
+        workspace_dir = DEFAULT_RUNTIME_WORKSPACE
     
     return workspace_dir / "MEMORY.md"
 

@@ -7,6 +7,36 @@ from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.gateway import runtime_chat
 
 
+def test_runtime_chat_workspace_root_uses_runtime_default(monkeypatch):
+    class _FakeConfig:
+        def get_effective_config(self):
+            return {}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    assert runtime_chat._runtime_workspace_root() == runtime_chat.Path("/workspace").resolve()
+
+
+def test_runtime_chat_workspace_root_allows_config_override(monkeypatch, tmp_path):
+    class _FakeConfig:
+        def get_effective_config(self):
+            return {"workspace": {"path": str(tmp_path)}}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    assert runtime_chat._runtime_workspace_root() == tmp_path.resolve()
+
+
+def test_runtime_chat_workspace_root_treats_legacy_config_as_default(monkeypatch):
+    class _FakeConfig:
+        def get_effective_config(self):
+            return {"workspace": {"path": "/root/.efp/workspace"}}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    assert runtime_chat._runtime_workspace_root() == runtime_chat.Path("/workspace").resolve()
+
+
 @pytest.mark.asyncio
 async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkeypatch):
     captured = {}

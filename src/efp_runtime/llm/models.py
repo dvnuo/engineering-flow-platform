@@ -7,7 +7,7 @@ from typing import Any
 
 
 DEFAULT_PROVIDER_ID = "github-copilot"
-DEFAULT_MODEL_ID = "gpt-5-mini"
+DEFAULT_MODEL_ID = "gpt-5.4-mini"
 DEFAULT_CHARS_PER_TOKEN = 4
 MIN_PRESERVE_RECENT_TOKENS = 2_000
 MAX_PRESERVE_RECENT_TOKENS = 8_000
@@ -94,6 +94,21 @@ def _default_preserve_recent_tokens(
 
 
 _COPILOT_PROFILES = {
+    "gpt-5.5": _profile(
+        "gpt-5.5",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gpt-5.4-mini": _profile(
+        "gpt-5.4-mini",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gpt-5.4": _profile(
+        "gpt-5.4",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
+    ),
     "gpt-5": _profile(
         "gpt-5",
         context_window_tokens=128_000,

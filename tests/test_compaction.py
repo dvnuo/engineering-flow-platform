@@ -326,6 +326,12 @@ class TestResolveContextWindowTokens:
         """Test GPT-5 Mini context window."""
         assert resolve_context_window_tokens("gpt-5-mini") == 264000
 
+    def test_gpt_5_4_and_5_5(self):
+        """Test GPT-5.4/5.5 Copilot context windows."""
+        assert resolve_context_window_tokens("gpt-5.4") == 400000
+        assert resolve_context_window_tokens("gpt-5.4-mini") == 400000
+        assert resolve_context_window_tokens("gpt-5.5") == 400000
+
     def test_gpt_5_pro(self):
         """Test GPT-5 Pro context window."""
         assert resolve_context_window_tokens("gpt-5-pro") == 200000

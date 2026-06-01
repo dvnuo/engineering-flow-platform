@@ -35,6 +35,44 @@ print(json.dumps({"legacy_core_loaded": "src.agents.core" in sys.modules}))
     assert payload == {"legacy_core_loaded": False}
 
 
+def test_startup_imports_and_workspace_initialization_cover_main_path():
+    code = """
+import json
+import asyncio
+import logging
+import tempfile
+from pathlib import Path
+
+asyncio.set_event_loop(asyncio.new_event_loop())
+
+import main
+import src.gateway.runtime_chat
+import src.gateway.server
+
+workspace = Path(tempfile.mkdtemp())
+main.config._config["workspace"] = {"path": str(workspace)}
+initialized = main.initialize_workspace(logging.getLogger("startup-import-test"))
+
+print(json.dumps({
+    "workspace": str(initialized),
+    "agents_exists": (workspace / "AGENTS.md").exists(),
+}))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = ".:src"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["agents_exists"] is True
+
+
 def test_runtime_source_does_not_import_through_src_package():
     combined = _combined_v2_source()
     assert "from src.efp_runtime" not in combined

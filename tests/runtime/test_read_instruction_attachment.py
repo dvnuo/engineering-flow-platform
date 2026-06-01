@@ -58,17 +58,14 @@ async def test_read_file_attaches_nearby_instructions_from_near_to_far(tmp_path:
     assert result.status == "success"
     assert result.output["loaded_instruction_paths"] == [
         "src/pkg/AGENTS.md",
-        "src/CLAUDE.md",
         "AGENTS.md",
     ]
     assert [entry["path"] for entry in result.output["instructions"]] == [
         "src/pkg/AGENTS.md",
-        "src/CLAUDE.md",
         "AGENTS.md",
     ]
     assert [entry["content"] for entry in result.output["instructions"]] == [
         "Package agents.",
-        "Source claude.",
         "Workspace agents.",
     ]
 
@@ -92,7 +89,6 @@ async def test_read_file_does_not_attach_instruction_file_to_itself(tmp_path: Pa
 
     assert result.status == "success"
     assert result.output["loaded_instruction_paths"] == [
-        "src/CLAUDE.md",
         "AGENTS.md",
     ]
 

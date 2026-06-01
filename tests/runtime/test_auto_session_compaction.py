@@ -188,8 +188,8 @@ async def test_token_budget_converts_to_char_budget_for_auto_compaction():
     assert result.status == LoopStatus.COMPLETED
     request_metadata = provider.requests[0].provider_request.metadata
     assert request_metadata["provider_id"] == "github-copilot"
-    assert request_metadata["model_id"] == "gpt-5-mini"
-    assert request_metadata["context_window_tokens"] == 128_000
+    assert request_metadata["model_id"] == "gpt-5.4-mini"
+    assert request_metadata["context_window_tokens"] == 400_000
     assert request_metadata["max_context_tokens"] == 20
     assert request_metadata["max_context_chars"] == 80
     assert request_metadata["context_reserve_tokens"] == 5

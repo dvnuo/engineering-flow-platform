@@ -29,8 +29,9 @@ def test_dockerfile_keeps_native_runtime_asset_dirs_and_port():
     text = _text("Dockerfile")
     assert "/app/skills" in text
     assert "/app/tools" not in text
-    assert "/root/.efp/workspace" in text
-    assert "/root/.efp/skills" in text
+    assert "/workspace" in text
+    assert "/root/.efp/" + "workspace" not in text
+    assert "/root/.efp/skills" not in text
     assert "EXPOSE 8000" in text
     assert 'CMD ["python", "main.py"]' in text
 
