@@ -131,7 +131,7 @@ async def test_opt_in_runtime_prepends_system_prompt_before_instructions_and_ski
     assert environment_message.metadata["message_metadata"]["kind"] == (
         "environment_context"
     )
-    assert "- model: github-copilot/gpt-5.4-mini" in environment_message.text
+    assert "- model: github-copilot/gpt-5.4" in environment_message.text
     assert f"- working directory: {tmp_path.resolve()}" in environment_message.text
     assert f"- workspace root: {tmp_path.resolve()}" in environment_message.text
     assert "- git repository: false" in environment_message.text
@@ -139,14 +139,14 @@ async def test_opt_in_runtime_prepends_system_prompt_before_instructions_and_ski
     assert re.search(r"- date: \d{4}-\d{2}-\d{2}", environment_message.text)
     assert request.metadata["system_prompt_context_count"] == 3
     assert request.metadata["environment_context_count"] == 1
-    assert request.metadata["environment_context_model"] == "github-copilot/gpt-5.4-mini"
+    assert request.metadata["environment_context_model"] == "github-copilot/gpt-5.4"
     assert request.metadata["instruction_context_count"] == 1
     assert request.metadata["available_skill_context_count"] == 1
     assert request.metadata["skill_context_count"] == 1
     assert request.provider_request.metadata["system_prompt_context_count"] == 3
     assert request.provider_request.metadata["environment_context_count"] == 1
     assert request.provider_request.metadata["environment_context_model"] == (
-        "github-copilot/gpt-5.4-mini"
+        "github-copilot/gpt-5.4"
     )
     assert request.provider_request.metadata["instruction_context_count"] == 1
     assert request.provider_request.metadata["available_skill_context_count"] == 1
@@ -501,7 +501,7 @@ def test_environment_context_builder_contains_runtime_environment(tmp_path: Path
         include_runtime_reminders=False,
     ).build_messages(
         metadata={
-            "requested_model": "github-copilot/gpt-5",
+            "requested_model": "github-copilot/gpt-5.4",
             "cwd": cwd,
         }
     )
@@ -510,13 +510,13 @@ def test_environment_context_builder_contains_runtime_environment(tmp_path: Path
     message = messages[0]
     assert message.metadata["source"] == "environment_context"
     assert message.metadata["kind"] == "environment_context"
-    assert message.metadata["model_id"] == "github-copilot/gpt-5"
+    assert message.metadata["model_id"] == "github-copilot/gpt-5.4"
     assert message.metadata["workspace_root"] == str(tmp_path.resolve())
     assert message.metadata["git_repository"] is True
     assert message.parts[0].metadata == message.metadata
     text = message.parts[0].text
     assert text.startswith("Environment:\n")
-    assert "- model: github-copilot/gpt-5" in text
+    assert "- model: github-copilot/gpt-5.4" in text
     assert f"- working directory: {cwd.resolve()}" in text
     assert f"- workspace root: {tmp_path.resolve()}" in text
     assert "- git repository: true" in text
@@ -528,8 +528,8 @@ def test_environment_context_builder_contains_runtime_environment(tmp_path: Path
 @pytest.mark.parametrize(
     ("requested_model", "expected_model"),
     [
-        ("github-copilot/gpt-5", "github-copilot/gpt-5"),
-        ("gpt-5", "github-copilot/gpt-5"),
+        ("github-copilot/gpt-5.4", "github-copilot/gpt-5.4"),
+        ("gpt-5.4", "github-copilot/gpt-5.4"),
     ],
 )
 async def test_environment_context_uses_requested_model(

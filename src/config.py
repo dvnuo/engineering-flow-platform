@@ -21,7 +21,7 @@ _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.indent(mapping=2, sequence=4, offset=2)
 
-DEFAULT_LLM_MODEL = "gpt-5.4-mini"
+DEFAULT_LLM_MODEL = "gpt-5.4"
 DEFAULT_LLM_TEMPERATURE = 0.7
 
 PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
@@ -183,6 +183,7 @@ class Config:
             "provider": True,
             "model": True,
             "api_key": True,
+            "reasoning_effort": True,
             "temperature": True,
             "reasoning_replay": True,
             "max_tokens": True,
@@ -356,6 +357,7 @@ class Config:
         self._config = copy.deepcopy(self._base_config)
         llm_cfg = self._config.get("llm")
         if isinstance(llm_cfg, dict):
+            llm_cfg.setdefault("reasoning_effort", "high")
             llm_cfg.setdefault("reasoning_replay", False)
 
     def load_managed_overlay(self) -> Dict[str, Any]:
@@ -788,16 +790,6 @@ class Config:
 
 
 DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
-    "gpt-4o": {
-        "max_context_window_tokens": 128_000,
-        "max_prompt_tokens": 64000,
-        "max_output_tokens": 16384,
-    },
-    "gpt-4.1": {
-        "max_context_window_tokens": 128_000,
-        "max_prompt_tokens": 128_000,
-        "max_output_tokens": 16384,
-    },
     "gpt-5-mini": {
         "max_context_window_tokens": 264000,
         "max_prompt_tokens": 128000,
@@ -824,6 +816,11 @@ DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
         "max_output_tokens": 128000,
     },
     "gemini-2.5-pro": {
+        "max_context_window_tokens": 128_000,
+        "max_prompt_tokens": 128_000,
+        "max_output_tokens": 64000,
+    },
+    "gemini-3.5-flash": {
         "max_context_window_tokens": 128_000,
         "max_prompt_tokens": 128_000,
         "max_output_tokens": 64000,
@@ -860,23 +857,24 @@ def resolve_llm_temperature(explicit: Optional[Any] = None) -> float:
 
 def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
     llm_cfg = config.llm if isinstance(config.llm, dict) else {}
-    configured_model = str(model or llm_cfg.get("model") or DEFAULT_LLM_MODEL).strip()
+    configured_model = _canonical_model_limit_key(
+        model or llm_cfg.get("model") or DEFAULT_LLM_MODEL
+    )
     configured_limits = llm_cfg.get("model_limits") if isinstance(llm_cfg.get("model_limits"), dict) else {}
     candidates: Dict[str, Dict[str, int]] = dict(DEFAULT_MODEL_LIMITS)
     for key, raw in configured_limits.items():
         if not isinstance(raw, dict):
             continue
-        candidates[str(key).lower()] = {
+        candidates[_canonical_model_limit_key(key)] = {
             "max_context_window_tokens": _safe_positive_int(raw.get("max_context_window_tokens"), 264000),
             "max_prompt_tokens": _safe_positive_int(raw.get("max_prompt_tokens"), 128000),
             "max_output_tokens": _safe_positive_int(raw.get("max_output_tokens"), _safe_positive_int(llm_cfg.get("max_tokens"), 64000)),
         }
 
-    selected = candidates.get(configured_model.lower(), {})
+    selected = candidates.get(configured_model, {})
     if not selected and configured_model:
-        model_lower = configured_model.lower()
         for key in sorted(candidates.keys(), key=len, reverse=True):
-            if key in model_lower:
+            if key in configured_model:
                 selected = candidates[key]
                 break
     if not selected:
@@ -890,6 +888,13 @@ def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
     selected["max_prompt_tokens"] = _safe_positive_int(selected.get("max_prompt_tokens"), 128000)
     selected["max_context_window_tokens"] = _safe_positive_int(selected.get("max_context_window_tokens"), 264000)
     return selected
+
+
+def _canonical_model_limit_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if "/" in text:
+        text = text.split("/", 1)[1]
+    return "-".join(text.split())
 
 
 def resolve_output_boundary(model: Optional[str] = None) -> Dict[str, int | str]:

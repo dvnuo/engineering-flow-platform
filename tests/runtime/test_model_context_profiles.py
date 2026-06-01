@@ -3,8 +3,11 @@ from __future__ import annotations
 import pytest
 
 from efp_runtime.llm.models import (
+    DEFAULT_MODEL_ID,
     DEFAULT_PROVIDER_ID,
     ModelContextProfile,
+    SUPPORTED_COPILOT_MODEL_IDS,
+    canonicalize_copilot_model_id,
     resolve_model_context_profile,
     tokens_to_chars,
 )
@@ -13,16 +16,20 @@ from efp_runtime.llm.models import (
 @pytest.mark.parametrize(
     ("model", "expected_model"),
     [
-        ("github-copilot/gpt-5.5", "gpt-5.5"),
-        ("github-copilot/gpt-5.4-mini", "gpt-5.4-mini"),
-        ("github-copilot/gpt-5.4", "gpt-5.4"),
-        ("github-copilot/gpt-5", "gpt-5"),
         ("github-copilot/gpt-5-mini", "gpt-5-mini"),
-        ("gpt-5.5", "gpt-5.5"),
-        ("gpt-5.4-mini", "gpt-5.4-mini"),
+        ("github-copilot/gpt-5.3-codex", "gpt-5.3-codex"),
+        ("github-copilot/gpt-5.4", "gpt-5.4"),
+        ("github-copilot/gpt-5.4-mini", "gpt-5.4-mini"),
+        ("github-copilot/gpt-5.5", "gpt-5.5"),
+        ("github-copilot/gemini-2.5-pro", "gemini-2.5-pro"),
+        ("github-copilot/gemini-3.5-flash", "gemini-3.5-flash"),
+        ("gpt-5 mini", "gpt-5-mini"),
+        ("gpt-5.3-codex", "gpt-5.3-codex"),
         ("gpt-5.4", "gpt-5.4"),
-        ("gpt-5", "gpt-5"),
-        ("gpt-5-mini", "gpt-5-mini"),
+        ("gpt-5.4 mini", "gpt-5.4-mini"),
+        ("gpt-5.5", "gpt-5.5"),
+        ("gemini 2.5 pro", "gemini-2.5-pro"),
+        ("gemini 3.5 flash", "gemini-3.5-flash"),
     ],
 )
 def test_github_copilot_profile_resolution(model: str, expected_model: str):
@@ -31,14 +38,36 @@ def test_github_copilot_profile_resolution(model: str, expected_model: str):
     assert isinstance(profile, ModelContextProfile)
     assert profile.provider_id == DEFAULT_PROVIDER_ID
     assert profile.model_id == expected_model
-    if expected_model in {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}:
+    if expected_model in {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}:
         assert profile.context_window_tokens == 400_000
         assert profile.default_reserve_tokens == 128_000
+    elif expected_model == "gpt-5-mini":
+        assert profile.context_window_tokens == 264_000
+        assert profile.default_reserve_tokens == 64_000
     else:
         assert profile.context_window_tokens == 128_000
-        assert profile.default_reserve_tokens == 8_000
+        assert profile.default_reserve_tokens == 64_000
     assert profile.default_preserve_recent_tokens == 8_000
     assert profile.tokens_to_chars(100) == 400
+
+
+def test_default_and_supported_model_list_are_copilot_responses_models():
+    assert DEFAULT_MODEL_ID == "gpt-5.4"
+    assert SUPPORTED_COPILOT_MODEL_IDS == (
+        "gpt-5-mini",
+        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.5",
+        "gemini-2.5-pro",
+        "gemini-3.5-flash",
+    )
+
+
+def test_canonicalize_copilot_model_id_rejects_unsupported_models():
+    assert canonicalize_copilot_model_id("gemini 3.5 flash") == "gemini-3.5-flash"
+    with pytest.raises(ValueError, match="unsupported GitHub Copilot model"):
+        canonicalize_copilot_model_id("gpt-5")
 
 
 def test_unknown_model_falls_back_to_conservative_copilot_profile():

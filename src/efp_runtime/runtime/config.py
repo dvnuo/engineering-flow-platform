@@ -20,7 +20,7 @@ class RuntimeConfig:
     max_iterations: int = 4
     doom_loop_threshold: int | None = 3
     default_provider_id: str = "github-copilot"
-    default_model: str = "gpt-5.4-mini"
+    default_model: str = "gpt-5.4"
     max_context_parts: int | None = None
     max_context_chars: int | None = None
     max_context_tokens: int | None = None

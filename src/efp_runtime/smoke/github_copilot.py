@@ -139,44 +139,25 @@ def _real_run_summary(
 def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "model": payload.get("model"),
-        "message_count": len(payload.get("messages", [])),
+        "input_count": len(payload.get("input", [])),
         "tool_count": len(payload.get("tools", [])),
         "stream": payload.get("stream"),
-        "metadata": _compact_metadata(payload.get("metadata", {})),
+        "reasoning": payload.get("reasoning"),
     }
 
 
 def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
+    compact = {
         "model": payload.get("model"),
-        "messages": payload.get("messages", []),
-        "tools": payload.get("tools", []),
+        "input": payload.get("input", []),
         "stream": payload.get("stream"),
-        "metadata": _compact_metadata(payload.get("metadata", {})),
+        "reasoning": payload.get("reasoning"),
     }
-
-
-def _compact_metadata(metadata: Any) -> dict[str, Any]:
-    if not isinstance(metadata, dict):
-        return {}
-    projection = metadata.get("efp_projection")
-    projection_summary: dict[str, Any] = {}
-    if isinstance(projection, dict):
-        projection_summary = {
-            "endpoint": projection.get("endpoint"),
-            "message_count": len(projection.get("messages", [])),
-            "tool_count": len(projection.get("tools", [])),
-        }
-    return {
-        "provider": metadata.get("provider"),
-        "provider_id": metadata.get("provider_id"),
-        "model_id": metadata.get("model_id"),
-        "session_id": metadata.get("session_id"),
-        "iteration": metadata.get("iteration"),
-        "max_iterations": metadata.get("max_iterations"),
-        "track_usage": metadata.get("track_usage"),
-        "efp_projection": projection_summary,
-    }
+    if payload.get("tools"):
+        compact["tools"] = payload["tools"]
+    if payload.get("instructions") is not None:
+        compact["instructions"] = payload["instructions"]
+    return compact
 
 
 def _assistant_text(result: RuntimeLoopResult) -> str:

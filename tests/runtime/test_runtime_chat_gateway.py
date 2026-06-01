@@ -37,6 +37,100 @@ def test_runtime_chat_workspace_root_treats_legacy_config_as_default(monkeypatch
     assert runtime_chat._runtime_workspace_root() == runtime_chat.Path("/workspace").resolve()
 
 
+def test_runtime_chat_resolves_default_and_alias_models(monkeypatch):
+    class _FakeConfig:
+        @property
+        def llm(self):
+            return {"model": "gpt-5.4 mini"}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    assert runtime_chat._resolve_model(None) == "gpt-5.4-mini"
+    assert runtime_chat._resolve_model("gemini 3.5 flash") == "gemini-3.5-flash"
+
+
+def test_runtime_chat_rejects_invalid_model_locally(monkeypatch):
+    class _FakeConfig:
+        @property
+        def llm(self):
+            return {"model": "gpt-5"}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
+        runtime_chat._resolve_model(None)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_type == "invalid_model"
+
+
+def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monkeypatch):
+    monkeypatch.delenv("EFP_GITHUB_COPILOT_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_COPILOT_TOKEN", raising=False)
+    monkeypatch.delenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("EFP_LLM_REASONING_EFFORT", raising=False)
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {
+            "llm": {
+                "provider": "github_copilot",
+                "api_key": "ghp_configtoken123",
+                "api_base": "https://copilot-api.enterprise.example/",
+                "reasoning_effort": "xhigh",
+            }
+        },
+        raising=False,
+    )
+
+    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert provider.endpoint == "responses"
+    assert provider.reasoning_effort == "xhigh"
+    assert provider.transport.endpoint == "https://copilot-api.enterprise.example/responses"
+    assert provider.transport._headers()["Accept"] == (
+        "application/vnd.github.copilot-chat-preview+json"
+    )
+    assert provider.transport._headers()["x-initiator"] == "agent"
+
+
+def test_build_github_copilot_provider_prefers_env_reasoning(monkeypatch):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", "low")
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {
+            "llm": {
+                "provider": "github_copilot",
+                "api_key": "ghp_configtoken123",
+                "reasoning_effort": "high",
+            }
+        },
+        raising=False,
+    )
+
+    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert provider.reasoning_effort == "low"
+
+
+def test_build_github_copilot_provider_rejects_invalid_reasoning(monkeypatch):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", "reasoning_effort": "extreme"}},
+        raising=False,
+    )
+
+    with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
+        runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_type == "invalid_reasoning_effort"
+
+
 @pytest.mark.asyncio
 async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkeypatch):
     captured = {}
@@ -109,7 +203,7 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
         message="hello",
         session_id="s-profile",
         request_id="req-profile",
-        model="request-model",
+        model="gpt-5.4 mini",
         track_usage=False,
         execution_metadata={
             "runtime_profile": {
@@ -120,10 +214,10 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
     )
 
     runtime_config = captured["config"]
-    assert captured["provider_model"] == "request-model"
+    assert captured["provider_model"] == "gpt-5.4-mini"
     assert runtime_config.workspace_root == runtime_chat._runtime_workspace_root()
     assert runtime_config.default_provider_id == "github-copilot"
-    assert runtime_config.default_model == "request-model"
+    assert runtime_config.default_model == "gpt-5.4-mini"
     assert runtime_config.track_usage is False
     assert runtime_config.enabled_tools == ["read"]
     assert runtime_config.disabled_tools == ["write"]

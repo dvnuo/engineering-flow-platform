@@ -282,87 +282,51 @@ class TestPruneHistoryForContextShare:
 
 class TestResolveContextWindowTokens:
     """Tests for context window resolution."""
+
+    @pytest.mark.parametrize(
+        ("model", "expected_window"),
+        [
+            ("gpt-5-mini", 264000),
+            ("gpt-5.3-codex", 400000),
+            ("gpt-5.4", 400000),
+            ("gpt-5.4-mini", 400000),
+            ("gpt-5.5", 400000),
+            ("gemini-2.5-pro", 128000),
+            ("gemini-3.5-flash", 128000),
+            ("github-copilot/gpt-5.4 mini", 400000),
+        ],
+    )
+    def test_supported_models(self, model, expected_window):
+        """Test supported model context windows."""
+        assert resolve_context_window_tokens(model) == expected_window
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "unsupported-model",
+            "github-copilot/unsupported model",
+            "custom-provider/custom-model",
+        ],
+    )
+    def test_unsupported_model(self, model):
+        """Test unsupported explicit models return conservative default."""
+        assert resolve_context_window_tokens(model) == 4096
     
-    def test_gpt_4(self):
-        """Test GPT-4 context window."""
-        assert resolve_context_window_tokens("gpt-4") == 8192
-    
-    def test_gpt_4_turbo(self):
-        """Test GPT-4 Turbo context window."""
-        # Update based on actual implementation
-        result = resolve_context_window_tokens("gpt-4-turbo")
-        # Should match either gpt-4 or be the actual 128k
-        assert result in [8192, 128_000]
-    
-    def test_gpt_3_5_turbo(self):
-        """Test GPT-3.5 Turbo context window."""
-        assert resolve_context_window_tokens("gpt-3.5-turbo") == 16385
-    
-    def test_claude(self):
-        """Test Claude context window."""
-        assert resolve_context_window_tokens("claude-sonnet-4") == 200000
-    
-    def test_unknown_model(self):
-        """Test unknown model returns default."""
-        assert resolve_context_window_tokens("unknown") == 4096
-    
-    def test_none_model(self):
-        """Test None model resolves to configured model limit."""
-        assert resolve_context_window_tokens(None) >= 128_000
+    def test_none_model_uses_configured_model_limit(self, monkeypatch):
+        """Test None model resolves through configured model limits."""
+        calls = []
 
-    def test_gpt_4o(self):
-        """Test GPT-4o context window."""
-        assert resolve_context_window_tokens("gpt-4o") == 128_000
+        def fake_resolve_model_limits(model):
+            calls.append(model)
+            return {"max_context_window_tokens": 123456}
 
-    def test_gpt_4o_mini(self):
-        """Test GPT-4o Mini context window."""
-        assert resolve_context_window_tokens("gpt-4o-mini") == 128_000
+        monkeypatch.setattr(
+            "src.agents.compaction.resolve_model_limits",
+            fake_resolve_model_limits,
+        )
 
-    def test_gpt_5(self):
-        """Test GPT-5 context window."""
-        assert resolve_context_window_tokens("gpt-5") == 200000
-
-    def test_gpt_5_mini(self):
-        """Test GPT-5 Mini context window."""
-        assert resolve_context_window_tokens("gpt-5-mini") == 264000
-
-    def test_gpt_5_4_and_5_5(self):
-        """Test GPT-5.4/5.5 Copilot context windows."""
-        assert resolve_context_window_tokens("gpt-5.4") == 400000
-        assert resolve_context_window_tokens("gpt-5.4-mini") == 400000
-        assert resolve_context_window_tokens("gpt-5.5") == 400000
-
-    def test_gpt_5_pro(self):
-        """Test GPT-5 Pro context window."""
-        assert resolve_context_window_tokens("gpt-5-pro") == 200000
-
-    def test_claude_haiku_4(self):
-        """Test Claude Haiku 4.x context window."""
-        assert resolve_context_window_tokens("claude-haiku-4") == 200000
-
-    def test_claude_haiku_4_versioned(self):
-        """Test versioned Claude Haiku 4 model ID."""
-        assert resolve_context_window_tokens("claude-haiku-4-20250514") == 200000
-
-    def test_claude_3_5_sonnet(self):
-        """Test Claude 3.5 Sonnet with alternative naming."""
-        assert resolve_context_window_tokens("claude-3-5-sonnet") == 200000
-
-    def test_claude_3_opus(self):
-        """Test Claude 3 Opus context window."""
-        assert resolve_context_window_tokens("claude-3-opus") == 200000
-
-    def test_claude_3_haiku(self):
-        """Test Claude 3 Haiku context window."""
-        assert resolve_context_window_tokens("claude-3-haiku") == 200000
-
-    def test_claude_opus_3_5(self):
-        """Test Claude Opus 3.5 context window."""
-        assert resolve_context_window_tokens("claude-opus-3-5") == 200000
-
-    def test_claude_sonnet_3_5(self):
-        """Test Claude Sonnet 3.5 context window."""
-        assert resolve_context_window_tokens("claude-sonnet-3-5") == 200000
+        assert resolve_context_window_tokens(None) == 123456
+        assert calls == [None]
 
 
 class TestNormalizeCompactionThreshold:

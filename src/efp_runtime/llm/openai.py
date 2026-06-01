@@ -60,6 +60,7 @@ def provider_request_to_openai_responses(
     instructions: Optional[str] = None,
     stream: bool = False,
     metadata: Optional[Mapping[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> JsonDict:
     """Project a EFP runtime request into an OpenAI Responses payload."""
 
@@ -74,6 +75,8 @@ def provider_request_to_openai_responses(
     }
     if instructions is not None:
         payload["instructions"] = instructions
+    if reasoning_effort is not None:
+        payload["reasoning"] = {"effort": reasoning_effort}
     return payload
 
 

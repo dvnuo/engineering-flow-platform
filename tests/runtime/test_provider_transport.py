@@ -12,18 +12,22 @@ import pytest
 
 import efp_runtime.llm.provider as provider_module
 from efp_runtime.llm.provider import (
+    DEFAULT_COPILOT_REASONING_EFFORT,
     GitHubCopilotHTTPTransport,
     GitHubCopilotProvider,
     OpenAICompatibleProvider,
     ProviderTransportError,
     RecordingTransport,
+    SUPPORTED_COPILOT_REASONING_EFFORTS,
     github_copilot_provider_from_env,
 )
+from efp_runtime.llm.models import SUPPORTED_COPILOT_MODEL_IDS
 from efp_runtime.llm.request import (
     ProviderRequest,
     RequestMessage,
     RequestMessagePart,
     RequestToolCall,
+    RequestToolResult,
     RequestToolSchema,
 )
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest
@@ -194,8 +198,8 @@ async def test_responses_provider_uses_requested_model_payload_hint_without_swit
 
 
 @pytest.mark.asyncio
-async def test_github_copilot_provider_defaults_metadata_and_model_payload():
-    transport = RecordingTransport([_chat_response("Copilot answer.")])
+async def test_github_copilot_provider_defaults_strict_responses_payload():
+    transport = RecordingTransport([_responses_response("Copilot answer.")])
     provider = GitHubCopilotProvider(
         transport=transport,
         metadata={"trace_id": "trace-copilot"},
@@ -212,18 +216,27 @@ async def test_github_copilot_provider_defaults_metadata_and_model_payload():
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5.4-mini"
+    assert provider.model == "gpt-5.4"
+    assert provider.endpoint == "responses"
+    assert provider.reasoning_effort == DEFAULT_COPILOT_REASONING_EFFORT
     assert provider.metadata["provider_id"] == "github-copilot"
     payload = transport.payloads[0]
-    assert payload["model"] == "gpt-5.4-mini"
-    assert payload["metadata"]["provider"] == "github-copilot"
-    assert payload["metadata"]["provider_id"] == "github-copilot"
-    assert payload["metadata"]["trace_id"] == "trace-copilot"
+    assert payload["model"] == "gpt-5.4"
+    assert "input" in payload
+    assert "messages" not in payload
+    assert payload["reasoning"] == {"effort": "high"}
+    assert "metadata" not in payload
+    assert "tools" not in payload
+    input_item = payload["input"][0]["content"][0]
+    assert input_item == {
+        "type": "input_text",
+        "text": "Answer with Copilot default.",
+    }
 
 
 @pytest.mark.asyncio
 async def test_github_copilot_provider_requested_model_only_changes_payload_model():
-    transport = RecordingTransport([_chat_response("Copilot override.")])
+    transport = RecordingTransport([_responses_response("Copilot override.")])
     provider = GitHubCopilotProvider(transport=transport)
     runner = RuntimeLoopRunner(
         store=InMemorySessionStore(),
@@ -234,13 +247,56 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     result = await runner.run(
         session_id="session-copilot-model-hint",
         user_text="Answer with requested model.",
-        metadata={"requested_model": "gpt-5"},
+        metadata={"requested_model": "gpt-5 mini"},
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5.4-mini"
-    assert transport.payloads[0]["model"] == "gpt-5"
-    assert transport.payloads[0]["metadata"]["provider_id"] == "github-copilot"
+    assert provider.model == "gpt-5.4"
+    assert transport.payloads[0]["model"] == "gpt-5-mini"
+    assert "metadata" not in transport.payloads[0]
+
+
+def test_github_copilot_provider_rejects_invalid_model_locally():
+    with pytest.raises(ValueError, match="unsupported GitHub Copilot model"):
+        GitHubCopilotProvider(
+            transport=RecordingTransport([]),
+            model="gpt-5",
+        )
+
+
+def test_github_copilot_provider_rejects_invalid_requested_model_locally():
+    provider = GitHubCopilotProvider(transport=RecordingTransport([]))
+
+    with pytest.raises(ValueError, match="unsupported GitHub Copilot model"):
+        provider.build_payload(
+            _runtime_request_with_metadata({"requested_model": "gpt-4o"})
+        )
+
+
+def test_github_copilot_provider_rejects_invalid_reasoning_effort_locally():
+    with pytest.raises(ValueError, match="unsupported GitHub Copilot reasoning effort"):
+        GitHubCopilotProvider(
+            transport=RecordingTransport([]),
+            reasoning_effort="extreme",
+        )
+
+
+def test_github_copilot_supported_models_and_reasoning_are_exact():
+    assert SUPPORTED_COPILOT_MODEL_IDS == (
+        "gpt-5-mini",
+        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.5",
+        "gemini-2.5-pro",
+        "gemini-3.5-flash",
+    )
+    assert SUPPORTED_COPILOT_REASONING_EFFORTS == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
 
 
 def test_github_copilot_injects_noop_when_tool_history_exists_without_tools():
@@ -248,8 +304,8 @@ def test_github_copilot_injects_noop_when_tool_history_exists_without_tools():
 
     payload = provider.build_payload(_runtime_request_with_tool_history())
 
-    assert [tool["function"]["name"] for tool in payload["tools"]] == ["_noop"]
-    assert payload["metadata"]["copilot_noop_tool_fallback"] is True
+    assert [tool["name"] for tool in payload["tools"]] == ["_noop"]
+    assert "metadata" not in payload
 
 
 def test_openai_provider_does_not_inject_noop_for_tool_history_without_tools():
@@ -278,8 +334,53 @@ def test_github_copilot_does_not_inject_noop_when_real_tools_exist():
 
     payload = provider.build_payload(_runtime_request_with_tool_history(tools=[schema]))
 
-    assert [tool["function"]["name"] for tool in payload["tools"]] == ["lookup"]
-    assert "copilot_noop_tool_fallback" not in payload["metadata"]
+    assert [tool["name"] for tool in payload["tools"]] == ["lookup"]
+    assert "metadata" not in payload
+
+
+def test_github_copilot_tool_history_uses_top_level_response_items():
+    provider = GitHubCopilotProvider(transport=RecordingTransport([]))
+
+    payload = provider.build_payload(
+        _runtime_request_with_tool_call_and_result_history()
+    )
+
+    assert payload["input"] == [
+        {
+            "role": "assistant",
+            "content": [{"type": "input_text", "text": "Checking the index."}],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_lookup",
+            "name": "lookup",
+            "arguments": '{"query":"runtime"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_lookup",
+            "output": "found runtime notes",
+        },
+    ]
+    for input_item in payload["input"]:
+        assert "metadata" not in input_item
+        assert "tool_name" not in input_item
+        assert "arguments_json" not in input_item
+        assert "arguments_text" not in input_item
+        assert "raw" not in input_item
+        assert "created_at" not in input_item
+        assert "status" not in input_item
+        for content_item in input_item.get("content", []):
+            assert set(content_item) <= {
+                "type",
+                "text",
+                "image_url",
+                "file_id",
+                "filename",
+                "file_data",
+            }
+            assert content_item["type"] != "function_call"
+            assert content_item["type"] != "function_call_output"
 
 
 @pytest.mark.asyncio
@@ -292,12 +393,12 @@ async def test_provider_returned_noop_tool_call_is_ignored_without_execution():
 
     transport = RecordingTransport(
         [
-            _chat_tool_call_response(
+            _responses_tool_call_response(
                 call_id="call_noop",
                 tool_name="_noop",
                 arguments="{}",
             ),
-            _chat_response("Done."),
+            _responses_response("Done."),
         ]
     )
     provider = GitHubCopilotProvider(transport=transport)
@@ -338,13 +439,11 @@ async def test_github_copilot_http_transport_posts_json_headers_and_returns_raw(
 ):
     requests = []
     raw_response = {
-        "choices": [
+        "output": [
             {
-                "message": {
-                    "role": "assistant",
-                    "content": "HTTP answer.",
-                },
-                "finish_reason": "stop",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "HTTP answer."}],
             }
         ]
     }
@@ -358,12 +457,16 @@ async def test_github_copilot_http_transport_posts_json_headers_and_returns_raw(
     transport = GitHubCopilotHTTPTransport(
         token="secret-token",
         timeout=12,
-        user_agent="efp-test",
-        initiator="tester",
     )
     payload = {
         "model": "gpt-5-mini",
-        "messages": [{"role": "user", "content": "Say ok"}],
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Say ok"}],
+            }
+        ],
+        "reasoning": {"effort": "high"},
         "stream": False,
     }
 
@@ -373,17 +476,20 @@ async def test_github_copilot_http_transport_posts_json_headers_and_returns_raw(
     assert len(requests) == 1
     request, timeout = requests[0]
     assert timeout == 12
-    assert request.full_url == "https://api.githubcopilot.com/chat/completions"
+    assert request.full_url == "https://api.githubcopilot.com/responses"
     assert request.get_method() == "POST"
     assert json.loads(request.data.decode("utf-8")) == payload
 
     headers = _request_headers(request)
     assert headers["authorization"] == "Bearer secret-token"
     assert headers["content-type"] == "application/json"
-    assert headers["accept"] == "application/json"
-    assert headers["user-agent"] == "efp-test"
+    assert headers["accept"] == "application/vnd.github.copilot-chat-preview+json"
+    assert headers["user-agent"] == "GitHubCopilotChat/0.35.0"
+    assert headers["editor-version"] == "vscode/1.107.0"
+    assert headers["editor-plugin-version"] == "copilot-chat/0.35.0"
+    assert headers["copilot-integration-id"] == "vscode-chat"
     assert headers["openai-intent"] == "conversation-edits"
-    assert headers["x-initiator"] == "tester"
+    assert headers["x-initiator"] == "agent"
 
 
 @pytest.mark.asyncio
@@ -424,7 +530,13 @@ async def test_github_copilot_http_transport_errors_do_not_leak_token(monkeypatc
         await transport.send(
             {
                 "model": "gpt-5-mini",
-                "messages": [{"role": "user", "content": "Say ok"}],
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Say ok"}],
+                    }
+                ],
+                "reasoning": {"effort": "high"},
                 "stream": False,
             }
         )
@@ -442,26 +554,30 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
             "EFP_GITHUB_COPILOT_TOKEN": " efp-token ",
             "GITHUB_COPILOT_TOKEN": "fallback-token",
             "EFP_GITHUB_COPILOT_BASE_URL": "https://copilot-api.enterprise.example/",
+            "EFP_GITHUB_COPILOT_REASONING_EFFORT": " medium ",
         }
     )
 
-    assert provider.model == "gpt-5.4-mini"
+    assert provider.model == "gpt-5.4"
+    assert provider.endpoint == "responses"
+    assert provider.reasoning_effort == "medium"
     assert provider.metadata["provider_id"] == "github-copilot"
     assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
     assert (
         provider.transport.endpoint
-        == "https://copilot-api.enterprise.example/chat/completions"
+        == "https://copilot-api.enterprise.example/responses"
     )
     assert provider.transport._headers()["Authorization"] == "Bearer efp-token"
+    assert provider.transport._headers()["x-initiator"] == "agent"
 
 
 def test_github_copilot_provider_from_env_falls_back_to_github_token():
     provider = github_copilot_provider_from_env(
-        model="gpt-5",
+        model="gemini 3.5 flash",
         env={"GITHUB_COPILOT_TOKEN": "github-token"},
     )
 
-    assert provider.model == "gpt-5"
+    assert provider.model == "gemini-3.5-flash"
     assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
     assert provider.transport._headers()["Authorization"] == "Bearer github-token"
 
@@ -506,13 +622,18 @@ def test_github_copilot_smoke_dry_run_outputs_payload_without_token():
     assert payload["model"] == "gpt-5-mini"
     assert payload["payload_summary"]["tool_count"] == 0
     assert payload["payload_summary"]["stream"] is False
+    assert payload["payload_summary"]["reasoning"] == {"effort": "high"}
     assert payload["payload"]["model"] == "gpt-5-mini"
-    assert payload["payload"]["messages"][-1] == {
-        "role": "user",
-        "content": "Say ok",
-    }
-    assert payload["payload"]["metadata"]["provider_id"] == "github-copilot"
+    assert payload["payload"]["reasoning"] == {"effort": "high"}
+    assert payload["payload"]["input"][-1]["role"] == "user"
+    input_item = payload["payload"]["input"][-1]["content"][0]
+    assert input_item == {"type": "input_text", "text": "Say ok"}
+    assert "messages" not in payload["payload"]
+    assert "metadata" not in payload["payload"]
+    assert "metadata" not in payload["payload_summary"]
+    assert "tools" not in payload["payload"]
     assert "Authorization" not in result.stdout
+    assert "metadata" not in result.stdout
 
 
 @pytest.mark.asyncio
@@ -751,6 +872,81 @@ def _runtime_request_with_tool_history(
     )
 
 
+def _runtime_request_with_tool_call_and_result_history() -> RuntimeRequest:
+    return RuntimeRequest(
+        session_id="session-tool-history",
+        messages=[],
+        iteration=1,
+        max_iterations=1,
+        provider_request=ProviderRequest(
+            messages=[
+                RequestMessage(
+                    role="assistant",
+                    parts=[
+                        RequestMessagePart(
+                            type="text",
+                            text="Checking the index.",
+                        ),
+                        RequestMessagePart(
+                            type="tool_call",
+                            tool_call=RequestToolCall(
+                                call_id="call_lookup",
+                                tool_name="lookup",
+                                arguments={"query": "runtime"},
+                                arguments_text='{"query":"runtime"}',
+                                status="completed",
+                                raw={"provider": "internal"},
+                                metadata={"source": "assistant"},
+                                created_at="2026-01-01T00:00:00Z",
+                            ),
+                        ),
+                    ],
+                ),
+                RequestMessage(
+                    role="tool",
+                    parts=[
+                        RequestMessagePart(
+                            type="tool_result",
+                            tool_result=RequestToolResult(
+                                call_id="call_lookup",
+                                tool_name="lookup",
+                                content="found runtime notes",
+                                output={"matches": 1},
+                                status="success",
+                                metadata={"source": "tool"},
+                                created_at="2026-01-01T00:00:01Z",
+                            ),
+                        )
+                    ],
+                ),
+            ],
+        ),
+    )
+
+
+def _runtime_request_with_metadata(metadata: dict[str, object]) -> RuntimeRequest:
+    return RuntimeRequest(
+        session_id="session-metadata",
+        messages=[],
+        iteration=1,
+        max_iterations=1,
+        provider_request=ProviderRequest(
+            messages=[
+                RequestMessage(
+                    role="user",
+                    parts=[
+                        RequestMessagePart(
+                            type="text",
+                            text="Hello",
+                        )
+                    ],
+                )
+            ],
+        ),
+        metadata=dict(metadata),
+    )
+
+
 def _chat_response(text):
     return {
         "choices": [
@@ -784,6 +980,19 @@ def _chat_tool_call_response(*, call_id: str, tool_name: str, arguments: str):
                     ],
                 },
                 "finish_reason": "tool_calls",
+            }
+        ]
+    }
+
+
+def _responses_tool_call_response(*, call_id: str, tool_name: str, arguments: str):
+    return {
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": call_id,
+                "name": tool_name,
+                "arguments": arguments,
             }
         ]
     }

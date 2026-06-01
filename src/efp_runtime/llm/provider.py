@@ -18,7 +18,12 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from .adapter import DefaultLLMEventAdapter, LLMEventAdapter
-from .models import DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID
+from .models import (
+    DEFAULT_MODEL_ID,
+    DEFAULT_PROVIDER_ID,
+    SUPPORTED_COPILOT_MODEL_IDS,
+    canonicalize_copilot_model_id,
+)
 from .openai import (
     provider_request_to_openai_chat,
     provider_request_to_openai_responses,
@@ -46,11 +51,15 @@ class ProviderTransportError(RuntimeError):
     """Raised by transports or helpers when provider transport fails."""
 
 
+DEFAULT_COPILOT_REASONING_EFFORT = "high"
+SUPPORTED_COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
+
+
 class GitHubCopilotHTTPTransport:
-    """Standard-library HTTP JSON transport for GitHub Copilot chat completions."""
+    """Standard-library HTTP JSON transport for GitHub Copilot Responses."""
 
     DEFAULT_BASE_URL = "https://api.githubcopilot.com"
-    CHAT_COMPLETIONS_PATH = "/chat/completions"
+    RESPONSES_PATH = "/responses"
 
     def __init__(
         self,
@@ -58,15 +67,30 @@ class GitHubCopilotHTTPTransport:
         token: str,
         base_url: Optional[str] = None,
         timeout: float = 60,
-        user_agent: str = "efp-runtime",
-        initiator: str = "user",
+        user_agent: str = "GitHubCopilotChat/0.35.0",
+        editor_version: str = "vscode/1.107.0",
+        editor_plugin_version: str = "copilot-chat/0.35.0",
+        integration_id: str = "vscode-chat",
+        initiator: str = "agent",
     ) -> None:
         self._token = _required_non_empty_string(token, "token")
         self.base_url = _normalize_base_url(base_url)
         self.timeout = timeout
         self.user_agent = _required_non_empty_string(user_agent, "user_agent")
+        self.editor_version = _required_non_empty_string(
+            editor_version,
+            "editor_version",
+        )
+        self.editor_plugin_version = _required_non_empty_string(
+            editor_plugin_version,
+            "editor_plugin_version",
+        )
+        self.integration_id = _required_non_empty_string(
+            integration_id,
+            "integration_id",
+        )
         self.initiator = _required_non_empty_string(initiator, "initiator")
-        self.endpoint = "{0}{1}".format(self.base_url, self.CHAT_COMPLETIONS_PATH)
+        self.endpoint = "{0}{1}".format(self.base_url, self.RESPONSES_PATH)
 
     async def send(self, payload: dict[str, Any]) -> TransportOutput:
         if payload.get("stream") is True:
@@ -130,8 +154,11 @@ class GitHubCopilotHTTPTransport:
         return {
             "Authorization": "Bearer {0}".format(self._token),
             "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "application/vnd.github.copilot-chat-preview+json",
             "User-Agent": self.user_agent,
+            "Editor-Version": self.editor_version,
+            "Editor-Plugin-Version": self.editor_plugin_version,
+            "Copilot-Integration-Id": self.integration_id,
             "Openai-Intent": "conversation-edits",
             "x-initiator": self.initiator,
         }
@@ -149,6 +176,7 @@ class OpenAICompatibleProvider:
         instructions: Optional[str] = None,
         stream: bool = False,
         metadata: Optional[Mapping[str, Any]] = None,
+        reasoning_effort: Optional[str] = None,
         adapter: Optional[LLMEventAdapter] = None,
     ) -> None:
         if endpoint not in {"chat", "responses"}:
@@ -159,6 +187,7 @@ class OpenAICompatibleProvider:
         self.instructions = instructions
         self.stream = stream
         self.metadata = dict(metadata or {})
+        self.reasoning_effort = reasoning_effort
         self.adapter = adapter or DefaultLLMEventAdapter()
 
     def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
@@ -172,6 +201,7 @@ class OpenAICompatibleProvider:
                 instructions=self.instructions,
                 stream=self.stream,
                 metadata=self.metadata,
+                reasoning_effort=self.reasoning_effort,
             )
         return provider_request_to_openai_chat(
             request.provider_request,
@@ -225,12 +255,17 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         *,
         transport: ProviderTransport,
         model: str = DEFAULT_MODEL_ID,
-        endpoint: str = "chat",
+        endpoint: str = "responses",
         instructions: Optional[str] = None,
         stream: bool = False,
         metadata: Optional[Mapping[str, Any]] = None,
+        reasoning_effort: str = DEFAULT_COPILOT_REASONING_EFFORT,
         adapter: Optional[LLMEventAdapter] = None,
     ) -> None:
+        if endpoint != "responses":
+            raise ValueError("GitHub Copilot provider endpoint must be 'responses'")
+        canonical_model = canonicalize_copilot_model_id(model)
+        canonical_reasoning_effort = validate_copilot_reasoning_effort(reasoning_effort)
         provider_metadata = dict(metadata or {})
         provider_metadata.update(
             {
@@ -239,12 +274,13 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             }
         )
         super().__init__(
-            model=model,
+            model=canonical_model,
             transport=transport,
             endpoint=endpoint,
             instructions=instructions,
             stream=stream,
             metadata=provider_metadata,
+            reasoning_effort=canonical_reasoning_effort,
             adapter=adapter,
         )
 
@@ -252,8 +288,11 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         """Project a request and apply GitHub Copilot request quirks."""
 
         payload = super().build_payload(request)
+        payload["model"] = canonicalize_copilot_model_id(payload.get("model"))
+        if self.endpoint == "responses":
+            payload["reasoning"] = {"effort": self.reasoning_effort}
         _inject_copilot_noop_tool_fallback(payload, request)
-        return payload
+        return _sanitize_copilot_responses_payload(payload)
 
     def _transport_error_response(self, exc: BaseException) -> dict[str, Any]:
         response = super()._transport_error_response(exc)
@@ -292,14 +331,15 @@ class RecordingTransport:
 def github_copilot_provider_from_env(
     *,
     model: str = DEFAULT_MODEL_ID,
-    endpoint: str = "chat",
+    endpoint: str = "responses",
     instructions: Optional[str] = None,
     stream: bool = False,
     metadata: Optional[Mapping[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
     adapter: Optional[LLMEventAdapter] = None,
     timeout: float = 60,
-    user_agent: str = "efp-runtime",
-    initiator: str = "user",
+    user_agent: str = "GitHubCopilotChat/0.35.0",
+    initiator: str = "agent",
     env: Optional[Mapping[str, str]] = None,
 ) -> GitHubCopilotProvider:
     """Create a GitHub Copilot provider using caller-supplied environment auth."""
@@ -314,6 +354,12 @@ def github_copilot_provider_from_env(
             "GitHub Copilot token is required; set EFP_GITHUB_COPILOT_TOKEN "
             "or GITHUB_COPILOT_TOKEN"
         )
+    configured_reasoning_effort = (
+        reasoning_effort
+        or _env_string(environ, "EFP_GITHUB_COPILOT_REASONING_EFFORT")
+        or _env_string(environ, "EFP_LLM_REASONING_EFFORT")
+        or DEFAULT_COPILOT_REASONING_EFFORT
+    )
     transport = GitHubCopilotHTTPTransport(
         token=token,
         base_url=_env_string(environ, "EFP_GITHUB_COPILOT_BASE_URL"),
@@ -328,8 +374,18 @@ def github_copilot_provider_from_env(
         instructions=instructions,
         stream=stream,
         metadata=metadata,
+        reasoning_effort=configured_reasoning_effort,
         adapter=adapter,
     )
+
+
+def validate_copilot_reasoning_effort(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError(_unsupported_reasoning_message(value))
+    effort = value.strip().lower()
+    if effort not in SUPPORTED_COPILOT_REASONING_EFFORTS:
+        raise ValueError(_unsupported_reasoning_message(value))
+    return effort
 
 
 def _requested_model(request: RuntimeRequest) -> Optional[str]:
@@ -354,9 +410,198 @@ def _inject_copilot_noop_tool_fallback(
     if not _provider_request_has_tool_call(request):
         return
     payload["tools"] = [_copilot_noop_tool_payload(payload)]
-    metadata = payload.get("metadata")
-    if isinstance(metadata, dict):
-        metadata["copilot_noop_tool_fallback"] = True
+
+
+def _sanitize_copilot_responses_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    if "model" in payload:
+        sanitized["model"] = payload["model"]
+    if "input" in payload:
+        sanitized["input"] = _sanitize_copilot_responses_input(payload.get("input"))
+    tools = _sanitize_copilot_tools(payload.get("tools"))
+    if tools:
+        sanitized["tools"] = tools
+    if "stream" in payload:
+        sanitized["stream"] = payload["stream"]
+    if payload.get("instructions") is not None:
+        sanitized["instructions"] = payload["instructions"]
+    if payload.get("reasoning") is not None:
+        sanitized["reasoning"] = deepcopy(payload["reasoning"])
+    return sanitized
+
+
+def _sanitize_copilot_responses_input(input_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(input_value, list):
+        return []
+    sanitized: list[dict[str, Any]] = []
+    for item in input_value:
+        sanitized.extend(_sanitize_copilot_responses_input_item(item))
+    return sanitized
+
+
+def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
+    if not isinstance(item, Mapping):
+        return []
+    item_type = item.get("type")
+    if item_type == "function_call":
+        return [_sanitize_copilot_function_call_item(item)]
+    if item_type == "function_call_output":
+        return [_sanitize_copilot_function_call_output_item(item)]
+    if "content" not in item:
+        return []
+
+    role = item.get("role")
+    if not isinstance(role, str) or not role:
+        role = "user"
+    content = item.get("content")
+    if isinstance(content, str):
+        return [{"role": role, "content": [{"type": "input_text", "text": content}]}]
+    if not isinstance(content, list):
+        return []
+
+    sanitized: list[dict[str, Any]] = []
+    buffered_content: list[dict[str, Any]] = []
+
+    def flush_message() -> None:
+        if not buffered_content:
+            return
+        sanitized.append({"role": role, "content": list(buffered_content)})
+        buffered_content.clear()
+
+    for content_item in content:
+        if not isinstance(content_item, Mapping):
+            continue
+        content_type = content_item.get("type")
+        if content_type == "function_call":
+            flush_message()
+            sanitized.append(_sanitize_copilot_function_call_item(content_item))
+            continue
+        if content_type == "function_call_output":
+            flush_message()
+            sanitized.append(_sanitize_copilot_function_call_output_item(content_item))
+            continue
+        projected = _sanitize_copilot_message_content_item(content_item)
+        if projected is not None:
+            buffered_content.append(projected)
+
+    flush_message()
+    return sanitized
+
+
+def _sanitize_copilot_message_content_item(
+    item: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    item_type = item.get("type")
+    if item_type == "input_text":
+        return {"type": "input_text", "text": _copilot_string(item.get("text", ""))}
+    if item_type == "input_image" and "image_url" in item:
+        return {"type": "input_image", "image_url": deepcopy(item["image_url"])}
+    if item_type == "input_file":
+        sanitized: dict[str, Any] = {"type": "input_file"}
+        if item.get("file_id") is not None:
+            sanitized["file_id"] = item["file_id"]
+        else:
+            if item.get("filename") is not None:
+                sanitized["filename"] = item["filename"]
+            if item.get("file_data") is not None:
+                sanitized["file_data"] = item["file_data"]
+        if len(sanitized) > 1:
+            return sanitized
+    return None
+
+
+def _sanitize_copilot_function_call_item(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "function_call",
+        "call_id": _copilot_string(item.get("call_id", "")),
+        "name": _copilot_string(item.get("name") or item.get("tool_name") or ""),
+        "arguments": _copilot_arguments_text(item),
+    }
+
+
+def _sanitize_copilot_function_call_output_item(
+    item: Mapping[str, Any],
+) -> dict[str, Any]:
+    output = item.get("output")
+    if output is None:
+        output = item.get("content")
+    if output is None:
+        output = item.get("error", "")
+    return {
+        "type": "function_call_output",
+        "call_id": _copilot_string(item.get("call_id", "")),
+        "output": _copilot_value_text(output),
+    }
+
+
+def _sanitize_copilot_tools(tools_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(tools_value, list):
+        return []
+    sanitized: list[dict[str, Any]] = []
+    for tool in tools_value:
+        clean_tool = _sanitize_copilot_tool(tool)
+        if clean_tool is not None:
+            sanitized.append(clean_tool)
+    return sanitized
+
+
+def _sanitize_copilot_tool(tool: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(tool, Mapping):
+        return None
+    source: Mapping[str, Any] = tool
+    function = tool.get("function")
+    if isinstance(function, Mapping) and tool.get("name") is None:
+        source = function
+
+    name = source.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    sanitized: dict[str, Any] = {
+        "type": _copilot_string(tool.get("type") or "function"),
+        "name": name,
+    }
+    if source.get("description") is not None:
+        sanitized["description"] = source["description"]
+    if source.get("parameters") is not None:
+        sanitized["parameters"] = deepcopy(source["parameters"])
+    return sanitized
+
+
+def _copilot_arguments_text(item: Mapping[str, Any]) -> str:
+    arguments = item.get("arguments")
+    if arguments is not None:
+        return _copilot_value_text(arguments)
+    arguments_text = item.get("arguments_text")
+    if arguments_text is not None:
+        return _copilot_value_text(arguments_text)
+    arguments_json = item.get("arguments_json")
+    if arguments_json is not None:
+        return _copilot_value_text(arguments_json)
+    return ""
+
+
+def _copilot_value_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, (Mapping, list)):
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+    return str(value)
+
+
+def _copilot_string(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return str(value)
 
 
 def _provider_request_has_tool_call(request: RuntimeRequest) -> bool:
@@ -450,13 +695,25 @@ def _redact_secret(text: str, secret: str) -> str:
     return text.replace(secret, "[redacted]")
 
 
+def _unsupported_reasoning_message(value: Any) -> str:
+    supported = ", ".join(SUPPORTED_COPILOT_REASONING_EFFORTS)
+    return "unsupported GitHub Copilot reasoning effort {0!r}; supported values: {1}".format(
+        value,
+        supported,
+    )
+
+
 __all__ = [
+    "DEFAULT_COPILOT_REASONING_EFFORT",
     "GitHubCopilotHTTPTransport",
     "GitHubCopilotProvider",
     "OpenAICompatibleProvider",
     "ProviderTransport",
     "ProviderTransportError",
     "RecordingTransport",
+    "SUPPORTED_COPILOT_MODEL_IDS",
+    "SUPPORTED_COPILOT_REASONING_EFFORTS",
     "TransportOutput",
     "github_copilot_provider_from_env",
+    "validate_copilot_reasoning_effort",
 ]

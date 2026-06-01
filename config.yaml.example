@@ -22,19 +22,12 @@ llm:
   provider: "github_copilot"
   api_base: "https://api.githubcopilot.com"
   api_key: "ghp_YOUR_GITHUB_TOKEN"
-  model: "gpt-5.4-mini"
+  model: "gpt-5.4"
+  reasoning_effort: "high"
   
   max_tokens: 128000
   allow_lower_max_tokens_than_model_limit: false
   model_limits:
-    gpt-4o:
-      max_context_window_tokens: 128000
-      max_prompt_tokens: 64000
-      max_output_tokens: 16384
-    gpt-4.1:
-      max_context_window_tokens: 128000
-      max_prompt_tokens: 128000
-      max_output_tokens: 16384
     gpt-5-mini:
       max_context_window_tokens: 264000
       max_prompt_tokens: 128000
@@ -56,6 +49,10 @@ llm:
       max_prompt_tokens: 272000
       max_output_tokens: 128000
     gemini-2.5-pro:
+      max_context_window_tokens: 128000
+      max_prompt_tokens: 128000
+      max_output_tokens: 64000
+    gemini-3.5-flash:
       max_context_window_tokens: 128000
       max_prompt_tokens: 128000
       max_output_tokens: 64000
@@ -204,7 +201,7 @@ cost_tracking:
 #   retention_days: 30
 
 # EFP runtime native provider and common models:
-# - github_copilot: gpt-5.4-mini, gpt-5.4, gpt-5.5, gpt-5.3-codex, gpt-5-mini, gpt-4.1, gpt-4o, gemini-2.5-pro
+# - github_copilot: gpt-5.4, gpt-5.4-mini, gpt-5.5, gpt-5.3-codex, gpt-5-mini, gemini-2.5-pro, gemini-3.5-flash
 
 # ============================================
 # Workspace Configuration (OPTIONAL)
