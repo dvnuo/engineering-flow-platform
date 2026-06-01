@@ -38,7 +38,7 @@ Tests may reference these names only to assert that they remain absent.
 
 ## Tool Surface
 
-Model-facing tools come from the opencode-style built-in registry under
+Model-facing tools come from the EFP-owned built-in registry under
 `efp_runtime.tools.builtin`.
 
 Default core tool ids are:
@@ -169,5 +169,5 @@ The runtime intentionally does not implement:
 - Provider fallback to OpenAI, Anthropic, or Ollama.
 - Cross-process background task persistence or shell job restoration.
 
-The current parity checklist is tracked in `docs/opencode-parity.md` and the
-data manifest in `src/efp_runtime/opencode_parity.py`.
+The current tool and capability contract is tracked in
+`docs/runtime-tool-surface.md` and guarded by runtime tests.

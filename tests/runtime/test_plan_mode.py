@@ -17,11 +17,11 @@ from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
-from efp_runtime.opencode_parity import DEFAULT_CORE_TOOL_IDS
+from tests._runtime_tool_surface_contract import EXPECTED_DEFAULT_CORE_TOOL_IDS
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_TOOL_IDS = list(DEFAULT_CORE_TOOL_IDS)
+DEFAULT_TOOL_IDS = list(EXPECTED_DEFAULT_CORE_TOOL_IDS)
 MODEL_FILTERED_DEFAULT_TOOL_IDS = [
     tool_id for tool_id in DEFAULT_TOOL_IDS if tool_id not in {"edit", "write"}
 ]

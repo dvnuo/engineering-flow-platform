@@ -10,10 +10,10 @@ import pytest
 
 from efp_runtime.models import ToolCall
 from efp_runtime.permissions import ALLOW, PermissionDecision, PermissionMetadata
-from efp_runtime.opencode_parity import DEFAULT_CORE_TOOL_IDS
 from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.runtime import ToolRuntime
+from tests._runtime_tool_surface_contract import EXPECTED_DEFAULT_CORE_TOOL_IDS
 
 
 class AllowEvaluator:
@@ -342,7 +342,7 @@ async def test_todo_write_normalizes_metadata_events_and_validates_input(
 @pytest.mark.asyncio
 async def test_new_core_tool_permission_defaults(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path)
-    assert registry.ids() == list(DEFAULT_CORE_TOOL_IDS)
+    assert registry.ids() == list(EXPECTED_DEFAULT_CORE_TOOL_IDS)
     assert registry.require("glob").permission.action == ALLOW
     assert registry.require("webfetch").permission.action == ALLOW
     assert registry.require("webfetch").permission.category == "network"

@@ -7,9 +7,9 @@ import pytest
 from efp_runtime.agents import AgentProfile
 from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
-from efp_runtime.opencode_parity import DEFAULT_CORE_TOOL_IDS
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.tools.builtin import create_core_tool_registry
+from tests._runtime_tool_surface_contract import EXPECTED_DEFAULT_CORE_TOOL_IDS
 
 
 REMOVED_TOOL_IDS = {
@@ -27,15 +27,15 @@ REMOVED_TOOL_IDS = {
 }
 
 
-def test_default_core_registry_uses_opencode_tool_surface(tmp_path: Path):
+def test_default_core_registry_uses_efp_tool_surface(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path)
 
-    assert registry.ids() == list(DEFAULT_CORE_TOOL_IDS)
+    assert registry.ids() == list(EXPECTED_DEFAULT_CORE_TOOL_IDS)
     assert REMOVED_TOOL_IDS.isdisjoint(registry.ids())
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_default_request_uses_opencode_core_tools(tmp_path: Path):
+async def test_agent_runtime_default_request_uses_efp_core_tools(tmp_path: Path):
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
@@ -47,7 +47,9 @@ async def test_agent_runtime_default_request_uses_opencode_core_tools(tmp_path: 
 
     assert result.status == LoopStatus.COMPLETED
     expected_model_tools = [
-        tool_id for tool_id in DEFAULT_CORE_TOOL_IDS if tool_id not in {"edit", "write"}
+        tool_id
+        for tool_id in EXPECTED_DEFAULT_CORE_TOOL_IDS
+        if tool_id not in {"edit", "write"}
     ]
     assert schema_ids == expected_model_tools
     assert REMOVED_TOOL_IDS.isdisjoint(schema_ids)
@@ -77,7 +79,7 @@ async def test_model_aware_selection_uses_only_registered_file_tools_by_default(
 
 
 
-def test_opencode_core_tool_schemas_expose_only_source_level_parameters(tmp_path: Path):
+def test_efp_core_tool_schemas_expose_only_source_level_parameters(tmp_path: Path):
     registry = create_core_tool_registry(tmp_path)
 
     expected = {
@@ -126,7 +128,7 @@ def test_opencode_core_tool_schemas_expose_only_source_level_parameters(tmp_path
     assert todo_item_schema["required"] == ["content", "status", "priority"]
 
 
-def test_child_config_inherits_only_opencode_tool_fields(tmp_path: Path):
+def test_child_config_inherits_only_efp_tool_fields(tmp_path: Path):
     base = RuntimeConfig(workspace_root=tmp_path, disabled_tools=["write"])
 
     child = _child_config(
