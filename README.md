@@ -192,7 +192,7 @@ engineering-flow-platform/
 
 Business skill assets are maintained in **engineering-flow-platform-skills**. Portal/K8s typically checks out/mounts that skills repository at `/app/skills` (or another path via `EFP_SKILLS_DIR`) for runtime discovery.
 
-EFP native runtime exposes only opencode-style built-in LLM tools
+EFP native runtime exposes only EFP-owned built-in LLM tools
 (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `todowrite`,
 `apply_patch`, plus other EFP runtime built-ins). Legacy Python tool packages,
 including `src/bash_tools`, are not part of the production LLM tool surface.
@@ -240,7 +240,7 @@ For complete control-plane contract details, see `docs/control_plane_contract.md
 Additional runtime contracts:
 - `docs/runtime_contract.md`
 - `docs/runtime-design.md`
-- `docs/opencode-parity.md`
+- `docs/runtime-tool-surface.md`
 - `docs/observability_contract.md`
 
 ### Portal Control-Plane Integration (Operator Minimum)

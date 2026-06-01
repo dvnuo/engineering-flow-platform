@@ -4,17 +4,17 @@ from pathlib import Path
 def test_p3_contract_docs_exist_and_are_indexed():
     assert Path("docs/runtime_contract.md").exists()
     assert Path("docs/runtime-design.md").exists()
-    assert Path("docs/opencode-parity.md").exists()
+    assert Path("docs/runtime-tool-surface.md").exists()
     assert Path("docs/observability_contract.md").exists()
     docs_index = Path("docs/README.md").read_text(encoding="utf-8")
     assert "runtime_contract.md" in docs_index
     assert "runtime-design.md" in docs_index
-    assert "opencode-parity.md" in docs_index
+    assert "runtime-tool-surface.md" in docs_index
     assert "observability_contract.md" in docs_index
     root_readme = Path("README.md").read_text(encoding="utf-8")
     assert "docs/runtime_contract.md" in root_readme
     assert "docs/runtime-design.md" in root_readme
-    assert "docs/opencode-parity.md" in root_readme
+    assert "docs/runtime-tool-surface.md" in root_readme
     assert "docs/observability_contract.md" in root_readme
 
 
@@ -32,7 +32,7 @@ def test_runtime_contract_doc_mentions_current_native_contract_surfaces():
         "EFP_SKILLS_DIR",
         "/app/skills",
         "EFP runtime native mode supports GitHub Copilot only",
-        "opencode-style EFP runtime built-in registry",
+        "EFP-owned runtime built-in registry",
         "prebuilt `engineering-flow-platform-tools` CLI binaries",
         "`jira`, `confluence`, and `browser`",
         "<tool> commands --json",
@@ -71,8 +71,8 @@ def test_runtime_design_doc_matches_removed_tool_and_portal_boundaries():
         assert stale not in text
 
 
-def test_opencode_parity_doc_records_current_gaps():
-    text = Path("docs/opencode-parity.md").read_text(encoding="utf-8")
+def test_runtime_tool_surface_doc_records_current_gaps():
+    text = Path("docs/runtime-tool-surface.md").read_text(encoding="utf-8")
 
     for needle in [
         "Core loop/history/provider request",

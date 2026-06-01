@@ -1,8 +1,9 @@
-# Opencode Parity Checklist
+# EFP Runtime Tool Surface Contract
 
-This checklist records the current EFP runtime state against the audited
-opencode baseline. It is intentionally conservative: items are marked complete
-only when covered by implementation and tests.
+The initial rebuild used opencode as an engineering reference, but this
+document records the EFP-owned runtime capability and tool contract. It is not a
+continuing upstream compatibility promise. Items are marked implemented only
+when covered by EFP runtime implementation and tests.
 
 | Area | State | Notes |
 | --- | --- | --- |
@@ -19,7 +20,7 @@ only when covered by implementation and tests.
 | GitHub Copilot provider/model path | Implemented | Production chat supports Copilot only, with token/base URL environment overrides and no OpenAI/Anthropic/Ollama fallback. |
 | Embedded runtime frontend | Removed | Gateway has no root HTML route and no static/template frontend assets. Portal owns UI. |
 | Old Python tool loaders | Removed | `src.context_tools`, `src.bash_tools`, `efp_runtime.tools.local`, and `efp_runtime.tools.external` are absent. |
-| MCP | Excluded | MCP servers and external protocol tool surfaces are out of scope for this runtime replacement branch. |
+| MCP | Excluded | MCP servers and external protocol tool surfaces are out of scope for this runtime branch. |
 
 ## Intentional Remaining Gaps
 
@@ -30,4 +31,4 @@ only when covered by implementation and tests.
 - `websearch` has no bundled provider. Callers must inject a runner so network
   search policy remains explicit.
 - Internal runtime tests live under `tests/runtime` and form the current
-  runtime test boundary.
+  EFP runtime test boundary.
