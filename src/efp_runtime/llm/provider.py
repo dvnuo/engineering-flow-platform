@@ -13,6 +13,7 @@ from copy import deepcopy
 import inspect
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, List, Optional, Protocol, Union
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -51,7 +52,23 @@ class ProviderTransportError(RuntimeError):
     """Raised by transports or helpers when provider transport fails."""
 
 
+class ProviderModelUnavailableError(ProviderTransportError):
+    """Raised when GitHub Copilot rejects the requested model."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        available_models_text: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.available_models_text = available_models_text
+
+
 DEFAULT_COPILOT_REASONING_EFFORT = "high"
+DEFAULT_COPILOT_FALLBACK_MODEL = "gpt-5.5"
 SUPPORTED_COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 
 
@@ -117,7 +134,19 @@ class GitHubCopilotHTTPTransport:
             with urllib_request.urlopen(request, timeout=self.timeout) as response:
                 raw_body = response.read()
         except urllib_error.HTTPError as exc:
-            message = _format_http_error(exc, self._token)
+            response_text = _read_http_error_body(exc)
+            model_unavailable_error = _model_unavailable_error_from_http_error(
+                exc,
+                response_text=response_text,
+                token=self._token,
+            )
+            if model_unavailable_error is not None:
+                raise model_unavailable_error from None
+            message = _format_http_error(
+                exc,
+                self._token,
+                response_text=response_text,
+            )
             raise ProviderTransportError(message) from None
         except urllib_error.URLError as exc:
             reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
@@ -260,11 +289,13 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         stream: bool = False,
         metadata: Optional[Mapping[str, Any]] = None,
         reasoning_effort: str = DEFAULT_COPILOT_REASONING_EFFORT,
+        fallback_model: str = DEFAULT_COPILOT_FALLBACK_MODEL,
         adapter: Optional[LLMEventAdapter] = None,
     ) -> None:
         if endpoint != "responses":
             raise ValueError("GitHub Copilot provider endpoint must be 'responses'")
         canonical_model = canonicalize_copilot_model_id(model)
+        canonical_fallback_model = canonicalize_copilot_model_id(fallback_model)
         canonical_reasoning_effort = validate_copilot_reasoning_effort(reasoning_effort)
         provider_metadata = dict(metadata or {})
         provider_metadata.update(
@@ -283,6 +314,7 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             reasoning_effort=canonical_reasoning_effort,
             adapter=adapter,
         )
+        self.fallback_model = canonical_fallback_model
 
     def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
         """Project a request and apply GitHub Copilot request quirks."""
@@ -293,6 +325,49 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             payload["reasoning"] = {"effort": self.reasoning_effort}
         _inject_copilot_noop_tool_fallback(payload, request)
         return _sanitize_copilot_responses_payload(payload)
+
+    async def invoke(self, request: RuntimeRequest) -> ProviderOutput:
+        payload = self.build_payload(request)
+        try:
+            raw_output = self.transport.send(payload)
+            if inspect.isawaitable(raw_output):
+                raw_output = await raw_output
+        except ProviderModelUnavailableError as exc:
+            retry_payload = self._fallback_payload_for_model_unavailable(payload)
+            if retry_payload is None:
+                return self._transport_error_response(exc)
+            try:
+                raw_output = self.transport.send(retry_payload)
+                if inspect.isawaitable(raw_output):
+                    raw_output = await raw_output
+            except Exception as retry_exc:
+                return self._transport_error_response(retry_exc)
+        except Exception as exc:
+            return self._transport_error_response(exc)
+
+        if self.stream:
+            if isinstance(raw_output, Mapping):
+                return self.adapter.normalize_response(raw_output)
+            return self.adapter.normalize_stream(raw_output)
+
+        if not isinstance(raw_output, Mapping):
+            return self._transport_error_response(
+                ProviderTransportError("non-stream transport returned a stream response")
+            )
+        return raw_output
+
+    def _fallback_payload_for_model_unavailable(
+        self,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        if self.stream:
+            return None
+        current_model = canonicalize_copilot_model_id(payload.get("model"))
+        if current_model == self.fallback_model:
+            return None
+        retry_payload = deepcopy(dict(payload))
+        retry_payload["model"] = self.fallback_model
+        return retry_payload
 
     def _transport_error_response(self, exc: BaseException) -> dict[str, Any]:
         response = super()._transport_error_response(exc)
@@ -336,6 +411,7 @@ def github_copilot_provider_from_env(
     stream: bool = False,
     metadata: Optional[Mapping[str, Any]] = None,
     reasoning_effort: Optional[str] = None,
+    fallback_model: Optional[str] = None,
     adapter: Optional[LLMEventAdapter] = None,
     timeout: float = 60,
     user_agent: str = "GitHubCopilotChat/0.35.0",
@@ -360,6 +436,11 @@ def github_copilot_provider_from_env(
         or _env_string(environ, "EFP_LLM_REASONING_EFFORT")
         or DEFAULT_COPILOT_REASONING_EFFORT
     )
+    configured_fallback_model = (
+        fallback_model
+        or _env_string(environ, "EFP_GITHUB_COPILOT_FALLBACK_MODEL")
+        or DEFAULT_COPILOT_FALLBACK_MODEL
+    )
     transport = GitHubCopilotHTTPTransport(
         token=token,
         base_url=_env_string(environ, "EFP_GITHUB_COPILOT_BASE_URL"),
@@ -375,6 +456,7 @@ def github_copilot_provider_from_env(
         stream=stream,
         metadata=metadata,
         reasoning_effort=configured_reasoning_effort,
+        fallback_model=configured_fallback_model,
         adapter=adapter,
     )
 
@@ -662,7 +744,12 @@ def _normalize_base_url(base_url: Optional[str]) -> str:
     return base_url.rstrip("/")
 
 
-def _format_http_error(exc: urllib_error.HTTPError, token: str) -> str:
+def _format_http_error(
+    exc: urllib_error.HTTPError,
+    token: str,
+    *,
+    response_text: str | None = None,
+) -> str:
     status = getattr(exc, "code", None)
     reason = getattr(exc, "reason", None) or getattr(exc, "msg", "")
     parts = ["GitHub Copilot HTTP transport failed"]
@@ -670,10 +757,71 @@ def _format_http_error(exc: urllib_error.HTTPError, token: str) -> str:
         parts.append("with status {0}".format(status))
     if reason:
         parts.append("({0})".format(_redact_secret(str(reason), token)))
-    response_text = _read_http_error_body(exc)
+    if response_text is None:
+        response_text = _read_http_error_body(exc)
     if response_text:
         parts.append("response: {0}".format(_redact_secret(response_text, token)))
     return " ".join(parts)
+
+
+def _model_unavailable_error_from_http_error(
+    exc: urllib_error.HTTPError,
+    *,
+    response_text: str,
+    token: str,
+) -> ProviderModelUnavailableError | None:
+    status = getattr(exc, "code", None)
+    if status != 400 or not response_text:
+        return None
+    error_message = _json_error_message(response_text)
+    if error_message is None or not _is_model_unavailable_message(error_message):
+        return None
+    safe_message = _redact_secret(error_message, token)
+    available_models_text = _available_models_text(safe_message)
+    return ProviderModelUnavailableError(
+        "GitHub Copilot model is not available: {0}".format(safe_message),
+        status_code=status,
+        available_models_text=available_models_text,
+    )
+
+
+def _json_error_message(response_text: str) -> str | None:
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, Mapping):
+        return None
+
+    error_value = data.get("error")
+    if isinstance(error_value, Mapping):
+        for key in ("message", "detail", "error"):
+            value = error_value.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    if isinstance(error_value, str) and error_value.strip():
+        return error_value.strip()
+    for key in ("message", "detail"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _is_model_unavailable_message(message: str) -> bool:
+    text = message.lower()
+    return (
+        "requested model is not available" in text
+        or "model is not available" in text
+    )
+
+
+def _available_models_text(message: str) -> str | None:
+    match = re.search(r"available models:\s*(.+)$", message, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    available_models = match.group(1).strip()
+    return available_models or None
 
 
 def _read_http_error_body(exc: urllib_error.HTTPError) -> str:
@@ -704,10 +852,12 @@ def _unsupported_reasoning_message(value: Any) -> str:
 
 
 __all__ = [
+    "DEFAULT_COPILOT_FALLBACK_MODEL",
     "DEFAULT_COPILOT_REASONING_EFFORT",
     "GitHubCopilotHTTPTransport",
     "GitHubCopilotProvider",
     "OpenAICompatibleProvider",
+    "ProviderModelUnavailableError",
     "ProviderTransport",
     "ProviderTransportError",
     "RecordingTransport",

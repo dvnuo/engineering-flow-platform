@@ -52,7 +52,7 @@ def test_github_copilot_profile_resolution(model: str, expected_model: str):
 
 
 def test_default_and_supported_model_list_are_copilot_responses_models():
-    assert DEFAULT_MODEL_ID == "gpt-5.4"
+    assert DEFAULT_MODEL_ID == "gpt-5.5"
     assert SUPPORTED_COPILOT_MODEL_IDS == (
         "gpt-5-mini",
         "gpt-5.3-codex",

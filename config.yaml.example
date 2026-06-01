@@ -22,7 +22,7 @@ llm:
   provider: "github_copilot"
   api_base: "https://api.githubcopilot.com"
   api_key: "ghp_YOUR_GITHUB_TOKEN"
-  model: "gpt-5.4"
+  model: "gpt-5.5"
   reasoning_effort: "high"
   
   max_tokens: 128000

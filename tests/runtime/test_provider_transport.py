@@ -12,10 +12,12 @@ import pytest
 
 import efp_runtime.llm.provider as provider_module
 from efp_runtime.llm.provider import (
+    DEFAULT_COPILOT_FALLBACK_MODEL,
     DEFAULT_COPILOT_REASONING_EFFORT,
     GitHubCopilotHTTPTransport,
     GitHubCopilotProvider,
     OpenAICompatibleProvider,
+    ProviderModelUnavailableError,
     ProviderTransportError,
     RecordingTransport,
     SUPPORTED_COPILOT_REASONING_EFFORTS,
@@ -216,12 +218,13 @@ async def test_github_copilot_provider_defaults_strict_responses_payload():
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5.4"
+    assert provider.model == "gpt-5.5"
     assert provider.endpoint == "responses"
     assert provider.reasoning_effort == DEFAULT_COPILOT_REASONING_EFFORT
+    assert provider.fallback_model == DEFAULT_COPILOT_FALLBACK_MODEL
     assert provider.metadata["provider_id"] == "github-copilot"
     payload = transport.payloads[0]
-    assert payload["model"] == "gpt-5.4"
+    assert payload["model"] == "gpt-5.5"
     assert "input" in payload
     assert "messages" not in payload
     assert payload["reasoning"] == {"effort": "high"}
@@ -251,7 +254,7 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5.4"
+    assert provider.model == "gpt-5.5"
     assert transport.payloads[0]["model"] == "gpt-5-mini"
     assert "metadata" not in transport.payloads[0]
 
@@ -278,6 +281,14 @@ def test_github_copilot_provider_rejects_invalid_reasoning_effort_locally():
         GitHubCopilotProvider(
             transport=RecordingTransport([]),
             reasoning_effort="extreme",
+        )
+
+
+def test_github_copilot_provider_rejects_invalid_fallback_model_locally():
+    with pytest.raises(ValueError, match="unsupported GitHub Copilot model"):
+        GitHubCopilotProvider(
+            transport=RecordingTransport([]),
+            fallback_model="gpt-5",
         )
 
 
@@ -434,6 +445,91 @@ async def test_provider_returned_noop_tool_call_is_ignored_without_execution():
 
 
 @pytest.mark.asyncio
+async def test_github_copilot_model_unavailable_falls_back_to_default_model():
+    transport = RecordingTransport(
+        [
+            ProviderModelUnavailableError(
+                "The requested model is not available. Available models: [gpt-5.5 gpt-5-mini]",
+                status_code=400,
+                available_models_text="[gpt-5.5 gpt-5-mini]",
+            ),
+            _responses_response("Fallback answer."),
+        ]
+    )
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-5.4")
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(
+        session_id="session-copilot-model-fallback",
+        user_text="Answer after fallback.",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.final_assistant_message is not None
+    assert result.final_assistant_message.parts[0].text == "Fallback answer."
+    assert [payload["model"] for payload in transport.payloads] == [
+        "gpt-5.4",
+        "gpt-5.5",
+    ]
+    for payload in transport.payloads:
+        _assert_strict_copilot_responses_payload(payload)
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_model_unavailable_does_not_retry_fallback_model():
+    transport = RecordingTransport(
+        [
+            ProviderModelUnavailableError(
+                "The requested model is not available. Available models: [gpt-5-mini]",
+                status_code=400,
+                available_models_text="[gpt-5-mini]",
+            )
+        ]
+    )
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-5.5")
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(
+        session_id="session-copilot-model-fallback-once",
+        user_text="Do not retry.",
+    )
+
+    assert result.status == LoopStatus.ERROR
+    assert len(transport.payloads) == 1
+    assert transport.payloads[0]["model"] == "gpt-5.5"
+    _assert_strict_copilot_responses_payload(transport.payloads[0])
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_regular_http_400_does_not_fallback():
+    transport = RecordingTransport([ProviderTransportError("HTTP 400 bad request")])
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-5.4")
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(
+        session_id="session-copilot-regular-400",
+        user_text="Do not fallback.",
+    )
+
+    assert result.status == LoopStatus.ERROR
+    assert len(transport.payloads) == 1
+    assert transport.payloads[0]["model"] == "gpt-5.4"
+    _assert_strict_copilot_responses_payload(transport.payloads[0])
+
+
+@pytest.mark.asyncio
 async def test_github_copilot_http_transport_posts_json_headers_and_returns_raw(
     monkeypatch,
 ):
@@ -548,6 +644,81 @@ async def test_github_copilot_http_transport_errors_do_not_leak_token(monkeypatc
     assert exc_info.value.__cause__ is None
 
 
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_raises_model_unavailable(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(
+                b'{"error":{"message":"The requested model is not available for integrator secret-token. Available models: [gpt-5.5 gpt-5-mini]"}}'
+            ),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderModelUnavailableError) as exc_info:
+        await transport.send(
+            {
+                "model": "gpt-5.4",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Say ok"}],
+                    }
+                ],
+                "reasoning": {"effort": "high"},
+                "stream": False,
+            }
+        )
+
+    error = exc_info.value
+    assert error.status_code == 400
+    assert error.available_models_text == "[gpt-5.5 gpt-5-mini]"
+    assert "requested model is not available" in str(error)
+    assert "[redacted]" in str(error)
+    assert "secret-token" not in str(error)
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_regular_400_is_transport_error(
+    monkeypatch,
+):
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"invalid request"}}'),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderTransportError) as exc_info:
+        await transport.send(
+            {
+                "model": "gpt-5.4",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Say ok"}],
+                    }
+                ],
+                "reasoning": {"effort": "high"},
+                "stream": False,
+            }
+        )
+
+    assert not isinstance(exc_info.value, ProviderModelUnavailableError)
+    assert "with status 400" in str(exc_info.value)
+    assert "invalid request" in str(exc_info.value)
+
+
 def test_github_copilot_provider_from_env_reads_token_and_base_url():
     provider = github_copilot_provider_from_env(
         env={
@@ -555,10 +726,12 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
             "GITHUB_COPILOT_TOKEN": "fallback-token",
             "EFP_GITHUB_COPILOT_BASE_URL": "https://copilot-api.enterprise.example/",
             "EFP_GITHUB_COPILOT_REASONING_EFFORT": " medium ",
+            "EFP_GITHUB_COPILOT_FALLBACK_MODEL": "gpt-5 mini",
         }
     )
 
-    assert provider.model == "gpt-5.4"
+    assert provider.model == "gpt-5.5"
+    assert provider.fallback_model == "gpt-5-mini"
     assert provider.endpoint == "responses"
     assert provider.reasoning_effort == "medium"
     assert provider.metadata["provider_id"] == "github-copilot"
@@ -574,10 +747,12 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
 def test_github_copilot_provider_from_env_falls_back_to_github_token():
     provider = github_copilot_provider_from_env(
         model="gemini 3.5 flash",
+        fallback_model="gpt-5.4 mini",
         env={"GITHUB_COPILOT_TOKEN": "github-token"},
     )
 
     assert provider.model == "gemini-3.5-flash"
+    assert provider.fallback_model == "gpt-5.4-mini"
     assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
     assert provider.transport._headers()["Authorization"] == "Bearer github-token"
 
@@ -1008,6 +1183,14 @@ def _responses_response(text):
             }
         ]
     }
+
+
+def _assert_strict_copilot_responses_payload(payload):
+    assert "input" in payload
+    assert "messages" not in payload
+    assert "metadata" not in payload
+    assert payload["reasoning"] == {"effort": "high"}
+    assert payload["stream"] is False
 
 
 class _FakeHTTPResponse:

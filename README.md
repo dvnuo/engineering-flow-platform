@@ -84,14 +84,15 @@ curl -X POST http://localhost:8000/api/chat \
 llm:
   provider: "github_copilot"
   api_key: "ghu_..."
-  model: "gpt-5.4"
+  model: "gpt-5.5"
   reasoning_effort: "high"
 ```
 
 EFP runtime native mode does not fall back to OpenAI or Anthropic providers.
 `EFP_GITHUB_COPILOT_TOKEN` or `GITHUB_COPILOT_TOKEN` may be used instead of
 `llm.api_key`; `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
-Copilot transport base URL.
+Copilot transport base URL. `EFP_GITHUB_COPILOT_FALLBACK_MODEL` can override the
+model-unavailable retry target; the default fallback is `gpt-5.5`.
 
 Supported GitHub Copilot models are `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`,
 `gpt-5.3-codex`, `gpt-5-mini`, `gemini-2.5-pro`, and `gemini-3.5-flash`.

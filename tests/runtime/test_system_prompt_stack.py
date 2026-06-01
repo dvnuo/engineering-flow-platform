@@ -131,7 +131,7 @@ async def test_opt_in_runtime_prepends_system_prompt_before_instructions_and_ski
     assert environment_message.metadata["message_metadata"]["kind"] == (
         "environment_context"
     )
-    assert "- model: github-copilot/gpt-5.4" in environment_message.text
+    assert "- model: github-copilot/gpt-5.5" in environment_message.text
     assert f"- working directory: {tmp_path.resolve()}" in environment_message.text
     assert f"- workspace root: {tmp_path.resolve()}" in environment_message.text
     assert "- git repository: false" in environment_message.text
@@ -139,14 +139,14 @@ async def test_opt_in_runtime_prepends_system_prompt_before_instructions_and_ski
     assert re.search(r"- date: \d{4}-\d{2}-\d{2}", environment_message.text)
     assert request.metadata["system_prompt_context_count"] == 3
     assert request.metadata["environment_context_count"] == 1
-    assert request.metadata["environment_context_model"] == "github-copilot/gpt-5.4"
+    assert request.metadata["environment_context_model"] == "github-copilot/gpt-5.5"
     assert request.metadata["instruction_context_count"] == 1
     assert request.metadata["available_skill_context_count"] == 1
     assert request.metadata["skill_context_count"] == 1
     assert request.provider_request.metadata["system_prompt_context_count"] == 3
     assert request.provider_request.metadata["environment_context_count"] == 1
     assert request.provider_request.metadata["environment_context_model"] == (
-        "github-copilot/gpt-5.4"
+        "github-copilot/gpt-5.5"
     )
     assert request.provider_request.metadata["instruction_context_count"] == 1
     assert request.provider_request.metadata["available_skill_context_count"] == 1
