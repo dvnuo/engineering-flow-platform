@@ -10,12 +10,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterable, Iterable, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 import inspect
 import json
 import os
 import re
 from typing import TYPE_CHECKING, Any, List, Optional, Protocol, Union
 from urllib import error as urllib_error
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from .adapter import DefaultLLMEventAdapter, LLMEventAdapter
@@ -67,15 +69,33 @@ class ProviderModelUnavailableError(ProviderTransportError):
         self.available_models_text = available_models_text
 
 
+@dataclass(frozen=True)
+class CopilotTokenExchange:
+    """Result of exchanging a GitHub source token for a Copilot plugin token."""
+
+    token: str
+    expires_at: int
+    api_base_url: str | None = None
+
+
 DEFAULT_COPILOT_REASONING_EFFORT = "high"
-DEFAULT_COPILOT_FALLBACK_MODEL = "gpt-5.5"
 SUPPORTED_COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
+GITHUB_SOURCE_TOKEN_PREFIXES = (
+    "ghp_",
+    "ghu_",
+    "gho_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+)
+_PROXY_ENDPOINT_PATTERN = re.compile(r"(?:^|[;&,\s])proxy-ep=([^;&,\s]+)")
 
 
 class GitHubCopilotHTTPTransport:
     """Standard-library HTTP JSON transport for GitHub Copilot Responses."""
 
     DEFAULT_BASE_URL = "https://api.githubcopilot.com"
+    DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com"
     RESPONSES_PATH = "/responses"
 
     def __init__(
@@ -84,14 +104,15 @@ class GitHubCopilotHTTPTransport:
         token: str,
         base_url: Optional[str] = None,
         timeout: float = 60,
+        github_api_base_url: Optional[str] = None,
         user_agent: str = "GitHubCopilotChat/0.35.0",
         editor_version: str = "vscode/1.107.0",
         editor_plugin_version: str = "copilot-chat/0.35.0",
         integration_id: str = "vscode-chat",
         initiator: str = "agent",
+        exchange_source_token: bool = True,
     ) -> None:
-        self._token = _required_non_empty_string(token, "token")
-        self.base_url = _normalize_base_url(base_url)
+        credential = _required_non_empty_string(token, "token")
         self.timeout = timeout
         self.user_agent = _required_non_empty_string(user_agent, "user_agent")
         self.editor_version = _required_non_empty_string(
@@ -107,6 +128,34 @@ class GitHubCopilotHTTPTransport:
             "integration_id",
         )
         self.initiator = _required_non_empty_string(initiator, "initiator")
+        self.github_api_base_url = _normalize_base_url(
+            github_api_base_url,
+            default=self.DEFAULT_GITHUB_API_BASE_URL,
+        )
+        explicit_base_url = (
+            _normalize_base_url(base_url) if base_url is not None else None
+        )
+        self.token_expires_at: int | None = None
+        self.token_source = "copilot"
+
+        parsed_base_url: str | None = None
+        if exchange_source_token and is_github_source_token(credential):
+            exchange = exchange_github_token_for_copilot_token(
+                credential,
+                github_api_base_url=self.github_api_base_url,
+                timeout=self.timeout,
+                user_agent=self.user_agent,
+                editor_version=self.editor_version,
+                editor_plugin_version=self.editor_plugin_version,
+                integration_id=self.integration_id,
+            )
+            credential = exchange.token
+            self.token_expires_at = exchange.expires_at
+            parsed_base_url = exchange.api_base_url
+            self.token_source = "github_exchange"
+
+        self._token = credential
+        self.base_url = _normalize_base_url(explicit_base_url or parsed_base_url)
         self.endpoint = "{0}{1}".format(self.base_url, self.RESPONSES_PATH)
 
     async def send(self, payload: dict[str, Any]) -> TransportOutput:
@@ -289,13 +338,11 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         stream: bool = False,
         metadata: Optional[Mapping[str, Any]] = None,
         reasoning_effort: str = DEFAULT_COPILOT_REASONING_EFFORT,
-        fallback_model: str = DEFAULT_COPILOT_FALLBACK_MODEL,
         adapter: Optional[LLMEventAdapter] = None,
     ) -> None:
         if endpoint != "responses":
             raise ValueError("GitHub Copilot provider endpoint must be 'responses'")
         canonical_model = canonicalize_copilot_model_id(model)
-        canonical_fallback_model = canonicalize_copilot_model_id(fallback_model)
         canonical_reasoning_effort = validate_copilot_reasoning_effort(reasoning_effort)
         provider_metadata = dict(metadata or {})
         provider_metadata.update(
@@ -314,7 +361,6 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             reasoning_effort=canonical_reasoning_effort,
             adapter=adapter,
         )
-        self.fallback_model = canonical_fallback_model
 
     def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
         """Project a request and apply GitHub Copilot request quirks."""
@@ -325,49 +371,6 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             payload["reasoning"] = {"effort": self.reasoning_effort}
         _inject_copilot_noop_tool_fallback(payload, request)
         return _sanitize_copilot_responses_payload(payload)
-
-    async def invoke(self, request: RuntimeRequest) -> ProviderOutput:
-        payload = self.build_payload(request)
-        try:
-            raw_output = self.transport.send(payload)
-            if inspect.isawaitable(raw_output):
-                raw_output = await raw_output
-        except ProviderModelUnavailableError as exc:
-            retry_payload = self._fallback_payload_for_model_unavailable(payload)
-            if retry_payload is None:
-                return self._transport_error_response(exc)
-            try:
-                raw_output = self.transport.send(retry_payload)
-                if inspect.isawaitable(raw_output):
-                    raw_output = await raw_output
-            except Exception as retry_exc:
-                return self._transport_error_response(retry_exc)
-        except Exception as exc:
-            return self._transport_error_response(exc)
-
-        if self.stream:
-            if isinstance(raw_output, Mapping):
-                return self.adapter.normalize_response(raw_output)
-            return self.adapter.normalize_stream(raw_output)
-
-        if not isinstance(raw_output, Mapping):
-            return self._transport_error_response(
-                ProviderTransportError("non-stream transport returned a stream response")
-            )
-        return raw_output
-
-    def _fallback_payload_for_model_unavailable(
-        self,
-        payload: Mapping[str, Any],
-    ) -> dict[str, Any] | None:
-        if self.stream:
-            return None
-        current_model = canonicalize_copilot_model_id(payload.get("model"))
-        if current_model == self.fallback_model:
-            return None
-        retry_payload = deepcopy(dict(payload))
-        retry_payload["model"] = self.fallback_model
-        return retry_payload
 
     def _transport_error_response(self, exc: BaseException) -> dict[str, Any]:
         response = super()._transport_error_response(exc)
@@ -411,7 +414,6 @@ def github_copilot_provider_from_env(
     stream: bool = False,
     metadata: Optional[Mapping[str, Any]] = None,
     reasoning_effort: Optional[str] = None,
-    fallback_model: Optional[str] = None,
     adapter: Optional[LLMEventAdapter] = None,
     timeout: float = 60,
     user_agent: str = "GitHubCopilotChat/0.35.0",
@@ -436,11 +438,6 @@ def github_copilot_provider_from_env(
         or _env_string(environ, "EFP_LLM_REASONING_EFFORT")
         or DEFAULT_COPILOT_REASONING_EFFORT
     )
-    configured_fallback_model = (
-        fallback_model
-        or _env_string(environ, "EFP_GITHUB_COPILOT_FALLBACK_MODEL")
-        or DEFAULT_COPILOT_FALLBACK_MODEL
-    )
     transport = GitHubCopilotHTTPTransport(
         token=token,
         base_url=_env_string(environ, "EFP_GITHUB_COPILOT_BASE_URL"),
@@ -456,7 +453,6 @@ def github_copilot_provider_from_env(
         stream=stream,
         metadata=metadata,
         reasoning_effort=configured_reasoning_effort,
-        fallback_model=configured_fallback_model,
         adapter=adapter,
     )
 
@@ -728,6 +724,124 @@ def _env_string(environ: Mapping[str, str], name: str) -> Optional[str]:
     return value or None
 
 
+def is_github_source_token(token: Any) -> bool:
+    if not isinstance(token, str):
+        return False
+    text = token.strip().lower()
+    return text.startswith(GITHUB_SOURCE_TOKEN_PREFIXES)
+
+
+def exchange_github_token_for_copilot_token(
+    source_credential: str,
+    *,
+    github_api_base_url: Optional[str] = None,
+    timeout: float = 60,
+    user_agent: str = "GitHubCopilotChat/0.35.0",
+    editor_version: str = "vscode/1.107.0",
+    editor_plugin_version: str = "copilot-chat/0.35.0",
+    integration_id: str = "vscode-chat",
+) -> CopilotTokenExchange:
+    """Exchange a GitHub source token for a Copilot plugin token."""
+
+    source_token = _required_non_empty_string(source_credential, "source_credential")
+    endpoint = "{0}/copilot_internal/v2/token".format(
+        _normalize_base_url(
+            github_api_base_url,
+            default=GitHubCopilotHTTPTransport.DEFAULT_GITHUB_API_BASE_URL,
+        )
+    )
+    request = urllib_request.Request(
+        endpoint,
+        headers={
+            "Authorization": "Bearer {0}".format(source_token),
+            "Accept": "application/json",
+            **_copilot_plugin_headers(
+                user_agent=user_agent,
+                editor_version=editor_version,
+                editor_plugin_version=editor_plugin_version,
+                integration_id=integration_id,
+            ),
+        },
+        method="GET",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=timeout) as response:
+            raw_body = response.read()
+    except urllib_error.HTTPError as exc:
+        response_text = _read_http_error_body(exc)
+        raise ProviderTransportError(
+            _format_token_exchange_http_error(
+                exc,
+                source_token,
+                response_text=response_text,
+            )
+        ) from None
+    except urllib_error.URLError as exc:
+        reason = _redact_secret(str(getattr(exc, "reason", exc)), source_token)
+        raise ProviderTransportError(
+            "GitHub Copilot token exchange failed: {0}".format(reason)
+        ) from None
+    except TimeoutError:
+        raise ProviderTransportError(
+            "GitHub Copilot token exchange timed out after {0} seconds".format(timeout)
+        ) from None
+
+    try:
+        text = raw_body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProviderTransportError(
+            "GitHub Copilot token exchange returned non-UTF-8 response data"
+        ) from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ProviderTransportError(
+            "GitHub Copilot token exchange returned invalid JSON"
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise ProviderTransportError(
+            "GitHub Copilot token exchange returned a non-object JSON response"
+        )
+
+    token = data.get("token")
+    expires_at = data.get("expires_at")
+    if not isinstance(token, str) or not token.strip():
+        raise ProviderTransportError(
+            "GitHub Copilot token exchange returned an invalid token"
+        )
+    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+        raise ProviderTransportError(
+            "GitHub Copilot token exchange returned an invalid expires_at"
+        )
+    expires_at_int = int(expires_at)
+    if expires_at_int <= 0:
+        raise ProviderTransportError(
+            "GitHub Copilot token exchange returned an invalid expires_at"
+        )
+    return CopilotTokenExchange(
+        token=token.strip(),
+        expires_at=expires_at_int,
+        api_base_url=parse_copilot_api_base_url(token),
+    )
+
+
+def parse_copilot_api_base_url(token: str) -> str | None:
+    match = _PROXY_ENDPOINT_PATTERN.search(token)
+    if match is None:
+        return None
+    raw = urllib_parse.unquote(match.group(1).strip())
+    parsed = urllib_parse.urlparse(raw)
+    host = parsed.netloc
+    if not host:
+        host = parsed.path.split("/", 1)[0]
+    host = host.strip()
+    if not host:
+        return None
+    if host.startswith("proxy."):
+        host = "api." + host.removeprefix("proxy.")
+    return "https://{0}".format(host.rstrip("/"))
+
+
 def _required_non_empty_string(value: str, field_name: str) -> str:
     if not isinstance(value, str):
         raise ValueError("{0} must be a non-empty string".format(field_name))
@@ -737,9 +851,13 @@ def _required_non_empty_string(value: str, field_name: str) -> str:
     return value
 
 
-def _normalize_base_url(base_url: Optional[str]) -> str:
+def _normalize_base_url(
+    base_url: Optional[str],
+    *,
+    default: str | None = None,
+) -> str:
     if base_url is None:
-        return GitHubCopilotHTTPTransport.DEFAULT_BASE_URL
+        return default or GitHubCopilotHTTPTransport.DEFAULT_BASE_URL
     base_url = _required_non_empty_string(base_url, "base_url")
     return base_url.rstrip("/")
 
@@ -753,6 +871,26 @@ def _format_http_error(
     status = getattr(exc, "code", None)
     reason = getattr(exc, "reason", None) or getattr(exc, "msg", "")
     parts = ["GitHub Copilot HTTP transport failed"]
+    if status is not None:
+        parts.append("with status {0}".format(status))
+    if reason:
+        parts.append("({0})".format(_redact_secret(str(reason), token)))
+    if response_text is None:
+        response_text = _read_http_error_body(exc)
+    if response_text:
+        parts.append("response: {0}".format(_redact_secret(response_text, token)))
+    return " ".join(parts)
+
+
+def _format_token_exchange_http_error(
+    exc: urllib_error.HTTPError,
+    token: str,
+    *,
+    response_text: str | None = None,
+) -> str:
+    status = getattr(exc, "code", None)
+    reason = getattr(exc, "reason", None) or getattr(exc, "msg", "")
+    parts = ["GitHub Copilot token exchange failed"]
     if status is not None:
         parts.append("with status {0}".format(status))
     if reason:
@@ -843,6 +981,30 @@ def _redact_secret(text: str, secret: str) -> str:
     return text.replace(secret, "[redacted]")
 
 
+def _copilot_plugin_headers(
+    *,
+    user_agent: str,
+    editor_version: str,
+    editor_plugin_version: str,
+    integration_id: str,
+) -> dict[str, str]:
+    return {
+        "User-Agent": _required_non_empty_string(user_agent, "user_agent"),
+        "Editor-Version": _required_non_empty_string(
+            editor_version,
+            "editor_version",
+        ),
+        "Editor-Plugin-Version": _required_non_empty_string(
+            editor_plugin_version,
+            "editor_plugin_version",
+        ),
+        "Copilot-Integration-Id": _required_non_empty_string(
+            integration_id,
+            "integration_id",
+        ),
+    }
+
+
 def _unsupported_reasoning_message(value: Any) -> str:
     supported = ", ".join(SUPPORTED_COPILOT_REASONING_EFFORTS)
     return "unsupported GitHub Copilot reasoning effort {0!r}; supported values: {1}".format(
@@ -852,7 +1014,7 @@ def _unsupported_reasoning_message(value: Any) -> str:
 
 
 __all__ = [
-    "DEFAULT_COPILOT_FALLBACK_MODEL",
+    "CopilotTokenExchange",
     "DEFAULT_COPILOT_REASONING_EFFORT",
     "GitHubCopilotHTTPTransport",
     "GitHubCopilotProvider",
@@ -864,6 +1026,9 @@ __all__ = [
     "SUPPORTED_COPILOT_MODEL_IDS",
     "SUPPORTED_COPILOT_REASONING_EFFORTS",
     "TransportOutput",
+    "exchange_github_token_for_copilot_token",
     "github_copilot_provider_from_env",
+    "is_github_source_token",
+    "parse_copilot_api_base_url",
     "validate_copilot_reasoning_effort",
 ]

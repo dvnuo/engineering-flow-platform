@@ -21,7 +21,7 @@ _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.indent(mapping=2, sequence=4, offset=2)
 
-DEFAULT_LLM_MODEL = "gpt-5.5"
+DEFAULT_LLM_MODEL = "gpt-5.4"
 DEFAULT_LLM_TEMPERATURE = 0.7
 
 PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(

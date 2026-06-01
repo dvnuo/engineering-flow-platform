@@ -20,9 +20,14 @@ llm:
   # EFP runtime native mode supports GitHub Copilot only.
   # Accepted aliases: github_copilot, github-copilot, copilot
   provider: "github_copilot"
-  api_base: "https://api.githubcopilot.com"
+  # Optional override. Blank lets EFP use the exchanged Copilot token proxy-ep
+  # when present, otherwise https://api.githubcopilot.com.
+  api_base: ""
+  # GitHub source tokens are exchanged for Copilot plugin tokens automatically.
+  # If EFP_GITHUB_COPILOT_TOKEN/GITHUB_COPILOT_TOKEN is already a Copilot token,
+  # EFP uses it directly.
   api_key: "ghp_YOUR_GITHUB_TOKEN"
-  model: "gpt-5.5"
+  model: "gpt-5.4"
   reasoning_effort: "high"
   
   max_tokens: 128000

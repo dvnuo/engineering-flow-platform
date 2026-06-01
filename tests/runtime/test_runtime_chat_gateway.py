@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
+import src.efp_runtime.llm.provider as provider_module
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.gateway import runtime_chat
@@ -69,6 +72,21 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
     monkeypatch.delenv("GITHUB_COPILOT_TOKEN", raising=False)
     monkeypatch.delenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("EFP_LLM_REASONING_EFFORT", raising=False)
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        return _FakeHTTPResponse(
+            {
+                "token": (
+                    "copilot-config-token;"
+                    "proxy-ep=https%3A%2F%2Fproxy.individual.githubcopilot.com"
+                ),
+                "expires_at": 1893456000,
+            }
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
     monkeypatch.setattr(
         runtime_chat.config,
         "_config",
@@ -88,10 +106,29 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
     assert provider.endpoint == "responses"
     assert provider.reasoning_effort == "xhigh"
     assert provider.transport.endpoint == "https://copilot-api.enterprise.example/responses"
+    assert provider.transport.token_source == "github_exchange"
+    assert provider.transport._headers()["Authorization"] == (
+        "Bearer copilot-config-token;"
+        "proxy-ep=https%3A%2F%2Fproxy.individual.githubcopilot.com"
+    )
     assert provider.transport._headers()["Accept"] == (
         "application/vnd.github.copilot-chat-preview+json"
     )
     assert provider.transport._headers()["x-initiator"] == "agent"
+    assert len(requests) == 1
+    exchange_request, _ = requests[0]
+    assert exchange_request.full_url == (
+        "https://api.github.com/copilot_internal/v2/token"
+    )
+    exchange_headers = _request_headers(exchange_request)
+    assert exchange_headers["authorization"] == "Bearer ghp_configtoken123"
+    assert exchange_headers["accept"] == "application/json"
+    assert exchange_headers["user-agent"] == "GitHubCopilotChat/0.35.0"
+    assert exchange_headers["editor-version"] == "vscode/1.107.0"
+    assert exchange_headers["editor-plugin-version"] == "copilot-chat/0.35.0"
+    assert exchange_headers["copilot-integration-id"] == "vscode-chat"
+    assert "openai-intent" not in exchange_headers
+    assert "x-initiator" not in exchange_headers
 
 
 def test_build_github_copilot_provider_prefers_env_reasoning(monkeypatch):
@@ -170,7 +207,7 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
         {
             "llm": {
                 "provider": "github_copilot",
-                "api_key": "ghp_configtoken123",
+                "api_key": "copilot-config-token",
                 "model": "gpt-5-mini",
             },
             "session": {"max_iterations": 2},
@@ -363,7 +400,7 @@ async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(
         {
             "llm": {
                 "provider": "github_copilot",
-                "api_key": "ghp_configtoken123",
+                "api_key": "copilot-config-token",
                 "model": "gpt-5-mini",
             },
             "session": {"max_iterations": 1},
@@ -385,3 +422,24 @@ async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(
     assert "Provider failed" in exc_info.value.message
     assert "ghp_supersecret123" not in exc_info.value.message
     assert "***REDACTED***" in exc_info.value.message
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def _request_headers(request):
+    headers = {key.lower(): value for key, value in request.header_items()}
+    for source in (request.headers, request.unredirected_hdrs):
+        headers.update({key.lower(): value for key, value in source.items()})
+    return headers

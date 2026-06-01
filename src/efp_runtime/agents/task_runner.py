@@ -371,7 +371,7 @@ def _child_config(
             else base_config.default_provider_id
         ),
         default_model=(
-            "gpt-5.5" if base_config is None else base_config.default_model
+            "gpt-5.4" if base_config is None else base_config.default_model
         ),
         compaction_auto=(
             True if base_config is None else base_config.compaction_auto
