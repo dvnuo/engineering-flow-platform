@@ -73,6 +73,23 @@ Removed aliases such as `fetch`, `read_file`, `write_file`, `shell_exec`,
 callers can ask for schemas or execute a registered built-in by id. It does not
 aggregate old Python tool packages.
 
+The runtime image can also provide prebuilt `engineering-flow-platform-tools`
+CLI binaries on `PATH` under `/usr/local/bin`. `scripts/prepare-runtime-tools.sh`
+discovers every `cmd/<tool>/main.go` from that repository and writes generated
+binaries to `runtime-tools/` for Docker/CI to copy into the image. Current tools
+include `jira`, `confluence`, and `browser`; future `cmd/<tool>` binaries should
+enter the image the same way. Agents reach these CLIs by invoking the model-facing
+`bash` built-in in the workspace-full-access workspace. They should inspect
+`<tool> commands --json` and `<tool> schema <command> --json`, prefer JSON
+output, use `--dry-run` before writes, and reserve `--yes` for destructive
+operations. These CLIs are not projected as separate model-facing function tools.
+
+Runtime profile application still writes the config files those CLIs and system
+tools expect: Atlassian config for Jira/Confluence, `gh` hosts config for
+GitHub, and Git user include config. The old `EFP_TOOLS_DIR` and
+`EFP_EXTERNAL_TOOLS_*` Python loader settings remain ignored; `runtime-tools/*`
+is only a build input for PATH binaries.
+
 ## Loop And Provider
 
 `efp_runtime.runtime.AgentRuntime` builds provider requests from:

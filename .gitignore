@@ -139,8 +139,8 @@ Thumbs.db
 htmlcov/
 
 # Runtime image build inputs generated from engineering-flow-platform-tools.
-runtime-tools/jira
-runtime-tools/confluence
+runtime-tools/*
+!runtime-tools/README.md
 
 # Local config - NEVER commit
 config.yaml

@@ -247,6 +247,11 @@ server:
 # 1. Bearer Token (recommended for Jira Cloud)
 # 2. Basic Auth with API Token (recommended for Jira Server/DC)
 # 3. Basic Auth with Password (legacy, not recommended)
+#
+# Runtime profile application projects Jira/Confluence values into the
+# Atlassian CLI config used by the prebuilt `jira` and `confluence` binaries
+# when those binaries are present on PATH. The old Python external tools loader
+# (`EFP_TOOLS_DIR`, `EFP_EXTERNAL_TOOLS_*`) is not used.
 
 # ============================================
 # Jira Configuration (OPTIONAL) - Supports Multiple Instances

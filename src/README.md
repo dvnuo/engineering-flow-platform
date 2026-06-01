@@ -60,8 +60,11 @@ src/
 - Canonical skill metadata files are lowercase `skill.md` with YAML frontmatter.
 - Business skills should be added to `engineering-flow-platform-skills`, not this EFP runtime repo.
 - Portal provisions skills repository/branch.
-- EFP native runtime no longer supports the External tools subsystem.
-- Runtime tool surface is built-in/native only.
+- EFP native runtime no longer supports the old Python External tools subsystem
+  (`EFP_TOOLS_DIR`, `EFP_EXTERNAL_TOOLS_*`).
+- Model-facing runtime tool surface is built-in/native only. Prebuilt
+  `engineering-flow-platform-tools` binaries may still be available on PATH and
+  should be invoked through the `bash` built-in.
 - The native runtime is API-only. Portal owns the UI; this repo no longer serves an embedded browser page or static/template assets.
 
 ## Runtime / Portal boundary (important)
