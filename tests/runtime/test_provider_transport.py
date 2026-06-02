@@ -350,7 +350,7 @@ def test_github_copilot_tool_history_uses_top_level_response_items():
     assert payload["input"] == [
         {
             "role": "assistant",
-            "content": [{"type": "input_text", "text": "Checking the index."}],
+            "content": [{"type": "output_text", "text": "Checking the index."}],
         },
         {
             "type": "function_call",
@@ -454,6 +454,62 @@ def test_copilot_sanitizer_shortens_long_call_ids_for_bypassed_projection():
     assert long_call_item["call_id"] != long_call_id
     assert short_call_item["call_id"] == "call_short"
     assert all(len(call_id) <= 64 for call_id in _collect_call_ids(payload))
+
+
+def test_copilot_sanitizer_uses_output_text_for_bypassed_assistant_text():
+    payload = provider_module._sanitize_copilot_responses_payload(
+        {
+            "input": [
+                {"role": "assistant", "content": "Plain assistant text."},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "input_text", "text": "Legacy assistant input."},
+                        {"type": "output_text", "text": "Assistant output."},
+                        {"type": "text", "text": "Plain item."},
+                        {
+                            "type": "input_image",
+                            "image_url": {"url": "https://example.test/i.png"},
+                        },
+                        {"type": "input_file", "file_id": "file_123"},
+                        {"type": "refusal", "refusal": "Cannot comply."},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "output_text", "text": "User text."},
+                        {
+                            "type": "input_image",
+                            "image_url": {"url": "https://example.test/u.png"},
+                        },
+                        {"type": "input_file", "file_id": "file_456"},
+                    ],
+                },
+            ],
+        }
+    )
+
+    assert payload["input"][0]["content"] == [
+        {"type": "output_text", "text": "Plain assistant text."}
+    ]
+    assert payload["input"][1]["content"] == [
+        {"type": "output_text", "text": "Legacy assistant input."},
+        {"type": "output_text", "text": "Assistant output."},
+        {"type": "output_text", "text": "Plain item."},
+        {"type": "refusal", "refusal": "Cannot comply."},
+    ]
+    assert all(
+        content_item["type"] != "input_text"
+        for item in payload["input"]
+        if item.get("role") == "assistant"
+        for content_item in item.get("content", [])
+    )
+    assert payload["input"][2]["content"] == [
+        {"type": "input_text", "text": "User text."},
+        {"type": "input_image", "image_url": {"url": "https://example.test/u.png"}},
+        {"type": "input_file", "file_id": "file_456"},
+    ]
 
 
 @pytest.mark.asyncio

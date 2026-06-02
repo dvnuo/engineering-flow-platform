@@ -534,7 +534,14 @@ def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
         role = "user"
     content = item.get("content")
     if isinstance(content, str):
-        return [{"role": role, "content": [{"type": "input_text", "text": content}]}]
+        return [
+            {
+                "role": role,
+                "content": [
+                    {"type": _copilot_text_content_type(role), "text": content}
+                ],
+            }
+        ]
     if not isinstance(content, list):
         return []
 
@@ -548,6 +555,14 @@ def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
         buffered_content.clear()
 
     for content_item in content:
+        if isinstance(content_item, str):
+            buffered_content.append(
+                {
+                    "type": _copilot_text_content_type(role),
+                    "text": content_item,
+                }
+            )
+            continue
         if not isinstance(content_item, Mapping):
             continue
         content_type = content_item.get("type")
@@ -559,7 +574,7 @@ def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
             flush_message()
             sanitized.append(_sanitize_copilot_function_call_output_item(content_item))
             continue
-        projected = _sanitize_copilot_message_content_item(content_item)
+        projected = _sanitize_copilot_message_content_item(content_item, role=role)
         if projected is not None:
             buffered_content.append(projected)
 
@@ -569,10 +584,24 @@ def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
 
 def _sanitize_copilot_message_content_item(
     item: Mapping[str, Any],
+    *,
+    role: str,
 ) -> Optional[dict[str, Any]]:
     item_type = item.get("type")
-    if item_type == "input_text":
-        return {"type": "input_text", "text": _copilot_string(item.get("text", ""))}
+    if item_type in {"input_text", "output_text", "text"}:
+        return {
+            "type": _copilot_text_content_type(role),
+            "text": _copilot_string(item.get("text", "")),
+        }
+    if role == "assistant":
+        if item_type == "refusal":
+            return {
+                "type": "refusal",
+                "refusal": _copilot_string(
+                    item.get("refusal", item.get("text", ""))
+                ),
+            }
+        return None
     if item_type == "input_image" and "image_url" in item:
         return {"type": "input_image", "image_url": deepcopy(item["image_url"])}
     if item_type == "input_file":
@@ -587,6 +616,10 @@ def _sanitize_copilot_message_content_item(
         if len(sanitized) > 1:
             return sanitized
     return None
+
+
+def _copilot_text_content_type(role: str) -> str:
+    return "output_text" if role == "assistant" else "input_text"
 
 
 def _sanitize_copilot_function_call_item(item: Mapping[str, Any]) -> dict[str, Any]:

@@ -281,6 +281,48 @@ def test_responses_projection_preserves_typed_input_items():
     assert tool_result["output"] == "found EFP runtime notes"
 
 
+def test_responses_projection_uses_role_aware_text_content_types():
+    request = ProviderRequest(
+        messages=[
+            RequestMessage(
+                role="user",
+                parts=[RequestMessagePart(type="text", text="Use project notes.")],
+            ),
+            RequestMessage(
+                role="assistant",
+                parts=[
+                    RequestMessagePart(type="text", text="Checking the index."),
+                    RequestMessagePart(
+                        type="context",
+                        context=RequestContext(type="task", text="Summarize results."),
+                    ),
+                    RequestMessagePart(
+                        type="attachment",
+                        attachment=RequestAttachment(
+                            attachment_id="att-1",
+                            mime_type="text/plain",
+                            filename="notes.txt",
+                        ),
+                    ),
+                ],
+            ),
+            RequestMessage(role="assistant", parts=[]),
+            RequestMessage(role="developer", parts=[]),
+        ]
+    )
+
+    payload = provider_request_to_openai_responses(request, model="gpt-test")
+
+    assert payload["input"][0]["content"][0]["type"] == "input_text"
+    assert [item["type"] for item in payload["input"][1]["content"]] == [
+        "output_text",
+        "output_text",
+        "output_text",
+    ]
+    assert payload["input"][2]["content"] == [{"type": "output_text", "text": ""}]
+    assert payload["input"][3]["content"] == [{"type": "input_text", "text": ""}]
+
+
 def test_responses_projection_shortens_long_tool_call_ids_without_breaking_pairs():
     long_call_id = "call_" + ("copilot_raw_tool_call_id_" * 18)
     tool_call = RequestToolCall(

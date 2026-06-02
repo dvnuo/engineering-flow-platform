@@ -192,13 +192,21 @@ def request_message_to_openai_responses_input(message: RequestMessage) -> JsonDi
 
     content: List[JsonDict] = []
     for part in message.parts:
-        content.extend(request_part_to_openai_responses_content(part))
+        content.extend(
+            request_part_to_openai_responses_content(part, role=message.role)
+        )
     if not content:
-        content.append({"type": "input_text", "text": ""})
+        content.append(
+            {"type": _responses_text_content_type(message.role), "text": ""}
+        )
     return {"role": message.role, "content": content}
 
 
-def request_part_to_openai_responses_content(part: RequestMessagePart) -> List[JsonDict]:
+def request_part_to_openai_responses_content(
+    part: RequestMessagePart,
+    *,
+    role: str = "",
+) -> List[JsonDict]:
     """Project one EFP runtime message part to typed Responses content items."""
 
     if part.tool_call is not None:
@@ -216,12 +224,16 @@ def request_part_to_openai_responses_content(part: RequestMessagePart) -> List[J
     if _part_has_projectable_text(part):
         return [
             {
-                "type": "input_text",
+                "type": _responses_text_content_type(role),
                 "text": _part_to_text(part),
                 "metadata": _content_item_metadata(part),
             }
         ]
     return []
+
+
+def _responses_text_content_type(role: str) -> str:
+    return "output_text" if role == "assistant" else "input_text"
 
 
 def _tool_call_to_responses_item(tool_call: RequestToolCall) -> JsonDict:
