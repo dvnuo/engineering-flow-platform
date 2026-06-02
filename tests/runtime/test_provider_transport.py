@@ -13,6 +13,7 @@ import pytest
 import efp_runtime.llm.provider as provider_module
 from efp_runtime.llm.provider import (
     DEFAULT_COPILOT_REASONING_EFFORT,
+    DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
     GitHubCopilotHTTPTransport,
     GitHubCopilotProvider,
     OpenAICompatibleProvider,
@@ -671,6 +672,71 @@ async def test_github_copilot_http_transport_posts_json_headers_and_returns_raw(
     assert headers["x-initiator"] == "agent"
 
 
+def test_github_copilot_http_transport_default_timeout_is_300_seconds():
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+
+    assert transport.timeout == DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_allows_disabled_timeout(monkeypatch):
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        return _FakeHTTPResponse(_responses_response("HTTP answer."))
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token", timeout=None)
+    result = await transport.send(
+        {
+            "model": "gpt-5-mini",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Say ok"}],
+                }
+            ],
+            "reasoning": {"effort": "high"},
+            "stream": False,
+        }
+    )
+
+    assert result == _responses_response("HTTP answer.")
+    assert requests[0][1] is None
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_disabled_timeout_error_message(
+    monkeypatch,
+):
+    def fake_urlopen(request, timeout):
+        raise TimeoutError()
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token", timeout=None)
+    with pytest.raises(ProviderTransportError) as exc_info:
+        await transport.send(
+            {
+                "model": "gpt-5-mini",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Say ok"}],
+                    }
+                ],
+                "reasoning": {"effort": "high"},
+                "stream": False,
+            }
+        )
+
+    message = str(exc_info.value)
+    assert "timed out" in message
+    assert "after None seconds" not in message
+
+
 def test_parse_copilot_api_base_url_maps_proxy_endpoint_hosts():
     assert (
         parse_copilot_api_base_url(
@@ -924,6 +990,7 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
         provider.transport.endpoint
         == "https://copilot-api.enterprise.example/responses"
     )
+    assert provider.transport.timeout == DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS
     assert provider.transport._headers()["Authorization"] == "Bearer efp-token"
     assert provider.transport._headers()["x-initiator"] == "agent"
 

@@ -80,6 +80,7 @@ class CopilotTokenExchange:
 
 
 DEFAULT_COPILOT_REASONING_EFFORT = "high"
+DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS = 300
 SUPPORTED_COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 GITHUB_SOURCE_TOKEN_PREFIXES = (
     "ghp_",
@@ -104,7 +105,7 @@ class GitHubCopilotHTTPTransport:
         *,
         token: str,
         base_url: Optional[str] = None,
-        timeout: float = 60,
+        timeout: float | None = DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
         github_api_base_url: Optional[str] = None,
         user_agent: str = "GitHubCopilotChat/0.35.0",
         editor_version: str = "vscode/1.107.0",
@@ -203,11 +204,9 @@ class GitHubCopilotHTTPTransport:
             raise ProviderTransportError(
                 "GitHub Copilot HTTP transport failed: {0}".format(reason)
             ) from None
-        except TimeoutError as exc:
+        except TimeoutError:
             raise ProviderTransportError(
-                "GitHub Copilot HTTP transport timed out after {0} seconds".format(
-                    self.timeout
-                )
+                _format_timeout_message("GitHub Copilot HTTP transport", self.timeout)
             ) from None
 
         try:
@@ -416,7 +415,7 @@ def github_copilot_provider_from_env(
     metadata: Optional[Mapping[str, Any]] = None,
     reasoning_effort: Optional[str] = None,
     adapter: Optional[LLMEventAdapter] = None,
-    timeout: float = 60,
+    timeout: float | None = DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
     user_agent: str = "GitHubCopilotChat/0.35.0",
     initiator: str = "agent",
     env: Optional[Mapping[str, str]] = None,
@@ -771,7 +770,7 @@ def exchange_github_token_for_copilot_token(
     source_credential: str,
     *,
     github_api_base_url: Optional[str] = None,
-    timeout: float = 60,
+    timeout: float | None = DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
     user_agent: str = "GitHubCopilotChat/0.35.0",
     editor_version: str = "vscode/1.107.0",
     editor_plugin_version: str = "copilot-chat/0.35.0",
@@ -819,7 +818,7 @@ def exchange_github_token_for_copilot_token(
         ) from None
     except TimeoutError:
         raise ProviderTransportError(
-            "GitHub Copilot token exchange timed out after {0} seconds".format(timeout)
+            _format_timeout_message("GitHub Copilot token exchange", timeout)
         ) from None
 
     try:
@@ -1049,9 +1048,27 @@ def _unsupported_reasoning_message(value: Any) -> str:
     )
 
 
+def _format_timeout_message(prefix: str, timeout: Any) -> str:
+    if timeout is None:
+        return "{0} timed out".format(prefix)
+    return "{0} timed out after {1} seconds".format(
+        prefix,
+        _format_timeout_seconds(timeout),
+    )
+
+
+def _format_timeout_seconds(timeout: Any) -> str:
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError):
+        return str(timeout)
+    return "{0:g}".format(value)
+
+
 __all__ = [
     "CopilotTokenExchange",
     "DEFAULT_COPILOT_REASONING_EFFORT",
+    "DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS",
     "GitHubCopilotHTTPTransport",
     "GitHubCopilotProvider",
     "OpenAICompatibleProvider",

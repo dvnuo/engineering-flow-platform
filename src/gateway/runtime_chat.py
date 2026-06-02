@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import math
 import os
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -14,6 +15,7 @@ from src.efp_runtime.event_bus import RuntimeEventBus
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.llm.provider import (
     DEFAULT_COPILOT_REASONING_EFFORT,
+    DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
     GitHubCopilotHTTPTransport,
     GitHubCopilotProvider,
     ProviderTransportError,
@@ -36,6 +38,15 @@ PORTAL_RUNTIME_PROFILE_SOURCE = "portal.runtime_profile"
 RUNTIME_NATIVE_PROVIDER_ERROR = (
     "EFP runtime native mode only supports GitHub Copilot. "
     "Set llm.provider to github_copilot, github-copilot, or copilot."
+)
+DISABLED_TIMEOUT_VALUES = {"false", "off", "none", "disabled"}
+TIMEOUT_SECONDS_ENV_KEYS = (
+    "EFP_GITHUB_COPILOT_TIMEOUT_SECONDS",
+    "EFP_LLM_TIMEOUT_SECONDS",
+)
+TIMEOUT_MS_ENV_KEYS = (
+    "EFP_GITHUB_COPILOT_TIMEOUT_MS",
+    "EFP_LLM_TIMEOUT_MS",
 )
 
 
@@ -342,6 +353,7 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
     transport = GitHubCopilotHTTPTransport(
         token=token,
         base_url=_env_string("EFP_GITHUB_COPILOT_BASE_URL") or _config_string(llm_config, "api_base"),
+        timeout=_resolve_github_copilot_timeout(llm_config),
         user_agent="GitHubCopilotChat/0.35.0",
         initiator="agent",
     )
@@ -371,6 +383,113 @@ def _resolve_reasoning_effort(llm_config: Mapping[str, Any]) -> str:
             error_type="invalid_reasoning_effort",
             details={"provider": "github-copilot"},
         ) from exc
+
+
+def _resolve_github_copilot_timeout(llm_config: Mapping[str, Any]) -> float | None:
+    env_timeout = _timeout_from_env()
+    if env_timeout is not None:
+        value, unit, source = env_timeout
+        return _parse_timeout_value(value, unit=unit, source=source)
+
+    for field, unit in (
+        ("timeout_seconds", "seconds"),
+        ("timeout_ms", "ms"),
+        ("timeout", "ms"),
+        ("request_timeout_seconds", "seconds"),
+    ):
+        if field in llm_config:
+            return _parse_timeout_value(
+                llm_config.get(field),
+                unit=unit,
+                source="llm.{0}".format(field),
+            )
+
+    return DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS
+
+
+def _timeout_from_env() -> tuple[str, str, str] | None:
+    for name in TIMEOUT_SECONDS_ENV_KEYS:
+        value = _env_string(name)
+        if value is not None:
+            return value, "seconds", "env:{0}".format(name)
+    for name in TIMEOUT_MS_ENV_KEYS:
+        value = _env_string(name)
+        if value is not None:
+            return value, "ms", "env:{0}".format(name)
+    return None
+
+
+def _parse_timeout_value(value: Any, *, unit: str, source: str) -> float | None:
+    if _timeout_is_disabled(value):
+        return None
+    if unit == "seconds":
+        return _positive_timeout_seconds(value, source=source)
+    if unit == "ms":
+        return _positive_timeout_milliseconds(value, source=source) / 1000.0
+    raise AssertionError("unsupported timeout unit: {0}".format(unit))
+
+
+def _timeout_is_disabled(value: Any) -> bool:
+    if value is False:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in DISABLED_TIMEOUT_VALUES
+    return False
+
+
+def _positive_timeout_seconds(value: Any, *, source: str) -> float:
+    expected = "a positive number of seconds or false/off/none/disabled"
+    if isinstance(value, bool):
+        _raise_invalid_timeout(value, source, expected)
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = float(text)
+        except ValueError:
+            _raise_invalid_timeout(value, source, expected)
+    else:
+        _raise_invalid_timeout(value, source, expected)
+
+    if not math.isfinite(parsed) or parsed <= 0:
+        _raise_invalid_timeout(value, source, expected)
+    return parsed
+
+
+def _positive_timeout_milliseconds(value: Any, *, source: str) -> int:
+    expected = "a positive integer number of milliseconds or false/off/none/disabled"
+    if isinstance(value, bool):
+        _raise_invalid_timeout(value, source, expected)
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text.isdigit():
+            _raise_invalid_timeout(value, source, expected)
+        parsed = int(text, 10)
+    else:
+        _raise_invalid_timeout(value, source, expected)
+
+    if parsed <= 0:
+        _raise_invalid_timeout(value, source, expected)
+    return parsed
+
+
+def _raise_invalid_timeout(value: Any, source: str, expected: str) -> None:
+    raise RuntimeChatError(
+        "Invalid GitHub Copilot timeout value for {0}: expected {1}.".format(
+            source,
+            expected,
+        ),
+        status_code=400,
+        error_type="invalid_timeout",
+        details={
+            "provider": "github-copilot",
+            "source": source,
+            "value": value,
+        },
+    )
 
 
 def _env_string(name: str) -> str | None:
