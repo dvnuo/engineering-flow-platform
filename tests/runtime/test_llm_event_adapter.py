@@ -79,3 +79,58 @@ async def test_streaming_chat_chunks_emit_text_deltas():
     assert [event.delta for event in text_events] == ["Hello", " world"]
     assert events[-1].type == LLMEventType.STEP_FINISH
     assert events[-1].usage == {"total_tokens": 7}
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_chunks_emit_text_reasoning_and_tool_input_events():
+    adapter = DefaultLLMEventAdapter()
+    chunks = [
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {"type": "response.reasoning_summary_text.delta", "delta": "Thinking"},
+        {
+            "type": "response.output_item.added",
+            "item_id": "fc_1",
+            "item": {"type": "function_call", "id": "fc_1", "call_id": "call_search", "name": "search", "arguments": ""},
+        },
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '{"query":'},
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '"efp"}'},
+        {
+            "type": "response.output_item.done",
+            "item_id": "fc_1",
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_search",
+                "name": "search",
+                "arguments": '{"query":"efp"}',
+            },
+        },
+        {"type": "response.completed", "usage": {"total_tokens": 12}},
+    ]
+
+    events = [event async for event in adapter.normalize_stream(chunks)]
+
+    assert [event.delta for event in events if event.type == LLMEventType.TEXT_DELTA] == ["Hello"]
+    assert [event.delta for event in events if event.type == LLMEventType.REASONING_DELTA] == ["Thinking"]
+    tool_input_events = [
+        event.type for event in events
+        if event.type in {
+            LLMEventType.TOOL_INPUT_START,
+            LLMEventType.TOOL_INPUT_DELTA,
+            LLMEventType.TOOL_INPUT_END,
+            LLMEventType.TOOL_CALL_COMPLETE,
+        }
+    ]
+    assert tool_input_events == [
+        LLMEventType.TOOL_INPUT_START,
+        LLMEventType.TOOL_INPUT_DELTA,
+        LLMEventType.TOOL_INPUT_DELTA,
+        LLMEventType.TOOL_INPUT_END,
+        LLMEventType.TOOL_CALL_COMPLETE,
+    ]
+    completed = next(event.tool_call for event in events if event.type == LLMEventType.TOOL_CALL_COMPLETE)
+    assert completed.call_id == "call_search"
+    assert completed.tool_name == "search"
+    assert completed.arguments == {"query": "efp"}
+    assert events[-1].type == LLMEventType.STEP_FINISH
+    assert events[-1].usage == {"total_tokens": 12}

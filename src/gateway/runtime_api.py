@@ -43,6 +43,10 @@ from src.gateway.runtime_chat import (
     RuntimeChatError,
     run_runtime_chat,
 )
+from src.gateway.runtime_event_projection import (
+    RuntimeEventProjector,
+    is_projected_runtime_event,
+)
 from src.gateway.runtime_request_contracts import (
     build_stream_start_event_payload,
     extract_trusted_client_request_id,
@@ -692,6 +696,20 @@ async def _run_chat_via_execution_bus(
     )
 
 
+async def _emit_gateway_runtime_event(event_payload: Dict[str, Any]) -> None:
+    """Best-effort bridge from chat SSE events to the gateway WebSocket bus."""
+
+    try:
+        maybe_result = emit_agent_event(
+            str(event_payload.get("type") or event_payload.get("event_type") or "runtime_event"),
+            event_payload,
+        )
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
+    except Exception:
+        logger.debug("Best-effort gateway runtime event emit failed", exc_info=True)
+
+
 def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str], Optional[str]]:
     """Resolve runtime agent identity from server-side state/config, never from client body."""
     runtime_agent_id: Optional[str] = None
@@ -1270,6 +1288,12 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         # Run EFP runtime and stream runtime events where available.
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         set_log_context(agent_id=runtime_agent_id)
+        runtime_event_projector = RuntimeEventProjector(
+            request_id=request_id,
+            agent_id=runtime_agent_id,
+            agent_name=runtime_agent_name,
+            model=model,
+        )
         if runtime_agent_id and session_id:
             try:
                 await publish_session_metadata(
@@ -1308,8 +1332,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         while not run_task.done() or not event_queue.empty():
             try:
                 event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
-                escaped = str(event).replace('\n', '\\n').replace('\r', '\\r')
-                await response.write(f"event: progress\ndata: {escaped}\n\n".encode())
+                if isinstance(event, dict) and is_projected_runtime_event(event):
+                    event_payloads = [event]
+                else:
+                    event_payloads = runtime_event_projector.project(event)
+                for event_payload in event_payloads:
+                    await _emit_gateway_runtime_event(event_payload)
+                    await response.write(_sse_event_bytes("runtime_event", event_payload))
             except asyncio.TimeoutError:
                 continue
 
@@ -1403,11 +1432,19 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             metadata=execution_metadata,
         )
         if response is not None and response_prepared:
-            error_data = json.dumps(
-                {'error': str(e), "error_type": stream_error_type, "details": stream_details}
-            )
             try:
-                await response.write(f"event: error\ndata: {error_data}\n\n".encode())
+                await response.write(
+                    _sse_event_bytes(
+                        "error",
+                        {
+                            "error": str(e),
+                            "error_type": stream_error_type,
+                            "details": stream_details,
+                            "session_id": session_id,
+                            "request_id": request_id,
+                        },
+                    )
+                )
                 await response.write(_sse_event_bytes("done", {"ok": False, "session_id": session_id, "request_id": request_id}))
             except Exception:
                 pass

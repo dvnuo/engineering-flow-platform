@@ -131,3 +131,45 @@ async def test_event_bus_request_id_filter_does_not_match_parent_request_id():
     assert "parent_request_id" not in event["data"]
     assert event["data"]["request_id"] == "req-1"
     assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_event_bus_replay_returns_recent_matching_session_and_request_events():
+    bus = EventBus()
+
+    await bus.emit("session.next.text.delta", {"session_id": "s-1", "request_id": "req-1", "delta": "a"})
+    await bus.emit("session.next.text.delta", {"session_id": "s-1", "request_id": "req-2", "delta": "b"})
+    await bus.emit("session.next.tool.success", {"session_id": "s-1", "request_id": "req-1", "tool_name": "search"})
+
+    replayed = await bus.replay_events(
+        filters={"session_id": "s-1", "request_id": "req-1"},
+        replay_limit=10,
+    )
+
+    assert len(replayed) == 2
+    parsed = [json.loads(event) for event in replayed]
+    assert [event["type"] for event in parsed] == [
+        "session.next.text.delta",
+        "session.next.tool.success",
+    ]
+    assert all(event["data"]["request_id"] == "req-1" for event in parsed)
+
+
+@pytest.mark.asyncio
+async def test_event_bus_replay_limit_and_last_event_at():
+    bus = EventBus()
+
+    await bus.emit("runtime.event", {"session_id": "s-1", "request_id": "req-1", "step": 1})
+    first = json.loads((await bus.replay_events(filters={"session_id": "s-1"}))[0])
+    await asyncio.sleep(0.001)
+    await bus.emit("runtime.event", {"session_id": "s-1", "request_id": "req-1", "step": 2})
+    await bus.emit("runtime.event", {"session_id": "s-1", "request_id": "req-1", "step": 3})
+
+    replayed = await bus.replay_events(
+        filters={"session_id": "s-1", "request_id": "req-1"},
+        replay_limit=1,
+        last_event_at=str(first["ts"]),
+    )
+
+    assert len(replayed) == 1
+    assert json.loads(replayed[0])["data"]["step"] == 3

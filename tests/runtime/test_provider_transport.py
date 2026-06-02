@@ -21,6 +21,7 @@ from efp_runtime.llm.provider import (
     ProviderTransportError,
     RecordingTransport,
     SUPPORTED_COPILOT_REASONING_EFFORTS,
+    parse_sse_json_events,
     parse_copilot_api_base_url,
     github_copilot_provider_from_env,
 )
@@ -841,23 +842,52 @@ def test_github_source_token_exchange_keeps_explicit_base_url(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_github_copilot_http_transport_rejects_stream_without_network(
+async def test_github_copilot_http_transport_stream_parses_sse_chunks(
     monkeypatch,
 ):
-    called = False
+    requests = []
+    body = (
+        b"event: response.output_text.delta\n"
+        b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+        b'data: {"type":"response.reasoning_summary_text.delta","delta":"thinking"}\n\n'
+        b'data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\\"query\\":"}\n\n'
+        b"data: [DONE]\n\n"
+    )
 
     def fake_urlopen(request, timeout):
-        nonlocal called
-        called = True
-        return _FakeHTTPResponse({})
+        requests.append((request, timeout))
+        return _FakeStreamingHTTPResponse(body)
 
     monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
 
-    transport = GitHubCopilotHTTPTransport(token="secret-token")
-    with pytest.raises(ProviderTransportError, match="does not support streaming"):
-        await transport.send({"model": "gpt-5-mini", "stream": True})
+    transport = GitHubCopilotHTTPTransport(token="secret-token", timeout=12)
+    stream = await transport.send({"model": "gpt-5-mini", "stream": True})
+    chunks = [chunk async for chunk in stream]
 
-    assert called is False
+    assert chunks == [
+        {"type": "response.output_text.delta", "delta": "hello"},
+        {"type": "response.reasoning_summary_text.delta", "delta": "thinking"},
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '{"query":'},
+    ]
+    request, timeout = requests[0]
+    assert timeout == 12
+    assert _request_headers(request)["accept"] == "text/event-stream"
+
+
+def test_parse_sse_json_events_supports_multiline_data_and_done():
+    chunks = list(
+        parse_sse_json_events(
+            [
+                'data: {"type":"response.output_text.delta",',
+                'data: "delta":"hi"}',
+                "",
+                "data: [DONE]",
+                "",
+            ]
+        )
+    )
+
+    assert chunks == [{"type": "response.output_text.delta", "delta": "hi"}]
 
 
 @pytest.mark.asyncio
@@ -1500,6 +1530,20 @@ class _FakeHTTPResponse:
         if isinstance(self.payload, bytes):
             return self.payload
         return json.dumps(self.payload).encode("utf-8")
+
+
+class _FakeStreamingHTTPResponse:
+    def __init__(self, body):
+        self._lines = io.BytesIO(body)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def readline(self):
+        return self._lines.readline()
 
 
 def _request_headers(request):

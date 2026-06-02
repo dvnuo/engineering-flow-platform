@@ -128,6 +128,7 @@ class DefaultLLMEventAdapter:
         text_started = False
         text_part_id = _stable_part_id("text", 0)
         tool_drafts: Dict[int, _ToolCallDraft] = {}
+        response_tool_drafts: Dict[str, _ToolCallDraft] = {}
         usage: Dict[str, Any] = {}
         finish_reason: Optional[str] = None
 
@@ -147,6 +148,21 @@ class DefaultLLMEventAdapter:
 
             if raw.get("usage"):
                 usage = _dict_or_empty(raw.get("usage"))
+
+            response_events, consumed_response_chunk = self._normalize_responses_stream_chunk(
+                raw,
+                response_tool_drafts,
+            )
+            for event in response_events:
+                if event.type == LLMEventType.TEXT_DELTA and not text_started:
+                    yield LLMEvent(LLMEventType.TEXT_START, part_id=text_part_id, raw=raw)
+                    text_started = True
+                if event.type in (LLMEventType.TEXT_DELTA, LLMEventType.TEXT_END):
+                    event.part_id = event.part_id or text_part_id
+                yield event
+            if consumed_response_chunk:
+                finish_reason = finish_reason or _extract_finish_reason(raw)
+                continue
 
             for event in self._normalize_simple_chunk(raw):
                 if event.type == LLMEventType.TEXT_DELTA and not text_started:
@@ -256,9 +272,116 @@ class DefaultLLMEventAdapter:
                     raw=draft.raw,
                 )
 
+        for draft in sorted(response_tool_drafts.values(), key=lambda item: item.index):
+            if draft.started:
+                yield LLMEvent(
+                    LLMEventType.TOOL_INPUT_END,
+                    tool_call_id=draft.id,
+                    tool_name=draft.name,
+                    text=draft.arguments_text,
+                    raw=draft.raw,
+                )
+                tool_call = _make_tool_call(
+                    {
+                        "id": draft.id,
+                        "type": "function",
+                        "function": {
+                            "name": draft.name,
+                            "arguments": draft.arguments_text,
+                        },
+                    },
+                    draft.index,
+                )
+                yield LLMEvent(
+                    LLMEventType.TOOL_CALL_COMPLETE,
+                    tool_call_id=tool_call.call_id,
+                    tool_name=tool_call.tool_name,
+                    tool_call=tool_call,
+                    raw=draft.raw,
+                )
+
         if started:
             metadata = {"finish_reason": finish_reason} if finish_reason else {}
             yield LLMEvent(LLMEventType.STEP_FINISH, usage=usage, metadata=metadata)
+
+    def _normalize_responses_stream_chunk(
+        self,
+        raw: Mapping[str, Any],
+        response_tool_drafts: Dict[str, _ToolCallDraft],
+    ) -> tuple[List[LLMEvent], bool]:
+        response_type = raw.get("type")
+        if not isinstance(response_type, str) or not response_type.startswith("response."):
+            return [], False
+
+        if response_type in {"response.output_text.delta"}:
+            delta = str(raw.get("delta") or "")
+            return [LLMEvent(LLMEventType.TEXT_DELTA, delta=delta, text=delta, raw=dict(raw))], True
+
+        if response_type in {
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_text.delta",
+        }:
+            delta = str(raw.get("delta") or "")
+            return [LLMEvent(LLMEventType.REASONING_DELTA, delta=delta, text=delta, raw=dict(raw))], True
+
+        if response_type == "response.function_call_arguments.delta":
+            call_id = _response_call_id(raw, response_tool_drafts)
+            draft = _response_tool_draft(response_tool_drafts, call_id, raw)
+            delta = str(raw.get("delta") or "")
+            events = _ensure_response_tool_started(draft)
+            if delta:
+                draft.arguments_chunks.append(delta)
+                draft.raw.update(dict(raw))
+                events.append(
+                    LLMEvent(
+                        LLMEventType.TOOL_INPUT_DELTA,
+                        tool_call_id=draft.id,
+                        tool_name=draft.name,
+                        delta=delta,
+                        text=delta,
+                        raw=dict(draft.raw),
+                    )
+                )
+            return events, True
+
+        if response_type in {"response.output_item.added", "response.output_item.done"}:
+            item = raw.get("item")
+            if not isinstance(item, Mapping) or not _is_responses_function_call_item(item):
+                return [], True
+            call_id = _response_item_draft_key(raw, item, response_tool_drafts)
+            draft = _response_tool_draft(response_tool_drafts, call_id, raw, item=item)
+            events = _ensure_response_tool_started(draft)
+            arguments = item.get("arguments")
+            if arguments not in (None, "") and not draft.arguments_text:
+                arguments_text = _copilot_stream_value_text(arguments)
+                draft.arguments_chunks.append(arguments_text)
+                events.append(
+                    LLMEvent(
+                        LLMEventType.TOOL_INPUT_DELTA,
+                        tool_call_id=draft.id,
+                        tool_name=draft.name,
+                        delta=arguments_text,
+                        text=arguments_text,
+                        raw=dict(draft.raw),
+                    )
+                )
+            if response_type == "response.output_item.done":
+                events.extend(_complete_response_tool_draft(draft))
+                response_tool_drafts.pop(call_id, None)
+            return events, True
+
+        if response_type == "response.function_call_arguments.done":
+            call_id = _response_call_id(raw, response_tool_drafts)
+            draft = _response_tool_draft(response_tool_drafts, call_id, raw)
+            arguments = raw.get("arguments")
+            if arguments not in (None, "") and not draft.arguments_text:
+                draft.arguments_chunks.append(_copilot_stream_value_text(arguments))
+            events = _ensure_response_tool_started(draft)
+            events.extend(_complete_response_tool_draft(draft))
+            response_tool_drafts.pop(call_id, None)
+            return events, True
+
+        return [], True
 
     def _normalize_simple_chunk(self, raw: Mapping[str, Any]) -> List[LLMEvent]:
         event_type = raw.get("type") or raw.get("event")
@@ -280,7 +403,11 @@ class DefaultLLMEventAdapter:
         if response_type in {"response.output_text.delta", "output_text.delta"}:
             delta = str(raw.get("delta") or "")
             return [LLMEvent(LLMEventType.TEXT_DELTA, delta=delta, text=delta, raw=dict(raw))]
-        if response_type in {"response.reasoning_text.delta", "reasoning_delta"}:
+        if response_type in {
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_text.delta",
+            "reasoning_delta",
+        }:
             delta = str(raw.get("delta") or "")
             return [LLMEvent(LLMEventType.REASONING_DELTA, delta=delta, text=delta, raw=dict(raw))]
         if response_type in {
@@ -572,6 +699,121 @@ def _format_error(error: Any) -> str:
         if message:
             return str(message)
     return str(error)
+
+
+def _response_call_id(
+    raw: Mapping[str, Any],
+    drafts: Mapping[str, _ToolCallDraft],
+    *,
+    fallback: Any = None,
+) -> str:
+    for key in ("call_id", "id", "item_id", "tool_call_id"):
+        value = raw.get(key)
+        if value not in (None, ""):
+            return str(value)
+    if fallback not in (None, ""):
+        return str(fallback)
+    output_index = raw.get("output_index")
+    if output_index not in (None, ""):
+        return f"call_{output_index}"
+    return f"call_{len(drafts)}"
+
+
+def _response_tool_draft(
+    drafts: Dict[str, _ToolCallDraft],
+    call_id: str,
+    raw: Mapping[str, Any],
+    *,
+    item: Mapping[str, Any] | None = None,
+) -> _ToolCallDraft:
+    draft = drafts.get(call_id)
+    source = item if item is not None else raw
+    if draft is None:
+        draft = _ToolCallDraft(
+            index=len(drafts),
+            id=str(source.get("call_id") or source.get("id") or call_id),
+            name=str(source.get("name") or source.get("tool_name") or ""),
+            raw=dict(raw),
+        )
+        drafts[call_id] = draft
+    else:
+        draft.raw.update(dict(raw))
+        if source.get("call_id") or source.get("id"):
+            draft.id = str(source.get("call_id") or source.get("id"))
+        if source.get("name") or source.get("tool_name"):
+            draft.name = str(source.get("name") or source.get("tool_name"))
+    if item is not None:
+        draft.raw["item"] = dict(item)
+    return draft
+
+
+def _response_item_draft_key(
+    raw: Mapping[str, Any],
+    item: Mapping[str, Any],
+    drafts: Mapping[str, _ToolCallDraft],
+) -> str:
+    for value in (raw.get("item_id"), item.get("id"), item.get("call_id")):
+        if value not in (None, ""):
+            return str(value)
+    return _response_call_id(item, drafts)
+
+
+def _ensure_response_tool_started(draft: _ToolCallDraft) -> List[LLMEvent]:
+    if draft.started:
+        return []
+    draft.started = True
+    return [
+        LLMEvent(
+            LLMEventType.TOOL_INPUT_START,
+            tool_call_id=draft.id,
+            tool_name=draft.name,
+            raw=dict(draft.raw),
+        )
+    ]
+
+
+def _complete_response_tool_draft(draft: _ToolCallDraft) -> List[LLMEvent]:
+    tool_call = _make_tool_call(
+        {
+            "id": draft.id,
+            "type": "function",
+            "function": {
+                "name": draft.name,
+                "arguments": draft.arguments_text,
+            },
+        },
+        draft.index,
+    )
+    return [
+        LLMEvent(
+            LLMEventType.TOOL_INPUT_END,
+            tool_call_id=draft.id,
+            tool_name=draft.name,
+            text=draft.arguments_text,
+            raw=dict(draft.raw),
+        ),
+        LLMEvent(
+            LLMEventType.TOOL_CALL_COMPLETE,
+            tool_call_id=tool_call.call_id,
+            tool_name=tool_call.tool_name,
+            tool_call=tool_call,
+            raw=dict(draft.raw),
+        ),
+    ]
+
+
+def _is_responses_function_call_item(item: Mapping[str, Any]) -> bool:
+    return str(item.get("type") or "") in {"function_call", "tool_call"}
+
+
+def _copilot_stream_value_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, (Mapping, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return str(value)
 
 
 _LLM_EVENT_TYPE_VALUES = {event_type.value for event_type in LLMEventType}

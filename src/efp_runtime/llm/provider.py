@@ -8,7 +8,7 @@ provider data.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 import inspect
@@ -162,10 +162,83 @@ class GitHubCopilotHTTPTransport:
 
     async def send(self, payload: dict[str, Any]) -> TransportOutput:
         if payload.get("stream") is True:
-            raise ProviderTransportError(
-                "GitHub Copilot HTTP transport does not support streaming responses"
-            )
+            return self._send_stream(payload)
         return await asyncio.to_thread(self._send_sync, payload)
+
+    async def _send_stream(self, payload: dict[str, Any]) -> AsyncIterator[Mapping[str, Any]]:
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        done = object()
+        loop = asyncio.get_running_loop()
+
+        def worker() -> None:
+            try:
+                for chunk in self._send_stream_sync(payload):
+                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            except BaseException as exc:  # noqa: BLE001 - propagated through async iterator.
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, done)
+
+        task = asyncio.create_task(asyncio.to_thread(worker))
+        try:
+            while True:
+                item = await queue.get()
+                if item is done:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        if not task.done():
+            await task
+
+    def _send_stream_sync(self, payload: dict[str, Any]) -> Iterable[Mapping[str, Any]]:
+        try:
+            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport received a non-JSON payload"
+            ) from exc
+
+        request = urllib_request.Request(
+            self.endpoint,
+            data=body,
+            headers=self._headers(stream=True),
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                yield from parse_sse_json_events(_iter_response_lines(response))
+        except urllib_error.HTTPError as exc:
+            response_text = _read_http_error_body(exc)
+            model_unavailable_error = _model_unavailable_error_from_http_error(
+                exc,
+                response_text=response_text,
+                token=self._token,
+            )
+            if model_unavailable_error is not None:
+                raise model_unavailable_error from None
+            message = _format_http_error(
+                exc,
+                self._token,
+                response_text=response_text,
+            )
+            raise ProviderTransportError(message) from None
+        except urllib_error.URLError as exc:
+            reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport failed: {0}".format(reason)
+            ) from None
+        except TimeoutError:
+            raise ProviderTransportError(
+                _format_timeout_message("GitHub Copilot HTTP transport", self.timeout)
+            ) from None
 
     def _send_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -228,11 +301,11 @@ class GitHubCopilotHTTPTransport:
             )
         return data
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, *, stream: bool = False) -> dict[str, str]:
         return {
             "Authorization": "Bearer {0}".format(self._token),
             "Content-Type": "application/json",
-            "Accept": "application/vnd.github.copilot-chat-preview+json",
+            "Accept": "text/event-stream" if stream else "application/vnd.github.copilot-chat-preview+json",
             "User-Agent": self.user_agent,
             "Editor-Version": self.editor_version,
             "Editor-Plugin-Version": self.editor_plugin_version,
@@ -455,6 +528,44 @@ def github_copilot_provider_from_env(
         reasoning_effort=configured_reasoning_effort,
         adapter=adapter,
     )
+
+
+def parse_sse_json_events(lines: Iterable[bytes | str]) -> Iterable[Mapping[str, Any]]:
+    """Parse text/event-stream data blocks into JSON object chunks."""
+
+    data_lines: list[str] = []
+
+    def flush() -> Iterable[Mapping[str, Any]]:
+        if not data_lines:
+            return []
+        raw_data = "\n".join(data_lines).strip()
+        data_lines.clear()
+        if not raw_data or raw_data == "[DONE]":
+            return []
+        try:
+            parsed = json.loads(raw_data)
+        except json.JSONDecodeError as exc:
+            raise ProviderTransportError(
+                "GitHub Copilot HTTP transport returned invalid SSE JSON"
+            ) from exc
+        if isinstance(parsed, Mapping):
+            return [dict(parsed)]
+        return [{"data": parsed}]
+
+    for raw_line in lines:
+        if isinstance(raw_line, bytes):
+            line = raw_line.decode("utf-8", errors="replace")
+        else:
+            line = str(raw_line)
+        line = line.rstrip("\r\n")
+        if not line:
+            yield from flush()
+            continue
+        if line.startswith("#"):
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    yield from flush()
 
 
 def validate_copilot_reasoning_effort(value: Any) -> str:
@@ -1010,6 +1121,14 @@ def _read_http_error_body(exc: urllib_error.HTTPError) -> str:
         return ""
 
 
+def _iter_response_lines(response: Any) -> Iterable[bytes]:
+    while True:
+        line = response.readline()
+        if not line:
+            break
+        yield line
+
+
 def _redact_secret(text: str, secret: str) -> str:
     if not text or not secret:
         return text
@@ -1082,6 +1201,7 @@ __all__ = [
     "exchange_github_token_for_copilot_token",
     "github_copilot_provider_from_env",
     "is_github_source_token",
+    "parse_sse_json_events",
     "parse_copilot_api_base_url",
     "validate_copilot_reasoning_effort",
 ]

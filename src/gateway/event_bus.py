@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from datetime import datetime, timezone
+from typing import Any, Deque, Dict, List, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +35,9 @@ class _ListenerRecord:
 class EventBus:
     """Simple in-memory event bus for agent events."""
 
-    def __init__(self):
+    def __init__(self, *, history_limit: int = 1000):
         self._listeners: List[_ListenerRecord] = []
+        self._history: Deque[str] = deque(maxlen=max(1, int(history_limit)))
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -96,15 +100,11 @@ class EventBus:
 
     async def emit(self, event_type: str, data: Dict[str, Any]):
         """Emit an event to matching listeners."""
-        import json
-
-        event = json.dumps({
-            "type": event_type,
-            "data": data,
-            "ts": asyncio.get_event_loop().time()
-        })
+        event_data = _event_record(event_type, data, ts=time.time())
+        event = _serialize_event_record(event_data)
 
         async with self._lock:
+            self._history.append(event)
             listeners = list(self._listeners)
 
         for listener in listeners:
@@ -120,16 +120,13 @@ class EventBus:
 
         This is called from sync callbacks, so we need to be careful about the event loop.
         """
-        import json
         logger.info(f"[EventBus] emit_sync: {event_type}")
 
-        event = json.dumps({
-            "type": event_type,
-            "data": data,
-            "ts": 0
-        })
+        event_data = _event_record(event_type, data, ts=time.time())
+        event = _serialize_event_record(event_data)
 
         listeners = list(self._listeners)
+        self._history.append(event)
 
         for listener in listeners:
             if not self._event_matches_filters(event_type, data, listener.filters):
@@ -139,6 +136,94 @@ class EventBus:
                 logger.info("[EventBus] Event sent to listener")
             except Exception as e:
                 logger.error(f"[EventBus] Error: {e}")
+
+    async def replay_events(
+        self,
+        *,
+        filters: Dict[str, str] | None = None,
+        replay_limit: int = 100,
+        last_event_at: str | None = None,
+    ) -> List[str]:
+        """Return recent cached events matching the same filters used by live listeners."""
+
+        normalized_filters = self._normalize_filters(filters)
+        limit = _normalize_replay_limit(replay_limit)
+        async with self._lock:
+            history = list(self._history)
+
+        matching: List[str] = []
+        for event in history:
+            parsed = _parse_event_record(event)
+            if parsed is None:
+                continue
+            data = parsed.get("data")
+            if not isinstance(data, dict):
+                continue
+            event_type = str(parsed.get("type") or "")
+            if not self._event_matches_filters(event_type, data, normalized_filters):
+                continue
+            if not _event_is_after(parsed, last_event_at):
+                continue
+            matching.append(event)
+        if limit <= 0:
+            return []
+        return matching[-limit:]
+
+
+def _event_record(event_type: str, data: Mapping[str, Any], *, ts: float) -> dict[str, Any]:
+    return {
+        "type": event_type,
+        "data": dict(data),
+        "ts": ts,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def _serialize_event_record(record: Mapping[str, Any]) -> str:
+    import json
+
+    return json.dumps(dict(record), ensure_ascii=False, default=str)
+
+
+def _parse_event_record(event: str) -> dict[str, Any] | None:
+    import json
+
+    try:
+        parsed = json.loads(event)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_replay_limit(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 100
+    if parsed < 0:
+        return 0
+    return min(parsed, 500)
+
+
+def _event_is_after(event: Mapping[str, Any], last_event_at: str | None) -> bool:
+    if not last_event_at:
+        return True
+    marker = str(last_event_at).strip()
+    if not marker:
+        return True
+    try:
+        marker_float = float(marker)
+    except ValueError:
+        marker_float = None
+    if marker_float is not None:
+        try:
+            return float(event.get("ts") or 0) > marker_float
+        except (TypeError, ValueError):
+            return True
+    created_at = event.get("created_at")
+    if not created_at:
+        return True
+    return str(created_at) > marker
 
 
 # Global event bus instance

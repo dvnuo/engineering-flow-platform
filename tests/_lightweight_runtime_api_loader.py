@@ -70,6 +70,15 @@ def load_runtime_api_lightweight():
             self.error_type = error_type
             self.details = dict(details or {})
 
+    class _RuntimeEventProjector:
+        def __init__(self, **_kwargs):
+            pass
+
+        def project(self, event):
+            if isinstance(event, dict):
+                return [event]
+            return [{"type": "runtime.event", "event_type": "runtime.event", "data": {}, "properties": {}}]
+
     class _RuntimeSessionArtifacts:
         def __init__(self):
             self.storage_dir = Path("/tmp/efp-lightweight-runtime-api")
@@ -185,6 +194,11 @@ def load_runtime_api_lightweight():
             "src.gateway.runtime_request_contracts",
             build_stream_start_event_payload=lambda *_a, **_k: {},
             extract_trusted_client_request_id=lambda *_a, **_k: None,
+        ),
+        "src.gateway.runtime_event_projection": _module(
+            "src.gateway.runtime_event_projection",
+            RuntimeEventProjector=_RuntimeEventProjector,
+            is_projected_runtime_event=lambda event: isinstance(event, dict) and "event_type" in event,
         ),
         "src.runtime.capability_registry": _module("src.runtime.capability_registry", get_capability_registry=lambda: {}),
         "src.gateway.event_bus": _module("src.gateway.event_bus", emit_agent_event=lambda *_a, **_k: None),
