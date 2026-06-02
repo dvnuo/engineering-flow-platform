@@ -87,6 +87,24 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
     }
 )
 
+RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
+    (
+        "Use bash for external CLI tools configured by the runtime profile: "
+        "jira, confluence, gh, and git."
+    ),
+    (
+        "For jira and confluence, always pass --json. Before complex commands, "
+        "inspect commands/schema/help llm; prefer --dry-run for writes, and use "
+        "--yes only when a destructive action was explicitly confirmed."
+    ),
+    "Use gh for GitHub issues, pull requests, and api calls; use git for clone, fetch, push, and status.",
+    (
+        "Credentials were applied by the runtime profile through the real CLIs; "
+        "if jira or confluence returns auth_failed, or gh/git authentication fails, "
+        "report a runtime profile configuration problem."
+    ),
+]
+
 
 class ServiceReloadManager:
     """Manager for services that need to be reinitialized when config changes."""
@@ -149,6 +167,44 @@ class ServiceReloadManager:
 service_reload_manager = ServiceReloadManager()
 
 
+def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, Any]) -> bool:
+    if not isinstance(overlay, dict) or "instruction_texts" in overlay:
+        return False
+    return (
+        _has_atlassian_profile_instances(overlay.get("jira"))
+        or _has_atlassian_profile_instances(overlay.get("confluence"))
+        or _has_github_profile_token(overlay.get("github"))
+        or _has_git_profile_user(overlay.get("git"))
+    )
+
+
+def _has_atlassian_profile_instances(section: Any) -> bool:
+    if not isinstance(section, dict) or section.get("enabled") is False:
+        return False
+    instances = section.get("instances")
+    if not isinstance(instances, list):
+        return False
+    for instance in instances:
+        if not isinstance(instance, dict) or instance.get("enabled") is False:
+            continue
+        if str(instance.get("base_url") or instance.get("url") or "").strip():
+            return True
+    return False
+
+
+def _has_github_profile_token(section: Any) -> bool:
+    if not isinstance(section, dict) or section.get("enabled") is False:
+        return False
+    return bool(str(section.get("api_token") or section.get("token") or section.get("access_token") or "").strip())
+
+
+def _has_git_profile_user(section: Any) -> bool:
+    user = section.get("user") if isinstance(section, dict) else None
+    if not isinstance(user, dict):
+        return False
+    return bool(str(user.get("name") or "").strip() and str(user.get("email") or "").strip())
+
+
 class Config:
     """Configuration management.
     
@@ -202,10 +258,12 @@ class Config:
         "jira": {
             "enabled": True,
             "instances": True,
+            "default_instance": True,
         },
         "confluence": {
             "enabled": True,
             "instances": True,
+            "default_instance": True,
         },
         "github": {
             "enabled": True,
@@ -384,6 +442,8 @@ class Config:
         """Apply Portal-managed snapshot into config.yaml and reload."""
         previous_sections = set(self._managed_sections)
         filtered_overlay = self._filter_managed_overlay_sections(overlay_config or {})
+        if _should_inject_runtime_profile_external_cli_instructions(filtered_overlay):
+            filtered_overlay["instruction_texts"] = list(RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS)
         new_sections = set(filtered_overlay.keys())
 
         config_document = self._load_yaml_document(self.config_path)
