@@ -47,3 +47,49 @@ def test_set_managed_overlay_prunes_stale_llm_temperature_and_response_flow(tmp_
     assert "temperature" not in written["llm"]
     assert "response_flow" not in written["llm"]
     assert written["session"]["timeout_minutes"] == 30
+
+
+def test_set_managed_overlay_writes_and_prunes_llm_timeout_fields(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "llm:\n"
+        "  provider: openai\n"
+        "  timeout_ms: 120000\n"
+        "  timeout_seconds: 120\n"
+        "  timeout: 120000\n",
+        encoding="utf-8",
+    )
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        runtime_profile_id="rp-timeout",
+        revision=1,
+        overlay_config={
+            "llm": {
+                "provider": "github_copilot",
+                "timeout_ms": 600000,
+            }
+        },
+    )
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        written = yaml.load(handle)
+
+    assert written["llm"]["provider"] == "github_copilot"
+    assert written["llm"]["timeout_ms"] == 600000
+    assert "timeout_seconds" not in written["llm"]
+    assert "timeout" not in written["llm"]
+
+    cfg.set_managed_overlay(
+        runtime_profile_id="rp-timeout",
+        revision=2,
+        overlay_config={"llm": {"provider": "github_copilot"}},
+    )
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        written = yaml.load(handle)
+
+    assert written["llm"]["provider"] == "github_copilot"
+    assert "timeout_ms" not in written["llm"]
+    assert "timeout_seconds" not in written["llm"]
+    assert "timeout" not in written["llm"]

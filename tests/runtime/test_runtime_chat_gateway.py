@@ -10,6 +10,19 @@ from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.gateway import runtime_chat
 
 
+TIMEOUT_ENV_KEYS = (
+    "EFP_GITHUB_COPILOT_TIMEOUT_SECONDS",
+    "EFP_LLM_TIMEOUT_SECONDS",
+    "EFP_GITHUB_COPILOT_TIMEOUT_MS",
+    "EFP_LLM_TIMEOUT_MS",
+)
+
+
+def _clear_timeout_env(monkeypatch):
+    for key in TIMEOUT_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
 def test_runtime_chat_workspace_root_uses_runtime_default(monkeypatch):
     class _FakeConfig:
         def get_effective_config(self):
@@ -72,6 +85,7 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
     monkeypatch.delenv("GITHUB_COPILOT_TOKEN", raising=False)
     monkeypatch.delenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("EFP_LLM_REASONING_EFFORT", raising=False)
+    _clear_timeout_env(monkeypatch)
     requests = []
 
     def fake_urlopen(request, timeout):
@@ -106,6 +120,7 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
     assert provider.endpoint == "responses"
     assert provider.reasoning_effort == "xhigh"
     assert provider.transport.endpoint == "https://copilot-api.enterprise.example/responses"
+    assert provider.transport.timeout == 300
     assert provider.transport.token_source == "github_exchange"
     assert provider.transport._headers()["Authorization"] == (
         "Bearer copilot-config-token;"
@@ -116,7 +131,8 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
     )
     assert provider.transport._headers()["x-initiator"] == "agent"
     assert len(requests) == 1
-    exchange_request, _ = requests[0]
+    exchange_request, exchange_timeout = requests[0]
+    assert exchange_timeout == 300
     assert exchange_request.full_url == (
         "https://api.github.com/copilot_internal/v2/token"
     )
@@ -134,6 +150,7 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
 def test_build_github_copilot_provider_prefers_env_reasoning(monkeypatch):
     monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
     monkeypatch.setenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", "low")
+    _clear_timeout_env(monkeypatch)
     monkeypatch.setattr(
         runtime_chat.config,
         "_config",
@@ -154,6 +171,7 @@ def test_build_github_copilot_provider_prefers_env_reasoning(monkeypatch):
 
 def test_build_github_copilot_provider_rejects_invalid_reasoning(monkeypatch):
     monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    _clear_timeout_env(monkeypatch)
     monkeypatch.setattr(
         runtime_chat.config,
         "_config",
@@ -166,6 +184,122 @@ def test_build_github_copilot_provider_rejects_invalid_reasoning(monkeypatch):
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_type == "invalid_reasoning_effort"
+
+
+@pytest.mark.parametrize(
+    ("timeout_config", "expected_timeout"),
+    [
+        ({"timeout_ms": 600000}, 600),
+        ({"timeout_seconds": 120}, 120),
+        ({"timeout": 450000}, 450),
+        ({"request_timeout_seconds": 180}, 180),
+    ],
+)
+def test_build_github_copilot_provider_resolves_configured_timeout(
+    monkeypatch,
+    timeout_config,
+    expected_timeout,
+):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    _clear_timeout_env(monkeypatch)
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", **timeout_config}},
+        raising=False,
+    )
+
+    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert provider.transport.timeout == expected_timeout
+
+
+def test_build_github_copilot_provider_prefers_env_timeout_over_config(monkeypatch):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    _clear_timeout_env(monkeypatch)
+    monkeypatch.setenv("EFP_LLM_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TIMEOUT_MS", "600000")
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", "timeout_seconds": 120}},
+        raising=False,
+    )
+
+    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert provider.transport.timeout == 90
+
+
+@pytest.mark.parametrize(
+    ("timeout_config", "env_name", "env_value"),
+    [
+        ({"timeout": False}, None, None),
+        ({"timeout_ms": 600000}, "EFP_GITHUB_COPILOT_TIMEOUT_SECONDS", "false"),
+        ({"timeout_ms": 600000}, "EFP_LLM_TIMEOUT_MS", "off"),
+    ],
+)
+def test_build_github_copilot_provider_can_disable_timeout(
+    monkeypatch,
+    timeout_config,
+    env_name,
+    env_value,
+):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    _clear_timeout_env(monkeypatch)
+    if env_name is not None:
+        monkeypatch.setenv(env_name, env_value)
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", **timeout_config}},
+        raising=False,
+    )
+
+    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert provider.transport.timeout is None
+
+
+@pytest.mark.parametrize("timeout_config", [{"timeout_ms": "abc"}, {"timeout_ms": 0}])
+def test_build_github_copilot_provider_rejects_invalid_timeout_config(
+    monkeypatch,
+    timeout_config,
+):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    _clear_timeout_env(monkeypatch)
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", **timeout_config}},
+        raising=False,
+    )
+
+    with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
+        runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_type == "invalid_timeout"
+    assert exc_info.value.details["provider"] == "github-copilot"
+
+
+def test_build_github_copilot_provider_rejects_invalid_timeout_env(monkeypatch):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    _clear_timeout_env(monkeypatch)
+    monkeypatch.setenv("EFP_LLM_TIMEOUT_SECONDS", "0")
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", "timeout_seconds": 120}},
+        raising=False,
+    )
+
+    with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
+        runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_type == "invalid_timeout"
+    assert exc_info.value.details["provider"] == "github-copilot"
 
 
 @pytest.mark.asyncio
