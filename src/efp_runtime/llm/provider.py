@@ -28,6 +28,7 @@ from .models import (
     canonicalize_copilot_model_id,
 )
 from .openai import (
+    normalize_responses_call_id,
     provider_request_to_openai_chat,
     provider_request_to_openai_responses,
 )
@@ -589,9 +590,10 @@ def _sanitize_copilot_message_content_item(
 
 
 def _sanitize_copilot_function_call_item(item: Mapping[str, Any]) -> dict[str, Any]:
+    call_id = normalize_responses_call_id(_copilot_string(item.get("call_id", "")))
     return {
         "type": "function_call",
-        "call_id": _copilot_string(item.get("call_id", "")),
+        "call_id": call_id,
         "name": _copilot_string(item.get("name") or item.get("tool_name") or ""),
         "arguments": _copilot_arguments_text(item),
     }
@@ -605,9 +607,10 @@ def _sanitize_copilot_function_call_output_item(
         output = item.get("content")
     if output is None:
         output = item.get("error", "")
+    call_id = normalize_responses_call_id(_copilot_string(item.get("call_id", "")))
     return {
         "type": "function_call_output",
-        "call_id": _copilot_string(item.get("call_id", "")),
+        "call_id": call_id,
         "output": _copilot_value_text(output),
     }
 

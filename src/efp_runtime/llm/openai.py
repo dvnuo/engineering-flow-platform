@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import hashlib
 import json
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,24 @@ from .request import (
 
 
 JsonDict = Dict[str, Any]
+RESPONSES_CALL_ID_MAX_LENGTH = 64
+_RESPONSES_CALL_ID_PREFIX = "call_"
+
+
+def normalize_responses_call_id(call_id: Any) -> str:
+    """Return a Responses-compatible call_id without changing short IDs."""
+
+    if isinstance(call_id, str):
+        original = call_id
+    elif call_id is None:
+        original = ""
+    else:
+        original = str(call_id)
+    if not original or len(original) <= RESPONSES_CALL_ID_MAX_LENGTH:
+        return original
+    digest = hashlib.sha256(original.encode("utf-8")).hexdigest()
+    prefix_length = RESPONSES_CALL_ID_MAX_LENGTH - len(_RESPONSES_CALL_ID_PREFIX)
+    return "{0}{1}".format(_RESPONSES_CALL_ID_PREFIX, digest[:prefix_length])
 
 
 def provider_request_to_openai_chat(
@@ -209,7 +228,7 @@ def _tool_call_to_responses_item(tool_call: RequestToolCall) -> JsonDict:
     arguments_text = _tool_call_arguments_text(tool_call)
     return {
         "type": "function_call",
-        "call_id": tool_call.call_id,
+        "call_id": normalize_responses_call_id(tool_call.call_id),
         "name": tool_call.tool_name,
         "tool_name": tool_call.tool_name,
         "arguments": arguments_text,
@@ -226,7 +245,7 @@ def _tool_call_to_responses_item(tool_call: RequestToolCall) -> JsonDict:
 def _tool_result_to_responses_item(tool_result: RequestToolResult) -> JsonDict:
     return {
         "type": "function_call_output",
-        "call_id": tool_result.call_id,
+        "call_id": normalize_responses_call_id(tool_result.call_id),
         "name": tool_result.tool_name,
         "tool_name": tool_result.tool_name,
         "output": _tool_result_content(tool_result),

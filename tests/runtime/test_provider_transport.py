@@ -386,6 +386,77 @@ def test_github_copilot_tool_history_uses_top_level_response_items():
 
 
 @pytest.mark.asyncio
+async def test_github_copilot_transport_shortens_long_responses_call_ids():
+    long_call_id = "call_" + ("copilot_raw_tool_call_id_" * 18)
+    transport = RecordingTransport([_responses_response("Done.")])
+    provider = GitHubCopilotProvider(transport=transport)
+
+    await provider.invoke(
+        _runtime_request_with_tool_call_and_result_history(call_id=long_call_id)
+    )
+
+    payload = transport.payloads[0]
+    call_items = [
+        item
+        for item in payload["input"]
+        if item.get("type") in {"function_call", "function_call_output"}
+    ]
+    call_ids = _collect_call_ids(payload)
+    shortened_call_id = call_items[0]["call_id"]
+
+    assert len(long_call_id) > 64
+    assert [item["type"] for item in call_items] == [
+        "function_call",
+        "function_call_output",
+    ]
+    assert call_items[0]["call_id"] == call_items[1]["call_id"]
+    assert shortened_call_id.startswith("call_")
+    assert len(shortened_call_id) <= 64
+    assert shortened_call_id != long_call_id
+    assert long_call_id not in call_ids
+    assert all(len(call_id) <= 64 for call_id in call_ids)
+
+
+def test_copilot_sanitizer_shortens_long_call_ids_for_bypassed_projection():
+    long_call_id = "call_" + ("manual_responses_call_id_" * 18)
+
+    payload = provider_module._sanitize_copilot_responses_payload(
+        {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": long_call_id,
+                    "name": "lookup",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": long_call_id,
+                    "output": "ok",
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_short",
+                    "name": "lookup",
+                    "arguments": "{}",
+                },
+            ],
+        }
+    )
+
+    long_call_item = payload["input"][0]
+    long_result_item = payload["input"][1]
+    short_call_item = payload["input"][2]
+
+    assert long_call_item["call_id"] == long_result_item["call_id"]
+    assert long_call_item["call_id"].startswith("call_")
+    assert len(long_call_item["call_id"]) <= 64
+    assert long_call_item["call_id"] != long_call_id
+    assert short_call_item["call_id"] == "call_short"
+    assert all(len(call_id) <= 64 for call_id in _collect_call_ids(payload))
+
+
+@pytest.mark.asyncio
 async def test_provider_returned_noop_tool_call_is_ignored_without_execution():
     executions = []
 
@@ -1079,6 +1150,23 @@ print(json.dumps({"legacy_core_loaded": "src.agents.core" in sys.modules}))
     assert payload == {"legacy_core_loaded": False}
 
 
+def _collect_call_ids(value):
+    if isinstance(value, dict):
+        collected = []
+        call_id = value.get("call_id")
+        if isinstance(call_id, str):
+            collected.append(call_id)
+        for nested in value.values():
+            collected.extend(_collect_call_ids(nested))
+        return collected
+    if isinstance(value, list):
+        collected = []
+        for nested in value:
+            collected.extend(_collect_call_ids(nested))
+        return collected
+    return []
+
+
 def _lookup_tool() -> ToolDef:
     async def execute(args, context):
         return "unused"
@@ -1126,7 +1214,10 @@ def _runtime_request_with_tool_history(
     )
 
 
-def _runtime_request_with_tool_call_and_result_history() -> RuntimeRequest:
+def _runtime_request_with_tool_call_and_result_history(
+    *,
+    call_id: str = "call_lookup",
+) -> RuntimeRequest:
     return RuntimeRequest(
         session_id="session-tool-history",
         messages=[],
@@ -1144,7 +1235,7 @@ def _runtime_request_with_tool_call_and_result_history() -> RuntimeRequest:
                         RequestMessagePart(
                             type="tool_call",
                             tool_call=RequestToolCall(
-                                call_id="call_lookup",
+                                call_id=call_id,
                                 tool_name="lookup",
                                 arguments={"query": "runtime"},
                                 arguments_text='{"query":"runtime"}',
@@ -1162,7 +1253,7 @@ def _runtime_request_with_tool_call_and_result_history() -> RuntimeRequest:
                         RequestMessagePart(
                             type="tool_result",
                             tool_result=RequestToolResult(
-                                call_id="call_lookup",
+                                call_id=call_id,
                                 tool_name="lookup",
                                 content="found runtime notes",
                                 output={"matches": 1},
