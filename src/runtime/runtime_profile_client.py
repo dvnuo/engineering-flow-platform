@@ -17,6 +17,16 @@ from src.utils.portal_internal_api import (
 logger = logging.getLogger(__name__)
 
 
+def _warn_if_external_config_failed() -> None:
+    status = config.get_external_config_status()
+    if not status.get("success"):
+        logger.warning(
+            "Runtime profile external CLI config sync failed during portal bootstrap: operation=%s error=%s",
+            status.get("operation"),
+            status.get("error"),
+        )
+
+
 def _extract_runtime_profile_overlay(
     payload: Dict[str, Any],
 ) -> Tuple[Optional[str], Optional[int], Optional[Dict[str, Any]], bool]:
@@ -109,7 +119,17 @@ async def bootstrap_runtime_profile_from_portal() -> bool:
 
     runtime_profile_id, revision, overlay_config, clear_flag = _extract_runtime_profile_overlay(payload)
     if clear_flag:
-        config.clear_managed_overlay()
+        try:
+            config.clear_managed_overlay()
+        except Exception:
+            logger.warning(
+                "Runtime profile bootstrap failed to clear profile config: agent_id=%s profile_id=%s",
+                agent_id,
+                runtime_profile_id,
+                exc_info=True,
+            )
+            return False
+        _warn_if_external_config_failed()
         logger.info(
             "Runtime profile config cleared from portal bootstrap: agent_id=%s profile_id=%s",
             agent_id,
@@ -118,7 +138,18 @@ async def bootstrap_runtime_profile_from_portal() -> bool:
         return True
 
     if isinstance(overlay_config, dict):
-        updated_sections = config.set_managed_overlay(runtime_profile_id, revision, overlay_config)
+        try:
+            updated_sections = config.set_managed_overlay(runtime_profile_id, revision, overlay_config)
+        except Exception:
+            logger.warning(
+                "Runtime profile bootstrap failed to apply profile config: agent_id=%s profile_id=%s revision=%s",
+                agent_id,
+                runtime_profile_id,
+                revision,
+                exc_info=True,
+            )
+            return False
+        _warn_if_external_config_failed()
         logger.info(
             "Runtime profile config applied from portal bootstrap: agent_id=%s profile_id=%s revision=%s sections=%s",
             agent_id,

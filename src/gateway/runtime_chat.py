@@ -9,13 +9,17 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
+from src.workspace_defaults import resolve_runtime_workspace
 from src.efp_runtime.event_bus import RuntimeEventBus
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.llm.provider import (
+    DEFAULT_COPILOT_REASONING_EFFORT,
     GitHubCopilotHTTPTransport,
     GitHubCopilotProvider,
     ProviderTransportError,
+    validate_copilot_reasoning_effort,
 )
+from src.efp_runtime.llm.models import canonicalize_copilot_model_id
 from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from src.efp_runtime.session.gateway_facade import (
@@ -170,7 +174,11 @@ def _runtime_session_root() -> Path:
 
 
 def _runtime_workspace_root() -> Path:
-    return Path.home() / ".efp" / "workspace"
+    try:
+        config_data = config.get_effective_config()
+    except Exception:
+        config_data = getattr(config, "_config", None)
+    return resolve_runtime_workspace(config_data).resolve()
 
 
 def _runtime_config(
@@ -294,7 +302,15 @@ def _resolve_max_iterations() -> int:
 def _resolve_model(model: str | None = None) -> str:
     configured = model or config.llm.get("model") or DEFAULT_LLM_MODEL
     text = str(configured).strip()
-    return text or DEFAULT_LLM_MODEL
+    try:
+        return canonicalize_copilot_model_id(text or DEFAULT_LLM_MODEL)
+    except ValueError as exc:
+        raise RuntimeChatError(
+            str(exc),
+            status_code=400,
+            error_type="invalid_model",
+            details={"provider": "github-copilot"},
+        ) from exc
 
 
 def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
@@ -326,16 +342,35 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
     transport = GitHubCopilotHTTPTransport(
         token=token,
         base_url=_env_string("EFP_GITHUB_COPILOT_BASE_URL") or _config_string(llm_config, "api_base"),
-        user_agent="efp-runtime",
-        initiator="user",
+        user_agent="GitHubCopilotChat/0.35.0",
+        initiator="agent",
     )
     return GitHubCopilotProvider(
         transport=transport,
         model=model,
-        endpoint="chat",
+        endpoint="responses",
         stream=False,
         metadata={"gateway": "runtime_api"},
+        reasoning_effort=_resolve_reasoning_effort(llm_config),
     )
+
+
+def _resolve_reasoning_effort(llm_config: Mapping[str, Any]) -> str:
+    raw = (
+        _env_string("EFP_GITHUB_COPILOT_REASONING_EFFORT")
+        or _env_string("EFP_LLM_REASONING_EFFORT")
+        or _config_string(llm_config, "reasoning_effort")
+        or DEFAULT_COPILOT_REASONING_EFFORT
+    )
+    try:
+        return validate_copilot_reasoning_effort(raw)
+    except ValueError as exc:
+        raise RuntimeChatError(
+            str(exc),
+            status_code=400,
+            error_type="invalid_reasoning_effort",
+            details={"provider": "github-copilot"},
+        ) from exc
 
 
 def _env_string(name: str) -> str | None:

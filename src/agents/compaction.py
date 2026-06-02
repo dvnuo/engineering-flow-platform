@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
 from src.runtime.context_summary import build_context_state_from_messages, build_structured_summary
-from src.config import config, resolve_model_limits
+from src.config import resolve_model_limits
 
 logger = logging.getLogger(__name__)
 
@@ -802,38 +802,18 @@ async def compact_messages(
 def resolve_context_window_tokens(model: Optional[str] = None) -> int:
     """Resolve context window tokens for a model.
 
-    Explicit model names use deterministic known-model mapping first so legacy
-    models and unknown strings do not inherit the configured default model's
-    large fallback window. ``model=None`` keeps configured-runtime behavior.
+    Explicit model names use deterministic supported-model mapping so unknown
+    strings do not inherit the configured default model's large fallback
+    window. ``model=None`` keeps configured-runtime behavior.
     """
     context_windows = {
-        "gpt-4": 8192,
-        "gpt-4.1": 128000,
-        "gpt-4-turbo": 128000,
-        "gpt-4o": 128000,
-        "gpt-4o-mini": 128000,
-        "gpt-5.4-mini": 400000,
-        "gpt-5.3-codex": 400000,
-        "gpt-5": 200000,
         "gpt-5-mini": 264000,
-        "gpt-5-pro": 200000,
-        "gpt-3.5-turbo": 16385,
+        "gpt-5.3-codex": 400000,
+        "gpt-5.4": 400000,
+        "gpt-5.4-mini": 400000,
+        "gpt-5.5": 400000,
         "gemini-2.5-pro": 128000,
-        "gemini-2.5": 128000,
-        "minimax/MiniMax-M3": 200000,
-        "gemini-2.0": 32000,
-        "gemini-1.5": 32000,
-        "claude-opus-4": 200000,
-        "claude-sonnet-4": 200000,
-        "claude-haiku-4": 200000,
-        "claude-haiku-3-5": 200000,
-        "claude-opus-3-5": 200000,
-        "claude-sonnet-3-5": 200000,
-        "claude-3-5-sonnet": 200000,
-        "claude-3-opus": 200000,
-        "claude-3-haiku": 200000,
-        "minimax": 64000,
-        "minimaxi": 64000,
+        "gemini-3.5-flash": 128000,
     }
 
     if model is None:
@@ -842,29 +822,9 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
             return int(limits["max_context_window_tokens"])
         return 4096
 
-    model_lower = str(model).lower()
-
-    for key in sorted(context_windows.keys(), key=len, reverse=True):
-        if key.lower() in model_lower:
-            return context_windows[key]
-
-    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
-    configured_limits = (
-        llm_cfg.get("model_limits")
-        if isinstance(llm_cfg.get("model_limits"), dict)
-        else {}
-    )
-    for key in sorted(configured_limits.keys(), key=lambda k: len(str(k)), reverse=True):
-        if str(key).lower() in model_lower:
-            raw = configured_limits.get(key) or {}
-            try:
-                value = int(raw.get("max_context_window_tokens") or 0)
-            except Exception:
-                value = 0
-            if value > 0:
-                return value
-
-    return 4096
+    model_lower = "-".join(str(model).lower().split())
+    model_name = model_lower.split("/", 1)[1] if "/" in model_lower else model_lower
+    return context_windows.get(model_name, 4096)
 
 
 def normalize_compaction_threshold(raw_value, default_value=0.8):

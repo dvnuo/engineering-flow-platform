@@ -20,21 +20,19 @@ llm:
   # EFP runtime native mode supports GitHub Copilot only.
   # Accepted aliases: github_copilot, github-copilot, copilot
   provider: "github_copilot"
-  api_base: "https://api.githubcopilot.com"
+  # Optional override. Blank lets EFP use the exchanged Copilot token proxy-ep
+  # when present, otherwise https://api.githubcopilot.com.
+  api_base: ""
+  # GitHub source tokens are exchanged for Copilot plugin tokens automatically.
+  # If EFP_GITHUB_COPILOT_TOKEN/GITHUB_COPILOT_TOKEN is already a Copilot token,
+  # EFP uses it directly.
   api_key: "ghp_YOUR_GITHUB_TOKEN"
-  model: "gpt-5.4-mini"
+  model: "gpt-5.4"
+  reasoning_effort: "high"
   
   max_tokens: 128000
   allow_lower_max_tokens_than_model_limit: false
   model_limits:
-    gpt-4o:
-      max_context_window_tokens: 128000
-      max_prompt_tokens: 64000
-      max_output_tokens: 16384
-    gpt-4.1:
-      max_context_window_tokens: 128000
-      max_prompt_tokens: 128000
-      max_output_tokens: 16384
     gpt-5-mini:
       max_context_window_tokens: 264000
       max_prompt_tokens: 128000
@@ -43,11 +41,23 @@ llm:
       max_context_window_tokens: 400000
       max_prompt_tokens: 272000
       max_output_tokens: 128000
+    gpt-5.4:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
+      max_output_tokens: 128000
     gpt-5.4-mini:
       max_context_window_tokens: 400000
       max_prompt_tokens: 272000
       max_output_tokens: 128000
+    gpt-5.5:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
+      max_output_tokens: 128000
     gemini-2.5-pro:
+      max_context_window_tokens: 128000
+      max_prompt_tokens: 128000
+      max_output_tokens: 64000
+    gemini-3.5-flash:
       max_context_window_tokens: 128000
       max_prompt_tokens: 128000
       max_output_tokens: 64000
@@ -122,8 +132,8 @@ llm:
   # ============================================
   # System Prompt Configuration
   # ============================================
-  # Controls which workspace files are included in the system prompt.
-  # These files are loaded from ~/.efp/workspace/ (SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, plus daily notes from memory/)
+  # Legacy memory prompt controls. Native runtime prompt defaults load AGENTS.md only.
+  # Workspace files are loaded from /workspace unless workspace.path overrides it.
   system-prompt:
     # SOUL.md - Agent's personality and values (Who you are)
     soul:
@@ -160,7 +170,7 @@ session:
   # Persistence layer settings (per-session files)
   persistence:
     enabled: true  # Enable session persistence
-    storage_dir: "~/.efp/workspace/sessions"  # Where to store session files
+    storage_dir: "/workspace/sessions"  # Where to store session files
     ttl_seconds: 2592000  # Session TTL in seconds (30 days = 30 * 24 * 3600)
 
   # Cache settings (for in-memory session cache)
@@ -196,40 +206,38 @@ cost_tracking:
 #   retention_days: 30
 
 # EFP runtime native provider and common models:
-# - github_copilot: gpt-5.4-mini, gpt-5.4, gpt-5.3-codex, gpt-5-mini, gpt-4.1, gpt-4o, gemini-2.5-pro
+# - github_copilot: gpt-5.4, gpt-5.4-mini, gpt-5.5, gpt-5.3-codex, gpt-5-mini, gemini-2.5-pro, gemini-3.5-flash
 
 # ============================================
 # Workspace Configuration (OPTIONAL)
 # ============================================
 # Workspace paths for project-specific files
-# All paths are unified under ~/.efp/ for easy backup
+# Defaults are under /workspace in the runtime container.
 
 workspace:
   # Main workspace directory
-  path: "~/.efp/workspace"
+  path: "/workspace"
 
   # Memory subdirectory for daily notes
-  memory_dir: "~/.efp/workspace/memory"
+  memory_dir: "/workspace/memory"
 
   # Session storage (can be overridden in session config)
-  sessions_dir: "~/.efp/workspace/sessions"
+  sessions_dir: "/workspace/sessions"
 
 # ============================================
 # Session Storage Structure
 # ============================================
-# Session data is stored in ~/.efp/workspace/sessions/
+# Session data is stored in /workspace/sessions/
 #
 # Structure:
-#   ~/.efp/
-#   ├── config.yaml
-#   └── workspace/
-#       ├── sessions/              ← Individual session files
-#       │   ├── {sanitized_id}_{hash}.jsonl  (one file per session)
-#       │   └── archive/             (archived sessions)
+#   /workspace/
+#   ├── sessions/              ← Individual session files
+#   │   ├── {sanitized_id}_{hash}.jsonl  (one file per session)
+#   │   └── archive/           (archived sessions)
 #   └── memory/                ← Daily notes
 #       └── YYYY-MM-DD.md
 #
-# All data is under ~/.efp/workspace/ for easy backup and management
+# Runtime workspace data is under /workspace by default.
 # ============================================
 # Server Configuration (OPTIONAL)
 # ============================================

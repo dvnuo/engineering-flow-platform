@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Engineering Flow Platform - A simple version of Engineering Flow Platform written in Python."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -19,6 +22,7 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from src.config import config
+from src.workspace_defaults import resolve_runtime_workspace
 
 # Apply proxy settings early (before any HTTP clients are created)
 config.apply_proxy()
@@ -73,19 +77,23 @@ def check_config() -> tuple[bool, list[str]]:
 
 
 def initialize_workspace(logger: logging.Logger) -> Path:
-    """Ensure DEFAULT_WORKSPACE exists and copy example markdown files from the
+    """Ensure the default workspace exists and copy example markdown files from the
     repository `workspace/` folder into it (rename *.md.example -> *.md).
 
     Behavior:
-    - Creates DEFAULT_WORKSPACE if it doesn't exist.
+    - Creates the default runtime workspace if it doesn't exist.
     - Copies files matching `workspace/*.md.example` from the project root
-      into DEFAULT_WORKSPACE and strips the `.example` suffix.
+      into the default runtime workspace and strips the `.example` suffix.
     - Does not overwrite existing files (skips if destination exists).
 
     Returns:
         Path to the workspace directory.
     """
-    default_workspace = Path.home() / ".efp" / "workspace"
+    try:
+        config_data = config.get_effective_config()
+    except Exception:
+        config_data = config._config
+    default_workspace = resolve_runtime_workspace(config_data)
     try:
         # Ensure the directory exists
         default_workspace.mkdir(parents=True, exist_ok=True)

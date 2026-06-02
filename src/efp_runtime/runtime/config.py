@@ -20,7 +20,7 @@ class RuntimeConfig:
     max_iterations: int = 4
     doom_loop_threshold: int | None = 3
     default_provider_id: str = "github-copilot"
-    default_model: str = "gpt-5-mini"
+    default_model: str = "gpt-5.4"
     max_context_parts: int | None = None
     max_context_chars: int | None = None
     max_context_tokens: int | None = None
@@ -56,12 +56,12 @@ class RuntimeConfig:
     inject_background_task_results: bool = True
     structured_output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    include_default_system_prompt: bool = True
-    include_environment_context: bool = True
+    include_default_system_prompt: bool = False
+    include_environment_context: bool = False
     system_prompt_texts: list[str] = field(default_factory=list)
     system_prompt_paths: list[str | Path] = field(default_factory=list)
     max_system_prompt_chars: int = 20000
-    include_runtime_reminders: bool = True
+    include_runtime_reminders: bool = False
     instruction_paths: list[str | Path] = field(default_factory=list)
     instruction_texts: list[str] = field(default_factory=list)
     include_default_instructions: bool = True

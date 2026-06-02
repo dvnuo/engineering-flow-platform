@@ -58,12 +58,12 @@ class SystemPromptBuilder:
         self,
         *,
         workspace_root: str | Path | None,
-        include_default_system_prompt: bool = True,
-        include_environment_context: bool = True,
+        include_default_system_prompt: bool = False,
+        include_environment_context: bool = False,
         system_prompt_texts: Iterable[str] = (),
         system_prompt_paths: Iterable[str | Path] = (),
         max_system_prompt_chars: int = 20000,
-        include_runtime_reminders: bool = True,
+        include_runtime_reminders: bool = False,
     ) -> None:
         if max_system_prompt_chars < 0:
             raise ValueError("max_system_prompt_chars must be greater than or equal to 0")
@@ -363,14 +363,14 @@ def _environment_model_id(metadata: Mapping[str, Any]) -> str:
     requested_model = _metadata_string(metadata, "requested_model")
     if requested_model is not None:
         return _qualified_model_id(requested_model, provider_id)
-    default_model = _metadata_string(metadata, "default_model") or "gpt-5-mini"
+    default_model = _metadata_string(metadata, "default_model") or "gpt-5.4"
     return _qualified_model_id(default_model, provider_id)
 
 
 def _qualified_model_id(model_id: str, provider_id: str | None) -> str:
     model = str(model_id).strip()
     if not model:
-        return "github-copilot/gpt-5-mini"
+        return "github-copilot/gpt-5.4"
     if "/" in model:
         return model
     provider = str(provider_id or "").strip().strip("/")

@@ -84,13 +84,21 @@ curl -X POST http://localhost:8000/api/chat \
 llm:
   provider: "github_copilot"
   api_key: "ghu_..."
-  model: "gpt-5.4-mini"
+  model: "gpt-5.4"
+  reasoning_effort: "high"
 ```
 
 EFP runtime native mode does not fall back to OpenAI or Anthropic providers.
-`EFP_GITHUB_COPILOT_TOKEN` or `GITHUB_COPILOT_TOKEN` may be used instead of
-`llm.api_key`; `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
-Copilot transport base URL.
+`llm.api_key` may be a GitHub source token such as `ghp_...` or
+`github_pat_...`; EFP exchanges it for a Copilot plugin token before calling
+`/responses`. `EFP_GITHUB_COPILOT_TOKEN` or `GITHUB_COPILOT_TOKEN` may be used
+instead of `llm.api_key`; if that value is already a Copilot token, EFP uses it
+directly. `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
+Copilot transport base URL; otherwise EFP uses the exchanged token `proxy-ep`
+when present.
+
+Supported GitHub Copilot models are `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`,
+`gpt-5.3-codex`, `gpt-5-mini`, `gemini-2.5-pro`, and `gemini-3.5-flash`.
 
 ### Control-Plane Runtime Settings
 
@@ -292,11 +300,11 @@ Attachment bytes are provided by Portal and resolved by runtime storage helpers.
 
 ## Session Management
 
-Sessions are automatically persisted to `~/.efp/workspace/sessions/`.
+Sessions are automatically persisted to `/workspace/sessions/` by default.
 
 ### Session Structure
 ```
-~/.efp/workspace/sessions/
+/workspace/sessions/
 ├── {session_id}_{hash}.jsonl  # Session conversation history
 └── archive/                   # Archived sessions
 ```
@@ -308,7 +316,7 @@ session:
   max_iterations: 30    # Max tool calls per turn
   persistence:
     enabled: true
-    storage_dir: "~/.efp/workspace/sessions"
+    storage_dir: "/workspace/sessions"
     ttl_seconds: 2592000  # 30 days
 ```
 
@@ -318,7 +326,7 @@ session:
 
 ### Workspace Files
 
-Located at `~/.efp/workspace/`:
+Located at `/workspace/` by default:
 
 | File | Purpose |
 |------|---------|

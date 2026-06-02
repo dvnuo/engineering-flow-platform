@@ -31,6 +31,7 @@ def test_runtime_contract_doc_mentions_current_native_contract_surfaces():
         "/api/internal/runtime-profile/apply",
         "EFP_SKILLS_DIR",
         "/app/skills",
+        "/workspace",
         "EFP runtime native mode supports GitHub Copilot only",
         "EFP-owned runtime built-in registry",
         "prebuilt `engineering-flow-platform-tools` CLI binaries",

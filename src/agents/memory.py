@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
 from src.config import config
-
-# Default workspace paths
-DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
 
 # Core memory files to index
 CORE_MEMORY_FILES = ["SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "MEMORY.md"]
@@ -48,14 +46,14 @@ class MemorySystem:
         """Initialize memory system.
         
         Args:
-            workspace_path: Path to workspace directory. Defaults to ~/.efp/workspace
+            workspace_path: Path to workspace directory. Defaults to the runtime workspace.
             cache_ttl_seconds: Cache TTL in seconds (default: 60)
             search_enabled: Whether to enable memory search
             search_config: Configuration for memory search
             daily_notes_index_days: Number of days to index for daily notes (default: 14)
             daily_notes_inject_days: Number of days to inject in prompt (default: 2)
         """
-        self.workspace = Path(workspace_path) if workspace_path else DEFAULT_WORKSPACE
+        self.workspace = Path(workspace_path) if workspace_path else DEFAULT_RUNTIME_WORKSPACE
         self._cache: Dict[str, Any] = {}
         self._cache_time: Optional[datetime] = None
         self._cache_ttl_seconds = cache_ttl_seconds

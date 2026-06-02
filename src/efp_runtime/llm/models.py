@@ -7,10 +7,19 @@ from typing import Any
 
 
 DEFAULT_PROVIDER_ID = "github-copilot"
-DEFAULT_MODEL_ID = "gpt-5-mini"
+DEFAULT_MODEL_ID = "gpt-5.4"
 DEFAULT_CHARS_PER_TOKEN = 4
 MIN_PRESERVE_RECENT_TOKENS = 2_000
 MAX_PRESERVE_RECENT_TOKENS = 8_000
+SUPPORTED_COPILOT_MODEL_IDS = (
+    "gpt-5-mini",
+    "gpt-5.3-codex",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.5",
+    "gemini-2.5-pro",
+    "gemini-3.5-flash",
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,27 @@ def resolve_model_context_profile(
         model_id,
         replace(_CONSERVATIVE_FALLBACK_PROFILE, model_id=model_id),
     )
+
+
+def canonicalize_copilot_model_id(value: Any) -> str:
+    """Return a supported canonical GitHub Copilot model id or raise."""
+
+    text = _model_identifier(value)
+    if text is None:
+        raise ValueError(_unsupported_model_message(value))
+    if "/" in text:
+        provider, model = text.split("/", 1)
+        if _normalize_identifier(provider) not in {
+            DEFAULT_PROVIDER_ID,
+            "github_copilot",
+            "copilot",
+        }:
+            raise ValueError(_unsupported_model_message(value))
+        text = model
+    model_id = _normalize_model_identifier(text)
+    if model_id not in SUPPORTED_COPILOT_MODEL_IDS:
+        raise ValueError(_unsupported_model_message(value))
+    return model_id
 
 
 def tokens_to_chars(
@@ -94,15 +124,40 @@ def _default_preserve_recent_tokens(
 
 
 _COPILOT_PROFILES = {
-    "gpt-5": _profile(
-        "gpt-5",
-        context_window_tokens=128_000,
-        default_reserve_tokens=8_000,
-    ),
     "gpt-5-mini": _profile(
         "gpt-5-mini",
+        context_window_tokens=264_000,
+        default_reserve_tokens=64_000,
+    ),
+    "gpt-5.3-codex": _profile(
+        "gpt-5.3-codex",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gpt-5.4": _profile(
+        "gpt-5.4",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gpt-5.4-mini": _profile(
+        "gpt-5.4-mini",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gpt-5.5": _profile(
+        "gpt-5.5",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gemini-2.5-pro": _profile(
+        "gemini-2.5-pro",
         context_window_tokens=128_000,
-        default_reserve_tokens=8_000,
+        default_reserve_tokens=64_000,
+    ),
+    "gemini-3.5-flash": _profile(
+        "gemini-3.5-flash",
+        context_window_tokens=128_000,
+        default_reserve_tokens=64_000,
     ),
 }
 
@@ -120,9 +175,9 @@ def _split_model_id(value: Any) -> tuple[str | None, str | None]:
     if not text:
         return None, None
     if "/" not in text:
-        return None, _normalize_identifier(text)
+        return None, _normalize_model_identifier(text)
     provider, model = text.split("/", 1)
-    return _normalize_identifier(provider), _normalize_identifier(model)
+    return _normalize_identifier(provider), _normalize_model_identifier(model)
 
 
 def _normalize_identifier(value: Any) -> str | None:
@@ -130,6 +185,28 @@ def _normalize_identifier(value: Any) -> str | None:
         return None
     text = value.strip().lower()
     return text or None
+
+
+def _model_identifier(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    return text or None
+
+
+def _normalize_model_identifier(value: Any) -> str | None:
+    text = _model_identifier(value)
+    if text is None:
+        return None
+    return "-".join(text.split())
+
+
+def _unsupported_model_message(value: Any) -> str:
+    supported = ", ".join(SUPPORTED_COPILOT_MODEL_IDS)
+    return "unsupported GitHub Copilot model {0!r}; supported models: {1}".format(
+        value,
+        supported,
+    )
 
 
 def _validate_non_negative_int(value: Any, field_name: str) -> None:
@@ -149,6 +226,8 @@ __all__ = [
     "MAX_PRESERVE_RECENT_TOKENS",
     "MIN_PRESERVE_RECENT_TOKENS",
     "ModelContextProfile",
+    "SUPPORTED_COPILOT_MODEL_IDS",
+    "canonicalize_copilot_model_id",
     "resolve_model_context_profile",
     "tokens_to_chars",
 ]

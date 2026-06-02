@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-_ROOT = Path.home() / ".efp" / "workspace" / "context_blobs"
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
+
+_ROOT = DEFAULT_RUNTIME_WORKSPACE / "context_blobs"
 
 
 def _safe_segment(value: str, fallback: str = "unknown") -> str:
@@ -152,4 +154,3 @@ def read_ref(
         f"{sliced[:cap]}\n\n[... output truncated at {cap} chars; "
         f"{len(sliced) - cap} chars omitted. Use start={start_idx + cap} to continue ...]"
     )
-

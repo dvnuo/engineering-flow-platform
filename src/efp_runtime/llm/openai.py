@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import hashlib
 import json
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,24 @@ from .request import (
 
 
 JsonDict = Dict[str, Any]
+RESPONSES_CALL_ID_MAX_LENGTH = 64
+_RESPONSES_CALL_ID_PREFIX = "call_"
+
+
+def normalize_responses_call_id(call_id: Any) -> str:
+    """Return a Responses-compatible call_id without changing short IDs."""
+
+    if isinstance(call_id, str):
+        original = call_id
+    elif call_id is None:
+        original = ""
+    else:
+        original = str(call_id)
+    if not original or len(original) <= RESPONSES_CALL_ID_MAX_LENGTH:
+        return original
+    digest = hashlib.sha256(original.encode("utf-8")).hexdigest()
+    prefix_length = RESPONSES_CALL_ID_MAX_LENGTH - len(_RESPONSES_CALL_ID_PREFIX)
+    return "{0}{1}".format(_RESPONSES_CALL_ID_PREFIX, digest[:prefix_length])
 
 
 def provider_request_to_openai_chat(
@@ -60,6 +79,7 @@ def provider_request_to_openai_responses(
     instructions: Optional[str] = None,
     stream: bool = False,
     metadata: Optional[Mapping[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> JsonDict:
     """Project a EFP runtime request into an OpenAI Responses payload."""
 
@@ -74,6 +94,8 @@ def provider_request_to_openai_responses(
     }
     if instructions is not None:
         payload["instructions"] = instructions
+    if reasoning_effort is not None:
+        payload["reasoning"] = {"effort": reasoning_effort}
     return payload
 
 
@@ -170,13 +192,21 @@ def request_message_to_openai_responses_input(message: RequestMessage) -> JsonDi
 
     content: List[JsonDict] = []
     for part in message.parts:
-        content.extend(request_part_to_openai_responses_content(part))
+        content.extend(
+            request_part_to_openai_responses_content(part, role=message.role)
+        )
     if not content:
-        content.append({"type": "input_text", "text": ""})
+        content.append(
+            {"type": _responses_text_content_type(message.role), "text": ""}
+        )
     return {"role": message.role, "content": content}
 
 
-def request_part_to_openai_responses_content(part: RequestMessagePart) -> List[JsonDict]:
+def request_part_to_openai_responses_content(
+    part: RequestMessagePart,
+    *,
+    role: str = "",
+) -> List[JsonDict]:
     """Project one EFP runtime message part to typed Responses content items."""
 
     if part.tool_call is not None:
@@ -194,7 +224,7 @@ def request_part_to_openai_responses_content(part: RequestMessagePart) -> List[J
     if _part_has_projectable_text(part):
         return [
             {
-                "type": "input_text",
+                "type": _responses_text_content_type(role),
                 "text": _part_to_text(part),
                 "metadata": _content_item_metadata(part),
             }
@@ -202,11 +232,15 @@ def request_part_to_openai_responses_content(part: RequestMessagePart) -> List[J
     return []
 
 
+def _responses_text_content_type(role: str) -> str:
+    return "output_text" if role == "assistant" else "input_text"
+
+
 def _tool_call_to_responses_item(tool_call: RequestToolCall) -> JsonDict:
     arguments_text = _tool_call_arguments_text(tool_call)
     return {
         "type": "function_call",
-        "call_id": tool_call.call_id,
+        "call_id": normalize_responses_call_id(tool_call.call_id),
         "name": tool_call.tool_name,
         "tool_name": tool_call.tool_name,
         "arguments": arguments_text,
@@ -223,7 +257,7 @@ def _tool_call_to_responses_item(tool_call: RequestToolCall) -> JsonDict:
 def _tool_result_to_responses_item(tool_result: RequestToolResult) -> JsonDict:
     return {
         "type": "function_call_output",
-        "call_id": tool_result.call_id,
+        "call_id": normalize_responses_call_id(tool_result.call_id),
         "name": tool_result.tool_name,
         "tool_name": tool_result.tool_name,
         "output": _tool_result_content(tool_result),

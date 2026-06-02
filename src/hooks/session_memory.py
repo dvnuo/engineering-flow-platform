@@ -14,11 +14,12 @@ from typing import Optional, List, Dict, Any
 
 from src.efp_runtime.session.gateway_facade import runtime_session_manager as session_manager
 from src.runtime.context_summary import build_structured_summary
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
 
 logger = logging.getLogger(__name__)
 
 # Default workspace memory directory
-DEFAULT_MEMORY_DIR = Path.home() / ".efp" / "workspace" / "memory"
+DEFAULT_MEMORY_DIR = DEFAULT_RUNTIME_WORKSPACE / "memory"
 
 
 async def summarize_session(
@@ -116,14 +117,14 @@ async def save_session_summary(
     
     Args:
         session_id: The session ID to summarize
-        workspace_dir: Workspace directory (defaults to ~/.efp/workspace)
+        workspace_dir: Workspace directory (defaults to the runtime workspace)
         session_data: Optional pre-fetched session data to avoid race conditions
         
     Returns:
         Path to the created memory file, or None if failed
     """
     if workspace_dir is None:
-        workspace_dir = Path.home() / ".efp" / "workspace"
+        workspace_dir = DEFAULT_RUNTIME_WORKSPACE
     
     memory_dir = workspace_dir / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)

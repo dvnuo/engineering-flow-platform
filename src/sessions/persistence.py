@@ -3,6 +3,8 @@
 Manages individual session files with TTL support.
 """
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
@@ -11,6 +13,8 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +38,15 @@ class SessionPersistence:
     
     def __init__(
         self,
-        storage_dir: str = "~/.efp/workspace/sessions",
+        storage_dir: str | Path = DEFAULT_RUNTIME_WORKSPACE / "sessions",
         ttl_seconds: int = 2592000,  # 30 days default
         enabled: bool = True,
     ):
         self.storage_dir = Path(storage_dir).expanduser()
         self.ttl_seconds = ttl_seconds
         self.enabled = enabled
-        self._lock = asyncio.Lock()
+        self._lock: asyncio.Lock | None = None
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._ensure_dir()
     
     def _ensure_dir(self):
@@ -49,6 +54,14 @@ class SessionPersistence:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir = self.storage_dir / "archive"
         self.archive_dir.mkdir(exist_ok=True)
+
+    def _get_lock(self) -> asyncio.Lock:
+        """Create the async lock lazily so module import does not require a loop."""
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        return self._lock
     
     def _session_file(self, session_id: str) -> Path:
         """Get the file path for a session.
@@ -98,7 +111,7 @@ class SessionPersistence:
         if not self.enabled:
             return False
         
-        async with self._lock:
+        async with self._get_lock():
             try:
                 now = datetime.utcnow().isoformat()
                 expires_at = self._calculate_expires_at()
@@ -204,7 +217,7 @@ class SessionPersistence:
         if not self.enabled:
             return False
         
-        async with self._lock:
+        async with self._get_lock():
             try:
                 session_file = self._session_file(session_id)
                 if not session_file.exists():
@@ -245,7 +258,7 @@ class SessionPersistence:
         if not self.enabled:
             return 0
         
-        async with self._lock:
+        async with self._get_lock():
             try:
                 # Materialize glob results to avoid unsafe iteration
                 session_files = list(self.storage_dir.glob("*.jsonl"))
@@ -299,7 +312,7 @@ class SessionPersistence:
         if not self.enabled:
             return 0
         
-        async with self._lock:
+        async with self._get_lock():
             try:
                 # Materialize glob results to avoid unsafe iteration
                 session_files = list(self.storage_dir.glob("*.jsonl"))

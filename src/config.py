@@ -21,7 +21,7 @@ _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.indent(mapping=2, sequence=4, offset=2)
 
-DEFAULT_LLM_MODEL = "gpt-5.4-mini"
+DEFAULT_LLM_MODEL = "gpt-5.4"
 DEFAULT_LLM_TEMPERATURE = 0.7
 
 PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
@@ -87,6 +87,24 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
     }
 )
 
+RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
+    (
+        "Use bash for external CLI tools configured by the runtime profile: "
+        "jira, confluence, gh, and git."
+    ),
+    (
+        "For jira and confluence, always pass --json. Before complex commands, "
+        "inspect commands/schema/help llm; prefer --dry-run for writes, and use "
+        "--yes only when a destructive action was explicitly confirmed."
+    ),
+    "Use gh for GitHub issues, pull requests, and api calls; use git for clone, fetch, push, and status.",
+    (
+        "Credentials were applied by the runtime profile through the real CLIs; "
+        "if jira or confluence returns auth_failed, or gh/git authentication fails, "
+        "report a runtime profile configuration problem."
+    ),
+]
+
 
 class ServiceReloadManager:
     """Manager for services that need to be reinitialized when config changes."""
@@ -149,6 +167,44 @@ class ServiceReloadManager:
 service_reload_manager = ServiceReloadManager()
 
 
+def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, Any]) -> bool:
+    if not isinstance(overlay, dict) or "instruction_texts" in overlay:
+        return False
+    return (
+        _has_atlassian_profile_instances(overlay.get("jira"))
+        or _has_atlassian_profile_instances(overlay.get("confluence"))
+        or _has_github_profile_token(overlay.get("github"))
+        or _has_git_profile_user(overlay.get("git"))
+    )
+
+
+def _has_atlassian_profile_instances(section: Any) -> bool:
+    if not isinstance(section, dict) or section.get("enabled") is False:
+        return False
+    instances = section.get("instances")
+    if not isinstance(instances, list):
+        return False
+    for instance in instances:
+        if not isinstance(instance, dict) or instance.get("enabled") is False:
+            continue
+        if str(instance.get("base_url") or instance.get("url") or "").strip():
+            return True
+    return False
+
+
+def _has_github_profile_token(section: Any) -> bool:
+    if not isinstance(section, dict) or section.get("enabled") is False:
+        return False
+    return bool(str(section.get("api_token") or section.get("token") or section.get("access_token") or "").strip())
+
+
+def _has_git_profile_user(section: Any) -> bool:
+    user = section.get("user") if isinstance(section, dict) else None
+    if not isinstance(user, dict):
+        return False
+    return bool(str(user.get("name") or "").strip() and str(user.get("email") or "").strip())
+
+
 class Config:
     """Configuration management.
     
@@ -183,6 +239,7 @@ class Config:
             "provider": True,
             "model": True,
             "api_key": True,
+            "reasoning_effort": True,
             "temperature": True,
             "reasoning_replay": True,
             "max_tokens": True,
@@ -197,14 +254,18 @@ class Config:
             "url": True,
             "username": True,
             "password": True,
+            "no_proxy": True,
+            "noProxy": True,
         },
         "jira": {
             "enabled": True,
             "instances": True,
+            "default_instance": True,
         },
         "confluence": {
             "enabled": True,
             "instances": True,
+            "default_instance": True,
         },
         "github": {
             "enabled": True,
@@ -240,6 +301,11 @@ class Config:
             "revision": None,
         }
         self._managed_sections: List[str] = []
+        self._external_config_status: Dict[str, Any] = {
+            "success": True,
+            "error": None,
+            "operation": None,
+        }
         self._last_modified: float = 0
         self._yaml = _yaml  # Use module-level instance
         self.load()
@@ -356,6 +422,7 @@ class Config:
         self._config = copy.deepcopy(self._base_config)
         llm_cfg = self._config.get("llm")
         if isinstance(llm_cfg, dict):
+            llm_cfg.setdefault("reasoning_effort", "high")
             llm_cfg.setdefault("reasoning_replay", False)
 
     def load_managed_overlay(self) -> Dict[str, Any]:
@@ -373,6 +440,21 @@ class Config:
         self._encrypt_sensitive_fields(encrypted)
         self._write_yaml_document(self.config_path, encrypted)
 
+    def _set_external_config_status(
+        self,
+        operation: Optional[str],
+        success: bool,
+        error: Optional[str] = None,
+    ) -> None:
+        self._external_config_status = {
+            "success": bool(success),
+            "error": error if error else None,
+            "operation": operation if operation in {"apply", "clear"} else None,
+        }
+
+    def _external_config_exc_info(self, error: str, exc: BaseException):
+        return (RuntimeError, RuntimeError(error), exc.__traceback__)
+
     def set_managed_overlay(
         self,
         runtime_profile_id: Optional[str],
@@ -382,6 +464,8 @@ class Config:
         """Apply Portal-managed snapshot into config.yaml and reload."""
         previous_sections = set(self._managed_sections)
         filtered_overlay = self._filter_managed_overlay_sections(overlay_config or {})
+        if _should_inject_runtime_profile_external_cli_instructions(filtered_overlay):
+            filtered_overlay["instruction_texts"] = list(RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS)
         new_sections = set(filtered_overlay.keys())
 
         config_document = self._load_yaml_document(self.config_path)
@@ -389,9 +473,24 @@ class Config:
         self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
         self._deep_merge_into(config_document, filtered_overlay)
         self._persist_runtime_config(config_document)
-        from src.external_cli.profile_config import apply_runtime_profile_external_config
 
-        apply_runtime_profile_external_config(filtered_overlay)
+        from src.external_cli.profile_config import (
+            apply_runtime_profile_external_config,
+            redact_runtime_profile_external_config_error,
+        )
+
+        try:
+            apply_runtime_profile_external_config(filtered_overlay)
+        except Exception as exc:
+            error = redact_runtime_profile_external_config_error(exc, filtered_overlay)
+            self._set_external_config_status("apply", False, error)
+            logger.warning(
+                "Runtime profile external CLI config apply failed: %s",
+                error,
+                exc_info=self._external_config_exc_info(error, exc),
+            )
+        else:
+            self._set_external_config_status("apply", True)
 
         self._managed_overlay_meta = {
             "runtime_profile_id": runtime_profile_id,
@@ -415,9 +514,24 @@ class Config:
         self._decrypt_sensitive_fields(config_document)
         self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
         self._persist_runtime_config(config_document)
-        from src.external_cli.profile_config import clear_runtime_profile_external_config
 
-        clear_runtime_profile_external_config()
+        from src.external_cli.profile_config import (
+            clear_runtime_profile_external_config,
+            redact_runtime_profile_external_config_error,
+        )
+
+        try:
+            clear_runtime_profile_external_config()
+        except Exception as exc:
+            error = redact_runtime_profile_external_config_error(exc)
+            self._set_external_config_status("clear", False, error)
+            logger.warning(
+                "Runtime profile external CLI config clear failed: %s",
+                error,
+                exc_info=self._external_config_exc_info(error, exc),
+            )
+        else:
+            self._set_external_config_status("clear", True)
 
         self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
         self._managed_sections = []
@@ -434,6 +548,13 @@ class Config:
             "runtime_profile_id": self._managed_overlay_meta.get("runtime_profile_id"),
             "revision": self._managed_overlay_meta.get("revision"),
             "managed_sections": sorted(self._managed_sections),
+        }
+
+    def get_external_config_status(self) -> Dict[str, Any]:
+        return {
+            "success": bool(self._external_config_status.get("success")),
+            "error": self._external_config_status.get("error"),
+            "operation": self._external_config_status.get("operation"),
         }
 
     def save_partial_sections(self, updates: Dict[str, Any], sections: List[str]) -> List[str]:
@@ -748,31 +869,22 @@ class Config:
     
     def apply_proxy(self) -> None:
         """Apply proxy settings to os.environ."""
+        from src.utils.proxy import no_proxy_value, proxy_url_with_credentials
+
         proxy_config = self.proxy
         if proxy_config.get("enabled") and proxy_config.get("url"):
-            url = proxy_config.get("url", "")
-            
-            # Add username:password if provided
-            username = proxy_config.get("username")
-            password = proxy_config.get("password")
-            if username and password:
-                # Parse existing URL and insert credentials
-                from urllib.parse import quote, urlparse, urlunparse
-                parsed = urlparse(url)
-                hostport = parsed.netloc.rsplit("@", 1)[-1]
-                if parsed.scheme and parsed.netloc and hostport:
-                    # Insert credentials into netloc
-                    encoded_username = quote(username, safe="")
-                    encoded_password = quote(password, safe="")
-                    netloc = f"{encoded_username}:{encoded_password}@{hostport}"
-                    url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+            url = proxy_url_with_credentials(
+                proxy_config.get("url", ""),
+                proxy_config.get("username"),
+                proxy_config.get("password"),
+            )
             
             os.environ["http_proxy"] = url
             os.environ["https_proxy"] = url
             os.environ["HTTP_PROXY"] = url
             os.environ["HTTPS_PROXY"] = url
             # Handle no_proxy for internal addresses
-            no_proxy = proxy_config.get("no_proxy", "localhost,127.0.0.1,169.254.169.254,.svc.cluster.local")
+            no_proxy = no_proxy_value(proxy_config)
             os.environ["no_proxy"] = no_proxy
             os.environ["NO_PROXY"] = no_proxy
         elif "proxy" in self._config:
@@ -788,16 +900,6 @@ class Config:
 
 
 DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
-    "gpt-4o": {
-        "max_context_window_tokens": 128_000,
-        "max_prompt_tokens": 64000,
-        "max_output_tokens": 16384,
-    },
-    "gpt-4.1": {
-        "max_context_window_tokens": 128_000,
-        "max_prompt_tokens": 128_000,
-        "max_output_tokens": 16384,
-    },
     "gpt-5-mini": {
         "max_context_window_tokens": 264000,
         "max_prompt_tokens": 128000,
@@ -808,12 +910,27 @@ DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
         "max_prompt_tokens": 272000,
         "max_output_tokens": 128000,
     },
+    "gpt-5.4": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
     "gpt-5.4-mini": {
         "max_context_window_tokens": 400000,
         "max_prompt_tokens": 272000,
         "max_output_tokens": 128000,
     },
+    "gpt-5.5": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
     "gemini-2.5-pro": {
+        "max_context_window_tokens": 128_000,
+        "max_prompt_tokens": 128_000,
+        "max_output_tokens": 64000,
+    },
+    "gemini-3.5-flash": {
         "max_context_window_tokens": 128_000,
         "max_prompt_tokens": 128_000,
         "max_output_tokens": 64000,
@@ -850,23 +967,24 @@ def resolve_llm_temperature(explicit: Optional[Any] = None) -> float:
 
 def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
     llm_cfg = config.llm if isinstance(config.llm, dict) else {}
-    configured_model = str(model or llm_cfg.get("model") or DEFAULT_LLM_MODEL).strip()
+    configured_model = _canonical_model_limit_key(
+        model or llm_cfg.get("model") or DEFAULT_LLM_MODEL
+    )
     configured_limits = llm_cfg.get("model_limits") if isinstance(llm_cfg.get("model_limits"), dict) else {}
     candidates: Dict[str, Dict[str, int]] = dict(DEFAULT_MODEL_LIMITS)
     for key, raw in configured_limits.items():
         if not isinstance(raw, dict):
             continue
-        candidates[str(key).lower()] = {
+        candidates[_canonical_model_limit_key(key)] = {
             "max_context_window_tokens": _safe_positive_int(raw.get("max_context_window_tokens"), 264000),
             "max_prompt_tokens": _safe_positive_int(raw.get("max_prompt_tokens"), 128000),
             "max_output_tokens": _safe_positive_int(raw.get("max_output_tokens"), _safe_positive_int(llm_cfg.get("max_tokens"), 64000)),
         }
 
-    selected = candidates.get(configured_model.lower(), {})
+    selected = candidates.get(configured_model, {})
     if not selected and configured_model:
-        model_lower = configured_model.lower()
         for key in sorted(candidates.keys(), key=len, reverse=True):
-            if key in model_lower:
+            if key in configured_model:
                 selected = candidates[key]
                 break
     if not selected:
@@ -880,6 +998,13 @@ def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
     selected["max_prompt_tokens"] = _safe_positive_int(selected.get("max_prompt_tokens"), 128000)
     selected["max_context_window_tokens"] = _safe_positive_int(selected.get("max_context_window_tokens"), 264000)
     return selected
+
+
+def _canonical_model_limit_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if "/" in text:
+        text = text.split("/", 1)[1]
+    return "-".join(text.split())
 
 
 def resolve_output_boundary(model: Optional[str] = None) -> Dict[str, int | str]:

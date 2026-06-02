@@ -5,11 +5,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
+
 from .models import ArtifactBinding, ArtifactRecord
 
 
 class FileArtifactStorage:
-    def __init__(self, base_dir: str = "~/.efp/workspace/file_artifacts"):
+    def __init__(self, base_dir: str | Path = DEFAULT_RUNTIME_WORKSPACE / "file_artifacts"):
         self.base_dir = Path(base_dir).expanduser()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_path = self.base_dir / "artifacts.json"

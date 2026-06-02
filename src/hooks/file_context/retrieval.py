@@ -99,7 +99,15 @@ class RetrievalEngine:
         """Resolve retrieval thresholds from model prompt limits, with emergency legacy fallback."""
         llm_cfg = config.llm if isinstance(config.llm, dict) else {}
         model = str(llm_cfg.get("model") or DEFAULT_LLM_MODEL).strip()
-        known_model_keys = ("gpt-4o", "gpt-4.1", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4-mini", "gemini-2.5-pro")
+        known_model_keys = (
+            "gpt-5-mini",
+            "gpt-5.3-codex",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.5",
+            "gemini-2.5-pro",
+            "gemini-3.5-flash",
+        )
         model_limits = resolve_model_limits(model or None)
         prompt_budget = int(model_limits.get("max_prompt_tokens") or 0) if any(k in model.lower() for k in known_model_keys) else 0
         if prompt_budget <= 0:

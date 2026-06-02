@@ -8,6 +8,8 @@ from typing import Dict, Optional
 import uuid
 from datetime import datetime
 
+from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
+
 from .models import FileMetadata, StoredFileNotFoundError
 from .validators import get_safe_extension
 
@@ -15,7 +17,7 @@ from .validators import get_safe_extension
 logger = logging.getLogger(__name__)
 
 # Upload directory
-UPLOAD_DIR = Path("~/.efp/workspace/uploads").expanduser()
+UPLOAD_DIR = DEFAULT_RUNTIME_WORKSPACE / "uploads"
 METADATA_FILE = UPLOAD_DIR / "metadata.json"
 
 # In-memory metadata storage

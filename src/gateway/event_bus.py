@@ -4,6 +4,8 @@ In-memory event bus that allows WebSocket connections to receive
 agent events in real-time.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from dataclasses import dataclass

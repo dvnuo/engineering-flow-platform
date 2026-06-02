@@ -1,10 +1,171 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
+import src.efp_runtime.llm.provider as provider_module
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.gateway import runtime_chat
+
+
+def test_runtime_chat_workspace_root_uses_runtime_default(monkeypatch):
+    class _FakeConfig:
+        def get_effective_config(self):
+            return {}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    assert runtime_chat._runtime_workspace_root() == runtime_chat.Path("/workspace").resolve()
+
+
+def test_runtime_chat_workspace_root_allows_config_override(monkeypatch, tmp_path):
+    class _FakeConfig:
+        def get_effective_config(self):
+            return {"workspace": {"path": str(tmp_path)}}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    assert runtime_chat._runtime_workspace_root() == tmp_path.resolve()
+
+
+def test_runtime_chat_workspace_root_treats_legacy_config_as_default(monkeypatch):
+    class _FakeConfig:
+        def get_effective_config(self):
+            return {"workspace": {"path": "/root/.efp/workspace"}}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    assert runtime_chat._runtime_workspace_root() == runtime_chat.Path("/workspace").resolve()
+
+
+def test_runtime_chat_resolves_default_and_alias_models(monkeypatch):
+    class _FakeConfig:
+        @property
+        def llm(self):
+            return {"model": "gpt-5.4 mini"}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    assert runtime_chat._resolve_model(None) == "gpt-5.4-mini"
+    assert runtime_chat._resolve_model("gemini 3.5 flash") == "gemini-3.5-flash"
+
+
+def test_runtime_chat_rejects_invalid_model_locally(monkeypatch):
+    class _FakeConfig:
+        @property
+        def llm(self):
+            return {"model": "gpt-5"}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
+        runtime_chat._resolve_model(None)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_type == "invalid_model"
+
+
+def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monkeypatch):
+    monkeypatch.delenv("EFP_GITHUB_COPILOT_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_COPILOT_TOKEN", raising=False)
+    monkeypatch.delenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("EFP_LLM_REASONING_EFFORT", raising=False)
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        return _FakeHTTPResponse(
+            {
+                "token": (
+                    "copilot-config-token;"
+                    "proxy-ep=https%3A%2F%2Fproxy.individual.githubcopilot.com"
+                ),
+                "expires_at": 1893456000,
+            }
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {
+            "llm": {
+                "provider": "github_copilot",
+                "api_key": "ghp_configtoken123",
+                "api_base": "https://copilot-api.enterprise.example/",
+                "reasoning_effort": "xhigh",
+            }
+        },
+        raising=False,
+    )
+
+    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert provider.endpoint == "responses"
+    assert provider.reasoning_effort == "xhigh"
+    assert provider.transport.endpoint == "https://copilot-api.enterprise.example/responses"
+    assert provider.transport.token_source == "github_exchange"
+    assert provider.transport._headers()["Authorization"] == (
+        "Bearer copilot-config-token;"
+        "proxy-ep=https%3A%2F%2Fproxy.individual.githubcopilot.com"
+    )
+    assert provider.transport._headers()["Accept"] == (
+        "application/vnd.github.copilot-chat-preview+json"
+    )
+    assert provider.transport._headers()["x-initiator"] == "agent"
+    assert len(requests) == 1
+    exchange_request, _ = requests[0]
+    assert exchange_request.full_url == (
+        "https://api.github.com/copilot_internal/v2/token"
+    )
+    exchange_headers = _request_headers(exchange_request)
+    assert exchange_headers["authorization"] == "Bearer ghp_configtoken123"
+    assert exchange_headers["accept"] == "application/json"
+    assert exchange_headers["user-agent"] == "GitHubCopilotChat/0.35.0"
+    assert exchange_headers["editor-version"] == "vscode/1.107.0"
+    assert exchange_headers["editor-plugin-version"] == "copilot-chat/0.35.0"
+    assert exchange_headers["copilot-integration-id"] == "vscode-chat"
+    assert "openai-intent" not in exchange_headers
+    assert "x-initiator" not in exchange_headers
+
+
+def test_build_github_copilot_provider_prefers_env_reasoning(monkeypatch):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", "low")
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {
+            "llm": {
+                "provider": "github_copilot",
+                "api_key": "ghp_configtoken123",
+                "reasoning_effort": "high",
+            }
+        },
+        raising=False,
+    )
+
+    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert provider.reasoning_effort == "low"
+
+
+def test_build_github_copilot_provider_rejects_invalid_reasoning(monkeypatch):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", "reasoning_effort": "extreme"}},
+        raising=False,
+    )
+
+    with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
+        runtime_chat._build_github_copilot_provider("gpt-5.4")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_type == "invalid_reasoning_effort"
 
 
 @pytest.mark.asyncio
@@ -46,7 +207,7 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
         {
             "llm": {
                 "provider": "github_copilot",
-                "api_key": "ghp_configtoken123",
+                "api_key": "copilot-config-token",
                 "model": "gpt-5-mini",
             },
             "session": {"max_iterations": 2},
@@ -79,7 +240,7 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
         message="hello",
         session_id="s-profile",
         request_id="req-profile",
-        model="request-model",
+        model="gpt-5.4 mini",
         track_usage=False,
         execution_metadata={
             "runtime_profile": {
@@ -90,10 +251,10 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
     )
 
     runtime_config = captured["config"]
-    assert captured["provider_model"] == "request-model"
+    assert captured["provider_model"] == "gpt-5.4-mini"
     assert runtime_config.workspace_root == runtime_chat._runtime_workspace_root()
     assert runtime_config.default_provider_id == "github-copilot"
-    assert runtime_config.default_model == "request-model"
+    assert runtime_config.default_model == "gpt-5.4-mini"
     assert runtime_config.track_usage is False
     assert runtime_config.enabled_tools == ["read"]
     assert runtime_config.disabled_tools == ["write"]
@@ -239,7 +400,7 @@ async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(
         {
             "llm": {
                 "provider": "github_copilot",
-                "api_key": "ghp_configtoken123",
+                "api_key": "copilot-config-token",
                 "model": "gpt-5-mini",
             },
             "session": {"max_iterations": 1},
@@ -261,3 +422,24 @@ async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(
     assert "Provider failed" in exc_info.value.message
     assert "ghp_supersecret123" not in exc_info.value.message
     assert "***REDACTED***" in exc_info.value.message
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def _request_headers(request):
+    headers = {key.lower(): value for key, value in request.header_items()}
+    for source in (request.headers, request.unredirected_hdrs):
+        headers.update({key.lower(): value for key, value in source.items()})
+    return headers
