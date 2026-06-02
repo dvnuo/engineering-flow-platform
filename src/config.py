@@ -254,6 +254,8 @@ class Config:
             "url": True,
             "username": True,
             "password": True,
+            "no_proxy": True,
+            "noProxy": True,
         },
         "jira": {
             "enabled": True,
@@ -810,31 +812,22 @@ class Config:
     
     def apply_proxy(self) -> None:
         """Apply proxy settings to os.environ."""
+        from src.utils.proxy import no_proxy_value, proxy_url_with_credentials
+
         proxy_config = self.proxy
         if proxy_config.get("enabled") and proxy_config.get("url"):
-            url = proxy_config.get("url", "")
-            
-            # Add username:password if provided
-            username = proxy_config.get("username")
-            password = proxy_config.get("password")
-            if username and password:
-                # Parse existing URL and insert credentials
-                from urllib.parse import quote, urlparse, urlunparse
-                parsed = urlparse(url)
-                hostport = parsed.netloc.rsplit("@", 1)[-1]
-                if parsed.scheme and parsed.netloc and hostport:
-                    # Insert credentials into netloc
-                    encoded_username = quote(username, safe="")
-                    encoded_password = quote(password, safe="")
-                    netloc = f"{encoded_username}:{encoded_password}@{hostport}"
-                    url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+            url = proxy_url_with_credentials(
+                proxy_config.get("url", ""),
+                proxy_config.get("username"),
+                proxy_config.get("password"),
+            )
             
             os.environ["http_proxy"] = url
             os.environ["https_proxy"] = url
             os.environ["HTTP_PROXY"] = url
             os.environ["HTTPS_PROXY"] = url
             # Handle no_proxy for internal addresses
-            no_proxy = proxy_config.get("no_proxy", "localhost,127.0.0.1,169.254.169.254,.svc.cluster.local")
+            no_proxy = no_proxy_value(proxy_config)
             os.environ["no_proxy"] = no_proxy
             os.environ["NO_PROXY"] = no_proxy
         elif "proxy" in self._config:

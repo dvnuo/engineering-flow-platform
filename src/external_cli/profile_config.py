@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shlex
 import stat
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ruamel.yaml import YAML
 
 from src.external_cli.github import github_hostname_from_base_url
+from src.utils.proxy import no_proxy_value, proxy_url_with_credentials
 
 
 _MANAGED_BY = "efp_runtime_profile"
@@ -20,24 +24,37 @@ _METADATA_VERSION = 2
 _GIT_INCLUDE_BEGIN = "# BEGIN EFP_RUNTIME_PROFILE_GIT_INCLUDE"
 _GIT_INCLUDE_END = "# END EFP_RUNTIME_PROFILE_GIT_INCLUDE"
 _REDACTED_SECRET = "[REDACTED_SECRET]"
+_PROXY_URL_ENV_KEYS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
 _yaml = YAML()
 _yaml.default_flow_style = False
+
+
+@dataclass(frozen=True)
+class _CliEnvironment:
+    env: dict[str, str]
+    secrets: tuple[str, ...] = ()
 
 
 def apply_runtime_profile_external_config(profile_config: dict[str, Any]) -> None:
     """Apply external CLI config for the sanitized Portal profile using real CLIs."""
 
+    cli_environment = _build_cli_environment(profile_config)
     previous = _load_metadata()
     if previous:
-        clear_runtime_profile_external_config(metadata=previous)
+        clear_runtime_profile_external_config(metadata=previous, cli_environment=cli_environment)
 
     metadata: dict[str, Any] = {"version": _METADATA_VERSION, "managed_by": _MANAGED_BY}
 
     try:
-        _apply_atlassian_product(profile_config, product="jira", metadata=metadata)
-        _apply_atlassian_product(profile_config, product="confluence", metadata=metadata)
-        _apply_github(profile_config, metadata=metadata)
-        _apply_git_user(profile_config, metadata=metadata)
+        _apply_atlassian_product(profile_config, product="jira", metadata=metadata, cli_environment=cli_environment)
+        _apply_atlassian_product(
+            profile_config,
+            product="confluence",
+            metadata=metadata,
+            cli_environment=cli_environment,
+        )
+        _apply_github(profile_config, metadata=metadata, cli_environment=cli_environment)
+        _apply_git_user(profile_config, metadata=metadata, cli_environment=cli_environment)
     except Exception:
         if _metadata_has_managed_entries(metadata):
             _write_private_text(_metadata_path(), json.dumps(metadata, indent=2, sort_keys=True) + "\n")
@@ -49,19 +66,30 @@ def apply_runtime_profile_external_config(profile_config: dict[str, Any]) -> Non
         _remove_file_if_exists(_metadata_path())
 
 
-def clear_runtime_profile_external_config(*, metadata: dict[str, Any] | None = None) -> None:
+def clear_runtime_profile_external_config(
+    *,
+    metadata: dict[str, Any] | None = None,
+    cli_environment: _CliEnvironment | None = None,
+) -> None:
     """Remove external CLI config previously managed by runtime profile apply."""
 
     meta = metadata if isinstance(metadata, dict) else _load_metadata()
     if not meta or meta.get("managed_by") != _MANAGED_BY:
         return
 
-    _clear_new_metadata(meta)
+    cli_environment = cli_environment or _CliEnvironment(env=os.environ.copy())
+    _clear_new_metadata(meta, cli_environment=cli_environment)
     _clear_legacy_metadata(meta)
     _remove_file_if_exists(_metadata_path())
 
 
-def _apply_atlassian_product(profile_config: dict[str, Any], *, product: str, metadata: dict[str, Any]) -> None:
+def _apply_atlassian_product(
+    profile_config: dict[str, Any],
+    *,
+    product: str,
+    metadata: dict[str, Any],
+    cli_environment: _CliEnvironment,
+) -> None:
     instances = _build_product_instances(profile_config.get(product), product=product)
     if not instances:
         return
@@ -70,11 +98,22 @@ def _apply_atlassian_product(profile_config: dict[str, Any], *, product: str, me
     product_meta: dict[str, Any] = {"instances": []}
     metadata[product] = product_meta
     for instance in instances:
-        _add_atlassian_instance(product, instance, default=instance["name"] == default_name)
+        _add_atlassian_instance(
+            product,
+            instance,
+            default=instance["name"] == default_name,
+            cli_environment=cli_environment,
+        )
         product_meta["instances"].append({"name": instance["name"]})
 
 
-def _add_atlassian_instance(product: str, instance: dict[str, Any], *, default: bool) -> None:
+def _add_atlassian_instance(
+    product: str,
+    instance: dict[str, Any],
+    *,
+    default: bool,
+    cli_environment: _CliEnvironment,
+) -> None:
     args = [
         product,
         "--json",
@@ -103,14 +142,29 @@ def _add_atlassian_instance(product: str, instance: dict[str, Any], *, default: 
         args.append(str(auth["stdin_flag"]))
         stdin_text = secret
 
-    _run_cli(args, input_text=stdin_text, secrets=(secret,))
+    _run_cli(
+        args,
+        input_text=stdin_text,
+        secrets=(secret,),
+        env=cli_environment.env,
+        env_secrets=cli_environment.secrets,
+    )
 
 
-def _remove_atlassian_instance(product: str, name: str) -> None:
-    _run_cli([product, "--json", "instance", "remove", name, "--yes"])
+def _remove_atlassian_instance(product: str, name: str, *, cli_environment: _CliEnvironment) -> None:
+    _run_cli(
+        [product, "--json", "instance", "remove", name, "--yes"],
+        env=cli_environment.env,
+        env_secrets=cli_environment.secrets,
+    )
 
 
-def _apply_github(profile_config: dict[str, Any], *, metadata: dict[str, Any]) -> None:
+def _apply_github(
+    profile_config: dict[str, Any],
+    *,
+    metadata: dict[str, Any],
+    cli_environment: _CliEnvironment,
+) -> None:
     login = _build_gh_login(profile_config)
     if login is None:
         return
@@ -119,23 +173,40 @@ def _apply_github(profile_config: dict[str, Any], *, metadata: dict[str, Any]) -
         ["gh", "auth", "login", "--hostname", host, "--with-token", "--git-protocol", "https"],
         input_text=token,
         secrets=(token,),
+        env=cli_environment.env,
+        env_secrets=cli_environment.secrets,
     )
     metadata["gh"] = {"hosts": [host]}
-    _run_cli(["gh", "auth", "setup-git", "--hostname", host], secrets=(token,))
+    _run_cli(
+        ["gh", "auth", "setup-git", "--hostname", host],
+        secrets=(token,),
+        env=cli_environment.env,
+        env_secrets=cli_environment.secrets,
+    )
 
 
-def _logout_gh_host(host: str) -> None:
-    _run_cli(["gh", "auth", "logout", "--hostname", host], input_text="y\n")
+def _logout_gh_host(host: str, *, cli_environment: _CliEnvironment) -> None:
+    _run_cli(
+        ["gh", "auth", "logout", "--hostname", host],
+        input_text="y\n",
+        env=cli_environment.env,
+        env_secrets=cli_environment.secrets,
+    )
 
 
-def _apply_git_user(profile_config: dict[str, Any], *, metadata: dict[str, Any]) -> None:
+def _apply_git_user(
+    profile_config: dict[str, Any],
+    *,
+    metadata: dict[str, Any],
+    cli_environment: _CliEnvironment,
+) -> None:
     git_user = _extract_git_user(profile_config)
     if git_user is None:
         return
     name, email = git_user
     previous = {
-        "user.name": _git_config_get("user.name"),
-        "user.email": _git_config_get("user.email"),
+        "user.name": _git_config_get("user.name", cli_environment=cli_environment),
+        "user.email": _git_config_get("user.email", cli_environment=cli_environment),
     }
     metadata["git"] = {
         "managed": {
@@ -144,55 +215,69 @@ def _apply_git_user(profile_config: dict[str, Any], *, metadata: dict[str, Any])
         },
         "previous": previous,
     }
-    _git_config_set("user.name", name)
-    _git_config_set("user.email", email)
+    _git_config_set("user.name", name, cli_environment=cli_environment)
+    _git_config_set("user.email", email, cli_environment=cli_environment)
 
 
-def _restore_git_user(git_meta: dict[str, Any]) -> None:
+def _restore_git_user(git_meta: dict[str, Any], *, cli_environment: _CliEnvironment) -> None:
     managed = git_meta.get("managed") if isinstance(git_meta.get("managed"), dict) else {}
     previous = git_meta.get("previous") if isinstance(git_meta.get("previous"), dict) else {}
     for key in ("user.name", "user.email"):
         managed_value = _string_or_empty(managed.get(key))
-        current_value = _git_config_get(key)
+        current_value = _git_config_get(key, cli_environment=cli_environment)
         if managed_value and current_value not in (None, managed_value):
             continue
         previous_value = previous.get(key)
         if isinstance(previous_value, str) and previous_value:
-            _git_config_set(key, previous_value)
+            _git_config_set(key, previous_value, cli_environment=cli_environment)
         else:
-            _git_config_unset(key)
+            _git_config_unset(key, cli_environment=cli_environment)
 
 
-def _git_config_get(key: str) -> str | None:
-    result = _run_cli_result(["git", "config", "--global", "--get", key], allowed_returncodes=(0, 1))
+def _git_config_get(key: str, *, cli_environment: _CliEnvironment) -> str | None:
+    result = _run_cli_result(
+        ["git", "config", "--global", "--get", key],
+        allowed_returncodes=(0, 1),
+        env=cli_environment.env,
+        env_secrets=cli_environment.secrets,
+    )
     if result.returncode != 0:
         return None
     value = (result.stdout or "").strip()
     return value or None
 
 
-def _git_config_set(key: str, value: str) -> None:
-    _run_cli(["git", "config", "--global", key, value])
+def _git_config_set(key: str, value: str, *, cli_environment: _CliEnvironment) -> None:
+    _run_cli(
+        ["git", "config", "--global", key, value],
+        env=cli_environment.env,
+        env_secrets=cli_environment.secrets,
+    )
 
 
-def _git_config_unset(key: str) -> None:
-    _run_cli(["git", "config", "--global", "--unset", key], allowed_returncodes=(0, 5))
+def _git_config_unset(key: str, *, cli_environment: _CliEnvironment) -> None:
+    _run_cli(
+        ["git", "config", "--global", "--unset", key],
+        allowed_returncodes=(0, 5),
+        env=cli_environment.env,
+        env_secrets=cli_environment.secrets,
+    )
 
 
-def _clear_new_metadata(meta: dict[str, Any]) -> None:
+def _clear_new_metadata(meta: dict[str, Any], *, cli_environment: _CliEnvironment) -> None:
     for product in ("jira", "confluence"):
         product_meta = meta.get(product) if isinstance(meta.get(product), dict) else {}
         for name in _metadata_instance_names(product_meta):
-            _remove_atlassian_instance(product, name)
+            _remove_atlassian_instance(product, name, cli_environment=cli_environment)
 
     gh = meta.get("gh") if isinstance(meta.get("gh"), dict) else {}
     if "path" not in gh:
         for host in _metadata_gh_hosts(gh):
-            _logout_gh_host(host)
+            _logout_gh_host(host, cli_environment=cli_environment)
 
     git = meta.get("git") if isinstance(meta.get("git"), dict) else {}
     if "managed" in git:
-        _restore_git_user(git)
+        _restore_git_user(git, cli_environment=cli_environment)
 
 
 def _clear_legacy_metadata(meta: dict[str, Any]) -> None:
@@ -257,6 +342,48 @@ def _metadata_gh_hosts(gh_meta: dict[str, Any]) -> list[str]:
         return [host for host in (_string_or_empty(item) for item in raw.keys()) if host]
     host = _string_or_empty(gh_meta.get("host"))
     return [host] if host else []
+
+
+def _build_cli_environment(profile_config: dict[str, Any] | None) -> _CliEnvironment:
+    env = os.environ.copy()
+    proxy_config = profile_config.get("proxy") if isinstance(profile_config, dict) else None
+    if not isinstance(proxy_config, dict):
+        return _CliEnvironment(env=env)
+
+    proxy_url = _string_or_empty(proxy_config.get("url"))
+    if not proxy_config.get("enabled") or not proxy_url:
+        return _CliEnvironment(env=env)
+
+    final_proxy_url = proxy_url_with_credentials(
+        proxy_url,
+        proxy_config.get("username"),
+        proxy_config.get("password"),
+    )
+    for key in _PROXY_URL_ENV_KEYS:
+        env[key] = final_proxy_url
+    no_proxy = no_proxy_value(proxy_config)
+    env["no_proxy"] = no_proxy
+    env["NO_PROXY"] = no_proxy
+
+    return _CliEnvironment(
+        env=env,
+        secrets=_combine_secrets(_proxy_redaction_secrets(proxy_config, final_proxy_url)),
+    )
+
+
+def _proxy_redaction_secrets(proxy_config: dict[str, Any], final_proxy_url: str) -> tuple[str, ...]:
+    secrets: list[str] = []
+    raw_url = _string_or_empty(proxy_config.get("url"))
+    if final_proxy_url:
+        secrets.append(final_proxy_url)
+    if raw_url:
+        secrets.append(raw_url)
+    password = proxy_config.get("password")
+    if password:
+        password_text = str(password)
+        secrets.append(password_text)
+        secrets.append(quote(password_text, safe=""))
+    return tuple(secrets)
 
 
 def _build_product_instances(product_config: Any, *, product: str) -> list[dict[str, Any]]:
@@ -374,12 +501,16 @@ def _run_cli(
     *,
     input_text: str | None = None,
     secrets: tuple[str, ...] = (),
+    env: dict[str, str] | None = None,
+    env_secrets: tuple[str, ...] = (),
     allowed_returncodes: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
     return _run_cli_result(
         args,
         input_text=input_text,
         secrets=secrets,
+        env=env,
+        env_secrets=env_secrets,
         allowed_returncodes=allowed_returncodes,
     )
 
@@ -389,8 +520,11 @@ def _run_cli_result(
     *,
     input_text: str | None = None,
     secrets: tuple[str, ...] = (),
+    env: dict[str, str] | None = None,
+    env_secrets: tuple[str, ...] = (),
     allowed_returncodes: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
+    redaction_secrets = _combine_secrets(secrets, env_secrets)
     try:
         result = subprocess.run(
             args,
@@ -398,15 +532,17 @@ def _run_cli_result(
             text=True,
             capture_output=True,
             check=False,
+            env=env,
         )
     except OSError as exc:
         raise RuntimeError(
-            f"Failed to run external CLI command: {_format_command(args, secrets)}: {_redact_text(str(exc), secrets)}"
+            "Failed to run external CLI command: "
+            f"{_format_command(args, redaction_secrets)}: {_redact_text(str(exc), redaction_secrets)}"
         ) from exc
 
     if result.returncode not in allowed_returncodes:
-        stdout = _redact_text((result.stdout or "").strip(), secrets)
-        stderr = _redact_text((result.stderr or "").strip(), secrets)
+        stdout = _redact_text((result.stdout or "").strip(), redaction_secrets)
+        stderr = _redact_text((result.stderr or "").strip(), redaction_secrets)
         details = []
         if stdout:
             details.append(f"stdout: {_truncate(stdout)}")
@@ -415,7 +551,8 @@ def _run_cli_result(
         detail_text = "; ".join(details)
         suffix = f". {detail_text}" if detail_text else ""
         raise RuntimeError(
-            f"External CLI command failed: {_format_command(args, secrets)} exited with {result.returncode}{suffix}"
+            "External CLI command failed: "
+            f"{_format_command(args, redaction_secrets)} exited with {result.returncode}{suffix}"
         )
     return result
 
@@ -426,10 +563,18 @@ def _format_command(args: list[str], secrets: tuple[str, ...]) -> str:
 
 def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
     text = str(value or "")
-    for secret in secrets:
-        if secret:
-            text = text.replace(secret, _REDACTED_SECRET)
+    for secret in _combine_secrets(secrets):
+        text = text.replace(secret, _REDACTED_SECRET)
     return text
+
+
+def _combine_secrets(*secret_groups: tuple[str, ...]) -> tuple[str, ...]:
+    secrets: set[str] = set()
+    for group in secret_groups:
+        for secret in group:
+            if secret:
+                secrets.add(str(secret))
+    return tuple(sorted(secrets, key=len, reverse=True))
 
 
 def _truncate(value: str, limit: int = 2000) -> str:

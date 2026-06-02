@@ -16,21 +16,23 @@ class _FakeCompleted:
 
 
 class _CliRecorder:
-    def __init__(self):
+    def __init__(self, *, record_env=False):
         self.calls = []
         self.git_values = {}
+        self.record_env = record_env
 
-    def run(self, args, input=None, text=False, capture_output=False, check=False):
+    def run(self, args, input=None, text=False, capture_output=False, check=False, env=None):
         args = list(args)
-        self.calls.append(
-            {
-                "args": args,
-                "input": input,
-                "text": text,
-                "capture_output": capture_output,
-                "check": check,
-            }
-        )
+        call = {
+            "args": args,
+            "input": input,
+            "text": text,
+            "capture_output": capture_output,
+            "check": check,
+        }
+        if self.record_env:
+            call["env"] = dict(env or {})
+        self.calls.append(call)
         if args[:4] == ["git", "config", "--global", "--get"]:
             value = self.git_values.get(args[4])
             if value is None:
@@ -257,7 +259,7 @@ def test_runtime_profile_apply_filters_unmanaged_nested_fields_from_snapshot(tmp
 def test_runtime_profile_apply_prunes_stale_managed_proxy_fields(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
-    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
         monkeypatch.delenv(key, raising=False)
 
     cfg = Config(str(config_path))
@@ -273,6 +275,33 @@ def test_runtime_profile_apply_prunes_stale_managed_proxy_fields(tmp_path, monke
     assert cfg.proxy.get("enabled") is None
     assert cfg.proxy.get("url") is None
     assert cfg.proxy.get("password") is None
+
+
+def test_runtime_profile_apply_allows_proxy_no_proxy_fields(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
+        monkeypatch.delenv(key, raising=False)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_proxy_no_proxy",
+        1,
+        {
+            "proxy": {
+                "enabled": True,
+                "url": "http://overlay.proxy.local:8080",
+                "no_proxy": "localhost,.svc",
+                "noProxy": "localhost,.camel",
+                "unexpected_nested": {"x": 1},
+            }
+        },
+    )
+
+    cfg.load()
+    assert cfg.proxy["no_proxy"] == "localhost,.svc"
+    assert cfg.proxy["noProxy"] == "localhost,.camel"
+    assert "unexpected_nested" not in cfg.proxy
 
 
 def test_runtime_profile_apply_encrypts_sensitive_fields_in_config_yaml(tmp_path, monkeypatch):
@@ -552,6 +581,90 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
     assert not metadata_path.exists()
 
 
+def test_runtime_profile_external_cli_inherits_docker_proxy_env_without_profile_proxy(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HTTPS_PROXY", "http://docker.proxy.local:8443")
+    recorder = _CliRecorder(record_env=True)
+    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
+
+    profile_config_module.apply_runtime_profile_external_config(
+        {
+            "github": {
+                "enabled": True,
+                "access_token": "gh-token",
+                "api_base_url": "https://github.example.test/api/v3",
+            }
+        }
+    )
+
+    gh_login = _command_calls(recorder, ["gh", "auth", "login"])
+    assert len(gh_login) == 1
+    assert gh_login[0]["env"]["HTTPS_PROXY"] == "http://docker.proxy.local:8443"
+
+
+def test_runtime_profile_external_cli_uses_profile_proxy_env_and_redacts_metadata(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HTTPS_PROXY", "http://docker.proxy.local:8443")
+    recorder = _CliRecorder(record_env=True)
+    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
+
+    metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "managed_by": "efp_runtime_profile",
+                "gh": {"hosts": ["old.example.test"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proxy_password = "p:a/s?s#%word"
+    expected_proxy = "http://user%40name:p%3Aa%2Fs%3Fs%23%25word@proxy.example.test:8080"
+    profile_config_module.apply_runtime_profile_external_config(
+        {
+            "proxy": {
+                "enabled": True,
+                "url": "http://olduser:oldpass@proxy.example.test:8080",
+                "username": "user@name",
+                "password": proxy_password,
+                "noProxy": "localhost,.internal",
+            },
+            "github": {
+                "enabled": True,
+                "access_token": "gh-token",
+                "api_base_url": "https://github.example.test/api/v3",
+            },
+        }
+    )
+
+    gh_logout = _command_calls(recorder, ["gh", "auth", "logout"])
+    assert len(gh_logout) == 1
+    gh_login = _command_calls(recorder, ["gh", "auth", "login"])
+    assert len(gh_login) == 1
+    for call in (gh_logout[0], gh_login[0]):
+        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+            assert call["env"][key] == expected_proxy
+        assert call["env"]["no_proxy"] == "localhost,.internal"
+        assert call["env"]["NO_PROXY"] == "localhost,.internal"
+
+    metadata_text = metadata_path.read_text(encoding="utf-8")
+    command_argv = json.dumps([call["args"] for call in recorder.calls])
+    assert proxy_password not in metadata_text
+    assert expected_proxy not in metadata_text
+    assert proxy_password not in command_argv
+    assert expected_proxy not in command_argv
+
+
 def test_runtime_profile_clear_unsets_git_values_without_previous(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
@@ -737,7 +850,7 @@ def test_runtime_profile_external_cli_failure_redacts_secret(tmp_path, monkeypat
     monkeypatch.setenv("HOME", str(home))
     secret = "gh-secret-token"
 
-    def fake_run(args, input=None, text=False, capture_output=False, check=False):
+    def fake_run(args, input=None, text=False, capture_output=False, check=False, env=None):
         assert secret not in json.dumps(list(args))
         assert input == secret
         return _FakeCompleted(
@@ -761,6 +874,50 @@ def test_runtime_profile_external_cli_failure_redacts_secret(tmp_path, monkeypat
 
     error_text = str(exc_info.value)
     assert secret not in error_text
+    assert "[REDACTED_SECRET]" in error_text
+
+
+def test_runtime_profile_external_cli_failure_redacts_profile_proxy_secrets(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    token = "gh-secret-token"
+    proxy_password = "p:a/s?s#%word"
+    encoded_proxy_password = "p%3Aa%2Fs%3Fs%23%25word"
+    expected_proxy = f"http://user:{encoded_proxy_password}@proxy.example.test:8080"
+
+    def fake_run(args, input=None, text=False, capture_output=False, check=False, env=None):
+        assert env["HTTPS_PROXY"] == expected_proxy
+        return _FakeCompleted(
+            returncode=2,
+            stdout=f"proxy failed through {expected_proxy}",
+            stderr=f"password {proxy_password} encoded {encoded_proxy_password} token {token}",
+        )
+
+    monkeypatch.setattr(profile_config_module.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        profile_config_module.apply_runtime_profile_external_config(
+            {
+                "proxy": {
+                    "enabled": True,
+                    "url": "http://proxy.example.test:8080",
+                    "username": "user",
+                    "password": proxy_password,
+                },
+                "github": {
+                    "enabled": True,
+                    "access_token": token,
+                    "api_base_url": "https://github.example.test/api/v3",
+                },
+            }
+        )
+
+    error_text = str(exc_info.value)
+    assert token not in error_text
+    assert proxy_password not in error_text
+    assert encoded_proxy_password not in error_text
+    assert expected_proxy not in error_text
     assert "[REDACTED_SECRET]" in error_text
 
 
