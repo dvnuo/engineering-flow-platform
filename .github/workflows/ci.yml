@@ -16,6 +16,10 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt
+      - name: Prepare workspace directories
+        run: |
+          sudo mkdir -p /workspace/uploads /workspace/file_context/sessions
+          sudo chown -R "$USER":"$USER" /workspace
       - env:
           PYTHONPATH: .
           EFP_EXTERNAL_TOOLS_STRICT: "false"
