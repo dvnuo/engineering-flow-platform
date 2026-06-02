@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from tests._lightweight_runtime_api_loader import load_runtime_api_lightweight
@@ -16,6 +18,11 @@ class _Req:
 async def test_internal_apply_runtime_profile_trusted(monkeypatch):
     runtime_api, cleanup = load_runtime_api_lightweight()
     captured = {}
+    external_status = {
+        "success": False,
+        "error": "External CLI command failed: gh auth login exited with 1",
+        "operation": "apply",
+    }
     monkeypatch.setattr(
         runtime_api.global_config,
         "set_managed_overlay",
@@ -23,6 +30,7 @@ async def test_internal_apply_runtime_profile_trusted(monkeypatch):
             {"runtime_profile_id": rp_id, "revision": revision, "config": cfg}
         ) or ["llm", "proxy"],
     )
+    monkeypatch.setattr(runtime_api.global_config, "get_external_config_status", lambda: external_status)
 
     try:
         req = _Req(
@@ -36,10 +44,11 @@ async def test_internal_apply_runtime_profile_trusted(monkeypatch):
         resp = await runtime_api.api_apply_runtime_profile(req)
 
         assert resp.status == 200
-        body = resp.body.decode("utf-8")
-        assert '"success": true' in body
-        assert '"updated_sections": ["llm", "proxy"]' in body
-        assert '"cleared": false' in body
+        body = json.loads(resp.body.decode("utf-8"))
+        assert body["success"] is True
+        assert body["updated_sections"] == ["llm", "proxy"]
+        assert body["cleared"] is False
+        assert body["external_config_status"] == external_status
         assert captured["runtime_profile_id"] == "rp_x"
         assert captured["revision"] == 3
     finally:
@@ -60,8 +69,9 @@ async def test_internal_apply_runtime_profile_clear(monkeypatch):
         resp = await runtime_api.api_apply_runtime_profile(req)
 
         assert resp.status == 200
-        body = resp.body.decode("utf-8")
-        assert '"cleared": true' in body
+        body = json.loads(resp.body.decode("utf-8"))
+        assert body["cleared"] is True
+        assert body["external_config_status"] == {"success": True, "error": None, "operation": None}
         assert cleared["value"] is True
     finally:
         cleanup()

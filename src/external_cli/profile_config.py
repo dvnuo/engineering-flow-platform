@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from ruamel.yaml import YAML
 
@@ -25,6 +25,7 @@ _GIT_INCLUDE_BEGIN = "# BEGIN EFP_RUNTIME_PROFILE_GIT_INCLUDE"
 _GIT_INCLUDE_END = "# END EFP_RUNTIME_PROFILE_GIT_INCLUDE"
 _REDACTED_SECRET = "[REDACTED_SECRET]"
 _PROXY_URL_ENV_KEYS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
+_PROFILE_SECRET_KEY_NAMES = frozenset({"api_key", "password", "token", "api_token", "access_token", "secret"})
 _yaml = YAML()
 _yaml.default_flow_style = False
 
@@ -81,6 +82,15 @@ def clear_runtime_profile_external_config(
     _clear_new_metadata(meta, cli_environment=cli_environment)
     _clear_legacy_metadata(meta)
     _remove_file_if_exists(_metadata_path())
+
+
+def redact_runtime_profile_external_config_error(
+    error: Any,
+    profile_config: dict[str, Any] | None = None,
+) -> str:
+    """Return a status-safe external CLI error message."""
+
+    return _truncate(_redact_text(str(error), _profile_config_redaction_secrets(profile_config)))
 
 
 def _apply_atlassian_product(
@@ -566,6 +576,73 @@ def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
     for secret in _combine_secrets(secrets):
         text = text.replace(secret, _REDACTED_SECRET)
     return text
+
+
+def _profile_config_redaction_secrets(profile_config: dict[str, Any] | None) -> tuple[str, ...]:
+    if not isinstance(profile_config, dict):
+        return ()
+    secrets: list[str] = []
+    _collect_profile_config_redaction_secrets(profile_config, secrets)
+    secrets.extend(_profile_proxy_redaction_secrets(profile_config))
+    return _combine_secrets(tuple(secrets))
+
+
+def _collect_profile_config_redaction_secrets(value: Any, secrets: list[str], key: str = "") -> None:
+    if isinstance(value, dict):
+        for raw_key, child in value.items():
+            child_key = str(raw_key)
+            if _is_profile_secret_key(child_key) and not isinstance(child, (dict, list, tuple)):
+                secret = "" if child is None else str(child)
+                if secret:
+                    secrets.append(secret)
+            _collect_profile_config_redaction_secrets(child, secrets, child_key)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_profile_config_redaction_secrets(item, secrets, key)
+
+
+def _is_profile_secret_key(key: str) -> bool:
+    normalized = "".join(ch for ch in str(key or "").lower() if ch.isalnum())
+    return normalized in {
+        "apikey",
+        "password",
+        "token",
+        "apitoken",
+        "accesstoken",
+        "secret",
+    } or str(key or "").lower() in _PROFILE_SECRET_KEY_NAMES
+
+
+def _profile_proxy_redaction_secrets(profile_config: dict[str, Any]) -> tuple[str, ...]:
+    proxy_config = profile_config.get("proxy") if isinstance(profile_config, dict) else None
+    if not isinstance(proxy_config, dict):
+        return ()
+
+    secrets: list[str] = []
+    raw_url = _string_or_empty(proxy_config.get("url"))
+    if raw_url:
+        secrets.append(raw_url)
+        parsed = urlparse(raw_url)
+        if parsed.password:
+            secrets.append(parsed.password)
+            secrets.append(quote(parsed.password, safe=""))
+        try:
+            final_proxy_url = proxy_url_with_credentials(
+                raw_url,
+                proxy_config.get("username"),
+                proxy_config.get("password"),
+            )
+        except Exception:
+            final_proxy_url = ""
+        if final_proxy_url:
+            secrets.append(final_proxy_url)
+
+    password = proxy_config.get("password")
+    if password:
+        password_text = str(password)
+        secrets.append(password_text)
+        secrets.append(quote(password_text, safe=""))
+    return tuple(secrets)
 
 
 def _combine_secrets(*secret_groups: tuple[str, ...]) -> tuple[str, ...]:

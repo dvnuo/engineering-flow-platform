@@ -343,6 +343,104 @@ def test_runtime_profile_clear_removes_managed_subtree_and_metadata(tmp_path):
     assert not runtime_profile_path.exists()
 
 
+def test_set_managed_overlay_external_cli_failure_is_non_fatal(tmp_path, monkeypatch, caplog):
+    config_path = tmp_path / "config.yaml"
+    runtime_profile_path = tmp_path / "runtime_profile.yaml"
+    _write_base_config(config_path)
+    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
+        monkeypatch.delenv(key, raising=False)
+    token = "gh-secret-token"
+    proxy_password = "proxy-url-secret"
+
+    def _fail_external_config(_overlay):
+        raise RuntimeError(f"External CLI command failed: gh auth login stderr: {token} proxy {proxy_password}")
+
+    monkeypatch.setattr(
+        profile_config_module,
+        "apply_runtime_profile_external_config",
+        _fail_external_config,
+    )
+    caplog.set_level("WARNING")
+
+    cfg = Config(str(config_path))
+    cfg.runtime_profile_path = runtime_profile_path
+    updated = cfg.set_managed_overlay(
+        "rp_external_fail",
+        5,
+        {
+            "github": {
+                "enabled": True,
+                "access_token": token,
+            },
+            "proxy": {
+                "enabled": True,
+                "url": f"http://proxy-user:{proxy_password}@proxy.example.test:8080",
+            },
+        },
+    )
+
+    assert updated == ["github", "instruction_texts", "proxy"]
+    cfg.load()
+    assert cfg.get_effective_config()["github"]["access_token"] == token
+    assert cfg.get_managed_overlay_meta() == {
+        "runtime_profile_id": "rp_external_fail",
+        "revision": 5,
+        "managed_sections": ["github", "instruction_texts", "proxy"],
+    }
+    status = cfg.get_external_config_status()
+    assert status["operation"] == "apply"
+    assert status["success"] is False
+    assert "External CLI command failed" in status["error"]
+    assert token not in status["error"]
+    assert proxy_password not in status["error"]
+    assert "[REDACTED_SECRET]" in status["error"]
+    assert token not in caplog.text
+    assert proxy_password not in caplog.text
+    assert "Runtime profile external CLI config apply failed" in caplog.text
+    assert not runtime_profile_path.exists()
+
+
+def test_clear_managed_overlay_external_cli_failure_is_non_fatal(tmp_path, monkeypatch, caplog):
+    config_path = tmp_path / "config.yaml"
+    runtime_profile_path = tmp_path / "runtime_profile.yaml"
+    _write_base_config(config_path)
+
+    monkeypatch.setattr(
+        profile_config_module,
+        "apply_runtime_profile_external_config",
+        lambda _overlay: None,
+    )
+    cfg = Config(str(config_path))
+    cfg.runtime_profile_path = runtime_profile_path
+    cfg.set_managed_overlay(
+        "rp_external_clear_fail",
+        6,
+        {"jira": {"enabled": True}},
+    )
+
+    monkeypatch.setattr(
+        profile_config_module,
+        "clear_runtime_profile_external_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("External CLI command failed: jira instance remove")),
+    )
+    caplog.set_level("WARNING")
+
+    cfg.clear_managed_overlay()
+
+    cfg.load()
+    assert cfg.get_managed_overlay_meta() == {"runtime_profile_id": None, "revision": None, "managed_sections": []}
+    assert cfg.jira.get("enabled") is None
+    assert "proxy" not in cfg.get_effective_config()
+    status = cfg.get_external_config_status()
+    assert status == {
+        "success": False,
+        "error": "External CLI command failed: jira instance remove",
+        "operation": "clear",
+    }
+    assert "Runtime profile external CLI config clear failed" in caplog.text
+    assert not runtime_profile_path.exists()
+
+
 def test_runtime_profile_load_removes_legacy_sidecar_on_startup(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     home_efp_dir = tmp_path / ".efp"

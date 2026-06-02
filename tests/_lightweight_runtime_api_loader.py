@@ -37,6 +37,9 @@ def load_runtime_api_lightweight():
         def get_managed_overlay_meta(self):
             return {}
 
+        def get_external_config_status(self):
+            return {"success": True, "error": None, "operation": None}
+
         def set_managed_overlay(self, *_args, **_kwargs):
             return []
 

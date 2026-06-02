@@ -301,6 +301,11 @@ class Config:
             "revision": None,
         }
         self._managed_sections: List[str] = []
+        self._external_config_status: Dict[str, Any] = {
+            "success": True,
+            "error": None,
+            "operation": None,
+        }
         self._last_modified: float = 0
         self._yaml = _yaml  # Use module-level instance
         self.load()
@@ -435,6 +440,21 @@ class Config:
         self._encrypt_sensitive_fields(encrypted)
         self._write_yaml_document(self.config_path, encrypted)
 
+    def _set_external_config_status(
+        self,
+        operation: Optional[str],
+        success: bool,
+        error: Optional[str] = None,
+    ) -> None:
+        self._external_config_status = {
+            "success": bool(success),
+            "error": error if error else None,
+            "operation": operation if operation in {"apply", "clear"} else None,
+        }
+
+    def _external_config_exc_info(self, error: str, exc: BaseException):
+        return (RuntimeError, RuntimeError(error), exc.__traceback__)
+
     def set_managed_overlay(
         self,
         runtime_profile_id: Optional[str],
@@ -453,9 +473,24 @@ class Config:
         self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
         self._deep_merge_into(config_document, filtered_overlay)
         self._persist_runtime_config(config_document)
-        from src.external_cli.profile_config import apply_runtime_profile_external_config
 
-        apply_runtime_profile_external_config(filtered_overlay)
+        from src.external_cli.profile_config import (
+            apply_runtime_profile_external_config,
+            redact_runtime_profile_external_config_error,
+        )
+
+        try:
+            apply_runtime_profile_external_config(filtered_overlay)
+        except Exception as exc:
+            error = redact_runtime_profile_external_config_error(exc, filtered_overlay)
+            self._set_external_config_status("apply", False, error)
+            logger.warning(
+                "Runtime profile external CLI config apply failed: %s",
+                error,
+                exc_info=self._external_config_exc_info(error, exc),
+            )
+        else:
+            self._set_external_config_status("apply", True)
 
         self._managed_overlay_meta = {
             "runtime_profile_id": runtime_profile_id,
@@ -479,9 +514,24 @@ class Config:
         self._decrypt_sensitive_fields(config_document)
         self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
         self._persist_runtime_config(config_document)
-        from src.external_cli.profile_config import clear_runtime_profile_external_config
 
-        clear_runtime_profile_external_config()
+        from src.external_cli.profile_config import (
+            clear_runtime_profile_external_config,
+            redact_runtime_profile_external_config_error,
+        )
+
+        try:
+            clear_runtime_profile_external_config()
+        except Exception as exc:
+            error = redact_runtime_profile_external_config_error(exc)
+            self._set_external_config_status("clear", False, error)
+            logger.warning(
+                "Runtime profile external CLI config clear failed: %s",
+                error,
+                exc_info=self._external_config_exc_info(error, exc),
+            )
+        else:
+            self._set_external_config_status("clear", True)
 
         self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
         self._managed_sections = []
@@ -498,6 +548,13 @@ class Config:
             "runtime_profile_id": self._managed_overlay_meta.get("runtime_profile_id"),
             "revision": self._managed_overlay_meta.get("revision"),
             "managed_sections": sorted(self._managed_sections),
+        }
+
+    def get_external_config_status(self) -> Dict[str, Any]:
+        return {
+            "success": bool(self._external_config_status.get("success")),
+            "error": self._external_config_status.get("error"),
+            "operation": self._external_config_status.get("operation"),
         }
 
     def save_partial_sections(self, updates: Dict[str, Any], sections: List[str]) -> List[str]:

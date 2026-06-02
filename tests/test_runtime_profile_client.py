@@ -1,5 +1,7 @@
 import pytest
 
+from src.config import Config
+from src.external_cli import profile_config as profile_config_module
 from src.runtime import runtime_profile_client
 
 
@@ -234,6 +236,67 @@ async def test_bootstrap_runtime_profile_apply(monkeypatch):
     assert captured["runtime_profile_id"] == "rp_1"
     assert captured["revision"] == 3
     assert captured["overlay"] == {"jira": {"enabled": True}}
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_profile_external_cli_failure_still_returns_true(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("llm:\n  provider: openai\n", encoding="utf-8")
+    cfg = Config(str(config_path))
+    token = "gh-bootstrap-secret-token"
+
+    monkeypatch.setattr(runtime_profile_client, "config", cfg)
+    monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
+    monkeypatch.setattr(runtime_profile_client, "get_portal_agent_id", lambda: "agent-1")
+    monkeypatch.setattr(runtime_profile_client, "build_portal_internal_api_headers", lambda include_content_type=False: {})
+    monkeypatch.setattr(
+        runtime_profile_client,
+        "ClientSession",
+        lambda headers=None: _FakeClientSession(
+            _FakeResponse(
+                200,
+                {
+                    "runtime_profile_id": "rp_cli_fail",
+                    "runtime_profile_context": {
+                        "runtime_profile_id": "rp_cli_fail",
+                        "revision": 9,
+                        "config": {
+                            "github": {
+                                "enabled": True,
+                                "access_token": token,
+                            }
+                        },
+                    },
+                },
+            )
+        ),
+    )
+
+    def _fail_external_config(_overlay):
+        raise RuntimeError(f"External CLI command failed: gh auth login stderr: {token}")
+
+    monkeypatch.setattr(
+        profile_config_module,
+        "apply_runtime_profile_external_config",
+        _fail_external_config,
+    )
+    caplog.set_level("WARNING")
+
+    ok = await runtime_profile_client.bootstrap_runtime_profile_from_portal()
+
+    assert ok is True
+    cfg.load()
+    assert cfg.get_effective_config()["github"]["access_token"] == token
+    status = cfg.get_external_config_status()
+    assert status["operation"] == "apply"
+    assert status["success"] is False
+    assert token not in status["error"]
+    assert token not in caplog.text
+    assert "Runtime profile external CLI config sync failed during portal bootstrap" in caplog.text
 
 
 @pytest.mark.asyncio

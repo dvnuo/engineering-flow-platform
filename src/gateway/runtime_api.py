@@ -2150,6 +2150,7 @@ async def api_apply_runtime_profile(request: web.Request) -> web.Response:
                     "revision": None,
                     "updated_sections": [],
                     "cleared": True,
+                    "external_config_status": global_config.get_external_config_status(),
                 }
             )
 
@@ -2161,6 +2162,7 @@ async def api_apply_runtime_profile(request: web.Request) -> web.Response:
                 "revision": revision,
                 "updated_sections": updated_sections,
                 "cleared": False,
+                "external_config_status": global_config.get_external_config_status(),
             }
         )
     except Exception as e:
