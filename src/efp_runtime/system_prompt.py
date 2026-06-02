@@ -124,8 +124,11 @@ class SystemPromptBuilder:
                 )
             )
 
-        if self.include_runtime_reminders:
-            reminder = self._runtime_reminder_message(runtime_metadata)
+        if self.include_runtime_reminders or _metadata_value(runtime_metadata, "runtime_mode") == "plan":
+            reminder = self._runtime_reminder_message(
+                runtime_metadata,
+                plan_mode_only=not self.include_runtime_reminders,
+            )
             if reminder is not None:
                 messages.append(reminder)
 
@@ -202,26 +205,29 @@ class SystemPromptBuilder:
     def _runtime_reminder_message(
         self,
         metadata: Mapping[str, Any],
+        *,
+        plan_mode_only: bool = False,
     ) -> Message | None:
         lines: list[str] = []
-        max_iterations = _metadata_value(metadata, "max_iterations")
-        if max_iterations is not None:
-            lines.append(
-                f"- This run is close-bounded by max_iterations={max_iterations}; "
-                "converge on the task, avoid extra provider or tool loops, and "
-                "use available task or background capabilities when appropriate."
-            )
-        if _metadata_bool(metadata, "enable_question_tool"):
-            lines.append(
-                "- Use the question tool only when truly blocked after reading relevant context; otherwise make a supported decision."
-            )
+        if not plan_mode_only:
+            max_iterations = _metadata_value(metadata, "max_iterations")
+            if max_iterations is not None:
+                lines.append(
+                    f"- This run is close-bounded by max_iterations={max_iterations}; "
+                    "converge on the task, avoid extra provider or tool loops, and "
+                    "use available task or background capabilities when appropriate."
+                )
+            if _metadata_bool(metadata, "enable_question_tool"):
+                lines.append(
+                    "- Use the question tool only when truly blocked after reading relevant context; otherwise make a supported decision."
+                )
         if _metadata_value(metadata, "runtime_mode") == "plan":
             lines.append(
                 "- Plan mode is active: do read-only analysis, do not write files, "
                 "do not run shell commands that mutate state, and finish through "
                 "plan_exit when available."
             )
-        if _metadata_bool(
+        if not plan_mode_only and _metadata_bool(
             metadata,
             "tool_output_truncation_enabled",
             "tool_output_paths_enabled",

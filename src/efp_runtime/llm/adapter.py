@@ -19,6 +19,8 @@ class _ToolCallDraft:
     arguments_chunks: List[str] = field(default_factory=list)
     raw: Dict[str, Any] = field(default_factory=dict)
     started: bool = False
+    input_ended: bool = False
+    completed: bool = False
 
     @property
     def arguments_text(self) -> str:
@@ -273,32 +275,8 @@ class DefaultLLMEventAdapter:
                 )
 
         for draft in sorted(response_tool_drafts.values(), key=lambda item: item.index):
-            if draft.started:
-                yield LLMEvent(
-                    LLMEventType.TOOL_INPUT_END,
-                    tool_call_id=draft.id,
-                    tool_name=draft.name,
-                    text=draft.arguments_text,
-                    raw=draft.raw,
-                )
-                tool_call = _make_tool_call(
-                    {
-                        "id": draft.id,
-                        "type": "function",
-                        "function": {
-                            "name": draft.name,
-                            "arguments": draft.arguments_text,
-                        },
-                    },
-                    draft.index,
-                )
-                yield LLMEvent(
-                    LLMEventType.TOOL_CALL_COMPLETE,
-                    tool_call_id=tool_call.call_id,
-                    tool_name=tool_call.tool_name,
-                    tool_call=tool_call,
-                    raw=draft.raw,
-                )
+            for event in _complete_response_tool_draft(draft):
+                yield event
 
         if started:
             metadata = {"finish_reason": finish_reason} if finish_reason else {}
@@ -367,7 +345,6 @@ class DefaultLLMEventAdapter:
                 )
             if response_type == "response.output_item.done":
                 events.extend(_complete_response_tool_draft(draft))
-                response_tool_drafts.pop(call_id, None)
             return events, True
 
         if response_type == "response.function_call_arguments.done":
@@ -377,8 +354,7 @@ class DefaultLLMEventAdapter:
             if arguments not in (None, "") and not draft.arguments_text:
                 draft.arguments_chunks.append(_copilot_stream_value_text(arguments))
             events = _ensure_response_tool_started(draft)
-            events.extend(_complete_response_tool_draft(draft))
-            response_tool_drafts.pop(call_id, None)
+            events.extend(_end_response_tool_input(draft))
             return events, True
 
         return [], True
@@ -772,7 +748,27 @@ def _ensure_response_tool_started(draft: _ToolCallDraft) -> List[LLMEvent]:
     ]
 
 
+def _end_response_tool_input(draft: _ToolCallDraft) -> List[LLMEvent]:
+    if draft.input_ended:
+        return []
+    draft.input_ended = True
+    return [
+        LLMEvent(
+            LLMEventType.TOOL_INPUT_END,
+            tool_call_id=draft.id,
+            tool_name=draft.name,
+            text=draft.arguments_text,
+            raw=dict(draft.raw),
+        )
+    ]
+
+
 def _complete_response_tool_draft(draft: _ToolCallDraft) -> List[LLMEvent]:
+    if draft.completed:
+        return []
+    events = _ensure_response_tool_started(draft)
+    events.extend(_end_response_tool_input(draft))
+    draft.completed = True
     tool_call = _make_tool_call(
         {
             "id": draft.id,
@@ -784,22 +780,16 @@ def _complete_response_tool_draft(draft: _ToolCallDraft) -> List[LLMEvent]:
         },
         draft.index,
     )
-    return [
-        LLMEvent(
-            LLMEventType.TOOL_INPUT_END,
-            tool_call_id=draft.id,
-            tool_name=draft.name,
-            text=draft.arguments_text,
-            raw=dict(draft.raw),
-        ),
+    events.append(
         LLMEvent(
             LLMEventType.TOOL_CALL_COMPLETE,
             tool_call_id=tool_call.call_id,
             tool_name=tool_call.tool_name,
             tool_call=tool_call,
             raw=dict(draft.raw),
-        ),
-    ]
+        )
+    )
+    return events
 
 
 def _is_responses_function_call_item(item: Mapping[str, Any]) -> bool:

@@ -134,3 +134,55 @@ async def test_streaming_responses_chunks_emit_text_reasoning_and_tool_input_eve
     assert completed.arguments == {"query": "efp"}
     assert events[-1].type == LLMEventType.STEP_FINISH
     assert events[-1].usage == {"total_tokens": 12}
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_function_arguments_done_and_item_done_complete_once():
+    adapter = DefaultLLMEventAdapter()
+    chunks = [
+        {
+            "type": "response.output_item.added",
+            "item_id": "fc_1",
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_search",
+                "name": "search",
+                "arguments": "",
+            },
+        },
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '{"query":'},
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '"efp"}'},
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "fc_1",
+            "arguments": '{"query":"efp"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "item_id": "fc_1",
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_search",
+                "name": "search",
+                "arguments": '{"query":"efp"}',
+            },
+        },
+        {"type": "response.completed", "usage": {"total_tokens": 12}},
+    ]
+
+    events = [event async for event in adapter.normalize_stream(chunks)]
+
+    assert [event.type for event in events].count(LLMEventType.TOOL_INPUT_START) == 1
+    assert [event.type for event in events].count(LLMEventType.TOOL_INPUT_END) == 1
+    complete_events = [
+        event for event in events if event.type == LLMEventType.TOOL_CALL_COMPLETE
+    ]
+    assert len(complete_events) == 1
+    assert [event.delta for event in events if event.type == LLMEventType.TOOL_INPUT_DELTA] == [
+        '{"query":',
+        '"efp"}',
+    ]
+    assert complete_events[0].tool_call.call_id == "call_search"
+    assert complete_events[0].tool_call.arguments == {"query": "efp"}

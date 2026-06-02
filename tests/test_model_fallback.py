@@ -320,7 +320,7 @@ class TestFallbackAttempt:
 def test_readme_llm_example_uses_default_llm_model():
     text = Path("README.md").read_text(encoding="utf-8")
     llm_section = text[text.find("### LLM Providers"): text.find("### Control-Plane Runtime Settings")]
-    assert 'model: "gpt-5.4-mini"' in llm_section
+    assert 'model: "gpt-5.4"' in llm_section
     assert 'model: "gpt-4o"' not in llm_section
 
 
