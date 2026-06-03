@@ -274,7 +274,14 @@ class DefaultLLMEventAdapter:
                     raw=draft.raw,
                 )
 
+        seen_response_drafts: set[int] = set()
         for draft in sorted(response_tool_drafts.values(), key=lambda item: item.index):
+            draft_identity = id(draft)
+            if draft_identity in seen_response_drafts:
+                continue
+            seen_response_drafts.add(draft_identity)
+            if not draft.name:
+                continue
             for event in _complete_response_tool_draft(draft):
                 yield event
 
@@ -303,8 +310,9 @@ class DefaultLLMEventAdapter:
             return [LLMEvent(LLMEventType.REASONING_DELTA, delta=delta, text=delta, raw=dict(raw))], True
 
         if response_type == "response.function_call_arguments.delta":
-            call_id = _response_call_id(raw, response_tool_drafts)
-            draft = _response_tool_draft(response_tool_drafts, call_id, raw)
+            draft = _response_existing_tool_draft(response_tool_drafts, raw)
+            if draft is None or not draft.name:
+                return [], True
             delta = str(raw.get("delta") or "")
             events = _ensure_response_tool_started(draft)
             if delta:
@@ -326,33 +334,40 @@ class DefaultLLMEventAdapter:
             item = raw.get("item")
             if not isinstance(item, Mapping) or not _is_responses_function_call_item(item):
                 return [], True
-            call_id = _response_item_draft_key(raw, item, response_tool_drafts)
-            draft = _response_tool_draft(response_tool_drafts, call_id, raw, item=item)
+            draft_key = _response_output_key(raw, item)
+            if draft_key is None:
+                return [], True
+            draft = _response_tool_draft(response_tool_drafts, draft_key, raw, item=item)
+            if draft is None:
+                return [], True
             events = _ensure_response_tool_started(draft)
-            arguments = item.get("arguments")
+            arguments = _response_tool_arguments(item)
             if arguments not in (None, "") and not draft.arguments_text:
                 arguments_text = _copilot_stream_value_text(arguments)
-                draft.arguments_chunks.append(arguments_text)
-                events.append(
-                    LLMEvent(
-                        LLMEventType.TOOL_INPUT_DELTA,
-                        tool_call_id=draft.id,
-                        tool_name=draft.name,
-                        delta=arguments_text,
-                        text=arguments_text,
-                        raw=dict(draft.raw),
+                if arguments_text and draft.name:
+                    draft.arguments_chunks.append(arguments_text)
+                    events.append(
+                        LLMEvent(
+                            LLMEventType.TOOL_INPUT_DELTA,
+                            tool_call_id=draft.id,
+                            tool_name=draft.name,
+                            delta=arguments_text,
+                            text=arguments_text,
+                            raw=dict(draft.raw),
+                        )
                     )
-                )
             if response_type == "response.output_item.done":
                 events.extend(_complete_response_tool_draft(draft))
             return events, True
 
         if response_type == "response.function_call_arguments.done":
-            call_id = _response_call_id(raw, response_tool_drafts)
-            draft = _response_tool_draft(response_tool_drafts, call_id, raw)
+            draft = _response_existing_tool_draft(response_tool_drafts, raw)
+            if draft is None or not draft.name:
+                return [], True
             arguments = raw.get("arguments")
             if arguments not in (None, "") and not draft.arguments_text:
                 draft.arguments_chunks.append(_copilot_stream_value_text(arguments))
+                draft.raw.update(dict(raw))
             events = _ensure_response_tool_started(draft)
             events.extend(_end_response_tool_input(draft))
             return events, True
@@ -677,51 +692,93 @@ def _format_error(error: Any) -> str:
     return str(error)
 
 
-def _response_call_id(
+def _response_output_key(
     raw: Mapping[str, Any],
-    drafts: Mapping[str, _ToolCallDraft],
-    *,
-    fallback: Any = None,
-) -> str:
-    for key in ("call_id", "id", "item_id", "tool_call_id"):
-        value = raw.get(key)
-        if value not in (None, ""):
-            return str(value)
-    if fallback not in (None, ""):
-        return str(fallback)
+    item: Mapping[str, Any] | None = None,
+) -> Optional[str]:
     output_index = raw.get("output_index")
     if output_index not in (None, ""):
-        return f"call_{output_index}"
-    return f"call_{len(drafts)}"
+        return f"output_index:{output_index}"
+    if item is not None and _is_responses_function_call_item(item):
+        call_id = item.get("call_id")
+        if call_id not in (None, ""):
+            return f"call_id:{call_id}"
+    return None
+
+
+def _response_existing_tool_draft(
+    drafts: Mapping[str, _ToolCallDraft],
+    raw: Mapping[str, Any],
+) -> Optional[_ToolCallDraft]:
+    output_key = _response_output_key(raw)
+    if output_key is not None and output_key in drafts:
+        return drafts[output_key]
+
+    for key in ("call_id", "tool_call_id"):
+        value = raw.get(key)
+        if value in (None, ""):
+            continue
+        draft = drafts.get(f"call_id:{value}")
+        if draft is not None:
+            return draft
+        draft = _response_draft_by_id(drafts, str(value))
+        if draft is not None:
+            return draft
+    return None
+
+
+def _response_draft_by_id(
+    drafts: Mapping[str, _ToolCallDraft],
+    call_id: str,
+) -> Optional[_ToolCallDraft]:
+    seen: set[int] = set()
+    for draft in drafts.values():
+        draft_identity = id(draft)
+        if draft_identity in seen:
+            continue
+        seen.add(draft_identity)
+        if draft.id == call_id:
+            return draft
+    return None
 
 
 def _response_tool_draft(
     drafts: Dict[str, _ToolCallDraft],
-    call_id: str,
+    draft_key: str,
     raw: Mapping[str, Any],
     *,
-    item: Mapping[str, Any] | None = None,
-) -> _ToolCallDraft:
-    draft = drafts.get(call_id)
-    source = item if item is not None else raw
-    tool_name = _response_tool_name(source, raw=raw, draft=draft)
+    item: Mapping[str, Any],
+) -> Optional[_ToolCallDraft]:
+    draft_id = _response_tool_call_id(item)
+    if not draft_id:
+        return None
+    draft = drafts.get(draft_key)
+    if draft is None:
+        draft = _response_draft_by_id(drafts, draft_id)
+    tool_name = _response_tool_name(item, draft=draft)
     if draft is None:
         draft = _ToolCallDraft(
             index=len(drafts),
-            id=str(source.get("call_id") or source.get("id") or call_id),
+            id=draft_id,
             name=tool_name,
             raw=dict(raw),
         )
-        drafts[call_id] = draft
+        drafts[draft_key] = draft
     else:
         draft.raw.update(dict(raw))
-        if source.get("call_id") or source.get("id"):
-            draft.id = str(source.get("call_id") or source.get("id"))
+        draft.id = draft_id
         if tool_name:
             draft.name = tool_name
-    if item is not None:
-        draft.raw["item"] = dict(item)
+    draft.raw["item"] = dict(item)
     return draft
+
+
+def _response_tool_call_id(item: Mapping[str, Any]) -> str:
+    for key in ("call_id", "id", "tool_call_id"):
+        value = item.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
 
 
 def _response_tool_name(
@@ -738,8 +795,9 @@ def _response_tool_name(
     if draft is not None:
         if draft.name:
             return draft.name
-        for candidate in _response_tool_name_candidates(draft.raw):
-            name = _tool_name_from_mapping(candidate)
+        item = draft.raw.get("item")
+        if isinstance(item, Mapping):
+            name = _tool_name_from_mapping(item)
             if name:
                 return name
     return ""
@@ -774,19 +832,17 @@ def _tool_name_from_mapping(source: Mapping[str, Any]) -> str:
     return ""
 
 
-def _response_item_draft_key(
-    raw: Mapping[str, Any],
-    item: Mapping[str, Any],
-    drafts: Mapping[str, _ToolCallDraft],
-) -> str:
-    for value in (raw.get("item_id"), item.get("id"), item.get("call_id")):
-        if value not in (None, ""):
-            return str(value)
-    return _response_call_id(item, drafts)
+def _response_tool_arguments(item: Mapping[str, Any]) -> Any:
+    if "arguments" in item:
+        return item.get("arguments")
+    function = item.get("function")
+    if isinstance(function, Mapping) and "arguments" in function:
+        return function.get("arguments")
+    return None
 
 
 def _ensure_response_tool_started(draft: _ToolCallDraft) -> List[LLMEvent]:
-    if draft.started:
+    if draft.started or not draft.name:
         return []
     draft.started = True
     return [
@@ -800,7 +856,7 @@ def _ensure_response_tool_started(draft: _ToolCallDraft) -> List[LLMEvent]:
 
 
 def _end_response_tool_input(draft: _ToolCallDraft) -> List[LLMEvent]:
-    if draft.input_ended:
+    if draft.input_ended or not draft.name:
         return []
     draft.input_ended = True
     return [
@@ -817,32 +873,12 @@ def _end_response_tool_input(draft: _ToolCallDraft) -> List[LLMEvent]:
 def _complete_response_tool_draft(draft: _ToolCallDraft) -> List[LLMEvent]:
     if draft.completed:
         return []
+    if not draft.name:
+        draft.completed = True
+        return []
     events = _ensure_response_tool_started(draft)
     events.extend(_end_response_tool_input(draft))
     draft.completed = True
-    if not draft.name:
-        item_id = _response_draft_item_id(draft)
-        location = f"call_id={draft.id}"
-        if item_id and item_id != draft.id:
-            location = f"{location}, item_id={item_id}"
-        message = (
-            "Provider emitted incomplete function call without tool name "
-            f"({location})."
-        )
-        events.append(
-            LLMEvent(
-                LLMEventType.ERROR,
-                tool_call_id=draft.id,
-                error=message,
-                raw={
-                    "call_id": draft.id,
-                    "item_id": item_id,
-                    "type": draft.raw.get("type"),
-                },
-                metadata={"index": draft.index},
-            )
-        )
-        return events
     tool_call = _make_tool_call(
         {
             "id": draft.id,
@@ -864,20 +900,6 @@ def _complete_response_tool_draft(draft: _ToolCallDraft) -> List[LLMEvent]:
         )
     )
     return events
-
-
-def _response_draft_item_id(draft: _ToolCallDraft) -> Optional[str]:
-    for key in ("item_id", "id"):
-        value = draft.raw.get(key)
-        if value not in (None, ""):
-            return str(value)
-    item = draft.raw.get("item")
-    if isinstance(item, Mapping):
-        for key in ("id", "call_id"):
-            value = item.get(key)
-            if value not in (None, ""):
-                return str(value)
-    return None
 
 
 def _is_responses_function_call_item(item: Mapping[str, Any]) -> bool:

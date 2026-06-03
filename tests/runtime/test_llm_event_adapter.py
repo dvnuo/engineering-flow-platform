@@ -89,13 +89,15 @@ async def test_streaming_responses_chunks_emit_text_reasoning_and_tool_input_eve
         {"type": "response.reasoning_summary_text.delta", "delta": "Thinking"},
         {
             "type": "response.output_item.added",
+            "output_index": 0,
             "item_id": "fc_1",
             "item": {"type": "function_call", "id": "fc_1", "call_id": "call_search", "name": "search", "arguments": ""},
         },
-        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '{"query":'},
-        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '"efp"}'},
+        {"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_1", "delta": '{"query":'},
+        {"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_1", "delta": '"efp"}'},
         {
             "type": "response.output_item.done",
+            "output_index": 0,
             "item_id": "fc_1",
             "item": {
                 "type": "function_call",
@@ -142,6 +144,7 @@ async def test_streaming_responses_function_arguments_done_and_item_done_complet
     chunks = [
         {
             "type": "response.output_item.added",
+            "output_index": 0,
             "item_id": "fc_1",
             "item": {
                 "type": "function_call",
@@ -151,15 +154,17 @@ async def test_streaming_responses_function_arguments_done_and_item_done_complet
                 "arguments": "",
             },
         },
-        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '{"query":'},
-        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '"efp"}'},
+        {"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_1", "delta": '{"query":'},
+        {"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_1", "delta": '"efp"}'},
         {
             "type": "response.function_call_arguments.done",
+            "output_index": 0,
             "item_id": "fc_1",
             "arguments": '{"query":"efp"}',
         },
         {
             "type": "response.output_item.done",
+            "output_index": 0,
             "item_id": "fc_1",
             "item": {
                 "type": "function_call",
@@ -194,6 +199,7 @@ async def test_streaming_responses_output_item_nested_function_name_completes_to
     chunks = [
         {
             "type": "response.output_item.added",
+            "output_index": 0,
             "item_id": "fc_1",
             "item": {
                 "type": "function_call",
@@ -203,10 +209,11 @@ async def test_streaming_responses_output_item_nested_function_name_completes_to
                 "arguments": "",
             },
         },
-        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '{"query":'},
-        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '"efp"}'},
+        {"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_1", "delta": '{"query":'},
+        {"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_1", "delta": '"efp"}'},
         {
             "type": "response.output_item.done",
+            "output_index": 0,
             "item_id": "fc_1",
             "item": {
                 "type": "function_call",
@@ -231,7 +238,7 @@ async def test_streaming_responses_output_item_nested_function_name_completes_to
 
 
 @pytest.mark.asyncio
-async def test_streaming_responses_incomplete_function_call_without_tool_name_emits_error():
+async def test_streaming_responses_orphan_function_call_arguments_are_ignored():
     adapter = DefaultLLMEventAdapter()
     chunks = [
         {
@@ -254,8 +261,162 @@ async def test_streaming_responses_incomplete_function_call_without_tool_name_em
     error_events = [event for event in events if event.type == LLMEventType.ERROR]
 
     assert complete_events == []
-    assert len(error_events) == 1
-    assert error_events[0].tool_call_id == "fc_missing_name"
-    assert "function call" in (error_events[0].error or "")
-    assert "tool name" in (error_events[0].error or "")
-    assert "fc_missing_name" in (error_events[0].error or "")
+    assert error_events == []
+    assert all(event.tool_call_id != "fc_missing_name" for event in events)
+    assert events[-1].type == LLMEventType.STEP_FINISH
+    assert events[-1].usage == {"total_tokens": 12}
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_orphan_encrypted_item_id_arguments_are_ignored():
+    adapter = DefaultLLMEventAdapter()
+    encrypted_item_id = (
+        "zWKh9D/etpetECfeACpT2ONLWvuJm9K3bvtlp5KzCsZasSD0KlemPHSlmZWvSrujW+"
+        "xIkWK0pts86n/TlXVf+kzTF4DP4h1wwnpZSgt+8bElTmnXob8QuFenDahD1AvaGsTQY"
+        "OBnNj7N1JXs5F1Gbc2PBIs99duvBNM4dMC15mFJtaQjKg9vMBeuT/cMOEeGP24A4Nvtf"
+        "WdlFquq2WAOLUf/bZLT0orolyXrZpRq/hy8Sb1Oa+a7RPsalyrusQ6MEmS7W35J7bZq"
+        "D7vGZT2Zd1fNRWPNJ0M9vW8YtaPrSGe4In+Ai/xPNyuSiOBB1Z6tL/1luzi5lKD6Z3ZsGSEp6MmJ8sLzhR4uc1PYHBCMcrhLwwdUTCSPb82rwmN4JkyU+tcAwo4lZ8qChBDnutDUnw=="
+    )
+    chunks = [
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": encrypted_item_id,
+            "delta": '{"query":"efp"}',
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": encrypted_item_id,
+            "arguments": '{"query":"efp"}',
+        },
+        {"type": "response.completed", "usage": {"total_tokens": 12}},
+    ]
+
+    events = [event async for event in adapter.normalize_stream(chunks)]
+
+    assert [event for event in events if event.type == LLMEventType.ERROR] == []
+    assert [event for event in events if event.type == LLMEventType.TOOL_CALL_COMPLETE] == []
+    assert encrypted_item_id not in {
+        event.tool_call_id for event in events if event.tool_call_id
+    }
+    assert events[-1].type == LLMEventType.STEP_FINISH
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_function_call_uses_output_index_not_encrypted_item_id():
+    adapter = DefaultLLMEventAdapter()
+    encrypted_added_item_id = "encrypted-added"
+    encrypted_delta_item_id = (
+        "zWKh9D/rotatingEncryptedItemIdThatChangesOnEachCopilotResponsesEvent"
+        "uSiOBB1Z6tL/1luzi5lKD6Z3ZsGSEp6MmJ8sLzhR4uc1PYHBCMcrhLwwdUTCSPb82rwmN4JkyU+tc=="
+    )
+    chunks = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item_id": encrypted_added_item_id,
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_search",
+                "name": "search",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": encrypted_delta_item_id,
+            "delta": '{"query":"efp"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item_id": "encrypted-done",
+            "item": {
+                "type": "function_call",
+                "id": "fc_done",
+                "call_id": "call_search",
+                "name": "search",
+                "arguments": '{"query":"efp"}',
+            },
+        },
+        {"type": "response.completed", "usage": {"total_tokens": 12}},
+    ]
+
+    events = [event async for event in adapter.normalize_stream(chunks)]
+    tool_events = [
+        event for event in events
+        if event.type in {
+            LLMEventType.TOOL_INPUT_START,
+            LLMEventType.TOOL_INPUT_DELTA,
+            LLMEventType.TOOL_INPUT_END,
+            LLMEventType.TOOL_CALL_COMPLETE,
+        }
+    ]
+
+    assert [event.type for event in tool_events] == [
+        LLMEventType.TOOL_INPUT_START,
+        LLMEventType.TOOL_INPUT_DELTA,
+        LLMEventType.TOOL_INPUT_END,
+        LLMEventType.TOOL_CALL_COMPLETE,
+    ]
+    assert {event.tool_call_id for event in tool_events} == {"call_search"}
+    assert encrypted_added_item_id not in {event.tool_call_id for event in tool_events}
+    assert encrypted_delta_item_id not in {event.tool_call_id for event in tool_events}
+    assert [event for event in events if event.type == LLMEventType.ERROR] == []
+    complete_event = next(
+        event for event in events if event.type == LLMEventType.TOOL_CALL_COMPLETE
+    )
+    assert complete_event.tool_name == "search"
+    assert complete_event.tool_call.tool_name == "search"
+    assert complete_event.tool_call.arguments == {"query": "efp"}
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_delta_before_output_item_added_is_ignored():
+    adapter = DefaultLLMEventAdapter()
+    chunks = [
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "encrypted-before-added",
+            "delta": '{"ignored":true}',
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item_id": "encrypted-added",
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_search",
+                "name": "search",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item_id": "encrypted-done",
+            "item": {
+                "type": "function_call",
+                "id": "fc_done",
+                "call_id": "call_search",
+                "name": "search",
+                "arguments": '{"query":"efp"}',
+            },
+        },
+        {"type": "response.completed", "usage": {"total_tokens": 12}},
+    ]
+
+    events = [event async for event in adapter.normalize_stream(chunks)]
+    complete_event = next(
+        event for event in events if event.type == LLMEventType.TOOL_CALL_COMPLETE
+    )
+
+    assert [event.delta for event in events if event.type == LLMEventType.TOOL_INPUT_DELTA] == [
+        '{"query":"efp"}',
+    ]
+    assert [event for event in events if event.type == LLMEventType.ERROR] == []
+    assert complete_event.tool_call.call_id == "call_search"
+    assert complete_event.tool_call.arguments == {"query": "efp"}
