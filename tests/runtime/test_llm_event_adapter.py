@@ -186,3 +186,76 @@ async def test_streaming_responses_function_arguments_done_and_item_done_complet
     ]
     assert complete_events[0].tool_call.call_id == "call_search"
     assert complete_events[0].tool_call.arguments == {"query": "efp"}
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_output_item_nested_function_name_completes_tool_call():
+    adapter = DefaultLLMEventAdapter()
+    chunks = [
+        {
+            "type": "response.output_item.added",
+            "item_id": "fc_1",
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_search",
+                "function": {"name": "search"},
+                "arguments": "",
+            },
+        },
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '{"query":'},
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '"efp"}'},
+        {
+            "type": "response.output_item.done",
+            "item_id": "fc_1",
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_search",
+                "function": {"name": "search"},
+                "arguments": '{"query":"efp"}',
+            },
+        },
+        {"type": "response.completed", "usage": {"total_tokens": 12}},
+    ]
+
+    events = [event async for event in adapter.normalize_stream(chunks)]
+    complete_events = [
+        event for event in events if event.type == LLMEventType.TOOL_CALL_COMPLETE
+    ]
+
+    assert len(complete_events) == 1
+    assert complete_events[0].tool_call.call_id == "call_search"
+    assert complete_events[0].tool_call.tool_name == "search"
+    assert complete_events[0].tool_call.arguments == {"query": "efp"}
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_incomplete_function_call_without_tool_name_emits_error():
+    adapter = DefaultLLMEventAdapter()
+    chunks = [
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_missing_name",
+            "delta": '{"query":"efp"}',
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "fc_missing_name",
+            "arguments": '{"query":"efp"}',
+        },
+        {"type": "response.completed", "usage": {"total_tokens": 12}},
+    ]
+
+    events = [event async for event in adapter.normalize_stream(chunks)]
+    complete_events = [
+        event for event in events if event.type == LLMEventType.TOOL_CALL_COMPLETE
+    ]
+    error_events = [event for event in events if event.type == LLMEventType.ERROR]
+
+    assert complete_events == []
+    assert len(error_events) == 1
+    assert error_events[0].tool_call_id == "fc_missing_name"
+    assert "function call" in (error_events[0].error or "")
+    assert "tool name" in (error_events[0].error or "")
+    assert "fc_missing_name" in (error_events[0].error or "")

@@ -704,11 +704,12 @@ def _response_tool_draft(
 ) -> _ToolCallDraft:
     draft = drafts.get(call_id)
     source = item if item is not None else raw
+    tool_name = _response_tool_name(source, raw=raw, draft=draft)
     if draft is None:
         draft = _ToolCallDraft(
             index=len(drafts),
             id=str(source.get("call_id") or source.get("id") or call_id),
-            name=str(source.get("name") or source.get("tool_name") or ""),
+            name=tool_name,
             raw=dict(raw),
         )
         drafts[call_id] = draft
@@ -716,11 +717,61 @@ def _response_tool_draft(
         draft.raw.update(dict(raw))
         if source.get("call_id") or source.get("id"):
             draft.id = str(source.get("call_id") or source.get("id"))
-        if source.get("name") or source.get("tool_name"):
-            draft.name = str(source.get("name") or source.get("tool_name"))
+        if tool_name:
+            draft.name = tool_name
     if item is not None:
         draft.raw["item"] = dict(item)
     return draft
+
+
+def _response_tool_name(
+    source: Mapping[str, Any],
+    *,
+    raw: Mapping[str, Any] | None = None,
+    draft: _ToolCallDraft | None = None,
+) -> str:
+    for candidate in _response_tool_name_candidates(source, raw=raw):
+        name = _tool_name_from_mapping(candidate)
+        if name:
+            return name
+
+    if draft is not None:
+        if draft.name:
+            return draft.name
+        for candidate in _response_tool_name_candidates(draft.raw):
+            name = _tool_name_from_mapping(candidate)
+            if name:
+                return name
+    return ""
+
+
+def _response_tool_name_candidates(
+    source: Mapping[str, Any],
+    *,
+    raw: Mapping[str, Any] | None = None,
+) -> List[Mapping[str, Any]]:
+    candidates = [source]
+    if raw is not None and raw is not source:
+        candidates.append(raw)
+    for mapping in list(candidates):
+        item = mapping.get("item")
+        if isinstance(item, Mapping):
+            candidates.append(item)
+    return candidates
+
+
+def _tool_name_from_mapping(source: Mapping[str, Any]) -> str:
+    for key in ("name", "tool_name"):
+        value = source.get(key)
+        if value not in (None, ""):
+            return str(value)
+
+    function = source.get("function")
+    if isinstance(function, Mapping):
+        name = function.get("name")
+        if name not in (None, ""):
+            return str(name)
+    return ""
 
 
 def _response_item_draft_key(
@@ -769,6 +820,29 @@ def _complete_response_tool_draft(draft: _ToolCallDraft) -> List[LLMEvent]:
     events = _ensure_response_tool_started(draft)
     events.extend(_end_response_tool_input(draft))
     draft.completed = True
+    if not draft.name:
+        item_id = _response_draft_item_id(draft)
+        location = f"call_id={draft.id}"
+        if item_id and item_id != draft.id:
+            location = f"{location}, item_id={item_id}"
+        message = (
+            "Provider emitted incomplete function call without tool name "
+            f"({location})."
+        )
+        events.append(
+            LLMEvent(
+                LLMEventType.ERROR,
+                tool_call_id=draft.id,
+                error=message,
+                raw={
+                    "call_id": draft.id,
+                    "item_id": item_id,
+                    "type": draft.raw.get("type"),
+                },
+                metadata={"index": draft.index},
+            )
+        )
+        return events
     tool_call = _make_tool_call(
         {
             "id": draft.id,
@@ -790,6 +864,20 @@ def _complete_response_tool_draft(draft: _ToolCallDraft) -> List[LLMEvent]:
         )
     )
     return events
+
+
+def _response_draft_item_id(draft: _ToolCallDraft) -> Optional[str]:
+    for key in ("item_id", "id"):
+        value = draft.raw.get(key)
+        if value not in (None, ""):
+            return str(value)
+    item = draft.raw.get("item")
+    if isinstance(item, Mapping):
+        for key in ("id", "call_id"):
+            value = item.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return None
 
 
 def _is_responses_function_call_item(item: Mapping[str, Any]) -> bool:
