@@ -2231,6 +2231,8 @@ async def api_skills(request: web.Request) -> web.Response:
 
 def setup_runtime_api_routes(app: web.Application):
     """Register API-only runtime routes used by Portal and runtime clients."""
+    from src.gateway.server_files import setup_server_files_routes
+
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_post('/api/tasks/execute', api_tasks_execute)
@@ -2245,6 +2247,7 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/internal/runtime-profile/apply', api_apply_runtime_profile)
     app.router.add_get('/api/skills', api_skills)
+    setup_server_files_routes(app)
 
     logger.info("Runtime API routes registered:")
     logger.info("  POST /api/chat     - Send message")
@@ -2258,3 +2261,9 @@ def setup_runtime_api_routes(app: web.Application):
     logger.info("  DELETE /api/sessions/{id} - Delete existing session")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  GET  /api/skills  - Get available skills")
+    logger.info("  GET  /api/server-files - Browse workspace server files")
+    logger.info("  GET  /api/server-files/read - Read workspace text file")
+    logger.info("  GET  /api/server-files/content - Stream workspace file content")
+    logger.info("  POST /api/server-files/upload - Upload workspace file")
+    logger.info("  POST /api/server-files/delete - Delete workspace file or directory")
+    logger.info("  GET  /api/server-files/download - Download workspace file or archive")

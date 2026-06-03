@@ -39,12 +39,33 @@ class TestRuntimeApiRoutes:
         assert '/api/sessions/{session_id}' in routes
         assert '/api/usage' in routes
         assert '/api/internal/runtime-profile/apply' in routes
+        assert '/api/server-files' in routes
+        assert '/api/server-files/read' in routes
+        assert '/api/server-files/content' in routes
+        assert '/api/server-files/upload' in routes
+        assert '/api/server-files/delete' in routes
+        assert '/api/server-files/download' in routes
+        assert not any(path == '/api/files' or path.startswith('/api/files/') for path in routes)
 
         delete_routes = [
             r for r in app.router.routes()
             if r.resource and r.resource.canonical == '/api/sessions/{session_id}' and r.method == 'DELETE'
         ]
         assert delete_routes
+
+        server_files_routes = {
+            (r.method, r.resource.canonical)
+            for r in app.router.routes()
+            if r.resource and r.resource.canonical.startswith('/api/server-files')
+        }
+        assert {
+            ('GET', '/api/server-files'),
+            ('GET', '/api/server-files/read'),
+            ('GET', '/api/server-files/content'),
+            ('POST', '/api/server-files/upload'),
+            ('POST', '/api/server-files/delete'),
+            ('GET', '/api/server-files/download'),
+        }.issubset(server_files_routes)
 
 
 class _HeaderOnlyRequest:
