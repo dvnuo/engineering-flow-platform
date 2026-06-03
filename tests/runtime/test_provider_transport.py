@@ -1277,7 +1277,7 @@ async def test_transport_send_error_maps_to_loop_error_status():
     assert error_part.type is MessagePartType.ERROR
     assert "OpenAI-compatible transport failed" in error_part.text
     assert "network disabled" in error_part.text
-    assert any(event.type == "llm.error" for event in result.runtime_events)
+    assert any(event.type == "llm.provider_error" for event in result.runtime_events)
 
 
 def test_provider_transport_imports_standalone_with_pythonpath_src():

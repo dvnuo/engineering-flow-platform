@@ -133,3 +133,83 @@ def test_projector_maps_permission_and_run_finish_usage_aliases():
     assert finish["state"] == "success"
     assert finish["data"]["tokens"] == 12
     assert finish["data"]["cost"] == 0.01
+
+
+def test_projector_maps_new_llm_reasoning_error_and_finish_events():
+    projector = RuntimeEventProjector(request_id="req-1")
+
+    reasoning_start = projector.project(
+        RuntimeEvent(
+            type="llm.reasoning_start",
+            session_id="s-1",
+            part_id="reasoning-1",
+            payload={"run_id": "run-1", "iteration": 1, "event_type": "reasoning_start"},
+            created_at="2026-06-02T01:02:03Z",
+        )
+    )
+    reasoning_delta = projector.project(
+        RuntimeEvent(
+            type="llm.reasoning_delta",
+            session_id="s-1",
+            part_id="reasoning-1",
+            payload={"run_id": "run-1", "iteration": 1, "delta": "think"},
+            created_at="2026-06-02T01:02:04Z",
+        )
+    )
+    reasoning_end = projector.project(
+        RuntimeEvent(
+            type="llm.reasoning_end",
+            session_id="s-1",
+            part_id="reasoning-1",
+            payload={"run_id": "run-1", "iteration": 1},
+            created_at="2026-06-02T01:02:05Z",
+        )
+    )
+
+    assert reasoning_start[0]["type"] == "session.next.reasoning.started"
+    assert reasoning_delta[0]["type"] == "session.next.reasoning.delta"
+    assert reasoning_delta[0]["data"]["delta"] == "think"
+    assert reasoning_end[0]["type"] == "session.next.reasoning.ended"
+
+    provider_error = projector.project(
+        RuntimeEvent(
+            type="llm.provider_error",
+            session_id="s-1",
+            payload={
+                "run_id": "run-1",
+                "iteration": 1,
+                "error": "rate_limit_exceeded: Slow down",
+                "code": "rate_limit_exceeded",
+                "retryable": True,
+            },
+            created_at="2026-06-02T01:02:06Z",
+        )
+    )
+    tool_error = projector.project(
+        RuntimeEvent(
+            type="llm.tool_error",
+            session_id="s-1",
+            payload={
+                "tool_call_id": "call-1",
+                "tool_name": "search",
+                "error": "tool failed",
+            },
+            created_at="2026-06-02T01:02:07Z",
+        )
+    )
+
+    assert provider_error[0]["type"] == "session.next.step.failed"
+    assert provider_error[0]["data"]["code"] == "rate_limit_exceeded"
+    assert provider_error[0]["data"]["retryable"] is True
+    assert tool_error[0]["type"] == "session.next.tool.failed"
+    assert tool_error[0]["data"]["tool_name"] == "search"
+
+    finish = projector.project(
+        RuntimeEvent(
+            type="llm.finish",
+            session_id="s-1",
+            payload={"run_id": "run-1", "iteration": 1},
+            created_at="2026-06-02T01:02:08Z",
+        )
+    )
+    assert finish == []

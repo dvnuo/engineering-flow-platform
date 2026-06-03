@@ -52,6 +52,8 @@ class SessionProcessor:
         self._text_buffers: Dict[str, List[str]] = {}
         self._active_text_part_id: Optional[str] = None
         self._reasoning_part: Optional[MessagePart] = None
+        self._reasoning_parts: Dict[str, MessagePart] = {}
+        self._active_reasoning_part_id: Optional[str] = None
         self._tool_inputs: Dict[str, _ToolInputDraft] = {}
 
     async def consume(
@@ -90,9 +92,19 @@ class SessionProcessor:
             self._finalize_text_part(event.part_id, event.text)
             return
 
+        if event_type == LLMEventType.REASONING_START:
+            self._ensure_assistant_message(event.message_id)
+            self._start_reasoning_part(event)
+            return
+
         if event_type == LLMEventType.REASONING_DELTA:
             self._ensure_assistant_message(event.message_id)
-            self._append_reasoning_delta(event.delta or event.text)
+            self._append_reasoning_delta(event)
+            return
+
+        if event_type == LLMEventType.REASONING_END:
+            self._ensure_assistant_message(event.message_id)
+            self._end_reasoning_part(event)
             return
 
         if event_type == LLMEventType.TOOL_INPUT_START:
@@ -121,6 +133,11 @@ class SessionProcessor:
             self._append_tool_result(event)
             return
 
+        if event_type == LLMEventType.TOOL_ERROR:
+            self._handle_tool_error(event)
+            self._record_runtime_event("llm.tool_error", event)
+            return
+
         if event_type == LLMEventType.STEP_FINISH:
             self._finalize_open_text_parts()
             assistant_message = self.last_assistant_message
@@ -135,12 +152,20 @@ class SessionProcessor:
             self._record_runtime_event("llm.step_finish", event)
             return
 
+        if event_type == LLMEventType.FINISH:
+            self._record_runtime_event("llm.finish", event)
+            return
+
+        if event_type == LLMEventType.PROVIDER_ERROR:
+            self._handle_provider_error(event)
+            return
+
         if event_type == LLMEventType.ERROR:
             message = self._ensure_assistant_message(event.message_id)
             message.append_part(
                 MessagePart.error_part(
                     event.error or event.text,
-                    metadata=dict(event.metadata),
+                    metadata=self._event_metadata(event),
                 )
             )
             message.status = "error"
@@ -159,6 +184,8 @@ class SessionProcessor:
         self.current_message = message
         self.last_assistant_message = message
         self._reasoning_part = None
+        self._reasoning_parts = {}
+        self._active_reasoning_part_id = None
         return message
 
     def _ensure_assistant_message(self, message_id: Optional[str] = None) -> Message:
@@ -195,19 +222,71 @@ class SessionProcessor:
         for part_id in list(self._text_buffers):
             self._finalize_text_part(part_id)
 
-    def _append_reasoning_delta(self, delta: str) -> None:
+    def _start_reasoning_part(self, event: LLMEvent) -> MessagePart | None:
+        if self.current_message is None:
+            return None
+        part_id = self._reasoning_part_id(event)
+        existing = self._reasoning_parts.get(part_id)
+        if existing is not None:
+            existing.metadata.update(self._event_metadata(event))
+            self._reasoning_part = existing
+            self._active_reasoning_part_id = part_id
+            return existing
+        part = self.current_message.append_part(
+            MessagePart(
+                type=MessagePartType.REASONING,
+                part_id=part_id,
+                reasoning="",
+                text="",
+                metadata=self._event_metadata(event),
+            )
+        )
+        self._reasoning_parts[part_id] = part
+        self._reasoning_part = part
+        self._active_reasoning_part_id = part_id
+        return part
+
+    def _append_reasoning_delta(self, event: LLMEvent) -> None:
+        delta = event.delta or event.text
         if not delta or self.current_message is None:
             return
-        if self._reasoning_part is None:
-            self._reasoning_part = self.current_message.append_part(
-                MessagePart(
-                    type=MessagePartType.REASONING,
-                    reasoning="",
-                    text="",
-                )
-            )
-        self._reasoning_part.reasoning = (self._reasoning_part.reasoning or "") + delta
-        self._reasoning_part.text = (self._reasoning_part.text or "") + delta
+        part_id = self._reasoning_part_id(event)
+        part = self._reasoning_parts.get(part_id)
+        if part is None:
+            part = self._start_reasoning_part(event)
+        if part is None:
+            return
+        part.metadata.update(self._event_metadata(event))
+        part.reasoning = (part.reasoning or "") + delta
+        part.text = (part.text or "") + delta
+        self._reasoning_part = part
+        self._active_reasoning_part_id = part_id
+
+    def _end_reasoning_part(self, event: LLMEvent) -> None:
+        part_id = self._reasoning_part_id(event)
+        part = self._reasoning_parts.get(part_id)
+        if part is None:
+            return
+        part.metadata.update(self._event_metadata(event))
+        if self._active_reasoning_part_id == part_id:
+            self._active_reasoning_part_id = None
+            self._reasoning_part = None
+
+    def _reasoning_part_id(self, event: LLMEvent) -> str:
+        return (
+            event.part_id
+            or _optional_metadata_str(event.metadata, "part_id")
+            or _optional_metadata_str(event.metadata, "reasoning_id")
+            or _optional_metadata_str(event.metadata, "item_id")
+            or self._active_reasoning_part_id
+            or "reasoning_0"
+        )
+
+    def _event_metadata(self, event: LLMEvent) -> Dict[str, Any]:
+        metadata = dict(event.metadata)
+        if event.provider_metadata:
+            metadata["provider_metadata"] = dict(event.provider_metadata)
+        return metadata
 
     def _start_tool_input(self, event: LLMEvent) -> None:
         call_id = event.tool_call_id or f"call_{len(self._tool_inputs)}"
@@ -298,6 +377,46 @@ class SessionProcessor:
         )
         message.append_part(MessagePart.tool_result_part(event.tool_result))
         self.session.messages.append(message)
+
+    def _handle_tool_error(self, event: LLMEvent) -> None:
+        call_id = event.tool_call_id or ""
+        if not call_id:
+            return
+        part = self._find_tool_call_part(call_id)
+        if part is None or part.tool_call is None:
+            return
+        part.tool_call.status = "error"
+        previous_state = part.metadata.get("tool_state")
+        previous_state = dict(previous_state) if isinstance(previous_state, dict) else {}
+        previous_time = previous_state.get("time")
+        previous_time = dict(previous_time) if isinstance(previous_time, dict) else {}
+        _set_tool_part_state(
+            part,
+            {
+                **previous_state,
+                "status": "error",
+                "error": event.error or event.text,
+                "metadata": self._event_metadata(event),
+                "time": {
+                    "start": previous_time.get("start") or part.created_at,
+                    "end": utc_now_iso(),
+                },
+            },
+        )
+
+    def _handle_provider_error(self, event: LLMEvent) -> None:
+        self._finalize_open_text_parts()
+        message = self._ensure_assistant_message(event.message_id)
+        message.append_part(
+            MessagePart.error_part(
+                event.error or event.text or "Provider error",
+                metadata=self._event_metadata(event),
+            )
+        )
+        message.status = "error"
+        message.completed_at = message.completed_at or utc_now_iso()
+        self.session.status = RuntimeStatus.ERROR
+        self._record_runtime_event("llm.provider_error", event)
 
     def _ensure_pending_tool_call_part(
         self,
@@ -430,6 +549,8 @@ class SessionProcessor:
                     "tool_call_id": event.tool_call_id,
                     "usage": dict(event.usage),
                     "error": event.error,
+                    "metadata": dict(event.metadata),
+                    "provider_metadata": dict(event.provider_metadata),
                     **dict(event.metadata),
                 },
             )
@@ -454,6 +575,13 @@ def _parse_arguments(arguments_text: str) -> Any:
         return json.loads(arguments_text)
     except json.JSONDecodeError:
         return arguments_text
+
+
+def _optional_metadata_str(metadata: Mapping[str, Any], key: str) -> Optional[str]:
+    value = metadata.get(key)
+    if value in (None, ""):
+        return None
+    return str(value)
 
 
 def _pending_tool_state(draft: _ToolInputDraft) -> dict[str, Any]:

@@ -17,6 +17,7 @@ class _ToolCallDraft:
     id: str
     name: str = ""
     arguments_chunks: List[str] = field(default_factory=list)
+    final_arguments_text: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
     started: bool = False
     input_ended: bool = False
@@ -24,7 +25,15 @@ class _ToolCallDraft:
 
     @property
     def arguments_text(self) -> str:
-        return "".join(self.arguments_chunks)
+        return self.final_arguments_text if self.final_arguments_text is not None else "".join(self.arguments_chunks)
+
+
+@dataclass
+class _ReasoningDraft:
+    item_id: str
+    encrypted_content: Optional[str] = None
+    active_part_ids: set[str] = field(default_factory=set)
+    raw: Dict[str, Any] = field(default_factory=dict)
 
 
 class LLMEventAdapter(Protocol):
@@ -48,11 +57,12 @@ class DefaultLLMEventAdapter:
 
         if "error" in raw and raw.get("error"):
             yield LLMEvent(
-                LLMEventType.ERROR,
+                LLMEventType.PROVIDER_ERROR,
                 error=_format_error(raw.get("error")),
                 raw=raw,
+                metadata={"provider": "openai"},
+                provider_metadata={"openai": {"error": raw.get("error")}},
             )
-            yield LLMEvent(LLMEventType.STEP_FINISH, usage=usage, raw=raw)
             return
 
         yield LLMEvent(LLMEventType.MESSAGE_START, raw=raw)
@@ -131,8 +141,11 @@ class DefaultLLMEventAdapter:
         text_part_id = _stable_part_id("text", 0)
         tool_drafts: Dict[int, _ToolCallDraft] = {}
         response_tool_drafts: Dict[str, _ToolCallDraft] = {}
+        response_reasoning_drafts: Dict[str, _ReasoningDraft] = {}
         usage: Dict[str, Any] = {}
         finish_reason: Optional[str] = None
+        finish_emitted = False
+        provider_error_emitted = False
 
         async for chunk in _aiter_chunks(chunks):
             if isinstance(chunk, LLMEvent):
@@ -154,7 +167,16 @@ class DefaultLLMEventAdapter:
             response_events, consumed_response_chunk = self._normalize_responses_stream_chunk(
                 raw,
                 response_tool_drafts,
+                response_reasoning_drafts,
             )
+            response_type = str(raw.get("type") or "")
+            if consumed_response_chunk and response_type in {
+                "response.completed",
+                "response.incomplete",
+            }:
+                if text_started:
+                    yield LLMEvent(LLMEventType.TEXT_END, part_id=text_part_id, raw=raw)
+                    text_started = False
             for event in response_events:
                 if event.type == LLMEventType.TEXT_DELTA and not text_started:
                     yield LLMEvent(LLMEventType.TEXT_START, part_id=text_part_id, raw=raw)
@@ -162,6 +184,21 @@ class DefaultLLMEventAdapter:
                 if event.type in (LLMEventType.TEXT_DELTA, LLMEventType.TEXT_END):
                     event.part_id = event.part_id or text_part_id
                 yield event
+                if event.type == LLMEventType.STEP_FINISH:
+                    finish_emitted = True
+                    finish_reason = (
+                        event.metadata.get("finish_reason")
+                        or event.metadata.get("reason")
+                        or finish_reason
+                    )
+                    if event.usage:
+                        usage = dict(event.usage)
+                elif event.type == LLMEventType.FINISH:
+                    finish_emitted = True
+                    if event.usage:
+                        usage = dict(event.usage)
+                elif event.type == LLMEventType.PROVIDER_ERROR:
+                    provider_error_emitted = True
             if consumed_response_chunk:
                 finish_reason = finish_reason or _extract_finish_reason(raw)
                 continue
@@ -246,46 +283,39 @@ class DefaultLLMEventAdapter:
         if started and text_started:
             yield LLMEvent(LLMEventType.TEXT_END, part_id=text_part_id)
 
-        for draft in sorted(tool_drafts.values(), key=lambda item: item.index):
-            if draft.started:
-                yield LLMEvent(
-                    LLMEventType.TOOL_INPUT_END,
-                    tool_call_id=draft.id,
-                    tool_name=draft.name,
-                    text=draft.arguments_text,
-                    raw=draft.raw,
-                )
-                tool_call = _make_tool_call(
-                    {
-                        "id": draft.id,
-                        "type": "function",
-                        "function": {
-                            "name": draft.name,
-                            "arguments": draft.arguments_text,
+        if not provider_error_emitted:
+            for draft in sorted(tool_drafts.values(), key=lambda item: item.index):
+                if draft.started:
+                    yield LLMEvent(
+                        LLMEventType.TOOL_INPUT_END,
+                        tool_call_id=draft.id,
+                        tool_name=draft.name,
+                        text=draft.arguments_text,
+                        raw=draft.raw,
+                    )
+                    tool_call = _make_tool_call(
+                        {
+                            "id": draft.id,
+                            "type": "function",
+                            "function": {
+                                "name": draft.name,
+                                "arguments": draft.arguments_text,
+                            },
                         },
-                    },
-                    draft.index,
-                )
-                yield LLMEvent(
-                    LLMEventType.TOOL_CALL_COMPLETE,
-                    tool_call_id=tool_call.call_id,
-                    tool_name=tool_call.tool_name,
-                    tool_call=tool_call,
-                    raw=draft.raw,
-                )
+                        draft.index,
+                    )
+                    yield LLMEvent(
+                        LLMEventType.TOOL_CALL_COMPLETE,
+                        tool_call_id=tool_call.call_id,
+                        tool_name=tool_call.tool_name,
+                        tool_call=tool_call,
+                        raw=draft.raw,
+                    )
 
-        seen_response_drafts: set[int] = set()
-        for draft in sorted(response_tool_drafts.values(), key=lambda item: item.index):
-            draft_identity = id(draft)
-            if draft_identity in seen_response_drafts:
-                continue
-            seen_response_drafts.add(draft_identity)
-            if not draft.name:
-                continue
-            for event in _complete_response_tool_draft(draft):
+            for event in _complete_all_response_tool_drafts(response_tool_drafts):
                 yield event
 
-        if started:
+        if started and not finish_emitted and not provider_error_emitted:
             metadata = {"finish_reason": finish_reason} if finish_reason else {}
             yield LLMEvent(LLMEventType.STEP_FINISH, usage=usage, metadata=metadata)
 
@@ -293,9 +323,14 @@ class DefaultLLMEventAdapter:
         self,
         raw: Mapping[str, Any],
         response_tool_drafts: Dict[str, _ToolCallDraft],
+        response_reasoning_drafts: Dict[str, _ReasoningDraft],
     ) -> tuple[List[LLMEvent], bool]:
         response_type = raw.get("type")
-        if not isinstance(response_type, str) or not response_type.startswith("response."):
+        if not isinstance(response_type, str):
+            return [], False
+        if response_type == "error":
+            return [_provider_error_event(raw, fallback="OpenAI Responses stream error")], True
+        if not response_type.startswith("response."):
             return [], False
 
         if response_type in {"response.output_text.delta"}:
@@ -303,11 +338,57 @@ class DefaultLLMEventAdapter:
             return [LLMEvent(LLMEventType.TEXT_DELTA, delta=delta, text=delta, raw=dict(raw))], True
 
         if response_type in {
+            "response.reasoning_summary.delta",
             "response.reasoning_summary_text.delta",
             "response.reasoning_text.delta",
         }:
             delta = str(raw.get("delta") or "")
-            return [LLMEvent(LLMEventType.REASONING_DELTA, delta=delta, text=delta, raw=dict(raw))], True
+            if not delta:
+                return [], True
+            part_id = _response_reasoning_part_id(raw, response_reasoning_drafts)
+            events = _ensure_response_reasoning_started(
+                response_reasoning_drafts,
+                raw,
+                part_id,
+            )
+            events.append(
+                LLMEvent(
+                    LLMEventType.REASONING_DELTA,
+                    part_id=part_id,
+                    delta=delta,
+                    text=delta,
+                    raw=dict(raw),
+                    metadata=_response_reasoning_metadata(raw, response_reasoning_drafts),
+                    provider_metadata=_response_reasoning_provider_metadata(
+                        raw,
+                        response_reasoning_drafts,
+                    ),
+                )
+            )
+            return events, True
+
+        if response_type in {
+            "response.reasoning_summary.done",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_text.done",
+        }:
+            return [], True
+
+        if response_type == "response.reasoning_summary_part.added":
+            part_id = _response_reasoning_part_id(raw, response_reasoning_drafts)
+            return _ensure_response_reasoning_started(
+                response_reasoning_drafts,
+                raw,
+                part_id,
+            ), True
+
+        if response_type == "response.reasoning_summary_part.done":
+            part_id = _response_reasoning_part_id(raw, response_reasoning_drafts)
+            return _end_response_reasoning_part(
+                response_reasoning_drafts,
+                raw,
+                part_id,
+            ), True
 
         if response_type == "response.function_call_arguments.delta":
             draft = _response_existing_tool_draft(response_tool_drafts, raw)
@@ -332,7 +413,27 @@ class DefaultLLMEventAdapter:
 
         if response_type in {"response.output_item.added", "response.output_item.done"}:
             item = raw.get("item")
-            if not isinstance(item, Mapping) or not _is_responses_function_call_item(item):
+            if not isinstance(item, Mapping):
+                return [], True
+            if _is_responses_reasoning_item(item):
+                if response_type == "response.output_item.added":
+                    part_id = _response_reasoning_part_id(raw, response_reasoning_drafts)
+                    return _ensure_response_reasoning_started(
+                        response_reasoning_drafts,
+                        raw,
+                        part_id,
+                        item=item,
+                    ), True
+                return _end_all_response_reasoning_parts(
+                    response_reasoning_drafts,
+                    raw,
+                    item=item,
+                ), True
+            if _is_responses_hosted_tool_item(item):
+                # Provider-hosted tools are not local EFP tool calls. This phase
+                # keeps them observable in raw metadata but does not execute them.
+                return [], True
+            if not _is_responses_function_call_item(item):
                 return [], True
             draft_key = _response_output_key(raw, item)
             if draft_key is None:
@@ -342,7 +443,10 @@ class DefaultLLMEventAdapter:
                 return [], True
             events = _ensure_response_tool_started(draft)
             arguments = _response_tool_arguments(item)
-            if arguments not in (None, "") and not draft.arguments_text:
+            if response_type == "response.output_item.done" and arguments not in (None, ""):
+                draft.final_arguments_text = _copilot_stream_value_text(arguments)
+                draft.raw.update(dict(raw))
+            if arguments not in (None, "") and not draft.arguments_chunks:
                 arguments_text = _copilot_stream_value_text(arguments)
                 if arguments_text and draft.name:
                     draft.arguments_chunks.append(arguments_text)
@@ -365,12 +469,48 @@ class DefaultLLMEventAdapter:
             if draft is None or not draft.name:
                 return [], True
             arguments = raw.get("arguments")
-            if arguments not in (None, "") and not draft.arguments_text:
-                draft.arguments_chunks.append(_copilot_stream_value_text(arguments))
+            if arguments not in (None, ""):
+                if not draft.arguments_chunks:
+                    draft.arguments_chunks.append(_copilot_stream_value_text(arguments))
+                draft.final_arguments_text = _copilot_stream_value_text(arguments)
                 draft.raw.update(dict(raw))
             events = _ensure_response_tool_started(draft)
             events.extend(_end_response_tool_input(draft))
             return events, True
+
+        if response_type in {"response.completed", "response.incomplete"}:
+            events: List[LLMEvent] = []
+            events.extend(_complete_all_response_tool_drafts(response_tool_drafts))
+            events.extend(_end_all_response_reasoning_parts(response_reasoning_drafts, raw))
+            finish_reason = _response_finish_reason(raw, has_function_call=_has_completed_tool_call(response_tool_drafts))
+            usage = _response_usage(raw)
+            metadata = {
+                "finish_reason": finish_reason,
+                **_response_finish_metadata(raw),
+            }
+            provider_metadata = _response_provider_metadata(raw)
+            events.append(
+                LLMEvent(
+                    LLMEventType.STEP_FINISH,
+                    usage=usage,
+                    metadata=metadata,
+                    provider_metadata=provider_metadata,
+                    raw=dict(raw),
+                )
+            )
+            events.append(
+                LLMEvent(
+                    LLMEventType.FINISH,
+                    usage=usage,
+                    metadata=metadata,
+                    provider_metadata=provider_metadata,
+                    raw=dict(raw),
+                )
+            )
+            return events, True
+
+        if response_type == "response.failed":
+            return [_provider_error_event(raw, fallback="OpenAI Responses response failed")], True
 
         return [], True
 
@@ -387,6 +527,8 @@ class DefaultLLMEventAdapter:
                     delta=str(raw.get("delta") or ""),
                     text=str(raw.get("text") or ""),
                     raw=dict(raw),
+                    metadata=_dict_or_empty(raw.get("metadata")),
+                    provider_metadata=_dict_or_empty(raw.get("provider_metadata")),
                 )
             ]
 
@@ -395,6 +537,7 @@ class DefaultLLMEventAdapter:
             delta = str(raw.get("delta") or "")
             return [LLMEvent(LLMEventType.TEXT_DELTA, delta=delta, text=delta, raw=dict(raw))]
         if response_type in {
+            "response.reasoning_summary.delta",
             "response.reasoning_summary_text.delta",
             "response.reasoning_text.delta",
             "reasoning_delta",
@@ -699,10 +842,16 @@ def _response_output_key(
     output_index = raw.get("output_index")
     if output_index not in (None, ""):
         return f"output_index:{output_index}"
+    item_id = raw.get("item_id")
+    if item_id not in (None, "") and item is None:
+        return f"item_id:{item_id}"
     if item is not None and _is_responses_function_call_item(item):
         call_id = item.get("call_id")
         if call_id not in (None, ""):
             return f"call_id:{call_id}"
+        item_id = item.get("id") or raw.get("item_id")
+        if item_id not in (None, ""):
+            return f"item_id:{item_id}"
     return None
 
 
@@ -713,6 +862,12 @@ def _response_existing_tool_draft(
     output_key = _response_output_key(raw)
     if output_key is not None and output_key in drafts:
         return drafts[output_key]
+
+    item_id = raw.get("item_id")
+    if item_id not in (None, ""):
+        draft = drafts.get(f"item_id:{item_id}")
+        if draft is not None:
+            return draft
 
     for key in ("call_id", "tool_call_id"):
         value = raw.get(key)
@@ -758,19 +913,45 @@ def _response_tool_draft(
     tool_name = _response_tool_name(item, draft=draft)
     if draft is None:
         draft = _ToolCallDraft(
-            index=len(drafts),
+            index=_unique_response_draft_count(drafts),
             id=draft_id,
             name=tool_name,
             raw=dict(raw),
         )
-        drafts[draft_key] = draft
     else:
         draft.raw.update(dict(raw))
         draft.id = draft_id
         if tool_name:
             draft.name = tool_name
     draft.raw["item"] = dict(item)
+    _response_register_tool_aliases(drafts, draft_key, raw, item, draft)
     return draft
+
+
+def _unique_response_draft_count(drafts: Mapping[str, _ToolCallDraft]) -> int:
+    return len({id(draft) for draft in drafts.values()})
+
+
+def _response_register_tool_aliases(
+    drafts: Dict[str, _ToolCallDraft],
+    draft_key: str,
+    raw: Mapping[str, Any],
+    item: Mapping[str, Any],
+    draft: _ToolCallDraft,
+) -> None:
+    drafts[draft_key] = draft
+    output_index = raw.get("output_index")
+    if output_index not in (None, ""):
+        drafts[f"output_index:{output_index}"] = draft
+    call_id = item.get("call_id") or item.get("tool_call_id")
+    if call_id not in (None, ""):
+        drafts[f"call_id:{call_id}"] = draft
+    item_id = item.get("id")
+    if item_id not in (None, ""):
+        drafts[f"item_id:{item_id}"] = draft
+    raw_item_id = raw.get("item_id")
+    if raw_item_id not in (None, "") and raw_item_id == item_id:
+        drafts[f"item_id:{raw_item_id}"] = draft
 
 
 def _response_tool_call_id(item: Mapping[str, Any]) -> str:
@@ -841,6 +1022,291 @@ def _response_tool_arguments(item: Mapping[str, Any]) -> Any:
     return None
 
 
+def _response_reasoning_part_id(
+    raw: Mapping[str, Any],
+    drafts: Mapping[str, _ReasoningDraft],
+) -> str:
+    item_id = _response_reasoning_item_id(raw)
+    if not item_id:
+        for draft in drafts.values():
+            if draft.active_part_ids:
+                return sorted(draft.active_part_ids)[-1]
+        return _stable_part_id("reasoning", 0)
+    summary_index = raw.get("summary_index")
+    if summary_index in (None, ""):
+        summary_index = 0
+    return f"{item_id}:{summary_index}"
+
+
+def _response_reasoning_item_id(raw: Mapping[str, Any]) -> str:
+    item = raw.get("item")
+    if isinstance(item, Mapping) and item.get("id") not in (None, ""):
+        return str(item.get("id"))
+    if raw.get("item_id") not in (None, ""):
+        return str(raw.get("item_id"))
+    return ""
+
+
+def _response_reasoning_draft(
+    drafts: Dict[str, _ReasoningDraft],
+    raw: Mapping[str, Any],
+    *,
+    item: Mapping[str, Any] | None = None,
+) -> _ReasoningDraft:
+    item_id = (
+        str(item.get("id"))
+        if item is not None and item.get("id") not in (None, "")
+        else _response_reasoning_item_id(raw)
+    )
+    if not item_id:
+        item_id = "reasoning_0"
+    draft = drafts.get(item_id)
+    if draft is None:
+        draft = _ReasoningDraft(item_id=item_id, raw=dict(raw))
+        drafts[item_id] = draft
+    else:
+        draft.raw.update(dict(raw))
+    if item is not None:
+        draft.raw["item"] = dict(item)
+        if "encrypted_content" in item:
+            encrypted = item.get("encrypted_content")
+            draft.encrypted_content = str(encrypted) if encrypted is not None else None
+    return draft
+
+
+def _ensure_response_reasoning_started(
+    drafts: Dict[str, _ReasoningDraft],
+    raw: Mapping[str, Any],
+    part_id: str,
+    *,
+    item: Mapping[str, Any] | None = None,
+) -> List[LLMEvent]:
+    draft = _response_reasoning_draft(drafts, raw, item=item)
+    if part_id in draft.active_part_ids:
+        return []
+    draft.active_part_ids.add(part_id)
+    metadata = _response_reasoning_metadata(raw, drafts, item=item)
+    provider_metadata = _response_reasoning_provider_metadata(raw, drafts, item=item)
+    return [
+        LLMEvent(
+            LLMEventType.REASONING_START,
+            part_id=part_id,
+            raw=dict(raw),
+            metadata=metadata,
+            provider_metadata=provider_metadata,
+        )
+    ]
+
+
+def _end_response_reasoning_part(
+    drafts: Dict[str, _ReasoningDraft],
+    raw: Mapping[str, Any],
+    part_id: str,
+    *,
+    item: Mapping[str, Any] | None = None,
+) -> List[LLMEvent]:
+    draft = _response_reasoning_draft(drafts, raw, item=item)
+    if part_id not in draft.active_part_ids:
+        return []
+    draft.active_part_ids.remove(part_id)
+    return [
+        LLMEvent(
+            LLMEventType.REASONING_END,
+            part_id=part_id,
+            raw=dict(raw),
+            metadata=_response_reasoning_metadata(raw, drafts, item=item),
+            provider_metadata=_response_reasoning_provider_metadata(raw, drafts, item=item),
+        )
+    ]
+
+
+def _end_all_response_reasoning_parts(
+    drafts: Dict[str, _ReasoningDraft],
+    raw: Mapping[str, Any],
+    *,
+    item: Mapping[str, Any] | None = None,
+) -> List[LLMEvent]:
+    if item is not None:
+        draft = _response_reasoning_draft(drafts, raw, item=item)
+        item_ids = [draft.item_id]
+    else:
+        item_ids = list(drafts)
+    events: List[LLMEvent] = []
+    for item_id in item_ids:
+        draft = drafts.get(item_id)
+        if draft is None:
+            continue
+        if not draft.active_part_ids and item is not None:
+            part_id = _response_reasoning_part_id(raw, drafts)
+            events.extend(_ensure_response_reasoning_started(drafts, raw, part_id, item=item))
+        for part_id in sorted(list(draft.active_part_ids)):
+            events.extend(_end_response_reasoning_part(drafts, raw, part_id, item=item))
+        if not draft.active_part_ids:
+            drafts.pop(item_id, None)
+    return events
+
+
+def _response_reasoning_metadata(
+    raw: Mapping[str, Any],
+    drafts: Mapping[str, _ReasoningDraft],
+    *,
+    item: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    item_id = (
+        str(item.get("id"))
+        if item is not None and item.get("id") not in (None, "")
+        else _response_reasoning_item_id(raw)
+    )
+    draft = drafts.get(item_id) if item_id else None
+    encrypted = None
+    if item is not None and "encrypted_content" in item:
+        encrypted = item.get("encrypted_content")
+    elif draft is not None:
+        encrypted = draft.encrypted_content
+    metadata: Dict[str, Any] = {"provider": "openai"}
+    if item_id:
+        metadata["item_id"] = item_id
+    if raw.get("summary_index") not in (None, ""):
+        metadata["summary_index"] = raw.get("summary_index")
+    if encrypted is not None:
+        metadata["encrypted_content"] = encrypted
+    return metadata
+
+
+def _response_reasoning_provider_metadata(
+    raw: Mapping[str, Any],
+    drafts: Mapping[str, _ReasoningDraft],
+    *,
+    item: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    metadata = _response_reasoning_metadata(raw, drafts, item=item)
+    openai: Dict[str, Any] = {}
+    if metadata.get("item_id"):
+        openai["itemId"] = metadata["item_id"]
+    if "encrypted_content" in metadata:
+        openai["reasoningEncryptedContent"] = metadata["encrypted_content"]
+    return {"openai": openai} if openai else {}
+
+
+def _response_usage(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    response = raw.get("response")
+    if isinstance(response, Mapping):
+        usage = response.get("usage")
+        if isinstance(usage, Mapping):
+            return dict(usage)
+    return _dict_or_empty(raw.get("usage"))
+
+
+def _response_finish_reason(raw: Mapping[str, Any], *, has_function_call: bool) -> str:
+    response = raw.get("response")
+    details = response.get("incomplete_details") if isinstance(response, Mapping) else None
+    reason = details.get("reason") if isinstance(details, Mapping) else None
+    if reason in (None, ""):
+        return "tool_calls" if has_function_call else "stop"
+    if reason == "max_output_tokens":
+        return "length"
+    if reason == "content_filter":
+        return "content_filter"
+    return "tool_calls" if has_function_call else str(reason)
+
+
+def _response_finish_metadata(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+    response = raw.get("response")
+    if isinstance(response, Mapping):
+        if response.get("id") not in (None, ""):
+            metadata["response_id"] = response.get("id")
+        if response.get("service_tier") not in (None, ""):
+            metadata["service_tier"] = response.get("service_tier")
+        details = response.get("incomplete_details")
+        if isinstance(details, Mapping) and details.get("reason") not in (None, ""):
+            metadata["incomplete_reason"] = details.get("reason")
+    if raw.get("type") not in (None, ""):
+        metadata["provider_event_type"] = raw.get("type")
+    return metadata
+
+
+def _response_provider_metadata(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    openai: Dict[str, Any] = {}
+    response = raw.get("response")
+    if isinstance(response, Mapping):
+        if response.get("id") not in (None, ""):
+            openai["responseId"] = response.get("id")
+        if response.get("service_tier") not in (None, ""):
+            openai["serviceTier"] = response.get("service_tier")
+        usage = response.get("usage")
+        if isinstance(usage, Mapping):
+            openai["usage"] = dict(usage)
+    return {"openai": openai} if openai else {}
+
+
+def _provider_error_event(raw: Mapping[str, Any], *, fallback: str) -> LLMEvent:
+    message, metadata, provider_metadata = _provider_error_payload(raw, fallback=fallback)
+    return LLMEvent(
+        LLMEventType.PROVIDER_ERROR,
+        error=message,
+        text=message,
+        raw=dict(raw),
+        metadata=metadata,
+        provider_metadata=provider_metadata,
+    )
+
+
+def _provider_error_payload(
+    raw: Mapping[str, Any],
+    *,
+    fallback: str,
+) -> tuple[str, Dict[str, Any], Dict[str, Any]]:
+    nested: Mapping[str, Any] = {}
+    response = raw.get("response")
+    if isinstance(response, Mapping):
+        error = response.get("error")
+        if isinstance(error, Mapping):
+            nested = error
+    top_error = raw.get("error")
+    if isinstance(top_error, Mapping):
+        nested = top_error
+    message = _optional_str(raw.get("message")) or _optional_str(nested.get("message"))
+    code = _optional_str(raw.get("code")) or _optional_str(nested.get("code"))
+    param = _optional_str(raw.get("param")) or _optional_str(nested.get("param"))
+    retryable = raw.get("retryable")
+    if retryable is None:
+        retryable = nested.get("retryable")
+    if message and code:
+        formatted = f"{code}: {message}"
+    else:
+        formatted = message or code or fallback
+
+    metadata: Dict[str, Any] = {"provider": "openai"}
+    if code:
+        metadata["code"] = code
+    if param:
+        metadata["param"] = param
+    if isinstance(retryable, bool):
+        metadata["retryable"] = retryable
+    if raw.get("type") not in (None, ""):
+        metadata["provider_event_type"] = raw.get("type")
+    if isinstance(response, Mapping) and response.get("id") not in (None, ""):
+        metadata["response_id"] = response.get("id")
+
+    openai: Dict[str, Any] = {"error": {key: value for key, value in metadata.items() if key != "provider"}}
+    if isinstance(response, Mapping) and response.get("id") not in (None, ""):
+        openai["responseId"] = response.get("id")
+    return formatted, metadata, {"openai": openai}
+
+
+def _has_completed_tool_call(drafts: Mapping[str, _ToolCallDraft]) -> bool:
+    seen: set[int] = set()
+    for draft in drafts.values():
+        draft_identity = id(draft)
+        if draft_identity in seen:
+            continue
+        seen.add(draft_identity)
+        if draft.completed or draft.name:
+            return True
+    return False
+
+
 def _ensure_response_tool_started(draft: _ToolCallDraft) -> List[LLMEvent]:
     if draft.started or not draft.name:
         return []
@@ -902,8 +1368,39 @@ def _complete_response_tool_draft(draft: _ToolCallDraft) -> List[LLMEvent]:
     return events
 
 
+def _complete_all_response_tool_drafts(
+    drafts: Mapping[str, _ToolCallDraft],
+) -> List[LLMEvent]:
+    events: List[LLMEvent] = []
+    seen: set[int] = set()
+    for draft in sorted(drafts.values(), key=lambda item: item.index):
+        draft_identity = id(draft)
+        if draft_identity in seen:
+            continue
+        seen.add(draft_identity)
+        events.extend(_complete_response_tool_draft(draft))
+    return events
+
+
 def _is_responses_function_call_item(item: Mapping[str, Any]) -> bool:
     return str(item.get("type") or "") in {"function_call", "tool_call"}
+
+
+def _is_responses_reasoning_item(item: Mapping[str, Any]) -> bool:
+    return str(item.get("type") or "") == "reasoning"
+
+
+def _is_responses_hosted_tool_item(item: Mapping[str, Any]) -> bool:
+    return str(item.get("type") or "") in {
+        "web_search_call",
+        "web_search_preview_call",
+        "file_search_call",
+        "code_interpreter_call",
+        "computer_use_call",
+        "image_generation_call",
+        "local_shell_call",
+        "mcp_call",
+    }
 
 
 def _copilot_stream_value_text(value: Any) -> str:

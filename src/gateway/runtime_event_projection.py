@@ -134,6 +134,22 @@ class RuntimeEventProjector:
             )
             return outputs
 
+        if raw_type == "llm.reasoning_start":
+            reasoning_id = _reasoning_id(raw_event, payload)
+            self._reasoning_started.add(reasoning_id)
+            outputs.append(
+                self._build(
+                    raw_event,
+                    payload,
+                    "session.next.reasoning.started",
+                    state="running",
+                    summary="Reasoning started",
+                    created_at=created_at,
+                    data={"reasoning_id": reasoning_id, "reasoningID": reasoning_id},
+                )
+            )
+            return outputs
+
         if raw_type == "llm.reasoning_delta":
             reasoning_id = _reasoning_id(raw_event, payload)
             if reasoning_id not in self._reasoning_started:
@@ -171,6 +187,22 @@ class RuntimeEventProjector:
             )
             return outputs
 
+        if raw_type == "llm.reasoning_end":
+            reasoning_id = _reasoning_id(raw_event, payload)
+            self._reasoning_started.discard(reasoning_id)
+            outputs.append(
+                self._build(
+                    raw_event,
+                    payload,
+                    "session.next.reasoning.ended",
+                    state="success",
+                    summary="Reasoning ended",
+                    created_at=created_at,
+                    data={"reasoning_id": reasoning_id, "reasoningID": reasoning_id},
+                )
+            )
+            return outputs
+
         if raw_type == "llm.tool_call_delta":
             return self._project_llm_tool_delta(raw_event, payload, created_at)
 
@@ -185,6 +217,25 @@ class RuntimeEventProjector:
                     summary=_tool_summary("Tool call requested", tool_data),
                     created_at=created_at,
                     data=tool_data,
+                )
+            )
+            return outputs
+
+        if raw_type == "llm.tool_error":
+            tool_data = _tool_data(payload)
+            outputs.append(
+                self._build(
+                    raw_event,
+                    payload,
+                    "session.next.tool.failed",
+                    state="failed",
+                    summary=_tool_summary("Tool failed", tool_data),
+                    created_at=created_at,
+                    data={
+                        **tool_data,
+                        "status": "error",
+                        "error": _redacted(payload.get("error") or payload.get("message")),
+                    },
                 )
             )
             return outputs
@@ -359,11 +410,11 @@ class RuntimeEventProjector:
             )
             return outputs
 
-        if raw_type == "llm.step_finish":
+        if raw_type in {"llm.step_finish", "llm.finish"}:
             outputs.extend(self._project_open_parts_ended(raw_event, payload, created_at))
             return outputs
 
-        if raw_type in {"error", "llm.error", "run_cancelled"}:
+        if raw_type in {"error", "llm.error", "llm.provider_error", "run_cancelled"}:
             outputs.extend(self._project_open_parts_ended(raw_event, payload, created_at))
             outputs.append(
                 self._build(
@@ -379,6 +430,8 @@ class RuntimeEventProjector:
                         "phase": payload.get("phase"),
                         "error": _redacted(payload.get("error") or raw_event.get("message")),
                         "error_type": payload.get("error_type"),
+                        "code": payload.get("code"),
+                        "retryable": payload.get("retryable"),
                     },
                 )
             )
