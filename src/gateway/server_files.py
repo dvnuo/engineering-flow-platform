@@ -80,6 +80,9 @@ class WorkspaceServerFilesService:
         rel = resolved.relative_to(self.root)
         return "." if str(rel) == "." else rel.as_posix()
 
+    def workspace_absolute_path(self, path: Path) -> str:
+        return str(self._ensure_under_workspace(path.resolve(strict=False)))
+
     def list_files(self, user_path: str | None) -> dict[str, Any]:
         target = self.resolve_workspace_path(user_path)
         if not target.exists():
@@ -99,7 +102,7 @@ class WorkspaceServerFilesService:
             items.append(
                 {
                     "name": entry.name,
-                    "path": relative_path,
+                    "path": self.workspace_absolute_path(entry),
                     "relative_path": relative_path,
                     "is_dir": is_dir,
                     "is_file": entry.is_file(),
@@ -117,7 +120,7 @@ class WorkspaceServerFilesService:
         return {
             "success": True,
             "root_path": str(self.root),
-            "path": relative_path,
+            "path": self.workspace_absolute_path(target),
             "relative_path": relative_path,
             "items": items,
         }
@@ -129,7 +132,7 @@ class WorkspaceServerFilesService:
         relative_path = self.workspace_relative_path(target)
         return {
             "success": True,
-            "path": relative_path,
+            "path": self.workspace_absolute_path(target),
             "relative_path": relative_path,
             "content": raw.decode("utf-8", errors="replace"),
             "language": _guess_language(target),
@@ -146,9 +149,9 @@ class WorkspaceServerFilesService:
         relative_path = self.workspace_relative_path(target)
         return {
             "success": True,
-            "mode": "file",
+            "mode": "file_save",
             "uploaded_filename": name,
-            "path": relative_path,
+            "path": self.workspace_absolute_path(target),
             "relative_path": relative_path,
             "target_path": str(target),
             "size": len(data),
@@ -206,9 +209,9 @@ class WorkspaceServerFilesService:
         target_relative_path = self.workspace_relative_path(target_dir)
         return {
             "success": True,
-            "mode": "zip",
+            "mode": "zip_extract",
             "uploaded_filename": uploaded_filename,
-            "path": target_relative_path,
+            "path": self.workspace_absolute_path(target_dir),
             "relative_path": target_relative_path,
             "target_path": str(target_dir),
             "extracted_count": len(extracted_items),
@@ -242,7 +245,7 @@ class WorkspaceServerFilesService:
                 raise ValueError("unsupported path")
             deleted.append(
                 {
-                    "path": relative_path,
+                    "path": self.workspace_absolute_path(target),
                     "relative_path": relative_path,
                     "deleted": True,
                 }
