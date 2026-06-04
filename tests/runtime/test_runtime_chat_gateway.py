@@ -118,6 +118,7 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
     provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
 
     assert provider.endpoint == "responses"
+    assert provider.stream is True
     assert provider.reasoning_effort == "xhigh"
     assert provider.transport.endpoint == "https://copilot-api.enterprise.example/responses"
     assert provider.transport.timeout == 300

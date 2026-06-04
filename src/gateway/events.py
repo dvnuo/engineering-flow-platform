@@ -26,6 +26,9 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
     query = request.rel_url.query
     filter_keys = ("session_id", "task_id", "group_id", "coordination_run_id", "agent_id", "request_id")
     filters = {key: str(query.get(key, "")).strip() for key in filter_keys if str(query.get(key, "")).strip()}
+    replay_requested = str(query.get("replay", "")).strip().lower() in {"1", "true", "yes", "on"}
+    replay_limit = _parse_replay_limit(query.get("replay_limit"))
+    last_event_at = str(query.get("last_event_at", "")).strip() or None
 
     # Register this connection as a listener
     await event_bus.add_listener(queue, filters=filters)
@@ -54,8 +57,18 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
         # Send welcome message
         await ws.send_str(json.dumps({
             "type": "connected",
-            "message": "Connected to EFP event bus"
+            "message": "Connected to EFP event bus",
+            "filters": filters,
         }))
+
+        if replay_requested:
+            replayed_events = await event_bus.replay_events(
+                filters=filters,
+                replay_limit=replay_limit,
+                last_event_at=last_event_at,
+            )
+            for event in replayed_events:
+                await ws.send_str(event)
         
         # Start background task to read events from queue
         event_reader = asyncio.create_task(read_events())
@@ -92,6 +105,16 @@ def setup_event_routes(app: web.Application):
     """Set up event routes."""
     app.router.add_get('/api/events', handle_websocket)
     logger.info("WebSocket event route registered: GET /api/events")
+
+
+def _parse_replay_limit(value, default: int = 100) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    if parsed < 0:
+        return 0
+    return min(parsed, 500)
 
 
 

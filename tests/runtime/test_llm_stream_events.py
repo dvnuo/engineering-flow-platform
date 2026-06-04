@@ -263,6 +263,79 @@ def test_subagent_child_config_preserves_emit_llm_stream_events():
     assert RuntimeConfig().emit_llm_stream_events is True
 
 
+@pytest.mark.asyncio
+async def test_bridge_projects_new_llm_event_contract_payloads():
+    from efp_runtime.loop.stream_events import bridge_llm_stream_events
+
+    runtime_events = []
+    llm_events = [
+        LLMEvent(
+            LLMEventType.REASONING_START,
+            part_id="reasoning-1",
+            metadata={"item_id": "rs_1"},
+            provider_metadata={"openai": {"itemId": "rs_1"}},
+            raw={"type": "response.output_item.added", "item_id": "rs_1"},
+        ),
+        LLMEvent(
+            LLMEventType.REASONING_DELTA,
+            part_id="reasoning-1",
+            delta="think",
+        ),
+        LLMEvent(LLMEventType.REASONING_END, part_id="reasoning-1"),
+        LLMEvent(
+            LLMEventType.FINISH,
+            usage={"total_tokens": 7},
+            metadata={"finish_reason": "stop"},
+        ),
+        LLMEvent(
+            LLMEventType.PROVIDER_ERROR,
+            error="rate_limit_exceeded: Slow down",
+            metadata={"code": "rate_limit_exceeded", "retryable": True},
+            provider_metadata={"openai": {"error": {"code": "rate_limit_exceeded"}}},
+            raw={"type": "response.failed", "response": {"id": "resp_1"}},
+        ),
+        LLMEvent(
+            LLMEventType.TOOL_ERROR,
+            tool_call_id="call-1",
+            tool_name="search",
+            error="tool failed",
+        ),
+    ]
+
+    yielded = [
+        event
+        async for event in bridge_llm_stream_events(
+            llm_events,
+            runtime_events=runtime_events,
+            session_id="s-1",
+            run_id="run-1",
+            iteration=1,
+        )
+    ]
+
+    assert yielded == llm_events
+    assert [event.type for event in runtime_events] == [
+        "llm.reasoning_start",
+        "llm.reasoning_delta",
+        "llm.reasoning_end",
+        "llm.finish",
+        "llm.provider_error",
+        "llm.tool_error",
+    ]
+    reasoning_payload = runtime_events[0].payload
+    assert reasoning_payload["event_type"] == "reasoning_start"
+    assert reasoning_payload["metadata"] == {"item_id": "rs_1"}
+    assert reasoning_payload["provider_metadata"] == {"openai": {"itemId": "rs_1"}}
+    assert reasoning_payload["raw"] == {
+        "type": "response.output_item.added",
+        "item_id": "rs_1",
+    }
+    assert runtime_events[3].payload["usage"] == {"total_tokens": 7}
+    assert runtime_events[4].payload["code"] == "rate_limit_exceeded"
+    assert runtime_events[4].payload["retryable"] is True
+    assert runtime_events[5].payload["tool_call_id"] == "call-1"
+
+
 def test_llm_stream_events_import_boundary():
     code = """
 import json

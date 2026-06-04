@@ -14,14 +14,19 @@ class LLMEventType(str, Enum):
     TEXT_START = "text_start"
     TEXT_DELTA = "text_delta"
     TEXT_END = "text_end"
+    REASONING_START = "reasoning_start"
     REASONING_DELTA = "reasoning_delta"
+    REASONING_END = "reasoning_end"
     TOOL_INPUT_START = "tool_input_start"
     TOOL_INPUT_DELTA = "tool_input_delta"
     TOOL_INPUT_END = "tool_input_end"
     TOOL_CALL_COMPLETE = "tool_call_complete"
     TOOL_RESULT = "tool_result"
+    TOOL_ERROR = "tool_error"
     STEP_START = "step_start"
     STEP_FINISH = "step_finish"
+    FINISH = "finish"
+    PROVIDER_ERROR = "provider_error"
     ERROR = "error"
 
 
@@ -42,6 +47,7 @@ class LLMEvent:
     error: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    provider_metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def type_value(self) -> str:

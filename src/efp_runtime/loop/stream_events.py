@@ -12,12 +12,17 @@ from ..llm.events import LLMEvent, LLMEventType
 _RUNTIME_EVENT_TYPES = {
     LLMEventType.STEP_START.value: "llm.step_start",
     LLMEventType.TEXT_DELTA.value: "llm.text_delta",
+    LLMEventType.REASONING_START.value: "llm.reasoning_start",
     LLMEventType.REASONING_DELTA.value: "llm.reasoning_delta",
+    LLMEventType.REASONING_END.value: "llm.reasoning_end",
     LLMEventType.TOOL_INPUT_START.value: "llm.tool_call_delta",
     LLMEventType.TOOL_INPUT_DELTA.value: "llm.tool_call_delta",
     LLMEventType.TOOL_INPUT_END.value: "llm.tool_call_delta",
     LLMEventType.TOOL_CALL_COMPLETE.value: "llm.tool_call_done",
+    LLMEventType.TOOL_ERROR.value: "llm.tool_error",
     LLMEventType.STEP_FINISH.value: "llm.step_finish",
+    LLMEventType.FINISH.value: "llm.finish",
+    LLMEventType.PROVIDER_ERROR.value: "llm.provider_error",
     LLMEventType.ERROR.value: "llm.error",
 }
 
@@ -73,12 +78,22 @@ def runtime_event_from_llm_event(
         "run_id": run_id,
         "iteration": iteration,
         "llm_event_type": event.type_value,
+        "event_type": event.type_value,
     }
     _set_if_present(payload, "event_id", _event_id(event))
+    if event.metadata:
+        payload["metadata"] = dict(event.metadata)
+    if event.provider_metadata:
+        payload["provider_metadata"] = dict(event.provider_metadata)
+    safe_raw = _safe_raw_payload(event.raw)
+    if safe_raw:
+        payload["raw"] = safe_raw
 
     if event.type_value in (
         LLMEventType.TEXT_DELTA.value,
+        LLMEventType.REASONING_START.value,
         LLMEventType.REASONING_DELTA.value,
+        LLMEventType.REASONING_END.value,
     ):
         delta = event.delta or event.text
         _set_if_present(payload, "delta", delta)
@@ -89,17 +104,26 @@ def runtime_event_from_llm_event(
         LLMEventType.TOOL_INPUT_DELTA.value,
         LLMEventType.TOOL_INPUT_END.value,
         LLMEventType.TOOL_CALL_COMPLETE.value,
+        LLMEventType.TOOL_ERROR.value,
     ):
         _set_if_present(payload, "tool_call_id", event.tool_call_id)
         _set_if_present(payload, "tool_name", event.tool_name)
         _add_tool_arguments(payload, event)
 
-    if event.type_value == LLMEventType.STEP_FINISH.value and event.usage:
+    if event.type_value in {LLMEventType.STEP_FINISH.value, LLMEventType.FINISH.value} and event.usage:
         payload["usage"] = dict(event.usage)
     if event.metadata.get("finish_reason"):
         payload["finish_reason"] = event.metadata["finish_reason"]
-    if event.type_value == LLMEventType.ERROR.value:
+    if event.type_value in {
+        LLMEventType.ERROR.value,
+        LLMEventType.PROVIDER_ERROR.value,
+        LLMEventType.TOOL_ERROR.value,
+    }:
         _set_if_present(payload, "error", event.error or event.text)
+        _set_if_present(payload, "message", event.error or event.text)
+        _set_if_present(payload, "code", event.metadata.get("code"))
+        if "retryable" in event.metadata:
+            payload["retryable"] = event.metadata["retryable"]
 
     return RuntimeEvent(
         type=runtime_type,
@@ -167,6 +191,41 @@ def _event_id(event: LLMEvent) -> Optional[str]:
         if value is not None:
             return str(value)
     return None
+
+
+def _safe_raw_payload(raw: Mapping[str, Any]) -> dict[str, Any]:
+    allowed_keys = {
+        "type",
+        "id",
+        "item_id",
+        "output_index",
+        "summary_index",
+        "call_id",
+        "tool_call_id",
+        "finish_reason",
+        "code",
+        "message",
+        "param",
+        "sequence_number",
+    }
+    payload = {key: raw[key] for key in allowed_keys if key in raw}
+    response = raw.get("response")
+    if isinstance(response, Mapping):
+        safe_response = {
+            key: response[key]
+            for key in ("id", "service_tier", "incomplete_details", "usage", "error")
+            if key in response
+        }
+        if safe_response:
+            payload["response"] = safe_response
+    item = raw.get("item")
+    if isinstance(item, Mapping):
+        payload["item"] = {
+            key: item[key]
+            for key in ("type", "id", "call_id", "name", "status")
+            if key in item
+        }
+    return payload
 
 
 def _mapping_value(mapping: Mapping[str, Any], key: str) -> Optional[Any]:

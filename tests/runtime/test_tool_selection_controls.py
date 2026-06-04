@@ -149,7 +149,7 @@ async def test_without_model_hint_keeps_default_file_tool_selection():
     assert provider.requests[0].metadata["model_aware_tool_selection"] == {
         "enabled": True,
         "ran": True,
-        "model_hint": "gpt-5-mini",
+        "model_hint": "gpt-5.4",
         "mode": "patch",
         "forced_disabled": ["edit", "write"],
     }

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
+from src.gateway.runtime_event_projection import RuntimeEventProjector
 from src.workspace_defaults import resolve_runtime_workspace
 from src.efp_runtime.event_bus import RuntimeEventBus
 from src.efp_runtime.events import RuntimeEvent
@@ -114,7 +115,18 @@ async def run_runtime_chat(
     subscription = None
     if stream_callback is not None:
         subscription = event_bus.subscribe(session_id=session_id)
-        forwarder = asyncio.create_task(_forward_runtime_events(subscription, stream_callback))
+        forwarder = asyncio.create_task(
+            _forward_runtime_events(
+                subscription,
+                stream_callback,
+                projector=RuntimeEventProjector(
+                    request_id=request_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model=runtime_model,
+                ),
+            )
+        )
 
     run_metadata = _run_metadata(
         request_path=request_path,
@@ -361,7 +373,7 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
         transport=transport,
         model=model,
         endpoint="responses",
-        stream=False,
+        stream=True,
         metadata={"gateway": "runtime_api"},
         reasoning_effort=_resolve_reasoning_effort(llm_config),
     )
@@ -569,16 +581,26 @@ def _compose_user_prompt(
     return "\n\n".join(parts).strip()
 
 
-async def _forward_runtime_events(subscription: Any, stream_callback: Any) -> None:
+async def _forward_runtime_events(
+    subscription: Any,
+    stream_callback: Any,
+    *,
+    projector: RuntimeEventProjector | None = None,
+) -> None:
     try:
         async for event in subscription:
-            payload = event.to_dict() if hasattr(event, "to_dict") else event
-            if hasattr(stream_callback, "put"):
-                await stream_callback.put(payload)
-            elif callable(stream_callback):
-                maybe_result = stream_callback(payload)
-                if asyncio.iscoroutine(maybe_result):
-                    await maybe_result
+            payloads = (
+                projector.project(event)
+                if projector is not None
+                else [event.to_dict() if hasattr(event, "to_dict") else event]
+            )
+            for payload in payloads:
+                if hasattr(stream_callback, "put"):
+                    await stream_callback.put(payload)
+                elif callable(stream_callback):
+                    maybe_result = stream_callback(payload)
+                    if asyncio.iscoroutine(maybe_result):
+                        await maybe_result
     except asyncio.CancelledError:
         raise
     except Exception:

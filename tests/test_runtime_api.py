@@ -1435,10 +1435,10 @@ async def test_api_chat_publish_failure_does_not_break_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_chat_stream_emits_progress_before_done_while_task_running(monkeypatch):
+async def test_api_chat_stream_emits_runtime_event_json_before_done_while_task_running(monkeypatch):
     from src.gateway import runtime_api
 
-    observed = {"task_running_during_progress": False}
+    observed = {"task_running_during_runtime_event": False}
 
     async def _fake_run_chat_via_execution_bus(**kwargs):
         stream_callback = kwargs["stream_callback"]
@@ -1457,9 +1457,9 @@ async def test_api_chat_stream_emits_progress_before_done_while_task_running(mon
 
         async def write(self, data):
             decoded = data.decode()
-            if "event: progress" in decoded:
+            if "event: runtime_event" in decoded:
                 pending_tasks = [t for t in asyncio.all_tasks() if not t.done()]
-                observed["task_running_during_progress"] = any(
+                observed["task_running_during_runtime_event"] = any(
                     getattr(getattr(t, "get_coro", lambda: None)(), "__name__", "") == "_fake_run_chat_via_execution_bus"
                     for t in pending_tasks
                 )
@@ -1478,10 +1478,15 @@ async def test_api_chat_stream_emits_progress_before_done_while_task_running(mon
 
     response = await runtime_api.api_chat_stream(_Request())
 
-    progress_index = next(i for i, chunk in enumerate(response.writes) if "event: progress" in chunk)
+    runtime_event_index = next(i for i, chunk in enumerate(response.writes) if "event: runtime_event" in chunk)
     done_index = next(i for i, chunk in enumerate(response.writes) if "event: done" in chunk)
-    assert progress_index < done_index
-    assert observed["task_running_during_progress"] is True
+    assert runtime_event_index < done_index
+    assert observed["task_running_during_runtime_event"] is True
+    runtime_event_chunk = response.writes[runtime_event_index]
+    runtime_event_data = json.loads(runtime_event_chunk.split("data: ", 1)[1].strip())
+    assert isinstance(runtime_event_data, dict)
+    assert runtime_event_data["type"] == "runtime.event"
+    assert runtime_event_data["event_type"] == "runtime.event"
 
 
 @pytest.mark.asyncio
