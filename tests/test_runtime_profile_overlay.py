@@ -51,6 +51,10 @@ def _command_calls(recorder, prefix):
     return [call for call in recorder.calls if call["args"][: len(prefix)] == prefix]
 
 
+def _command_indices(recorder, prefix):
+    return [index for index, call in enumerate(recorder.calls) if call["args"][: len(prefix)] == prefix]
+
+
 RUNTIME_OVERLAY_FIELDS = {
     "enabled_tools": ["read"],
     "disabled_tools": ["write"],
@@ -131,6 +135,10 @@ def _write_base_config(path):
     )
 
 
+def _read_yaml(path):
+    return YAML().load(path.read_text(encoding="utf-8")) or {}
+
+
 def test_runtime_profile_apply_writes_config_yaml_without_sidecar(tmp_path):
     config_path = tmp_path / "config.yaml"
     runtime_profile_path = tmp_path / "runtime_profile.yaml"
@@ -154,13 +162,152 @@ def test_runtime_profile_apply_writes_config_yaml_without_sidecar(tmp_path):
     effective = cfg.get_effective_config()
     assert effective["llm"]["provider"] == "anthropic"
     assert effective["llm"].get("model") is None
-    assert effective["jira"]["enabled"] is True
+    assert "jira" not in effective
     assert "unknown" not in effective
 
     meta = cfg.get_managed_overlay_meta()
     assert meta["runtime_profile_id"] == "rp_1"
     assert meta["revision"] == 3
     assert meta["managed_sections"] == ["jira", "llm"]
+
+
+def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persisted(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    applied = []
+
+    monkeypatch.setattr(
+        profile_config_module,
+        "apply_runtime_profile_external_config",
+        lambda overlay, **_: applied.append(json.loads(json.dumps(overlay))),
+    )
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_atlassian",
+        1,
+        {
+            "jira": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "jira-main",
+                        "url": "https://jira.example.test",
+                        "username": "bot",
+                        "token": "jira-token",
+                    }
+                ],
+            },
+            "confluence": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "docs",
+                        "url": "https://conf.example.test/wiki",
+                        "username": "bot",
+                        "token": "conf-token",
+                    }
+                ],
+            },
+        },
+    )
+
+    persisted = _read_yaml(config_path)
+    assert "jira" not in persisted
+    assert "confluence" not in persisted
+    assert persisted["instruction_texts"]
+    assert "jira-token" not in config_path.read_text(encoding="utf-8")
+    assert "conf-token" not in config_path.read_text(encoding="utf-8")
+    assert applied[0]["jira"]["instances"][0]["token"] == "jira-token"
+    assert applied[0]["confluence"]["instances"][0]["token"] == "conf-token"
+    assert cfg.get_managed_overlay_meta()["managed_sections"] == [
+        "confluence",
+        "instruction_texts",
+        "jira",
+    ]
+
+
+def test_runtime_profile_apply_prunes_previous_portal_atlassian_entries(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "llm:\n"
+        "  provider: openai\n"
+        "jira:\n"
+        "  enabled: true\n"
+        "  instances:\n"
+        "    - name: jira-main\n"
+        "      url: https://jira.example.test\n"
+        "      username: bot\n"
+        "      token: jira-token\n"
+        "confluence:\n"
+        "  enabled: true\n"
+        "  instances:\n"
+        "    - name: docs\n"
+        "      url: https://conf.example.test/wiki\n"
+        "      username: bot\n"
+        "      token: conf-token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        profile_config_module,
+        "apply_runtime_profile_external_config",
+        lambda overlay, **_: None,
+    )
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay("rp_prune", 2, {"llm": {"provider": "anthropic"}})
+
+    persisted = _read_yaml(config_path)
+    assert "jira" not in persisted
+    assert "confluence" not in persisted
+    raw_text = config_path.read_text(encoding="utf-8")
+    assert "jira-token" not in raw_text
+    assert "conf-token" not in raw_text
+    cfg.load()
+    effective = cfg.get_effective_config()
+    assert "jira" not in effective
+    assert "confluence" not in effective
+
+
+def test_runtime_profile_config_instances_normalize_cli_native_and_drop_blank_urls():
+    cfg = Config.__new__(Config)
+    cfg._config = {
+        "jira": {
+            "enabled": True,
+            "instances": [
+                {
+                    "name": "jira-main",
+                    "base_url": "https://jira.example.test/",
+                    "rest_path": "/rest/api/3",
+                },
+                {
+                    "name": "jira-main",
+                    "url": "https://jira.example.test",
+                    "username": "duplicate",
+                },
+                {"name": "name-only"},
+                {"name": "jira-uri", "uri": "https://jira-uri.example.test"},
+            ],
+        },
+        "confluence": {
+            "enabled": True,
+            "instances": [
+                {"name": "docs", "baseUrl": "https://conf.example.test/wiki/"},
+                {"name": "docs", "base_url": "https://conf.example.test/wiki"},
+                {"name": "blank", "base_url": " "},
+            ],
+        },
+    }
+
+    jira_instances = cfg.get_jira_instances()
+    assert [item["name"] for item in jira_instances] == ["jira-main", "jira-uri"]
+    assert jira_instances[0]["url"] == "https://jira.example.test"
+    assert jira_instances[0]["base_url"] == "https://jira.example.test/"
+    assert jira_instances[1]["url"] == "https://jira-uri.example.test"
+
+    confluence_instances = cfg.get_confluence_instances()
+    assert [item["name"] for item in confluence_instances] == ["docs"]
+    assert confluence_instances[0]["url"] == "https://conf.example.test/wiki"
 
 
 def test_runtime_profile_apply_preserves_and_clears_runtime_top_level_fields(tmp_path):
@@ -352,7 +499,7 @@ def test_set_managed_overlay_external_cli_failure_is_non_fatal(tmp_path, monkeyp
     token = "gh-secret-token"
     proxy_password = "proxy-url-secret"
 
-    def _fail_external_config(_overlay):
+    def _fail_external_config(_overlay, **_):
         raise RuntimeError(f"External CLI command failed: gh auth login stderr: {token} proxy {proxy_password}")
 
     monkeypatch.setattr(
@@ -408,7 +555,7 @@ def test_clear_managed_overlay_external_cli_failure_is_non_fatal(tmp_path, monke
     monkeypatch.setattr(
         profile_config_module,
         "apply_runtime_profile_external_config",
-        lambda _overlay: None,
+        lambda _overlay, **_: None,
     )
     cfg = Config(str(config_path))
     cfg.runtime_profile_path = runtime_profile_path
@@ -421,7 +568,7 @@ def test_clear_managed_overlay_external_cli_failure_is_non_fatal(tmp_path, monke
     monkeypatch.setattr(
         profile_config_module,
         "clear_runtime_profile_external_config",
-        lambda: (_ for _ in ()).throw(RuntimeError("External CLI command failed: jira instance remove")),
+        lambda **_: (_ for _ in ()).throw(RuntimeError("External CLI command failed: jira instance remove")),
     )
     caplog.set_level("WARNING")
 
@@ -513,8 +660,22 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
         },
     )
 
+    jira_remove = _command_calls(recorder, ["jira", "--json", "instance", "remove"])
+    assert jira_remove == [
+        {
+            "args": ["jira", "--json", "instance", "remove", "jira-main", "--yes"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        }
+    ]
     jira_add = _command_calls(recorder, ["jira", "--json", "instance", "add"])
     assert len(jira_add) == 1
+    assert _command_indices(recorder, ["jira", "--json", "instance", "remove"])[0] < _command_indices(
+        recorder,
+        ["jira", "--json", "instance", "add"],
+    )[0]
     assert jira_add[0]["args"] == [
         "jira",
         "--json",
@@ -536,8 +697,22 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
     ]
     assert jira_add[0]["input"] == "jira-token"
 
+    confluence_remove = _command_calls(recorder, ["confluence", "--json", "instance", "remove"])
+    assert confluence_remove == [
+        {
+            "args": ["confluence", "--json", "instance", "remove", "docs", "--yes"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        }
+    ]
     confluence_add = _command_calls(recorder, ["confluence", "--json", "instance", "add"])
     assert len(confluence_add) == 1
+    assert _command_indices(recorder, ["confluence", "--json", "instance", "remove"])[0] < _command_indices(
+        recorder,
+        ["confluence", "--json", "instance", "add"],
+    )[0]
     assert confluence_add[0]["args"] == [
         "confluence",
         "--json",
@@ -642,7 +817,14 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
             "text": True,
             "capture_output": True,
             "check": False,
-        }
+        },
+        {
+            "args": ["jira", "--json", "instance", "remove", "jira-main", "--yes"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        },
     ]
     assert _command_calls(recorder, ["confluence", "--json", "instance", "remove"]) == [
         {
@@ -651,7 +833,14 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
             "text": True,
             "capture_output": True,
             "check": False,
-        }
+        },
+        {
+            "args": ["confluence", "--json", "instance", "remove", "docs", "--yes"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        },
     ]
     assert _command_calls(recorder, ["gh", "auth", "logout"]) == [
         {
@@ -677,6 +866,136 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
         "check": False,
     }
     assert not metadata_path.exists()
+
+
+def test_managed_overlay_external_cli_env_uses_config_path_with_profile_proxy(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    for key in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "no_proxy",
+        "NO_PROXY",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("EFP_CONFIG", str(tmp_path / "wrong-config.yaml"))
+    recorder = _CliRecorder(record_env=True)
+    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_external_env",
+        1,
+        {
+            "proxy": {
+                "enabled": True,
+                "url": "http://proxy.example.test:8080",
+                "username": "proxy-user",
+                "password": "proxy-password",
+                "no_proxy": "localhost,.svc",
+            },
+            "jira": {
+                "enabled": True,
+                "instances": [{"name": "jira-main", "url": "https://jira.example.test"}],
+            },
+            "confluence": {
+                "enabled": True,
+                "instances": [{"name": "docs", "url": "https://conf.example.test/wiki"}],
+            },
+        },
+    )
+
+    expected_proxy = "http://proxy-user:proxy-password@proxy.example.test:8080"
+    atlassian_calls = [call for call in recorder.calls if call["args"][0] in {"jira", "confluence"}]
+    assert [call["args"][:4] for call in atlassian_calls] == [
+        ["jira", "--json", "instance", "remove"],
+        ["jira", "--json", "instance", "add"],
+        ["confluence", "--json", "instance", "remove"],
+        ["confluence", "--json", "instance", "add"],
+    ]
+    for call in atlassian_calls:
+        assert call["env"]["EFP_CONFIG"] == str(config_path)
+        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+            assert call["env"][key] == expected_proxy
+        assert call["env"]["no_proxy"] == "localhost,.svc"
+        assert call["env"]["NO_PROXY"] == "localhost,.svc"
+
+    recorder.calls.clear()
+    monkeypatch.setenv("EFP_CONFIG", str(tmp_path / "wrong-clear-config.yaml"))
+    cfg.clear_managed_overlay()
+
+    remove_prefixes = (
+        ["jira", "--json", "instance", "remove"],
+        ["confluence", "--json", "instance", "remove"],
+    )
+    remove_calls = [call for call in recorder.calls if call["args"][:4] in remove_prefixes]
+    assert [call["args"][0] for call in remove_calls] == ["jira", "confluence"]
+    for call in remove_calls:
+        assert call["env"]["EFP_CONFIG"] == str(config_path)
+
+
+def test_runtime_profile_external_cli_reapply_removes_same_name_before_add(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    recorder = _CliRecorder()
+    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
+
+    profile = {
+        "jira": {
+            "enabled": True,
+            "instances": [
+                {"name": "jira-main", "uri": "https://jira.example.test", "token": "jira-token"},
+                {"name": "jira-empty"},
+            ],
+        },
+        "confluence": {
+            "enabled": True,
+            "instances": [
+                {"name": "docs", "baseUrl": "https://conf.example.test/wiki", "token": "conf-token"},
+                {"name": "docs-empty", "url": ""},
+            ],
+        },
+    }
+
+    profile_config_module.apply_runtime_profile_external_config(profile)
+    recorder.calls.clear()
+    profile_config_module.apply_runtime_profile_external_config(profile)
+
+    jira_remove = _command_calls(recorder, ["jira", "--json", "instance", "remove"])
+    jira_add = _command_calls(recorder, ["jira", "--json", "instance", "add"])
+    assert [call["args"][4] for call in jira_remove] == ["jira-main", "jira-main"]
+    assert len(jira_add) == 1
+    assert all(
+        index < _command_indices(recorder, ["jira", "--json", "instance", "add"])[0]
+        for index in _command_indices(recorder, ["jira", "--json", "instance", "remove"])
+    )
+
+    confluence_remove = _command_calls(recorder, ["confluence", "--json", "instance", "remove"])
+    confluence_add = _command_calls(recorder, ["confluence", "--json", "instance", "add"])
+    assert [call["args"][4] for call in confluence_remove] == ["docs", "docs"]
+    assert len(confluence_add) == 1
+    assert confluence_add[0]["args"][5:7] == ["--base-url", "https://conf.example.test/wiki"]
+    assert all(
+        index < _command_indices(recorder, ["confluence", "--json", "instance", "add"])[0]
+        for index in _command_indices(recorder, ["confluence", "--json", "instance", "remove"])
+    )
+
+    all_argv = json.dumps([call["args"] for call in recorder.calls])
+    assert "jira-empty" not in all_argv
+    assert "docs-empty" not in all_argv
+    metadata = json.loads(
+        (home / ".config" / "efp" / "runtime-profile-external-config.json").read_text(encoding="utf-8")
+    )
+    assert metadata["jira"]["instances"] == [{"name": "jira-main"}]
+    assert metadata["confluence"]["instances"] == [{"name": "docs"}]
 
 
 def test_runtime_profile_external_cli_inherits_docker_proxy_env_without_profile_proxy(tmp_path, monkeypatch):
@@ -708,6 +1027,7 @@ def test_runtime_profile_external_cli_uses_profile_proxy_env_and_redacts_metadat
 ):
     home = tmp_path / "home"
     home.mkdir()
+    config_path = tmp_path / "config.yaml"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("HTTPS_PROXY", "http://docker.proxy.local:8443")
     recorder = _CliRecorder(record_env=True)
@@ -742,7 +1062,8 @@ def test_runtime_profile_external_cli_uses_profile_proxy_env_and_redacts_metadat
                 "access_token": "gh-token",
                 "api_base_url": "https://github.example.test/api/v3",
             },
-        }
+        },
+        config_path=config_path,
     )
 
     gh_logout = _command_calls(recorder, ["gh", "auth", "logout"])
@@ -750,6 +1071,7 @@ def test_runtime_profile_external_cli_uses_profile_proxy_env_and_redacts_metadat
     gh_login = _command_calls(recorder, ["gh", "auth", "login"])
     assert len(gh_login) == 1
     for call in (gh_logout[0], gh_login[0]):
+        assert call["env"]["EFP_CONFIG"] == str(config_path)
         for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
             assert call["env"][key] == expected_proxy
         assert call["env"]["no_proxy"] == "localhost,.internal"
@@ -1027,7 +1349,7 @@ def test_runtime_profile_external_cli_instructions_are_injected(tmp_path, monkey
     monkeypatch.setattr(
         profile_config_module,
         "apply_runtime_profile_external_config",
-        lambda overlay: applied.append(json.loads(json.dumps(overlay))),
+        lambda overlay, **_: applied.append(json.loads(json.dumps(overlay))),
     )
 
     cfg = Config(str(config_path))
@@ -1065,6 +1387,42 @@ def test_runtime_profile_external_cli_instructions_are_injected(tmp_path, monkey
     assert applied[0]["instruction_texts"] == instructions
 
 
+def test_runtime_profile_external_cli_instructions_require_real_atlassian_url(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    applied = []
+
+    monkeypatch.setattr(
+        profile_config_module,
+        "apply_runtime_profile_external_config",
+        lambda overlay, **_: applied.append(json.loads(json.dumps(overlay))),
+    )
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_no_instructions",
+        1,
+        {
+            "jira": {
+                "enabled": True,
+                "instances": [{"name": "jira-main"}],
+            },
+            "confluence": {
+                "enabled": True,
+                "instances": [{"name": "docs", "baseUrl": " "}],
+            },
+        },
+    )
+
+    cfg.load()
+    effective = cfg.get_effective_config()
+    assert "instruction_texts" not in effective
+    assert "jira" not in effective
+    assert "confluence" not in effective
+    assert "instruction_texts" not in applied[0]
+    assert cfg.get_managed_overlay_meta()["managed_sections"] == ["confluence", "jira"]
+
+
 def test_runtime_profile_external_cli_instructions_preserve_portal_texts(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
@@ -1072,7 +1430,7 @@ def test_runtime_profile_external_cli_instructions_preserve_portal_texts(tmp_pat
     monkeypatch.setattr(
         profile_config_module,
         "apply_runtime_profile_external_config",
-        lambda overlay: None,
+        lambda overlay, **_: None,
     )
 
     cfg = Config(str(config_path))

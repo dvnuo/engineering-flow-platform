@@ -105,6 +105,18 @@ RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
     ),
 ]
 
+_ATLASSIAN_INSTANCE_URL_FIELDS = ("url", "base_url", "baseUrl", "uri")
+
+
+def _first_atlassian_instance_url(value: Dict[str, Any]) -> str:
+    if not isinstance(value, dict):
+        return ""
+    for field in _ATLASSIAN_INSTANCE_URL_FIELDS:
+        text = str(value.get(field) or "").strip()
+        if text:
+            return text.rstrip("/")
+    return ""
+
 
 class ServiceReloadManager:
     """Manager for services that need to be reinitialized when config changes."""
@@ -187,7 +199,7 @@ def _has_atlassian_profile_instances(section: Any) -> bool:
     for instance in instances:
         if not isinstance(instance, dict) or instance.get("enabled") is False:
             continue
-        if str(instance.get("base_url") or instance.get("url") or "").strip():
+        if _first_atlassian_instance_url(instance):
             return True
     return False
 
@@ -467,14 +479,18 @@ class Config:
         """Apply Portal-managed snapshot into config.yaml and reload."""
         previous_sections = set(self._managed_sections)
         filtered_overlay = self._filter_managed_overlay_sections(overlay_config or {})
-        if _should_inject_runtime_profile_external_cli_instructions(filtered_overlay):
-            filtered_overlay["instruction_texts"] = list(RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS)
-        new_sections = set(filtered_overlay.keys())
+        external_cli_overlay = copy.deepcopy(filtered_overlay)
+        if _should_inject_runtime_profile_external_cli_instructions(external_cli_overlay):
+            external_cli_overlay["instruction_texts"] = list(RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS)
+        persisted_overlay = copy.deepcopy(external_cli_overlay)
+        persisted_overlay.pop("jira", None)
+        persisted_overlay.pop("confluence", None)
+        new_sections = set(external_cli_overlay.keys())
 
         config_document = self._load_yaml_document(self.config_path)
         self._decrypt_sensitive_fields(config_document)
         self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
-        self._deep_merge_into(config_document, filtered_overlay)
+        self._deep_merge_into(config_document, persisted_overlay)
         self._persist_runtime_config(config_document)
 
         from src.external_cli.profile_config import (
@@ -483,9 +499,9 @@ class Config:
         )
 
         try:
-            apply_runtime_profile_external_config(filtered_overlay)
+            apply_runtime_profile_external_config(external_cli_overlay, config_path=self.config_path)
         except Exception as exc:
-            error = redact_runtime_profile_external_config_error(exc, filtered_overlay)
+            error = redact_runtime_profile_external_config_error(exc, external_cli_overlay)
             self._set_external_config_status("apply", False, error)
             logger.warning(
                 "Runtime profile external CLI config apply failed: %s",
@@ -524,7 +540,7 @@ class Config:
         )
 
         try:
-            clear_runtime_profile_external_config()
+            clear_runtime_profile_external_config(config_path=self.config_path)
         except Exception as exc:
             error = redact_runtime_profile_external_config_error(exc)
             self._set_external_config_status("clear", False, error)
@@ -769,10 +785,10 @@ class Config:
         instances = jira_config.get("instances", [])
         
         # Backward compatibility: if instances is empty but url exists, convert old format
-        if not instances and jira_config.get("url"):
+        if not instances and _first_atlassian_instance_url(jira_config):
             instances = [{
                 "name": "Default",
-                "url": jira_config.get("url", ""),
+                "url": _first_atlassian_instance_url(jira_config),
                 "project": jira_config.get("project", ""),
                 "username": jira_config.get("username", ""),
                 "password": jira_config.get("password", ""),
@@ -781,7 +797,7 @@ class Config:
                 "timeout": jira_config.get("timeout", 30.0),
             }]
         
-        return instances
+        return self._normalize_atlassian_instances(instances)
     
     def find_jira_instance(self, url: str = None, name: str = None) -> Optional[Dict[str, Any]]:
         """Find Jira instance by URL or name."""
@@ -817,17 +833,37 @@ class Config:
         instances = confluence_config.get("instances", [])
         
         # Backward compatibility: if instances is empty but url exists, convert old format
-        if not instances and confluence_config.get("url"):
+        if not instances and _first_atlassian_instance_url(confluence_config):
             instances = [{
                 "name": "Default",
-                "url": confluence_config.get("url", ""),
+                "url": _first_atlassian_instance_url(confluence_config),
                 "username": confluence_config.get("username", ""),
                 "password": confluence_config.get("password", ""),
                 "token": confluence_config.get("token", ""),
                 "space": confluence_config.get("space", ""),
             }]
         
-        return instances
+        return self._normalize_atlassian_instances(instances)
+
+    def _normalize_atlassian_instances(self, instances: Any) -> List[Dict[str, Any]]:
+        if not isinstance(instances, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for raw in instances:
+            if not isinstance(raw, dict):
+                continue
+            url = _first_atlassian_instance_url(raw)
+            if not url:
+                continue
+            item = copy.deepcopy(raw)
+            item["url"] = url
+            key = (str(item.get("name") or "").strip().lower(), url.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(item)
+        return normalized
     
     def find_confluence_instance(
         self,

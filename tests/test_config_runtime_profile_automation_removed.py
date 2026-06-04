@@ -1,4 +1,5 @@
 from src.config import Config
+from src.external_cli import profile_config as profile_config_module
 
 
 def _write_base_config(path):
@@ -53,6 +54,11 @@ def test_set_managed_overlay_allows_llm_response_flow_subtree(tmp_path):
 
 def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(
+        profile_config_module,
+        "apply_runtime_profile_external_config",
+        lambda overlay, **_: None,
+    )
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
 
@@ -94,11 +100,15 @@ def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path, monk
     assert effective["github"]["base_url"] == "https://api.github.com"
     assert "automation" not in effective["github"]
 
-    assert effective["jira"]["enabled"] is True
-    assert "automation" not in effective["jira"]
+    assert "jira" not in effective
+    assert "confluence" not in effective
 
-    assert effective["confluence"]["enabled"] is True
-    assert "automation" not in effective["confluence"]
+    assert cfg.get_managed_overlay_meta()["managed_sections"] == [
+        "confluence",
+        "github",
+        "instruction_texts",
+        "jira",
+    ]
 
 
 def test_set_managed_overlay_applies_and_clears_llm_temperature(tmp_path):

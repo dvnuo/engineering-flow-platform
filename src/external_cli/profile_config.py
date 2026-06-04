@@ -36,10 +36,14 @@ class _CliEnvironment:
     secrets: tuple[str, ...] = ()
 
 
-def apply_runtime_profile_external_config(profile_config: dict[str, Any]) -> None:
+def apply_runtime_profile_external_config(
+    profile_config: dict[str, Any],
+    *,
+    config_path: Path | str | None = None,
+) -> None:
     """Apply external CLI config for the sanitized Portal profile using real CLIs."""
 
-    cli_environment = _build_cli_environment(profile_config)
+    cli_environment = _build_cli_environment(profile_config, config_path=config_path)
     previous = _load_metadata()
     if previous:
         clear_runtime_profile_external_config(metadata=previous, cli_environment=cli_environment)
@@ -71,6 +75,7 @@ def clear_runtime_profile_external_config(
     *,
     metadata: dict[str, Any] | None = None,
     cli_environment: _CliEnvironment | None = None,
+    config_path: Path | str | None = None,
 ) -> None:
     """Remove external CLI config previously managed by runtime profile apply."""
 
@@ -78,7 +83,7 @@ def clear_runtime_profile_external_config(
     if not meta or meta.get("managed_by") != _MANAGED_BY:
         return
 
-    cli_environment = cli_environment or _CliEnvironment(env=os.environ.copy())
+    cli_environment = cli_environment or _build_cli_environment(None, config_path=config_path)
     _clear_new_metadata(meta, cli_environment=cli_environment)
     _clear_legacy_metadata(meta)
     _remove_file_if_exists(_metadata_path())
@@ -108,6 +113,7 @@ def _apply_atlassian_product(
     product_meta: dict[str, Any] = {"instances": []}
     metadata[product] = product_meta
     for instance in instances:
+        _remove_atlassian_instance_if_exists(product, instance["name"], cli_environment=cli_environment)
         _add_atlassian_instance(
             product,
             instance,
@@ -167,6 +173,18 @@ def _remove_atlassian_instance(product: str, name: str, *, cli_environment: _Cli
         env=cli_environment.env,
         env_secrets=cli_environment.secrets,
     )
+
+
+def _remove_atlassian_instance_if_exists(product: str, name: str, *, cli_environment: _CliEnvironment) -> None:
+    try:
+        _run_cli(
+            [product, "--json", "instance", "remove", name, "--yes"],
+            allowed_returncodes=tuple(range(256)),
+            env=cli_environment.env,
+            env_secrets=cli_environment.secrets,
+        )
+    except RuntimeError:
+        return
 
 
 def _apply_github(
@@ -354,8 +372,14 @@ def _metadata_gh_hosts(gh_meta: dict[str, Any]) -> list[str]:
     return [host] if host else []
 
 
-def _build_cli_environment(profile_config: dict[str, Any] | None) -> _CliEnvironment:
+def _build_cli_environment(
+    profile_config: dict[str, Any] | None,
+    *,
+    config_path: Path | str | None = None,
+) -> _CliEnvironment:
     env = os.environ.copy()
+    if config_path is not None:
+        env["EFP_CONFIG"] = str(config_path)
     proxy_config = profile_config.get("proxy") if isinstance(profile_config, dict) else None
     if not isinstance(proxy_config, dict):
         return _CliEnvironment(env=env)
@@ -409,7 +433,7 @@ def _build_product_instances(product_config: Any, *, product: str) -> list[dict[
     for index, raw in enumerate(raw_instances, 1):
         if not isinstance(raw, dict) or raw.get("enabled") is False:
             continue
-        base_url = _normalize_base_url(raw.get("base_url") or raw.get("url"))
+        base_url = _profile_instance_base_url(raw)
         if not base_url:
             continue
         name = _unique_instance_name(str(raw.get("name") or f"{product}-{index}").strip(), used_names, product, index)
@@ -432,6 +456,10 @@ def _build_product_instances(product_config: Any, *, product: str) -> list[dict[
             }
         instances.append(instance)
     return instances
+
+
+def _profile_instance_base_url(raw: dict[str, Any]) -> str:
+    return _normalize_base_url(raw.get("base_url") or raw.get("baseUrl") or raw.get("url") or raw.get("uri"))
 
 
 def _unique_instance_name(raw_name: str, used_names: set[str], product: str, index: int) -> str:
