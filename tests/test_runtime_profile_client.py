@@ -276,7 +276,7 @@ async def test_bootstrap_runtime_profile_external_cli_failure_still_returns_true
         ),
     )
 
-    def _fail_external_config(_overlay):
+    def _fail_external_config(_overlay, **_):
         raise RuntimeError(f"External CLI command failed: gh auth login stderr: {token}")
 
     monkeypatch.setattr(
