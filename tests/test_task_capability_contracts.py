@@ -136,6 +136,23 @@ def test_resolve_task_capability_contract_github_review_task_issue_comment_fallb
     assert plan["involved_capability_ids"] == ["adapter:github:add_comment", "skill:review-pull-request"]
 
 
+def test_resolve_task_capability_contract_agent_async_task():
+    plan = resolve_task_capability_contract("agent_async_task", {"skill_name": "Review-Pull-Request"})
+
+    assert plan["primary_capability_id"] == "skill:review-pull-request"
+    assert plan["capability_id"] == "skill:review-pull-request"
+    assert plan["action_id"] == "skill:review-pull-request"
+    assert plan["capability_type"] == "skill"
+    assert plan["involved_capability_ids"] == ["skill:review-pull-request"]
+
+
+def test_resolve_task_capability_contract_agent_async_task_requires_skill_name():
+    plan = resolve_task_capability_contract("agent_async_task", {})
+
+    assert plan["primary_capability_id"] is None
+    assert plan["involved_capability_ids"] == []
+
+
 def test_resolve_task_capability_contract_delegation_task():
     plan = resolve_task_capability_contract("delegation_task", {"skill_name": "Demo"})
 

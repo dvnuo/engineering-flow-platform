@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Protocol
+import json
 import logging
 import os
 from datetime import datetime
@@ -1198,6 +1199,389 @@ def _normalize_agent_mode(value: Any) -> Optional[str]:
     if normalized in {"specialist", "task"}:
         return normalized
     return None
+
+
+def _normalize_agent_async_status(value: Any, *, fallback: str = "success") -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"success", "succeeded", "completed", "complete", "done", "ok"}:
+        return "success"
+    if normalized == "blocked":
+        return "blocked"
+    if normalized in {"error", "failed", "failure"}:
+        return "error"
+    if normalized in {"cancelled", "canceled"}:
+        return "cancelled"
+    fallback_status = str(fallback or "").strip().lower()
+    if fallback_status in {"success", "blocked", "error", "cancelled"}:
+        return fallback_status
+    return "success"
+
+
+def _agent_async_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    return [value]
+
+
+def _agent_async_first_text(payload: Dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _agent_async_has_blockers(payload: Dict[str, Any]) -> bool:
+    blockers = payload.get("blockers")
+    if isinstance(blockers, list):
+        return bool(blockers)
+    if blockers is None:
+        return False
+    if isinstance(blockers, str):
+        return bool(blockers.strip())
+    return bool(blockers)
+
+
+def _agent_async_fallback_response(payload: Dict[str, Any], raw_text: str) -> str:
+    response = _agent_async_first_text(
+        payload,
+        ("response", "answer", "output", "content", "message", "review_summary", "result_summary", "summary", "raw_text"),
+    )
+    return response or raw_text.strip()
+
+
+def _merge_agent_async_skill_payload(raw_output: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    data = raw_output.get("data") if isinstance(raw_output.get("data"), dict) else {}
+    if isinstance(data, dict):
+        merged.update(data)
+    for key in (
+        "status",
+        "success",
+        "summary",
+        "final_response",
+        "response",
+        "answer",
+        "output",
+        "content",
+        "message",
+        "review_summary",
+        "result_summary",
+        "raw_text",
+        "needs_user_input",
+        "blockers",
+        "next_recommendation",
+        "artifacts",
+        "audit_trace",
+        "external_actions",
+        "error",
+    ):
+        if key in raw_output:
+            merged[key] = raw_output.get(key)
+    if not merged:
+        merged.update(raw_output)
+    return merged
+
+
+def _normalize_agent_async_skill_output(
+    *,
+    normalized_skill: ExecutionResult,
+    task_type: str,
+    skill_name: str,
+) -> Dict[str, Any]:
+    raw_output = normalized_skill.output_payload if isinstance(normalized_skill.output_payload, dict) else {}
+    payload = _merge_agent_async_skill_payload(raw_output)
+    explicit_success = payload.get("success")
+    fallback_status = normalized_skill.status
+    if isinstance(explicit_success, bool):
+        fallback_status = "success" if explicit_success else "error"
+    agent_status = _normalize_agent_async_status(payload.get("status"), fallback=fallback_status)
+    raw_text = _agent_async_first_text(payload, ("raw_text", "output", "response", "content", "message"))
+    blockers = _agent_async_list(payload.get("blockers"))
+    payload["blockers"] = blockers
+    payload.setdefault("summary", "")
+    payload["summary"] = _agent_async_first_text(payload, ("summary", "result_summary", "review_summary", "output", "response")) or (
+        payload.get("error") if isinstance(payload.get("error"), str) else ""
+    )
+    payload.setdefault("artifacts", [])
+    payload["artifacts"] = _agent_async_list(payload.get("artifacts"))
+    payload.setdefault("next_recommendation", "")
+    payload["next_recommendation"] = (
+        payload.get("next_recommendation").strip()
+        if isinstance(payload.get("next_recommendation"), str)
+        else payload.get("next_recommendation") or ""
+    )
+    payload.setdefault("audit_trace", [])
+    payload["audit_trace"] = _agent_async_list(payload.get("audit_trace"))
+    payload.setdefault("external_actions", [])
+    payload["external_actions"] = _agent_async_list(payload.get("external_actions"))
+    if not isinstance(payload.get("final_response"), str) or not payload.get("final_response", "").strip():
+        payload["final_response"] = _agent_async_fallback_response(payload, raw_text)
+    if "needs_user_input" not in payload or not isinstance(payload.get("needs_user_input"), bool):
+        payload["needs_user_input"] = agent_status == "blocked" or _agent_async_has_blockers(payload)
+    error_value = payload.get("error")
+    if agent_status == "blocked" and not error_value:
+        error_value = payload["summary"] or "agent_async_task blocked"
+    elif agent_status == "error" and not error_value:
+        error_value = payload["summary"] or f"agent_async_task skill '{skill_name}' failed"
+    return {
+        "status": agent_status,
+        "success": agent_status == "success",
+        "summary": payload["summary"],
+        "final_response": payload["final_response"],
+        "needs_user_input": bool(payload["needs_user_input"]),
+        "blockers": payload["blockers"],
+        "next_recommendation": payload["next_recommendation"],
+        "artifacts": payload["artifacts"],
+        "audit_trace": payload["audit_trace"],
+        "external_actions": payload["external_actions"],
+        "error": error_value,
+        "raw_agent_payload": payload,
+        "result": raw_output,
+        "task_type": task_type,
+    }
+
+
+AGENT_ASYNC_TASK_DEFAULT_SYSTEM_PROMPT = (
+    "You are executing an EFP Portal agent_async_task as an autonomous background runtime task. "
+    "Do not ask the user for more information during execution. Make reasonable assumptions, "
+    "complete independently with available context and tools, and return blocked only when truly necessary. "
+    "When blocked, include minimal missing information in blockers and set needs_user_input to true. "
+    "Preserve secrets: never output tokens, credentials, API keys, or raw authorization values. "
+    "Return exactly one JSON object matching the requested task schema."
+)
+
+
+def _json_for_agent_async_prompt(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return json.dumps(str(value), ensure_ascii=False)
+
+
+def _extract_agent_async_json_object(text: str) -> Optional[Dict[str, Any]]:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    for candidate in (raw, raw[raw.find("{") : raw.rfind("}") + 1] if "{" in raw and "}" in raw else ""):
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _agent_async_status_from_chat_status(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"completed", "complete", "success", "succeeded", "ok"}:
+        return "success"
+    if normalized in {"waiting_for_permission", "waiting_for_question", "blocked", "permission_requested"}:
+        return "blocked"
+    if normalized in {"cancelled", "canceled"}:
+        return "cancelled"
+    if normalized in {"max_iterations", "error", "failed", "failure"}:
+        return "error"
+    return "success"
+
+
+def _build_agent_async_chat_prompt(
+    *,
+    task_id: Optional[str],
+    skill_name: str,
+    input_payload: Dict[str, Any],
+    metadata: Dict[str, Any],
+    context_ref: Optional[Dict[str, Any]],
+) -> str:
+    task_text = _first_non_empty(input_payload.get("user_task"), input_payload.get("followup_task")) or ""
+    task_session_id = (
+        _non_empty_string(input_payload.get("task_session_id"))
+        or _non_empty_string(metadata.get("portal_task_session_id"))
+        or ""
+    )
+    root_task_id = _non_empty_string(input_payload.get("root_task_id")) or _non_empty_string(metadata.get("portal_root_task_id")) or ""
+    parent_task_id = (
+        _non_empty_string(input_payload.get("parent_task_id"))
+        or _non_empty_string(metadata.get("portal_parent_task_id"))
+        or ""
+    )
+    autonomous_instruction = _non_empty_string(input_payload.get("autonomous_instruction"))
+    delegation = input_payload.get("delegation") if isinstance(input_payload.get("delegation"), dict) else {}
+    skill_kwargs = input_payload.get("skill_kwargs") if isinstance(input_payload.get("skill_kwargs"), dict) else {}
+    input_artifacts = input_payload.get("input_artifacts") if isinstance(input_payload.get("input_artifacts"), list) else []
+    expected_output_schema = (
+        input_payload.get("expected_output_schema") if isinstance(input_payload.get("expected_output_schema"), dict) else {}
+    )
+    retry_policy = input_payload.get("retry_policy") if isinstance(input_payload.get("retry_policy"), dict) else {}
+    command_line = f"/skill {skill_name.strip()}\n\n" if skill_name.strip() else ""
+    return (
+        command_line
+        + "Agent async task instructions:\n"
+        "- This is an EFP Portal background task launched from Portal Tasks, not interactive chat.\n"
+        "- Work autonomously as a long-running background agent task.\n"
+        f"- Selected skill: `{skill_name or '(none provided)'}`.\n"
+        "- Follow the selected skill instructions when the native runtime loads that skill.\n"
+        "- Do not claim the selected skill is running unless it is present in the active skill context.\n"
+        "- If the selected skill cannot be loaded, continue with useful best-effort work unless the skill is required; record exact blockers in JSON.\n\n"
+        "Task identifiers:\n"
+        f"- task_id: {task_id or '(not provided)'}\n"
+        f"- task_session_id: {task_session_id or '(not provided)'}\n"
+        f"- root_task_id: {root_task_id or '(not provided)'}\n"
+        f"- parent_task_id: {parent_task_id or '(none)'}\n\n"
+        "User task content:\n"
+        f"{task_text or '(no user_task or followup_task provided)'}\n\n"
+        "Available task context:\n"
+        f"- context_ref: {_json_for_agent_async_prompt(context_ref or {})}\n"
+        f"- delegation: {_json_for_agent_async_prompt(delegation)}\n"
+        f"- skill_kwargs: {_json_for_agent_async_prompt(skill_kwargs)}\n"
+        f"- input_artifacts: {_json_for_agent_async_prompt(input_artifacts)}\n"
+        f"- expected_output_schema: {_json_for_agent_async_prompt(expected_output_schema)}\n"
+        f"- deadline: {_json_for_agent_async_prompt(input_payload.get('deadline'))}\n"
+        f"- retry_policy: {_json_for_agent_async_prompt(retry_policy)}\n\n"
+        "Autonomous execution rules:\n"
+        "- Do not ask the user questions during execution.\n"
+        "- Make reasonable assumptions and proceed independently.\n"
+        "- Complete as much of the task as possible with available context and tools.\n"
+        "- If information is truly insufficient, return status \"blocked\" with minimal missing information in blockers and needs_user_input true.\n"
+        "- If a tool permission is required and the runtime pauses for permission, return status \"blocked\" and include the permission in blockers.\n"
+        "- Preserve secrets: do not output tokens, credentials, API keys, or raw authorization values.\n"
+        f"{('- Portal autonomous instruction: ' + autonomous_instruction + chr(10)) if autonomous_instruction else ''}"
+        "\nReturn exactly one JSON object. Do not wrap it in markdown.\n"
+        "The JSON object must match this schema:\n"
+        "{\n"
+        '  "status": "success|blocked|error",\n'
+        '  "summary": "...",\n'
+        '  "final_response": "...",\n'
+        '  "needs_user_input": false,\n'
+        '  "blockers": [],\n'
+        '  "next_recommendation": "...",\n'
+        '  "artifacts": [],\n'
+        '  "audit_trace": [],\n'
+        '  "external_actions": []\n'
+        "}\n"
+    )
+
+
+async def run_agent_async_task(payload: Dict[str, Any]) -> Dict[str, Any]:
+    input_payload = dict(payload or {})
+    metadata = input_payload.get("_execution_metadata") if isinstance(input_payload.get("_execution_metadata"), dict) else {}
+    context_ref = input_payload.get("_runtime_context_ref") if isinstance(input_payload.get("_runtime_context_ref"), dict) else {}
+    skill_name = _non_empty_string(input_payload.get("skill_name")) or _non_empty_string(metadata.get("portal_skill_name")) or ""
+    task_id = (
+        _non_empty_string(input_payload.get("_runtime_task_id"))
+        or _non_empty_string(input_payload.get("task_id"))
+        or _non_empty_string(metadata.get("task_id"))
+        or _non_empty_string(metadata.get("portal_task_id"))
+    )
+    task_session_id = (
+        _non_empty_string(input_payload.get("task_session_id"))
+        or _non_empty_string(metadata.get("portal_task_session_id"))
+        or _non_empty_string(input_payload.get("_runtime_session_id"))
+        or (f"agent-task:{task_id}" if task_id else None)
+    )
+    chat_request_id = _non_empty_string(input_payload.get("_runtime_request_id"))
+    chat_request_id = f"{chat_request_id}:chat" if chat_request_id else f"agent-async-chat:{task_id or 'adhoc'}"
+    agent_id = _non_empty_string(input_payload.get("_runtime_agent_id")) or _non_empty_string(metadata.get("agent_id"))
+    prompt = _build_agent_async_chat_prompt(
+        task_id=task_id,
+        skill_name=skill_name,
+        input_payload=input_payload,
+        metadata=metadata,
+        context_ref=context_ref,
+    )
+    chat_metadata = {
+        **metadata,
+        "path": "/api/tasks/execute/agent_async_task/chat",
+        "task_type": "agent_async_task",
+        "skill_name": skill_name,
+        "execution_mode": "chat_tool_loop",
+        "agent_async_task": {
+            "task_id": task_id,
+            "task_session_id": task_session_id,
+            "root_task_id": input_payload.get("root_task_id") or metadata.get("portal_root_task_id"),
+            "parent_task_id": input_payload.get("parent_task_id") or metadata.get("portal_parent_task_id"),
+            "schema": input_payload.get("schema"),
+        },
+    }
+    from src.gateway.runtime_chat import run_runtime_chat
+
+    output_payload = await run_runtime_chat(
+        request_id=chat_request_id,
+        session_id=task_session_id or chat_request_id,
+        message=prompt,
+        user_name="Portal Agent Async Task",
+        request_path="/api/tasks/execute/agent_async_task/chat",
+        execution_metadata=chat_metadata,
+        agent_id=agent_id,
+        agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None,
+        model=metadata.get("resolved_model") or metadata.get("model"),
+        transient_model_message=AGENT_ASYNC_TASK_DEFAULT_SYSTEM_PROMPT,
+    )
+    raw_text = _agent_async_first_text(output_payload, ("response", "output", "content", "message"))
+    structured_output = output_payload.get("structured_output") if isinstance(output_payload.get("structured_output"), dict) else None
+    parsed = dict(structured_output or _extract_agent_async_json_object(raw_text) or {})
+    if not parsed:
+        parsed = {"summary": raw_text, "raw_text": raw_text}
+    parsed.setdefault("raw_text", raw_text)
+    chat_status = _agent_async_status_from_chat_status(output_payload.get("status"))
+    parsed_status = _normalize_agent_async_status(parsed.get("status"), fallback=chat_status)
+    blockers = _agent_async_list(parsed.get("blockers"))
+    if output_payload.get("pending_permission_request") is not None:
+        parsed_status = "blocked"
+        blockers.append({"type": "permission_request", "request": output_payload.get("pending_permission_request")})
+    if output_payload.get("pending_question_request") is not None:
+        parsed_status = "blocked"
+        blockers.append({"type": "question_request", "request": output_payload.get("pending_question_request")})
+    parsed["status"] = parsed_status
+    parsed["blockers"] = blockers
+    normalized = _normalize_agent_async_skill_output(
+        normalized_skill=make_execution_result(
+            request_id=chat_request_id,
+            status=parsed_status,
+            output_payload=parsed,
+        ),
+        task_type="agent_async_task",
+        skill_name=skill_name,
+    )
+    return {
+        "status": normalized["status"],
+        "success": normalized["success"],
+        "summary": normalized["summary"],
+        "final_response": normalized["final_response"],
+        "needs_user_input": normalized["needs_user_input"],
+        "blockers": normalized["blockers"],
+        "next_recommendation": normalized["next_recommendation"],
+        "artifacts": normalized["artifacts"],
+        "audit_trace": normalized["audit_trace"],
+        "external_actions": normalized["external_actions"],
+        "error": normalized["error"],
+        "raw_text": raw_text,
+        "runtime_events": output_payload.get("runtime_events") if isinstance(output_payload.get("runtime_events"), list) else [],
+        "data": {
+            "execution_mode": "chat_tool_loop",
+            "chat_session_id": task_session_id,
+            "chat_request_id": chat_request_id,
+            "chat_status": output_payload.get("status"),
+            "skill_name": skill_name,
+        },
+        "result": output_payload,
+    }
 
 
 def _build_structured_delegation_payload_from_skill_output(
@@ -2505,6 +2889,231 @@ def build_default_execution_bus(
                     "secondary_action_id": secondary_action_id,
                     "secondary_action_success": secondary_action_success,
                     "result": review_result.get("result"),
+                },
+                runtime_events=runtime_events,
+            )
+
+        if task_type == "agent_async_task":
+            payload = dict(request.input_payload or {})
+            metadata = request.metadata if isinstance(request.metadata, dict) else {}
+            skill_name = _non_empty_string(payload.get("skill_name")) or _non_empty_string(metadata.get("portal_skill_name"))
+            capability_payload = dict(payload)
+            if skill_name:
+                capability_payload["skill_name"] = skill_name
+            capability = resolve_task_capability_plan(task_type, capability_payload)
+            involved_capability_ids = list(capability.get("involved_capability_ids") or [])
+            resolved_task_template_id = _resolve_request_task_template_id(request)
+            task_session_id = (
+                _non_empty_string(payload.get("task_session_id"))
+                or _non_empty_string(metadata.get("portal_task_session_id"))
+                or request.session_id
+            )
+            root_task_id = _non_empty_string(payload.get("root_task_id")) or _non_empty_string(metadata.get("portal_root_task_id"))
+            parent_task_id = _non_empty_string(payload.get("parent_task_id")) or _non_empty_string(metadata.get("portal_parent_task_id"))
+
+            def _agent_async_preflight_failure(
+                *,
+                error_code: str,
+                summary: str,
+                status: str = "blocked",
+                blockers: Optional[list[Any]] = None,
+            ) -> ExecutionResult:
+                normalized_status = _normalize_agent_async_status(status, fallback="blocked")
+                failure_blockers = list(blockers or [error_code])
+                runtime_events = [
+                    build_runtime_event(
+                        event_type="task.agent_async.blocked" if normalized_status == "blocked" else "task.agent_async.failed",
+                        execution_type=request.execution_type,
+                        state=normalized_status,
+                        session_id=request.session_id,
+                        request_id=request.request_id,
+                        agent_id=request.agent_id,
+                        summary="agent async task",
+                        task_id=task_id,
+                        detail_payload={
+                            "task_type": task_type,
+                            "task_template_id": resolved_task_template_id,
+                            "skill_name": skill_name,
+                            "task_session_id": task_session_id,
+                            "root_task_id": root_task_id,
+                            "parent_task_id": parent_task_id,
+                            "success": False,
+                            "error": error_code,
+                            "capability_id": capability.get("capability_id"),
+                            "capability_type": capability.get("capability_type"),
+                            "capability_resolution": capability.get("capability_resolution"),
+                            "involved_capability_ids": involved_capability_ids,
+                        },
+                        legacy_payload={"legacy_type": "task_agent_async"},
+                    )
+                ]
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status=normalized_status,
+                    output_payload={
+                        "task_type": task_type,
+                        "task_template_id": resolved_task_template_id,
+                        "schema": payload.get("schema") or "agent_async_task.v1",
+                        "skill_name": skill_name,
+                        "task_session_id": task_session_id,
+                        "root_task_id": root_task_id,
+                        "parent_task_id": parent_task_id,
+                        "status": normalized_status,
+                        "success": False,
+                        "summary": summary,
+                        "final_response": summary,
+                        "needs_user_input": normalized_status == "blocked",
+                        "blockers": failure_blockers,
+                        "next_recommendation": "",
+                        "artifacts": [],
+                        "audit_trace": [],
+                        "external_actions": [],
+                        "error": error_code,
+                        "task_boundary": True,
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
+                        "requires_identity_binding": capability.get("requires_identity_binding"),
+                        "capability_resolution": capability.get("capability_resolution"),
+                        "involved_capability_ids": involved_capability_ids,
+                        "resolved_skill_capability_id": f"skill:{skill_name.strip().lower()}" if skill_name else None,
+                        "result": {"error": error_code},
+                    },
+                    runtime_events=runtime_events,
+                )
+
+            if not skill_name:
+                return _agent_async_preflight_failure(
+                    error_code="missing_skill_name",
+                    summary="agent_async_task blocked: skill_name is required",
+                )
+            raw_skill_kwargs = payload.get("skill_kwargs")
+            if raw_skill_kwargs is not None and not isinstance(raw_skill_kwargs, dict):
+                return _agent_async_preflight_failure(
+                    error_code="invalid_skill_kwargs",
+                    summary="agent_async_task blocked: skill_kwargs must be an object/dict when provided",
+                    blockers=["invalid_skill_kwargs"],
+                )
+
+            agent_task_payload = {
+                **payload,
+                "_runtime_request_id": request.request_id,
+                "_runtime_session_id": request.session_id,
+                "_runtime_agent_id": request.agent_id,
+                "_runtime_task_id": task_id,
+                "_runtime_context_ref": dict(request.context_ref or {}) if isinstance(request.context_ref, dict) else {},
+                "_execution_metadata": dict(metadata),
+            }
+            try:
+                logger.info(
+                    "Agent async task start | request_id=%s task_id=%s skill_name=%s task_session_id=%s",
+                    request.request_id,
+                    task_id or "-",
+                    skill_name,
+                    task_session_id or "-",
+                )
+                task_result = await run_agent_async_task(agent_task_payload)
+                normalized_skill = bus._normalize_result(request, task_result)
+                logger.info(
+                    "Agent async task end | request_id=%s task_id=%s skill_name=%s status=%s summary=%s",
+                    request.request_id,
+                    task_id or "-",
+                    skill_name,
+                    normalized_skill.status,
+                    safe_preview(summarize_output_payload(normalized_skill.output_payload), 160),
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Agent async task failed | request_id=%s task_id=%s skill_name=%s error_class=%s error=%s",
+                    request.request_id,
+                    task_id or "-",
+                    skill_name,
+                    exc.__class__.__name__,
+                    sanitize_exception_message(exc),
+                )
+                normalized_skill = make_execution_result(
+                    request_id=request.request_id,
+                    status="error",
+                    output_payload={"error": str(exc)},
+                )
+
+            agent_output = _normalize_agent_async_skill_output(
+                normalized_skill=normalized_skill,
+                task_type=task_type,
+                skill_name=skill_name,
+            )
+            agent_status = str(agent_output["status"])
+            success_value = bool(agent_output["success"])
+            runtime_events = list(normalized_skill.runtime_events or [])
+            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+            if agent_status == "success":
+                event_type = "task.agent_async.completed"
+            elif agent_status == "blocked":
+                event_type = "task.agent_async.blocked"
+            else:
+                event_type = "task.agent_async.failed"
+            runtime_events.append(
+                build_runtime_event(
+                    event_type=event_type,
+                    execution_type=request.execution_type,
+                    state="completed" if success_value else agent_status,
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary="agent async task",
+                    task_id=task_id,
+                    detail_payload={
+                        "task_type": task_type,
+                        "task_template_id": resolved_task_template_id,
+                        "skill_name": skill_name,
+                        "task_session_id": task_session_id,
+                        "root_task_id": root_task_id,
+                        "parent_task_id": parent_task_id,
+                        "success": success_value,
+                        "status": agent_status,
+                        "error": agent_output.get("error"),
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
+                        "requires_identity_binding": capability.get("requires_identity_binding"),
+                        "capability_resolution": capability.get("capability_resolution"),
+                        "involved_capability_ids": involved_capability_ids,
+                    },
+                    legacy_payload={"legacy_type": "task_agent_async"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status=agent_status,
+                output_payload={
+                    "task_type": task_type,
+                    "task_template_id": resolved_task_template_id,
+                    "schema": payload.get("schema") or "agent_async_task.v1",
+                    "skill_name": skill_name,
+                    "task_session_id": task_session_id,
+                    "root_task_id": root_task_id,
+                    "parent_task_id": parent_task_id,
+                    "status": agent_status,
+                    "success": success_value,
+                    "summary": agent_output.get("summary"),
+                    "final_response": agent_output.get("final_response"),
+                    "needs_user_input": agent_output.get("needs_user_input"),
+                    "blockers": agent_output.get("blockers"),
+                    "next_recommendation": agent_output.get("next_recommendation"),
+                    "artifacts": agent_output.get("artifacts"),
+                    "audit_trace": agent_output.get("audit_trace"),
+                    "external_actions": agent_output.get("external_actions"),
+                    "error": agent_output.get("error"),
+                    "task_boundary": True,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "policy_tags": capability.get("policy_tags"),
+                    "requires_identity_binding": capability.get("requires_identity_binding"),
+                    "capability_resolution": capability.get("capability_resolution"),
+                    "involved_capability_ids": involved_capability_ids,
+                    "resolved_skill_capability_id": f"skill:{skill_name.strip().lower()}",
+                    "result": agent_output.get("result"),
+                    "raw_agent_payload": agent_output.get("raw_agent_payload"),
                 },
                 runtime_events=runtime_events,
             )
