@@ -554,6 +554,30 @@ def test_governance_context_matches_canonical_contract_for_github_review_task():
     assert gov_context["capability_id"] == plan["primary_capability_id"]
 
 
+def test_governance_context_matches_canonical_contract_for_agent_async_task():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "agent_async_task", "skill_name": "review-pull-request"},
+    )
+    gov_context = _resolve_capability_context(req)
+    plan = resolve_task_capability_contract("agent_async_task", req.input_payload)
+    assert gov_context["capability_id"] == plan["primary_capability_id"]
+    assert gov_context["capability_type"] == "skill"
+
+
+def test_governance_context_agent_async_task_uses_portal_skill_metadata_fallback():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "agent_async_task"},
+        metadata={"portal_skill_name": "review-pull-request"},
+    )
+    gov_context = _resolve_capability_context(req)
+    assert gov_context["capability_id"] == "skill:review-pull-request"
+    assert gov_context["capability_type"] == "skill"
+
+
 def test_governance_context_matches_canonical_contract_for_jira_review_task():
     req = make_execution_request(
         source_type="task",

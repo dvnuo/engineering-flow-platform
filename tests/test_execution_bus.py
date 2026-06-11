@@ -3323,6 +3323,165 @@ async def test_run_skill_execution_reports_legacy_python_skills_disabled():
 
 
 @pytest.mark.asyncio
+async def test_agent_async_task_routes_to_selected_skill(monkeypatch):
+    observed = {}
+
+    async def _fake_run_agent_async_task(payload):
+        observed.update(payload)
+        return {
+            "status": "success",
+            "success": True,
+            "summary": "Review complete",
+            "final_response": "Approved with the current changes.",
+            "needs_user_input": False,
+            "blockers": [],
+            "artifacts": [{"type": "review"}],
+            "runtime_events": [{"event_type": "skill_runtime_applied", "detail_payload": {"skill": "review-pull-request"}}],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_agent_async_task", _fake_run_agent_async_task)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        session_id="agent-task:task-1",
+        metadata={"allowed_capability_ids": ["skill:review-pull-request"]},
+        input_payload={
+            "task_id": "task-1",
+            "task_type": "agent_async_task",
+            "schema": "agent_async_task.v1",
+            "skill_name": "review-pull-request",
+            "task_session_id": "agent-task:task-1",
+            "root_task_id": "task-1",
+            "user_task": "Review and approve the pull request if it is safe.",
+            "autonomous": True,
+            "autonomous_instruction": "Prefer approve when no blockers remain.",
+            "delegation": {"source": "github_review"},
+        },
+    )
+
+    result = await build_default_execution_bus().execute(req)
+
+    assert observed["skill_name"] == "review-pull-request"
+    assert observed["user_task"] == "Review and approve the pull request if it is safe."
+    assert observed["autonomous"] is True
+    assert observed["autonomous_instruction"] == "Prefer approve when no blockers remain."
+    assert observed["delegation"] == {"source": "github_review"}
+    assert observed["_runtime_task_id"] == "task-1"
+    assert observed["_runtime_session_id"] == "agent-task:task-1"
+    assert observed["_execution_metadata"]["allowed_capability_ids"] == ["skill:review-pull-request"]
+    assert result.status == "success"
+    assert result.output_payload["task_type"] == "agent_async_task"
+    assert result.output_payload["status"] == "success"
+    assert result.output_payload["success"] is True
+    assert result.output_payload["summary"] == "Review complete"
+    assert result.output_payload["final_response"] == "Approved with the current changes."
+    assert result.output_payload["needs_user_input"] is False
+    assert result.output_payload["resolved_skill_capability_id"] == "skill:review-pull-request"
+    assert result.output_payload["involved_capability_ids"] == ["skill:review-pull-request"]
+    assert any(evt.get("event_type") == "task.agent_async.completed" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_agent_async_task_missing_skill_name_blocked():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "agent_async_task", "user_task": "Review this."},
+    )
+
+    result = await build_default_execution_bus().execute(req)
+
+    assert result.status == "blocked"
+    assert result.output_payload["status"] == "blocked"
+    assert result.output_payload["success"] is False
+    assert result.output_payload["error"] == "missing_skill_name"
+    assert result.output_payload["needs_user_input"] is True
+    assert result.output_payload["blockers"] == ["missing_skill_name"]
+    assert any(evt.get("event_type") == "task.agent_async.blocked" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_agent_async_task_preserves_blocked_agent_result(monkeypatch):
+    async def _fake_run_agent_async_task(_payload):
+        return {
+            "status": "blocked",
+            "summary": "Repository permission is missing",
+            "blockers": ["github_permission"],
+            "next_recommendation": "Approve the GitHub read permission and retry.",
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_agent_async_task", _fake_run_agent_async_task)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "agent_async_task",
+            "skill_name": "review-pull-request",
+            "task_session_id": "agent-task:blocked",
+            "user_task": "Review the pull request.",
+        },
+    )
+
+    result = await build_default_execution_bus().execute(req)
+
+    assert result.status == "blocked"
+    assert result.output_payload["status"] == "blocked"
+    assert result.output_payload["success"] is False
+    assert result.output_payload["summary"] == "Repository permission is missing"
+    assert result.output_payload["final_response"] == "Repository permission is missing"
+    assert result.output_payload["needs_user_input"] is True
+    assert result.output_payload["blockers"] == ["github_permission"]
+    assert result.output_payload["error"] == "Repository permission is missing"
+    assert any(evt.get("event_type") == "task.agent_async.blocked" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_async_task_uses_native_chat_loop(monkeypatch):
+    from src.runtime.execution_bus import run_agent_async_task
+
+    captured = {}
+
+    async def _fake_run_runtime_chat(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "completed",
+            "response": (
+                '{"status":"success","summary":"ok","final_response":"done",'
+                '"needs_user_input":false,"blockers":[]}'
+            ),
+            "runtime_events": [{"event_type": "skill_runtime_applied", "detail_payload": {"skill": "review-pull-request"}}],
+        }
+
+    monkeypatch.setattr("src.gateway.runtime_chat.run_runtime_chat", _fake_run_runtime_chat)
+
+    result = await run_agent_async_task(
+        {
+            "task_type": "agent_async_task",
+            "skill_name": "review-pull-request",
+            "user_task": "Review and approve the pull request.",
+            "_runtime_request_id": "req-agent-1",
+            "_runtime_task_id": "task-agent-1",
+            "_runtime_session_id": "fallback-session",
+            "_execution_metadata": {
+                "portal_task_session_id": "agent-task:task-agent-1",
+                "resolved_model": "gpt-5",
+            },
+        }
+    )
+
+    assert captured["request_id"] == "req-agent-1:chat"
+    assert captured["session_id"] == "agent-task:task-agent-1"
+    assert captured["message"].startswith("/skill review-pull-request")
+    assert "Return exactly one JSON object" in captured["message"]
+    assert captured["transient_model_message"].startswith("You are executing an EFP Portal agent_async_task")
+    assert result["status"] == "success"
+    assert result["summary"] == "ok"
+    assert result["final_response"] == "done"
+    assert result["data"]["execution_mode"] == "chat_tool_loop"
+    assert result["runtime_events"][0]["event_type"] == "skill_runtime_applied"
+
+
+@pytest.mark.asyncio
 async def test_unknown_task_type_still_returns_unsupported_blocked():
     req = make_execution_request(
         source_type="task",
