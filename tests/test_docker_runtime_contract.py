@@ -4,6 +4,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 def _text(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
@@ -41,6 +43,9 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
     assert "https://cli.github.com/packages" in text
     assert "githubcli-archive-keyring.gpg" in text
     assert " gh \\" in text or "\n        gh\n" in text
+    assert "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" in text
+    assert "/tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli" in text
+    assert "aws --version" in text
     assert "google-chrome-stable" in text
     assert "google-chrome --version" in text
     assert "COPY runtime-tools/ /tmp/runtime-tools/" in text
@@ -64,6 +69,9 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
 
 
 def test_prepare_runtime_tools_script_discovers_all_cmd_tools(tmp_path):
+    if os.name == "nt":
+        pytest.skip("prepare-runtime-tools.sh execution contract requires a POSIX shell")
+
     project_root = tmp_path / "runtime"
     script_dir = project_root / "scripts"
     script_dir.mkdir(parents=True)
