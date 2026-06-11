@@ -206,6 +206,87 @@ class TestGatewayRequestHandling:
         assert data["service"] == "engineering-flow-platform"
 
 
+class TestGatewaySystemPromptContract:
+    """System prompt compatibility routes should match runtime behavior."""
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_routes_are_agents_only(self, monkeypatch, tmp_path):
+        from aiohttp.test_utils import TestClient, TestServer
+        from src.gateway import server as gateway_server
+
+        class _FakeConfig:
+            jira = {}
+            server = {"host": "127.0.0.1", "port": 0}
+
+            def get_effective_config(self):
+                return {"workspace": {"path": str(tmp_path)}}
+
+        monkeypatch.setattr(gateway_server, "config", _FakeConfig())
+        monkeypatch.setattr(gateway_server, "bootstrap_runtime_profile_sync", lambda: True)
+        monkeypatch.setattr(gateway_server, "setup_runtime_api_routes", lambda app: None)
+
+        client = TestClient(TestServer(gateway_server.Gateway().app))
+        await client.start_server()
+        try:
+            cfg_response = await client.get("/api/agent/system-prompt/config")
+            cfg = await cfg_response.json()
+            assert cfg_response.status == 200
+            assert cfg["engine"] == "native"
+            assert cfg["runtime_type"] == "native"
+            assert cfg["sections"] == ["agents"]
+            assert cfg["agents"]["can_disable"] is False
+            assert (tmp_path / "AGENTS.md").exists()
+
+            ok_response = await client.put(
+                "/api/agent/system-prompt/config",
+                json={"agents": {"enabled": True}},
+            )
+            assert ok_response.status == 200
+
+            disabled_response = await client.put(
+                "/api/agent/system-prompt/config",
+                json={"agents": {"enabled": False}},
+            )
+            assert disabled_response.status == 422
+
+            unsupported_response = await client.put(
+                "/api/agent/system-prompt/config",
+                json={"soul": {"enabled": True}},
+            )
+            assert unsupported_response.status == 422
+
+            write_response = await client.put(
+                "/api/agent/system-prompt/agents",
+                json={"content": "Native agents only."},
+            )
+            assert write_response.status == 200
+            assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == "Native agents only."
+
+            get_response = await client.get("/api/agent/system-prompt/agents")
+            body = await get_response.json()
+            assert get_response.status == 200
+            assert body["enabled"] is True
+            assert body["content"] == "Native agents only."
+            assert body["can_disable"] is False
+
+            invalid_enabled_response = await client.put(
+                "/api/agent/system-prompt/agents",
+                json={"enabled": "yes"},
+            )
+            assert invalid_enabled_response.status == 400
+
+            for name in ["soul", "user", "tools", "memory", "daily_notes"]:
+                get_unsupported = await client.get(f"/api/agent/system-prompt/{name}")
+                put_unsupported = await client.put(
+                    f"/api/agent/system-prompt/{name}",
+                    json={"content": "x"},
+                )
+                assert get_unsupported.status == 422
+                assert put_unsupported.status == 422
+        finally:
+            await client.close()
+
+
 class TestGatewayIntegration:
     """Gateway integration tests."""
 
