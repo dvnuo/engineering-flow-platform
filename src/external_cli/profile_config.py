@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import configparser
 import json
 import os
 import shlex
@@ -28,6 +29,10 @@ _PROXY_URL_ENV_KEYS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
 _PROFILE_SECRET_KEY_NAMES = frozenset({"api_key", "password", "token", "api_token", "access_token", "secret"})
 _yaml = YAML()
 _yaml.default_flow_style = False
+
+
+def _home_path() -> Path:
+    return Path(os.environ.get("HOME") or Path.home())
 
 
 @dataclass(frozen=True)
@@ -59,6 +64,7 @@ def apply_runtime_profile_external_config(
             cli_environment=cli_environment,
         )
         _apply_github(profile_config, metadata=metadata, cli_environment=cli_environment)
+        _apply_aws(profile_config, metadata=metadata)
         _apply_git_user(profile_config, metadata=metadata, cli_environment=cli_environment)
     except Exception:
         if _metadata_has_managed_entries(metadata):
@@ -303,6 +309,10 @@ def _clear_new_metadata(meta: dict[str, Any], *, cli_environment: _CliEnvironmen
         for host in _metadata_gh_hosts(gh):
             _logout_gh_host(host, cli_environment=cli_environment)
 
+    aws = meta.get("aws") if isinstance(meta.get("aws"), dict) else {}
+    if aws:
+        _restore_aws_profile(aws)
+
     git = meta.get("git") if isinstance(meta.get("git"), dict) else {}
     if "managed" in git:
         _restore_git_user(git, cli_environment=cli_environment)
@@ -343,7 +353,7 @@ def _clear_legacy_metadata(meta: dict[str, Any]) -> None:
 
 
 def _metadata_has_managed_entries(metadata: dict[str, Any]) -> bool:
-    return any(key in metadata for key in ("jira", "confluence", "gh", "git"))
+    return any(key in metadata for key in ("jira", "confluence", "gh", "aws", "git"))
 
 
 def _metadata_instance_names(product_meta: dict[str, Any]) -> list[str]:
@@ -522,6 +532,95 @@ def _build_gh_login(profile_config: dict[str, Any]) -> tuple[str, str] | None:
     return host, token
 
 
+def _apply_aws(
+    profile_config: dict[str, Any],
+    *,
+    metadata: dict[str, Any],
+) -> None:
+    aws_profile = _build_aws_profile(profile_config)
+    if aws_profile is None:
+        return
+
+    profile_name = aws_profile["profile"]
+    config_section = _aws_config_section_name(profile_name)
+    credentials_section = profile_name
+    config_path = _aws_config_path()
+    credentials_path = _aws_credentials_path()
+
+    previous_config = _read_ini_section(config_path, config_section)
+    previous_credentials = _read_ini_section(credentials_path, credentials_section)
+
+    config_values = {}
+    for key in ("region", "output"):
+        if aws_profile.get(key):
+            config_values[key] = aws_profile[key]
+    _set_ini_section_exact(config_path, config_section, config_values)
+
+    credential_values = {}
+    if aws_profile.get("access_key_id"):
+        credential_values["aws_access_key_id"] = aws_profile["access_key_id"]
+    if aws_profile.get("secret_access_key"):
+        credential_values["aws_secret_access_key"] = aws_profile["secret_access_key"]
+    if aws_profile.get("session_token"):
+        credential_values["aws_session_token"] = aws_profile["session_token"]
+    if credential_values:
+        _set_ini_section_exact(credentials_path, credentials_section, credential_values)
+
+    metadata["aws"] = {
+        "profile": profile_name,
+        "config_path": str(config_path),
+        "credentials_path": str(credentials_path),
+        "config_section": config_section,
+        "credentials_section": credentials_section,
+        "previous": {
+            "config": previous_config,
+            "credentials": previous_credentials,
+        },
+    }
+
+
+def _build_aws_profile(profile_config: dict[str, Any]) -> dict[str, str] | None:
+    aws = profile_config.get("aws") if isinstance(profile_config, dict) else None
+    if not isinstance(aws, dict) or aws.get("enabled") is False:
+        return None
+    profile = _single_line(aws.get("profile") or aws.get("profile_name") or "default") or "default"
+    built = {
+        "profile": profile,
+        "region": _single_line(aws.get("region") or aws.get("default_region")),
+        "output": _single_line(aws.get("output")),
+        "account_id": _single_line(aws.get("account_id")),
+        "access_key_id": _single_line(aws.get("access_key_id") or aws.get("aws_access_key_id")),
+        "secret_access_key": _string_or_empty(aws.get("secret_access_key") or aws.get("aws_secret_access_key")),
+        "session_token": _string_or_empty(aws.get("session_token") or aws.get("aws_session_token")),
+    }
+    if not any(value for key, value in built.items() if key != "profile"):
+        return None
+    return built
+
+
+def _restore_aws_profile(aws_meta: dict[str, Any]) -> None:
+    profile_name = _string_or_empty(aws_meta.get("profile")) or "default"
+    config_section = _string_or_empty(aws_meta.get("config_section")) or _aws_config_section_name(profile_name)
+    credentials_section = _string_or_empty(aws_meta.get("credentials_section")) or profile_name
+    previous = aws_meta.get("previous") if isinstance(aws_meta.get("previous"), dict) else {}
+
+    config_path = Path(str(aws_meta.get("config_path") or _aws_config_path()))
+    credentials_path = Path(str(aws_meta.get("credentials_path") or _aws_credentials_path()))
+
+    previous_config = previous.get("config") if isinstance(previous.get("config"), dict) else None
+    previous_credentials = previous.get("credentials") if isinstance(previous.get("credentials"), dict) else None
+
+    if previous_config is None:
+        _remove_ini_section(config_path, config_section)
+    else:
+        _set_ini_section_exact(config_path, config_section, previous_config)
+
+    if previous_credentials is None:
+        _remove_ini_section(credentials_path, credentials_section)
+    else:
+        _set_ini_section_exact(credentials_path, credentials_section, previous_credentials)
+
+
 def _extract_git_user(profile_config: dict[str, Any]) -> tuple[str, str] | None:
     git = profile_config.get("git") if isinstance(profile_config, dict) else None
     user = git.get("user") if isinstance(git, dict) and isinstance(git.get("user"), dict) else None
@@ -633,10 +732,13 @@ def _is_profile_secret_key(key: str) -> bool:
     normalized = "".join(ch for ch in str(key or "").lower() if ch.isalnum())
     return normalized in {
         "apikey",
+        "accesskeyid",
         "password",
         "token",
         "apitoken",
         "accesstoken",
+        "secretaccesskey",
+        "sessiontoken",
         "secret",
     } or str(key or "").lower() in _PROFILE_SECRET_KEY_NAMES
 
@@ -703,8 +805,73 @@ def _single_line(value: Any) -> str:
     return _string_or_empty(value).replace("\x00", "").replace("\r", " ").replace("\n", " ")
 
 
+def _aws_config_path() -> Path:
+    return _home_path() / ".aws" / "config"
+
+
+def _aws_credentials_path() -> Path:
+    return _home_path() / ".aws" / "credentials"
+
+
+def _aws_config_section_name(profile_name: str) -> str:
+    profile = _string_or_empty(profile_name) or "default"
+    return "default" if profile == "default" else f"profile {profile}"
+
+
+def _new_ini_parser() -> configparser.RawConfigParser:
+    parser = configparser.RawConfigParser()
+    parser.optionxform = str
+    return parser
+
+
+def _read_ini(path: Path) -> configparser.RawConfigParser:
+    parser = _new_ini_parser()
+    if path.exists():
+        parser.read(path, encoding="utf-8")
+    return parser
+
+
+def _read_ini_section(path: Path, section: str) -> dict[str, str] | None:
+    parser = _read_ini(path)
+    if not parser.has_section(section):
+        return None
+    return {key: value for key, value in parser.items(section)}
+
+
+def _write_ini(path: Path, parser: configparser.RawConfigParser) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        parser.write(handle)
+    _chmod_private(path)
+
+
+def _set_ini_section_exact(path: Path, section: str, values: dict[str, Any]) -> None:
+    parser = _read_ini(path)
+    if parser.has_section(section):
+        parser.remove_section(section)
+    parser.add_section(section)
+    for key, value in values.items():
+        text = _string_or_empty(value)
+        if text:
+            parser.set(section, key, text)
+    _write_ini(path, parser)
+
+
+def _remove_ini_section(path: Path, section: str) -> None:
+    if not path.exists():
+        return
+    parser = _read_ini(path)
+    if not parser.has_section(section):
+        return
+    parser.remove_section(section)
+    if parser.sections():
+        _write_ini(path, parser)
+    else:
+        _remove_file_if_exists(path)
+
+
 def _metadata_path() -> Path:
-    return Path.home() / ".config" / "efp" / "runtime-profile-external-config.json"
+    return _home_path() / ".config" / "efp" / "runtime-profile-external-config.json"
 
 
 def _write_private_text(path: Path, text: str) -> None:

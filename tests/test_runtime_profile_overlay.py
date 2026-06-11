@@ -209,22 +209,81 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
                     }
                 ],
             },
+            "aws": {
+                "enabled": True,
+                "profile": "prod",
+                "region": "us-east-1",
+                "output": "json",
+                "access_key_id": "AKIA_TEST",
+                "secret_access_key": "aws-secret",
+            },
         },
     )
 
     persisted = _read_yaml(config_path)
     assert "jira" not in persisted
     assert "confluence" not in persisted
+    assert "aws" not in persisted
     assert persisted["instruction_texts"]
     assert "jira-token" not in config_path.read_text(encoding="utf-8")
     assert "conf-token" not in config_path.read_text(encoding="utf-8")
+    assert "aws-secret" not in config_path.read_text(encoding="utf-8")
     assert applied[0]["jira"]["instances"][0]["token"] == "jira-token"
     assert applied[0]["confluence"]["instances"][0]["token"] == "conf-token"
+    assert applied[0]["aws"]["secret_access_key"] == "aws-secret"
     assert cfg.get_managed_overlay_meta()["managed_sections"] == [
+        "aws",
         "confluence",
         "instruction_texts",
         "jira",
     ]
+
+
+def test_runtime_profile_aws_external_config_writes_and_clears_aws_cli_files(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    profile_config_module.apply_runtime_profile_external_config(
+        {
+            "aws": {
+                "enabled": True,
+                "profile": "prod",
+                "region": "us-east-1",
+                "output": "json",
+                "access_key_id": "AKIA_TEST",
+                "secret_access_key": "aws-secret",
+                "session_token": "aws-session",
+            }
+        }
+    )
+
+    aws_config = home / ".aws" / "config"
+    aws_credentials = home / ".aws" / "credentials"
+    if os.name != "nt":
+        assert aws_config.stat().st_mode & 0o777 == 0o600
+        assert aws_credentials.stat().st_mode & 0o777 == 0o600
+
+    config_text = aws_config.read_text(encoding="utf-8")
+    assert "[profile prod]" in config_text
+    assert "region = us-east-1" in config_text
+    assert "output = json" in config_text
+
+    credentials_text = aws_credentials.read_text(encoding="utf-8")
+    assert "[prod]" in credentials_text
+    assert "aws_access_key_id = AKIA_TEST" in credentials_text
+    assert "aws_secret_access_key = aws-secret" in credentials_text
+    assert "aws_session_token = aws-session" in credentials_text
+
+    metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
+    metadata_text = metadata_path.read_text(encoding="utf-8")
+    assert "aws-secret" not in metadata_text
+    assert json.loads(metadata_text)["aws"]["profile"] == "prod"
+
+    profile_config_module.clear_runtime_profile_external_config()
+    assert not aws_config.exists()
+    assert not aws_credentials.exists()
+    assert not metadata_path.exists()
 
 
 def test_runtime_profile_apply_prunes_previous_portal_atlassian_entries(tmp_path, monkeypatch):
@@ -784,7 +843,8 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
 
     metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert metadata_path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert metadata_path.stat().st_mode & 0o777 == 0o600
     assert metadata == {
         "version": 2,
         "managed_by": "efp_runtime_profile",
@@ -1229,13 +1289,13 @@ def test_runtime_profile_clear_legacy_metadata_removes_generated_files(tmp_path,
     metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
     metadata_path.write_text(
         json.dumps(
-            {
-                "version": 1,
-                "managed_by": "efp_runtime_profile",
-                "atlassian": {
-                    "path": str(atlassian_path),
-                    "sha256": hashlib.sha256(atlassian_text.encode("utf-8")).hexdigest(),
-                },
+                {
+                    "version": 1,
+                    "managed_by": "efp_runtime_profile",
+                    "atlassian": {
+                        "path": str(atlassian_path),
+                        "sha256": hashlib.sha256(atlassian_path.read_bytes()).hexdigest(),
+                    },
                 "gh": {
                     "path": str(hosts_path),
                     "hosts": {
@@ -1374,7 +1434,7 @@ def test_runtime_profile_external_cli_instructions_are_injected(tmp_path, monkey
     instructions = cfg.get_effective_config()["instruction_texts"]
     joined = "\n".join(instructions)
     assert "Use bash" in joined
-    assert "jira, confluence, gh, and git" in joined
+    assert "jira, confluence, gh, aws, and git" in joined
     assert "always pass --json" in joined
     assert "commands/schema/help llm" in joined
     assert "--dry-run" in joined

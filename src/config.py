@@ -21,6 +21,11 @@ _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.indent(mapping=2, sequence=4, offset=2)
 
+
+def _home_path() -> Path:
+    return Path(os.environ.get("HOME") or Path.home())
+
+
 DEFAULT_LLM_MODEL = "gpt-5.4"
 DEFAULT_LLM_TEMPERATURE = 0.7
 
@@ -90,17 +95,17 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
 RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
     (
         "Use bash for external CLI tools configured by the runtime profile: "
-        "jira, confluence, gh, and git."
+        "jira, confluence, gh, aws, and git."
     ),
     (
         "For jira and confluence, always pass --json. Before complex commands, "
         "inspect commands/schema/help llm; prefer --dry-run for writes, and use "
         "--yes only when a destructive action was explicitly confirmed."
     ),
-    "Use gh for GitHub issues, pull requests, and api calls; use git for clone, fetch, push, and status.",
+    "Use gh for GitHub issues, pull requests, and api calls; use aws for AWS operations; use git for clone, fetch, push, and status.",
     (
         "Credentials were applied by the runtime profile through the real CLIs; "
-        "if jira or confluence returns auth_failed, or gh/git authentication fails, "
+        "if jira or confluence returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
         "report a runtime profile configuration problem."
     ),
 ]
@@ -186,6 +191,7 @@ def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, 
         _has_atlassian_profile_instances(overlay.get("jira"))
         or _has_atlassian_profile_instances(overlay.get("confluence"))
         or _has_github_profile_token(overlay.get("github"))
+        or _has_aws_profile_config(overlay.get("aws"))
         or _has_git_profile_user(overlay.get("git"))
     )
 
@@ -208,6 +214,27 @@ def _has_github_profile_token(section: Any) -> bool:
     if not isinstance(section, dict) or section.get("enabled") is False:
         return False
     return bool(str(section.get("api_token") or section.get("token") or section.get("access_token") or "").strip())
+
+
+def _has_aws_profile_config(section: Any) -> bool:
+    if not isinstance(section, dict) or section.get("enabled") is False:
+        return False
+    return bool(
+        str(
+            section.get("access_key_id")
+            or section.get("aws_access_key_id")
+            or section.get("secret_access_key")
+            or section.get("aws_secret_access_key")
+            or section.get("session_token")
+            or section.get("aws_session_token")
+            or section.get("region")
+            or section.get("default_region")
+            or section.get("profile")
+            or section.get("profile_name")
+            or section.get("account_id")
+            or ""
+        ).strip()
+    )
 
 
 def _has_git_profile_user(section: Any) -> bool:
@@ -237,6 +264,7 @@ class Config:
         "jira",
         "confluence",
         "github",
+        "aws",
         "git",
         "debug",
         *PORTAL_MANAGED_RUNTIME_FIELDS,
@@ -290,6 +318,21 @@ class Config:
             "base_url": True,
             "api_base_url": True,
         },
+        "aws": {
+            "enabled": True,
+            "profile": True,
+            "profile_name": True,
+            "region": True,
+            "default_region": True,
+            "output": True,
+            "account_id": True,
+            "access_key_id": True,
+            "aws_access_key_id": True,
+            "secret_access_key": True,
+            "aws_secret_access_key": True,
+            "session_token": True,
+            "aws_session_token": True,
+        },
         "git": {
             "user": {
                 "name": True,
@@ -308,7 +351,7 @@ class Config:
             self.config_path = self._find_config()
         else:
             self.config_path = Path(config_path)
-        self.runtime_profile_path = Path.home() / ".efp" / "runtime_profile.yaml"
+        self.runtime_profile_path = _home_path() / ".efp" / "runtime_profile.yaml"
         self._config: Dict[str, Any] = {}
         self._base_config: Dict[str, Any] = {}
         self._managed_overlay_meta: Dict[str, Any] = {
@@ -327,12 +370,16 @@ class Config:
 
     def _find_config(self) -> Path:
         """Find the first existing config file from default paths."""
-        for path in self.DEFAULT_PATHS:
+        default_paths = [
+            _home_path() / ".efp" / "config.yaml",
+            Path(__file__).parent / "config.yaml",
+        ]
+        for path in default_paths:
             if path.exists():
                 return path
         # Return the primary path even if it doesn't exist
         import shutil
-        target = self.DEFAULT_PATHS[0]
+        target = default_paths[0]
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(self.PROJECT_EXAMPLE, target)
         return target
@@ -485,6 +532,7 @@ class Config:
         persisted_overlay = copy.deepcopy(external_cli_overlay)
         persisted_overlay.pop("jira", None)
         persisted_overlay.pop("confluence", None)
+        persisted_overlay.pop("aws", None)
         new_sections = set(external_cli_overlay.keys())
 
         config_document = self._load_yaml_document(self.config_path)

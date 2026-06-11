@@ -17,6 +17,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         gnupg \
+        unzip \
     && mkdir -p -m 755 /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -36,6 +37,12 @@ RUN apt-get update \
         gh \
         tesseract-ocr \
         google-chrome-stable \
+    && AWS_CLI_ARCH="$(dpkg --print-architecture)" \
+    && case "$AWS_CLI_ARCH" in amd64) AWS_CLI_ARCH="x86_64" ;; arm64) AWS_CLI_ARCH="aarch64" ;; *) echo "Unsupported AWS CLI architecture: $AWS_CLI_ARCH" >&2; exit 1 ;; esac \
+    && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli \
+    && rm -rf /tmp/aws /tmp/awscliv2.zip \
     && python3.11 -m venv "$VIRTUAL_ENV" \
     && "$VIRTUAL_ENV/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     && rm -rf /var/lib/apt/lists/*
@@ -62,6 +69,7 @@ RUN set -eux; \
     printf '%s\n' '#!/usr/bin/env bash' 'exec /usr/bin/google-chrome-stable --no-sandbox "$@"' > /usr/local/bin/google-chrome; \
     chmod 0755 /usr/local/bin/google-chrome \
     && google-chrome --version >/dev/null \
+    && aws --version >/dev/null \
     && jira version --json >/dev/null \
     && jira commands --json >/dev/null \
     && jira schema issue.map-csv --json >/dev/null \
