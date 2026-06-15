@@ -59,6 +59,7 @@ from src.efp_runtime.session.gateway_facade import (
     runtime_session_manager as session_manager,
 )
 from src.sessions.usage import usage_tracker
+from src.workspace_defaults import resolve_runtime_workspace
 
 logger = logging.getLogger(__name__)
 runtime_task_tracker = RuntimeTaskTracker()
@@ -1533,7 +1534,34 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             runtime_agent_id or "-",
         )
         request_id = f"task-{parsed['task_id']}"
-        runtime_task_tracker.create_pending(
+        existing_record = runtime_task_tracker.get(parsed["task_id"])
+        if existing_record is not None:
+            if existing_record.status in {"accepted", "running"}:
+                try:
+                    _schedule_runtime_task_record(existing_record)
+                except Exception as exc:
+                    sanitized_message = sanitize_exception_message(exc)
+                    logger.error("Task execute duplicate scheduling failed | task_id=%s", parsed["task_id"], exc_info=True)
+                    logger.debug("Task execute duplicate scheduling error detail: %s", sanitized_message)
+                    failure_payload = {
+                        "ok": False,
+                        "task_id": parsed["task_id"],
+                        "execution_type": "task",
+                        "request_id": existing_record.request_id,
+                        "status": "error",
+                        "trace_id": existing_record.trace_id,
+                        "portal_dispatch_id": existing_record.portal_dispatch_id,
+                        "error": sanitized_message,
+                    }
+                    runtime_task_tracker.mark_internal_failure(
+                        parsed["task_id"],
+                        payload=failure_payload,
+                        error_message=sanitized_message,
+                    )
+                    return web.json_response(failure_payload, status=500)
+            return web.json_response(_runtime_task_status_payload(existing_record), status=200)
+
+        record = runtime_task_tracker.create_pending(
             task_id=parsed["task_id"],
             request_id=request_id,
             task_type=parsed["task_type"],
@@ -1543,30 +1571,20 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             trace_id=trace_headers.get("trace_id"),
             portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
             portal_task_id=metadata.get("portal_task_id"),
-        )
-
-        background_coro = _run_task_execution_in_background(
-            task_id=parsed["task_id"],
-            request_id=request_id,
-            task_type=parsed["task_type"],
-            session_id=parsed["session_id"],
-            source=parsed["source"] or "portal",
-            runtime_agent_id=runtime_agent_id,
             context_ref=parsed["context_ref"] or None,
             merged_input_payload=merged_input_payload,
             metadata=metadata,
             trace_headers=trace_headers,
         )
+
         try:
-            background_task = _spawn_runtime_background_task(background_coro)
+            _schedule_runtime_task_record(record)
         except Exception as exc:
-            background_coro.close()
             runtime_task_tracker.remove(parsed["task_id"])
             logger.error("Task execute scheduling failed | task_id=%s", parsed["task_id"], exc_info=True)
             logger.debug("Task execute scheduling error detail: %s", sanitize_exception_message(exc))
             return web.json_response({"error": "Internal server error"}, status=500)
 
-        runtime_task_tracker.set_background_task(parsed["task_id"], background_task)
         await _emit_task_lifecycle_event(
             "task.accepted",
             task_id=parsed["task_id"],
@@ -1602,6 +1620,89 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
 
 def _spawn_runtime_background_task(coro: Any) -> asyncio.Task:
     return asyncio.create_task(coro)
+
+
+def _runtime_task_status_payload(record: Any) -> Dict[str, Any]:
+    if record.status in {"accepted", "running"}:
+        return {
+            "ok": True,
+            "task_id": record.task_id,
+            "execution_type": "task",
+            "request_id": record.request_id,
+            "status": record.status,
+            "trace_id": record.trace_id,
+            "portal_dispatch_id": record.portal_dispatch_id,
+            "accepted_at": record.accepted_at,
+            "started_at": record.started_at,
+            "finished_at": record.finished_at,
+            "resume_count": getattr(record, "resume_count", 0),
+            "last_resumed_at": getattr(record, "last_resumed_at", None),
+        }
+    payload = dict(record.payload)
+    payload["accepted_at"] = record.accepted_at
+    payload["started_at"] = record.started_at
+    payload["finished_at"] = record.finished_at
+    payload["resume_count"] = getattr(record, "resume_count", 0)
+    payload["last_resumed_at"] = getattr(record, "last_resumed_at", None)
+    return payload
+
+
+def _has_runtime_task_resume_payload(record: Any) -> bool:
+    return isinstance(getattr(record, "merged_input_payload", None), dict) and isinstance(getattr(record, "metadata", None), dict)
+
+
+def _schedule_runtime_task_record(record: Any, *, resumed: bool = False) -> bool:
+    if record.status not in {"accepted", "running"}:
+        return False
+    background_task = getattr(record, "background_task", None)
+    if background_task is not None and not background_task.done():
+        return False
+    if not _has_runtime_task_resume_payload(record):
+        runtime_task_tracker.mark_stale(
+            record.task_id,
+            reason="Persisted runtime task request is incomplete",
+            payload={
+                "ok": False,
+                "task_id": record.task_id,
+                "execution_type": "task",
+                "request_id": record.request_id,
+                "status": "stale",
+                "trace_id": record.trace_id,
+                "portal_dispatch_id": record.portal_dispatch_id,
+                "error": "Persisted runtime task request is incomplete",
+            },
+        )
+        return False
+
+    metadata = dict(record.metadata or {})
+    trace_headers = dict(record.trace_headers or {})
+    if not trace_headers.get("trace_id"):
+        trace_headers["trace_id"] = record.trace_id
+    if not trace_headers.get("portal_dispatch_id"):
+        trace_headers["portal_dispatch_id"] = record.portal_dispatch_id
+    if resumed:
+        metadata["runtime_task_resumed"] = True
+        metadata["runtime_task_resume_count"] = getattr(record, "resume_count", 0)
+
+    background_coro = _run_task_execution_in_background(
+        task_id=record.task_id,
+        request_id=record.request_id,
+        task_type=record.task_type,
+        session_id=record.session_id,
+        source=record.source or "portal",
+        runtime_agent_id=record.agent_id,
+        context_ref=record.context_ref or None,
+        merged_input_payload=dict(record.merged_input_payload or {}),
+        metadata=metadata,
+        trace_headers=trace_headers,
+    )
+    try:
+        spawned = _spawn_runtime_background_task(background_coro)
+    except Exception:
+        background_coro.close()
+        raise
+    runtime_task_tracker.set_background_task(record.task_id, spawned)
+    return True
 
 
 async def _emit_task_lifecycle_event(
@@ -1824,25 +1925,7 @@ async def api_task_status(request: web.Request) -> web.Response:
         record = runtime_task_tracker.get(task_id)
         if record is None:
             return web.json_response({"error": "Task not found"}, status=404)
-        if record.status in {"accepted", "running"}:
-            payload = {
-                "ok": True,
-                "task_id": record.task_id,
-                "execution_type": "task",
-                "request_id": record.request_id,
-                "status": record.status,
-                "trace_id": record.trace_id,
-                "portal_dispatch_id": record.portal_dispatch_id,
-                "accepted_at": record.accepted_at,
-                "started_at": record.started_at,
-                "finished_at": record.finished_at,
-            }
-            return web.json_response(payload)
-        payload = dict(record.payload)
-        payload["accepted_at"] = record.accepted_at
-        payload["started_at"] = record.started_at
-        payload["finished_at"] = record.finished_at
-        return web.json_response(payload)
+        return web.json_response(_runtime_task_status_payload(record))
     finally:
         clear_log_context()
 
@@ -1873,6 +1956,82 @@ async def api_task_cancel(request: web.Request) -> web.Response:
         return web.json_response(payload)
     finally:
         clear_log_context()
+
+
+def _runtime_task_persistence_storage_dir() -> Optional[Path]:
+    enabled = str(os.getenv("EFP_RUNTIME_TASKS_PERSISTENCE", "true")).strip().lower()
+    if enabled in {"0", "false", "no", "off"}:
+        return None
+    explicit = str(os.getenv("EFP_RUNTIME_TASKS_DIR", "")).strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    try:
+        config_data = global_config.get_effective_config()
+    except Exception:
+        config_data = getattr(global_config, "_config", {}) or {}
+    return resolve_runtime_workspace(config_data) / ".efp" / "runtime_tasks"
+
+
+async def resume_persisted_runtime_tasks() -> int:
+    storage_dir = _runtime_task_persistence_storage_dir()
+    if storage_dir is None:
+        runtime_task_tracker.configure_storage(None)
+        return 0
+
+    runtime_task_tracker.configure_storage(storage_dir)
+    loaded_count = runtime_task_tracker.load_persisted_records()
+    resumed_count = 0
+    for record in runtime_task_tracker.list_active():
+        background_task = getattr(record, "background_task", None)
+        if background_task is not None and not background_task.done():
+            continue
+        resumed_record = runtime_task_tracker.mark_resuming(record.task_id) or record
+        try:
+            scheduled = _schedule_runtime_task_record(resumed_record, resumed=True)
+        except Exception as exc:
+            sanitized_message = sanitize_exception_message(exc)
+            logger.error("Persisted runtime task resume failed | task_id=%s", record.task_id, exc_info=True)
+            runtime_task_tracker.mark_internal_failure(
+                record.task_id,
+                payload={
+                    "ok": False,
+                    "task_id": record.task_id,
+                    "execution_type": "task",
+                    "request_id": record.request_id,
+                    "status": "error",
+                    "trace_id": record.trace_id,
+                    "portal_dispatch_id": record.portal_dispatch_id,
+                    "error": sanitized_message,
+                },
+                error_message=sanitized_message,
+            )
+            continue
+        if not scheduled:
+            continue
+        resumed_count += 1
+        await _emit_task_lifecycle_event(
+            "task.resumed",
+            task_id=record.task_id,
+            portal_task_id=record.portal_task_id,
+            agent_id=record.agent_id,
+            session_id=record.session_id,
+            trace_id=record.trace_id,
+            portal_dispatch_id=record.portal_dispatch_id,
+        )
+    if loaded_count or resumed_count:
+        logger.info(
+            "Runtime task recovery initialized | storage_dir=%s loaded=%s resumed=%s",
+            storage_dir,
+            loaded_count,
+            resumed_count,
+        )
+    return resumed_count
+
+
+async def _resume_runtime_tasks_on_startup(_app: web.Application) -> None:
+    await resume_persisted_runtime_tasks()
+
+
 def _parse_bool_query(value: Optional[str]) -> Optional[bool]:
     if value is None:
         return None
@@ -2232,6 +2391,9 @@ async def api_skills(request: web.Request) -> web.Response:
 def setup_runtime_api_routes(app: web.Application):
     """Register API-only runtime routes used by Portal and runtime clients."""
     from src.gateway.server_files import setup_server_files_routes
+
+    if not any(handler is _resume_runtime_tasks_on_startup for handler in app.on_startup):
+        app.on_startup.append(_resume_runtime_tasks_on_startup)
 
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
