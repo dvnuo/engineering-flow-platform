@@ -30,6 +30,7 @@ from src.hooks.file_context.storage import storage as file_context_storage
 from src.config import config as global_config, DEFAULT_LLM_MODEL
 from src.runtime.chat_orchestration_adapter import execute_runtime_task_request
 from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+from src.runtime.runtime_task_session_coordinator import RuntimeTaskSessionCoordinator
 from src.runtime.portal_session_metadata_client import (
     extract_session_metadata_publish_fields,
     publish_session_metadata,
@@ -63,6 +64,7 @@ from src.workspace_defaults import resolve_runtime_workspace
 
 logger = logging.getLogger(__name__)
 runtime_task_tracker = RuntimeTaskTracker()
+runtime_task_session_coordinator = RuntimeTaskSessionCoordinator()
 runtime_session_artifacts = RuntimeSessionArtifacts()
 
 
@@ -356,6 +358,20 @@ def _safe_runtime_task_session_id(value: str) -> str:
     """Keep task-backed chat session ids portable across file-backed stores."""
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip(".-")
     return cleaned or f"task-session-{hashlib.sha256(str(value).encode('utf-8')).hexdigest()[:16]}"
+
+
+def _resolve_runtime_task_delivery(input_payload: Dict[str, Any], metadata: Dict[str, Any]) -> str:
+    for value in (
+        input_payload.get("delivery"),
+        input_payload.get("runtime_task_delivery"),
+        metadata.get("delivery"),
+        metadata.get("runtime_task_delivery"),
+    ):
+        if isinstance(value, str) and value.strip().lower() == "queue":
+            return "queue"
+        if isinstance(value, str) and value.strip().lower() == "steer":
+            return "steer"
+    return "steer"
 
 
 def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
@@ -1567,6 +1583,8 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         if task_session_id:
             merged_input_payload["task_session_id"] = task_session_id
             metadata["runtime_task_session_id"] = task_session_id
+        input_delivery = _resolve_runtime_task_delivery(merged_input_payload, metadata)
+        metadata["runtime_task_delivery"] = input_delivery
         runtime_agent_id, _runtime_agent_name = _resolve_runtime_agent_identity(request)
         set_log_context(agent_id=runtime_agent_id)
         logger.info(
@@ -1585,6 +1603,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
                 source=parsed["source"] or "portal",
                 session_id=parsed["session_id"],
                 task_session_id=task_session_id,
+                input_delivery=input_delivery,
                 context_ref=parsed["context_ref"] or None,
                 merged_input_payload=merged_input_payload,
                 metadata=metadata,
@@ -1643,6 +1662,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             metadata=metadata,
             trace_headers=trace_headers,
             task_session_id=task_session_id,
+            input_delivery=input_delivery,
         )
 
         try:
@@ -1676,6 +1696,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
                 "admission_id": record.admission_id,
                 "input_hash": record.input_hash,
                 "task_session_id": record.task_session_id,
+                "delivery": record.input_delivery,
             },
             status=202,
         )
@@ -1694,13 +1715,69 @@ def _spawn_runtime_background_task(coro: Any) -> asyncio.Task:
     return asyncio.create_task(coro)
 
 
+def _runtime_task_session_key(record: Any) -> Optional[str]:
+    return getattr(record, "task_session_id", None) or getattr(record, "session_id", None)
+
+
+def _runtime_task_waiting_for_user(record: Any) -> bool:
+    return bool(
+        getattr(record, "status", None) == "blocked"
+        and (
+            getattr(record, "pending_permission_request", None) is not None
+            or getattr(record, "pending_question_request", None) is not None
+        )
+    )
+
+
+def _reconcile_runtime_task_session_lane(session_key: Optional[str]) -> None:
+    if not session_key:
+        return
+    active_task_id = runtime_task_session_coordinator.active_task_id(session_key)
+    if not active_task_id:
+        return
+    active_record = runtime_task_tracker.get(active_task_id)
+    if active_record is None:
+        runtime_task_session_coordinator.clear(session_key)
+        return
+    if _runtime_task_waiting_for_user(active_record):
+        return
+    background_task = getattr(active_record, "background_task", None)
+    active_status = getattr(active_record, "status", None)
+    if active_status in {"accepted", "running"} and background_task is not None and not background_task.done():
+        return
+    if active_status in {"accepted", "running"} and background_task is None:
+        return
+    runtime_task_session_coordinator.complete(session_key, active_task_id)
+
+
+def _schedule_next_runtime_task_session_record(next_task_id: Optional[str]) -> None:
+    if not next_task_id:
+        return
+    next_record = runtime_task_tracker.get(next_task_id)
+    if next_record is None or next_record.status not in {"accepted", "running"}:
+        return
+    try:
+        _schedule_runtime_task_record(next_record)
+    except Exception:
+        logger.warning("Failed to schedule next runtime task session record | task_id=%s", next_task_id, exc_info=True)
+
+
 def _runtime_task_observability_fields(record: Any) -> Dict[str, Any]:
+    session_key = _runtime_task_session_key(record)
+    lane_snapshot = runtime_task_session_coordinator.snapshot(session_key, record.task_id) if session_key else None
     return {
         "engine": "native",
         "admission_id": getattr(record, "admission_id", None),
+        "admitted_seq": getattr(record, "admitted_seq", 0),
         "admitted_at": getattr(record, "admitted_at", None),
+        "delivery": getattr(record, "input_delivery", "steer"),
         "input_hash": getattr(record, "input_hash", None),
         "task_session_id": getattr(record, "task_session_id", None),
+        "session_lane_status": lane_snapshot.lane_status if lane_snapshot else None,
+        "session_active_task_id": lane_snapshot.active_task_id if lane_snapshot else None,
+        "session_queue_position": lane_snapshot.queue_position if lane_snapshot else None,
+        "session_pending_count": lane_snapshot.pending_count if lane_snapshot else 0,
+        "session_interrupt_seq": lane_snapshot.interrupt_seq if lane_snapshot else None,
         "active_attempt_id": getattr(record, "active_attempt_id", None),
         "attempt_count": getattr(record, "attempt_count", 0),
         "last_attempt_started_at": getattr(record, "last_attempt_started_at", None),
@@ -1778,8 +1855,50 @@ def _schedule_runtime_task_record(record: Any, *, resumed: bool = False) -> bool
     metadata["runtime_task_admission_id"] = getattr(record, "admission_id", None)
     metadata["runtime_task_input_hash"] = getattr(record, "input_hash", None)
     metadata["runtime_task_session_id"] = getattr(record, "task_session_id", None)
+    metadata["runtime_task_delivery"] = getattr(record, "input_delivery", "steer")
     metadata["runtime_task_attempt_count"] = getattr(record, "attempt_count", 0)
     execution_session_id = record.session_id or getattr(record, "task_session_id", None)
+    session_key = _runtime_task_session_key(record) or execution_session_id
+    if session_key:
+        _reconcile_runtime_task_session_lane(session_key)
+        decision = runtime_task_session_coordinator.schedule(
+            session_key,
+            record.task_id,
+            admitted_seq=int(getattr(record, "admitted_seq", 0) or 0),
+            delivery=str(getattr(record, "input_delivery", "steer") or "steer"),
+        )
+        if decision.action == "queued":
+            logger.info(
+                "Runtime task queued behind active session lane | task_id=%s session_id=%s active_task_id=%s queue_position=%s pending_count=%s",
+                record.task_id,
+                session_key,
+                decision.active_task_id or "-",
+                decision.queue_position or "-",
+                decision.pending_count,
+            )
+            return True
+        if decision.action == "active":
+            logger.debug(
+                "Runtime task owns active session lane | task_id=%s session_id=%s",
+                record.task_id,
+                session_key,
+            )
+        if decision.action == "suppressed":
+            runtime_task_tracker.mark_stale(
+                record.task_id,
+                reason="Runtime task suppressed by session interrupt",
+                payload={
+                    "ok": False,
+                    "task_id": record.task_id,
+                    "execution_type": "task",
+                    "request_id": record.request_id,
+                    "status": "stale",
+                    "trace_id": record.trace_id,
+                    "portal_dispatch_id": record.portal_dispatch_id,
+                    "error": "Runtime task suppressed by session interrupt",
+                },
+            )
+            return False
 
     background_coro = _run_task_execution_in_background(
         task_id=record.task_id,
@@ -1797,6 +1916,8 @@ def _schedule_runtime_task_record(record: Any, *, resumed: bool = False) -> bool
         spawned = _spawn_runtime_background_task(background_coro)
     except Exception:
         background_coro.close()
+        if session_key:
+            runtime_task_session_coordinator.complete(session_key, record.task_id)
         raise
     runtime_task_tracker.set_background_task(record.task_id, spawned)
     return True
@@ -1870,6 +1991,12 @@ async def _run_task_execution_in_background(
 ) -> None:
     execution_started_at = time.perf_counter()
     attempt_id: Optional[str] = None
+    metadata_session_key = metadata.get("runtime_task_session_id") if isinstance(metadata, dict) else None
+    session_key = (
+        _safe_runtime_task_session_id(metadata_session_key)
+        if isinstance(metadata_session_key, str) and metadata_session_key.strip()
+        else session_id
+    )
     try:
         running_record = runtime_task_tracker.mark_running(task_id)
         if running_record is not None:
@@ -2029,6 +2156,15 @@ async def _run_task_execution_in_background(
             trace_id=trace_headers.get("trace_id"),
             portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
         )
+    finally:
+        next_task_id: Optional[str] = None
+        if session_key:
+            current = runtime_task_tracker.get(task_id)
+            if current is not None and _runtime_task_waiting_for_user(current):
+                runtime_task_session_coordinator.hold_for_user_input(session_key, task_id)
+            elif current is None or getattr(current, "status", None) in {"success", "error", "blocked", "cancelled", "stale"}:
+                next_task_id = runtime_task_session_coordinator.complete(session_key, task_id)
+        _schedule_next_runtime_task_session_record(next_task_id)
 
 
 async def api_task_status(request: web.Request) -> web.Response:
@@ -2067,18 +2203,207 @@ async def api_task_cancel(request: web.Request) -> web.Response:
         record = runtime_task_tracker.get(task_id)
         if record is None:
             return web.json_response({"error": "Task not found"}, status=404)
-        if record.status in {"success", "error", "blocked", "cancelled", "stale"}:
+        waiting_for_user = _runtime_task_waiting_for_user(record)
+        if record.status in {"success", "error", "blocked", "cancelled", "stale"} and not waiting_for_user:
             payload = _runtime_task_status_payload(record)
             payload["cancel_requested"] = True
             payload["status"] = record.status
             return web.json_response(payload)
+        session_key = _runtime_task_session_key(record)
+        if session_key:
+            runtime_task_session_coordinator.cancel(
+                session_key,
+                task_id,
+                admitted_seq=int(getattr(record, "admitted_seq", 0) or 0),
+            )
         payload = {"ok": False, "task_id": task_id, "execution_type": "task", "request_id": record.request_id, "status": "cancelled", "cancel_requested": True, "trace_id": record.trace_id, "portal_dispatch_id": record.portal_dispatch_id, "accepted_at": record.accepted_at, "started_at": record.started_at, "finished_at": None, "error": "Task cancelled by request"}
         payload.update(_runtime_task_observability_fields(record))
-        cancelled = runtime_task_tracker.cancel(task_id, reason="Task cancelled by request", payload=payload)
+        cancelled = runtime_task_tracker.cancel(task_id, reason="Task cancelled by request", payload=payload, force=waiting_for_user)
         if cancelled:
             payload = _runtime_task_status_payload(cancelled)
+        if waiting_for_user:
+            next_task_id = runtime_task_session_coordinator.complete(session_key, task_id) if session_key else None
+            _schedule_next_runtime_task_session_record(next_task_id)
         await _emit_task_lifecycle_event("task.cancelled", task_id=task_id, portal_task_id=record.portal_task_id, agent_id=record.agent_id, session_id=record.session_id, trace_id=record.trace_id, portal_dispatch_id=record.portal_dispatch_id)
         return web.json_response(payload)
+    finally:
+        clear_log_context()
+
+
+def _pending_request_id(pending: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(pending, dict):
+        return None
+    value = pending.get("request_id") or pending.get("id")
+    return str(value).strip() if value is not None and str(value).strip() else None
+
+
+def _pending_request_matches(pending: Optional[Dict[str, Any]], request_id: Optional[str]) -> bool:
+    pending_id = _pending_request_id(pending)
+    if request_id:
+        return pending_id == request_id
+    return pending_id is not None
+
+
+def _permission_response_decision(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"approve", "approved", "allow", "allowed", "accept", "accepted"}:
+        return "approve"
+    if normalized in {"deny", "denied", "reject", "rejected"}:
+        return "deny"
+    raise ValueError("decision must be approve/allow or deny/reject")
+
+
+def _metadata_with_permission_response(
+    metadata: Optional[Dict[str, Any]],
+    *,
+    pending_request: Dict[str, Any],
+    decision: str,
+    always: bool,
+    reason: Optional[str],
+) -> Dict[str, Any]:
+    merged = dict(metadata or {})
+    profile = dict(merged.get("runtime_profile") or {}) if isinstance(merged.get("runtime_profile"), dict) else {}
+    profile_config = dict(profile.get("config") or {}) if isinstance(profile.get("config"), dict) else {}
+    tool_permissions = dict(profile_config.get("tool_permissions") or {}) if isinstance(profile_config.get("tool_permissions"), dict) else {}
+    request_metadata = pending_request.get("metadata") if isinstance(pending_request.get("metadata"), dict) else {}
+    tool_id = (
+        pending_request.get("tool_id")
+        or pending_request.get("tool")
+        or request_metadata.get("tool_name")
+    )
+    if not isinstance(tool_id, str) or not tool_id.strip():
+        raise ValueError("pending permission request is missing tool_id")
+    rule: Dict[str, Any] = {"action": "allow" if decision == "approve" else "deny"}
+    patterns = pending_request.get("patterns")
+    if isinstance(patterns, list) and patterns:
+        rule["patterns"] = patterns
+    elif pending_request.get("args") is not None:
+        rule["patterns"] = [json.dumps(pending_request.get("args"), ensure_ascii=False, sort_keys=True, default=str)]
+    if reason:
+        rule["reason"] = reason
+    tool_permissions[tool_id.strip()] = rule
+    profile_config["tool_permissions"] = tool_permissions
+    profile["source"] = "portal.runtime_profile"
+    profile["config"] = profile_config
+    merged["runtime_profile"] = profile
+    merged["runtime_task_resume_after_user_input"] = True
+    merged["runtime_permission_response"] = {
+        "request_id": _pending_request_id(pending_request),
+        "decision": decision,
+        "always": bool(always),
+        "reason": reason,
+        "tool_id": tool_id.strip(),
+    }
+    return merged
+
+
+def _metadata_with_question_response(
+    metadata: Optional[Dict[str, Any]],
+    *,
+    pending_request: Dict[str, Any],
+    answers: Any,
+) -> Dict[str, Any]:
+    merged = dict(metadata or {})
+    merged["runtime_task_resume_after_user_input"] = True
+    merged["runtime_question_response"] = {
+        "request_id": _pending_request_id(pending_request),
+        "request": dict(pending_request),
+        "answers": answers,
+    }
+    return merged
+
+
+def _resume_runtime_task_after_user_input(record: Any, *, metadata: Dict[str, Any]) -> Any:
+    merged_input_payload = dict(record.merged_input_payload or {})
+    merged_input_payload["_runtime_resume"] = True
+    resumed = runtime_task_tracker.resume_after_user_input(
+        record.task_id,
+        merged_input_payload=merged_input_payload,
+        metadata=metadata,
+    )
+    if resumed is None:
+        return None
+    _schedule_runtime_task_record(resumed)
+    return resumed
+
+
+async def api_task_permission_respond(request: web.Request) -> web.Response:
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(path="/api/tasks/{task_id}/permission/respond", trace_id=trace_headers.get("trace_id"))
+    try:
+        task_id = str(request.match_info.get("task_id") or "").strip()
+        if not task_id:
+            return web.json_response({"error": "task_id is required"}, status=400)
+        data = await request.json()
+        if not isinstance(data, dict):
+            return web.json_response({"error": "Request body must be a JSON object"}, status=400)
+        record = runtime_task_tracker.get(task_id)
+        if record is None:
+            return web.json_response({"error": "Task not found"}, status=404)
+        pending = getattr(record, "pending_permission_request", None)
+        if not isinstance(pending, dict):
+            return web.json_response({"error": "Task is not waiting for permission"}, status=409)
+        request_id = str(data.get("request_id") or data.get("id") or "").strip() or None
+        if not _pending_request_matches(pending, request_id):
+            return web.json_response({"error": "permission_request_id_mismatch"}, status=409)
+        decision = _permission_response_decision(data.get("decision") or data.get("action") or data.get("reply"))
+        metadata = _metadata_with_permission_response(
+            record.metadata,
+            pending_request=pending,
+            decision=decision,
+            always=bool(data.get("always")),
+            reason=str(data.get("reason")).strip() if data.get("reason") is not None else None,
+        )
+        resumed = _resume_runtime_task_after_user_input(record, metadata=metadata)
+        if resumed is None:
+            return web.json_response({"error": "Task not found"}, status=404)
+        return web.json_response(_runtime_task_status_payload(resumed), status=202)
+    except (json.JSONDecodeError, ContentTypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    finally:
+        clear_log_context()
+
+
+async def api_task_question_respond(request: web.Request) -> web.Response:
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(path="/api/tasks/{task_id}/question/respond", trace_id=trace_headers.get("trace_id"))
+    try:
+        task_id = str(request.match_info.get("task_id") or "").strip()
+        if not task_id:
+            return web.json_response({"error": "task_id is required"}, status=400)
+        data = await request.json()
+        if not isinstance(data, dict):
+            return web.json_response({"error": "Request body must be a JSON object"}, status=400)
+        record = runtime_task_tracker.get(task_id)
+        if record is None:
+            return web.json_response({"error": "Task not found"}, status=404)
+        pending = getattr(record, "pending_question_request", None)
+        if not isinstance(pending, dict):
+            return web.json_response({"error": "Task is not waiting for a question response"}, status=409)
+        request_id = str(data.get("request_id") or data.get("id") or "").strip() or None
+        if not _pending_request_matches(pending, request_id):
+            return web.json_response({"error": "question_request_id_mismatch"}, status=409)
+        if "answers" in data:
+            answers = data.get("answers")
+        elif "answer" in data:
+            answers = data.get("answer")
+        else:
+            return web.json_response({"error": "answers is required"}, status=400)
+        metadata = _metadata_with_question_response(
+            record.metadata,
+            pending_request=pending,
+            answers=answers,
+        )
+        resumed = _resume_runtime_task_after_user_input(record, metadata=metadata)
+        if resumed is None:
+            return web.json_response({"error": "Task not found"}, status=404)
+        return web.json_response(_runtime_task_status_payload(resumed), status=202)
+    except (json.JSONDecodeError, ContentTypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
     finally:
         clear_log_context()
 
@@ -2529,6 +2854,8 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_post('/api/tasks/execute', api_tasks_execute)
     app.router.add_get('/api/tasks/{task_id}', api_task_status)
     app.router.add_post('/api/tasks/{task_id}/cancel', api_task_cancel)
+    app.router.add_post('/api/tasks/{task_id}/permission/respond', api_task_permission_respond)
+    app.router.add_post('/api/tasks/{task_id}/question/respond', api_task_question_respond)
     app.router.add_get('/api/capabilities', api_capabilities)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)

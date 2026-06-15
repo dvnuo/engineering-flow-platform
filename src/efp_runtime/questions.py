@@ -127,13 +127,21 @@ class QuestionBroker:
         request = self._pending.pop(request_id, None)
         if request is None:
             raise KeyError(f"Unknown question request: {request_id}")
+        self.seed_answer(request.session_id, request.tool_call_id, answers)
+
+    def seed_answer(
+        self,
+        session_id: Optional[str],
+        tool_call_id: Optional[str],
+        answers: Iterable[AnswerValue],
+    ) -> None:
         answer_items: Iterable[AnswerValue]
         if isinstance(answers, str):
             answer_items = [answers]
         else:
             answer_items = answers
         normalized_answers = [_normalize_answer(answer) for answer in answer_items]
-        self._answers[(request.session_id, request.tool_call_id)] = normalized_answers
+        self._answers[(session_id, tool_call_id)] = normalized_answers
 
     def consume_answer(
         self,

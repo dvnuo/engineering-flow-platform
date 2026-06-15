@@ -1255,6 +1255,14 @@ def _agent_async_has_blockers(payload: Dict[str, Any]) -> bool:
     return bool(blockers)
 
 
+def _runtime_task_should_resume(input_payload: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+    return bool(
+        input_payload.get("_runtime_resume")
+        or input_payload.get("runtime_task_resume")
+        or metadata.get("runtime_task_resume_after_user_input")
+    )
+
+
 def _agent_async_fallback_response(payload: Dict[str, Any], raw_text: str) -> str:
     response = _agent_async_first_text(
         payload,
@@ -1533,20 +1541,33 @@ async def run_agent_async_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             "schema": input_payload.get("schema"),
         },
     }
-    from src.gateway.runtime_chat import run_runtime_chat
+    from src.gateway.runtime_chat import resume_runtime_chat, run_runtime_chat
 
-    output_payload = await run_runtime_chat(
-        request_id=chat_request_id,
-        session_id=task_session_id or chat_request_id,
-        message=prompt,
-        user_name="Portal Agent Async Task",
-        request_path="/api/tasks/execute/agent_async_task/chat",
-        execution_metadata=chat_metadata,
-        agent_id=agent_id,
-        agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None,
-        model=metadata.get("resolved_model") or metadata.get("model"),
-        transient_model_message=AGENT_ASYNC_TASK_DEFAULT_SYSTEM_PROMPT,
-    )
+    if _runtime_task_should_resume(input_payload, metadata):
+        output_payload = await resume_runtime_chat(
+            request_id=chat_request_id,
+            session_id=task_session_id or chat_request_id,
+            user_name="Portal Agent Async Task",
+            request_path="/api/tasks/execute/agent_async_task/chat/resume",
+            execution_metadata=chat_metadata,
+            agent_id=agent_id,
+            agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None,
+            model=metadata.get("resolved_model") or metadata.get("model"),
+            transient_model_message=AGENT_ASYNC_TASK_DEFAULT_SYSTEM_PROMPT,
+        )
+    else:
+        output_payload = await run_runtime_chat(
+            request_id=chat_request_id,
+            session_id=task_session_id or chat_request_id,
+            message=prompt,
+            user_name="Portal Agent Async Task",
+            request_path="/api/tasks/execute/agent_async_task/chat",
+            execution_metadata=chat_metadata,
+            agent_id=agent_id,
+            agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None,
+            model=metadata.get("resolved_model") or metadata.get("model"),
+            transient_model_message=AGENT_ASYNC_TASK_DEFAULT_SYSTEM_PROMPT,
+        )
     raw_text = _agent_async_first_text(output_payload, ("response", "output", "content", "message"))
     structured_output = output_payload.get("structured_output") if isinstance(output_payload.get("structured_output"), dict) else None
     parsed = dict(structured_output or _extract_agent_async_json_object(raw_text) or {})
@@ -1711,20 +1732,33 @@ async def run_generic_agent_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             "schema": input_payload.get("schema"),
         },
     }
-    from src.gateway.runtime_chat import run_runtime_chat
+    from src.gateway.runtime_chat import resume_runtime_chat, run_runtime_chat
 
-    output_payload = await run_runtime_chat(
-        request_id=chat_request_id,
-        session_id=task_session_id or chat_request_id,
-        message=prompt,
-        user_name="Portal Generic Agent Task",
-        request_path="/api/tasks/execute/generic_agent_task/chat",
-        execution_metadata=chat_metadata,
-        agent_id=agent_id,
-        agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None,
-        model=metadata.get("resolved_model") or metadata.get("model"),
-        transient_model_message=GENERIC_AGENT_TASK_DEFAULT_SYSTEM_PROMPT,
-    )
+    if _runtime_task_should_resume(input_payload, metadata):
+        output_payload = await resume_runtime_chat(
+            request_id=chat_request_id,
+            session_id=task_session_id or chat_request_id,
+            user_name="Portal Generic Agent Task",
+            request_path="/api/tasks/execute/generic_agent_task/chat/resume",
+            execution_metadata=chat_metadata,
+            agent_id=agent_id,
+            agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None,
+            model=metadata.get("resolved_model") or metadata.get("model"),
+            transient_model_message=GENERIC_AGENT_TASK_DEFAULT_SYSTEM_PROMPT,
+        )
+    else:
+        output_payload = await run_runtime_chat(
+            request_id=chat_request_id,
+            session_id=task_session_id or chat_request_id,
+            message=prompt,
+            user_name="Portal Generic Agent Task",
+            request_path="/api/tasks/execute/generic_agent_task/chat",
+            execution_metadata=chat_metadata,
+            agent_id=agent_id,
+            agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None,
+            model=metadata.get("resolved_model") or metadata.get("model"),
+            transient_model_message=GENERIC_AGENT_TASK_DEFAULT_SYSTEM_PROMPT,
+        )
     raw_text = _agent_async_first_text(output_payload, ("response", "output", "content", "message"))
     structured_output = output_payload.get("structured_output") if isinstance(output_payload.get("structured_output"), dict) else None
     parsed = dict(structured_output or _extract_agent_async_json_object(raw_text) or {})

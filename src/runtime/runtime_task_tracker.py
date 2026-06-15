@@ -43,7 +43,9 @@ class RuntimeTaskRecord:
     resume_count: int = 0
     last_resumed_at: Optional[str] = None
     admission_id: Optional[str] = None
+    admitted_seq: int = 0
     admitted_at: Optional[str] = None
+    input_delivery: str = "steer"
     input_hash: Optional[str] = None
     task_session_id: Optional[str] = None
     active_attempt_id: Optional[str] = None
@@ -67,6 +69,7 @@ class RuntimeTaskTracker:
     def __init__(self, *, max_records: int = 512, storage_dir: Optional[str | Path] = None):
         self._records: "OrderedDict[str, RuntimeTaskRecord]" = OrderedDict()
         self._max_records = max(1, int(max_records))
+        self._next_admitted_seq = 1
         self._storage_dir: Optional[Path] = None
         self.configure_storage(storage_dir)
 
@@ -97,6 +100,7 @@ class RuntimeTaskTracker:
         metadata: Optional[Dict[str, Any]] = None,
         trace_headers: Optional[Dict[str, Optional[str]]] = None,
         task_session_id: Optional[str] = None,
+        input_delivery: str = "steer",
     ) -> RuntimeTaskRecord:
         safe_context_ref = _optional_json_dict(context_ref)
         safe_merged_input_payload = _optional_json_dict(merged_input_payload)
@@ -106,6 +110,7 @@ class RuntimeTaskTracker:
             source=source,
             session_id=session_id,
             task_session_id=task_session_id,
+            input_delivery=_normalize_delivery(input_delivery),
             context_ref=safe_context_ref,
             merged_input_payload=safe_merged_input_payload,
             metadata=safe_metadata,
@@ -131,7 +136,9 @@ class RuntimeTaskTracker:
             metadata=safe_metadata,
             trace_headers=_optional_json_dict(trace_headers),
             admission_id=_admission_id(task_id=task_id, input_hash=input_hash),
+            admitted_seq=self._allocate_admitted_seq(),
             admitted_at=_utc_now_iso(),
+            input_delivery=_normalize_delivery(input_delivery),
             input_hash=input_hash,
             task_session_id=task_session_id,
             background_task=None,
@@ -222,11 +229,11 @@ class RuntimeTaskTracker:
         record = self._records.get(task_id)
         return bool(record and record.status in _TASK_TERMINAL_STATUSES)
 
-    def cancel(self, task_id: str, *, reason: str = "Task cancelled", payload: Optional[Dict[str, Any]] = None) -> Optional[RuntimeTaskRecord]:
+    def cancel(self, task_id: str, *, reason: str = "Task cancelled", payload: Optional[Dict[str, Any]] = None, force: bool = False) -> Optional[RuntimeTaskRecord]:
         record = self._records.get(task_id)
         if record is None:
             return None
-        if record.status in _TASK_TERMINAL_STATUSES:
+        if record.status in _TASK_TERMINAL_STATUSES and not (force and record.status == "blocked"):
             return record
         if record.background_task is not None and not record.background_task.done():
             record.background_task.cancel()
@@ -298,6 +305,33 @@ class RuntimeTaskTracker:
             self._persist_record(record)
         return record
 
+    def resume_after_user_input(
+        self,
+        task_id: str,
+        *,
+        merged_input_payload: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[RuntimeTaskRecord]:
+        record = self._records.get(task_id)
+        if record is None:
+            return None
+        record.status = "accepted"
+        record.finished_at = None
+        record.error_message = None
+        record.payload = {}
+        record.active_attempt_id = None
+        record.background_task = None
+        record.cancel_requested = False
+        record.completion_source = "user_input_response"
+        record.pending_permission_request = None
+        record.pending_question_request = None
+        if merged_input_payload is not None:
+            record.merged_input_payload = _optional_json_dict(merged_input_payload)
+        if metadata is not None:
+            record.metadata = _optional_json_dict(metadata)
+        self._persist_record(record)
+        return record
+
     def admission_matches(
         self,
         record: RuntimeTaskRecord,
@@ -306,6 +340,7 @@ class RuntimeTaskTracker:
         source: Optional[str],
         session_id: Optional[str],
         task_session_id: Optional[str],
+        input_delivery: str = "steer",
         context_ref: Optional[Dict[str, Any]],
         merged_input_payload: Optional[Dict[str, Any]],
         metadata: Optional[Dict[str, Any]],
@@ -315,6 +350,7 @@ class RuntimeTaskTracker:
             source=source,
             session_id=session_id,
             task_session_id=task_session_id,
+            input_delivery=_normalize_delivery(input_delivery),
             context_ref=context_ref,
             merged_input_payload=merged_input_payload,
             metadata=metadata,
@@ -334,6 +370,14 @@ class RuntimeTaskTracker:
             loaded.append(record)
 
         loaded.sort(key=lambda record: record.accepted_at or "")
+        max_admitted_seq = max([record.admitted_seq for record in self._records.values()] or [0])
+        for record in loaded:
+            if record.admitted_seq <= 0:
+                max_admitted_seq += 1
+                record.admitted_seq = max_admitted_seq
+            else:
+                max_admitted_seq = max(max_admitted_seq, record.admitted_seq)
+        self._next_admitted_seq = max(self._next_admitted_seq, max_admitted_seq + 1)
         for record in loaded:
             existing = self._records.get(record.task_id)
             if existing is not None and existing.background_task is not None and not existing.background_task.done():
@@ -357,6 +401,7 @@ class RuntimeTaskTracker:
 
     def reset(self, *, clear_storage: bool = True) -> None:
         self._records.clear()
+        self._next_admitted_seq = 1
         if clear_storage and self._storage_dir is not None and self._storage_dir.exists():
             for path in self._storage_dir.glob("*.json"):
                 try:
@@ -389,6 +434,11 @@ class RuntimeTaskTracker:
         digest = hashlib.sha256(task_id.encode("utf-8")).hexdigest()
         return self._storage_dir / f"{digest}.json"
 
+    def _allocate_admitted_seq(self) -> int:
+        admitted_seq = self._next_admitted_seq
+        self._next_admitted_seq += 1
+        return admitted_seq
+
 
 def _optional_json_dict(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if value is None:
@@ -416,6 +466,7 @@ _VOLATILE_METADATA_KEYS = {
     "runtime_task_admission_id",
     "runtime_task_input_hash",
     "runtime_task_session_id",
+    "runtime_task_delivery",
     "runtime_task_attempt_id",
     "runtime_task_attempt_count",
 }
@@ -432,12 +483,17 @@ def _stable_digest(value: Any) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _normalize_delivery(value: Any) -> str:
+    return "queue" if str(value or "").strip().lower() == "queue" else "steer"
+
+
 def build_task_input_hash(
     *,
     task_type: str,
     source: Optional[str],
     session_id: Optional[str],
     task_session_id: Optional[str],
+    input_delivery: str = "steer",
     context_ref: Optional[Dict[str, Any]],
     merged_input_payload: Optional[Dict[str, Any]],
     metadata: Optional[Dict[str, Any]],
@@ -448,6 +504,7 @@ def build_task_input_hash(
             "source": source or "",
             "session_id": session_id or "",
             "task_session_id": task_session_id or "",
+            "input_delivery": _normalize_delivery(input_delivery),
             "context_ref": _optional_json_dict(context_ref),
             "merged_input_payload": _optional_json_dict(merged_input_payload),
             "metadata": _stable_metadata(metadata),
@@ -520,7 +577,9 @@ def _record_to_json(record: RuntimeTaskRecord) -> Dict[str, Any]:
             "resume_count": record.resume_count,
             "last_resumed_at": record.last_resumed_at,
             "admission_id": record.admission_id,
+            "admitted_seq": record.admitted_seq,
             "admitted_at": record.admitted_at,
+            "input_delivery": record.input_delivery,
             "input_hash": record.input_hash,
             "task_session_id": record.task_session_id,
             "active_attempt_id": record.active_attempt_id,
@@ -548,11 +607,13 @@ def _record_from_json(raw: Dict[str, Any]) -> RuntimeTaskRecord:
     source = str(raw.get("source") or "portal")
     session_id = str(raw["session_id"]) if raw.get("session_id") is not None else None
     task_session_id = str(raw["task_session_id"]) if raw.get("task_session_id") is not None else None
+    input_delivery = _normalize_delivery(raw.get("input_delivery") or raw.get("delivery") or "steer")
     input_hash = str(raw["input_hash"]) if raw.get("input_hash") is not None else build_task_input_hash(
         task_type=task_type,
         source=source,
         session_id=session_id,
         task_session_id=task_session_id,
+        input_delivery=input_delivery,
         context_ref=context_ref,
         merged_input_payload=merged_input_payload,
         metadata=metadata,
@@ -580,7 +641,9 @@ def _record_from_json(raw: Dict[str, Any]) -> RuntimeTaskRecord:
         resume_count=int(raw.get("resume_count") or 0),
         last_resumed_at=str(raw["last_resumed_at"]) if raw.get("last_resumed_at") is not None else None,
         admission_id=str(raw["admission_id"]) if raw.get("admission_id") is not None else _admission_id(task_id=task_id, input_hash=input_hash),
+        admitted_seq=int(raw.get("admitted_seq") or 0),
         admitted_at=str(raw["admitted_at"]) if raw.get("admitted_at") is not None else str(raw.get("accepted_at") or _utc_now_iso()),
+        input_delivery=input_delivery,
         input_hash=input_hash,
         task_session_id=task_session_id,
         active_attempt_id=str(raw["active_attempt_id"]) if raw.get("active_attempt_id") is not None else None,
