@@ -2950,7 +2950,7 @@ def test_runtime_task_tracker_persists_and_loads_active_records(tmp_path):
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
     tracker = RuntimeTaskTracker(storage_dir=tmp_path)
-    tracker.create_pending(
+    created = tracker.create_pending(
         task_id="task-persist",
         request_id="task-task-persist",
         task_type="adapter_action_task",
@@ -2964,8 +2964,14 @@ def test_runtime_task_tracker_persists_and_loads_active_records(tmp_path):
         merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
         metadata={"task_id": "task-persist", "portal_task_id": "portal-task-1"},
         trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+        task_session_id="task-session-1",
     )
-    tracker.mark_running("task-persist")
+    running = tracker.mark_running("task-persist")
+    assert created.admission_id
+    assert created.input_hash
+    assert running is not None
+    assert running.attempt_count == 1
+    assert running.active_attempt_id
 
     loaded = RuntimeTaskTracker(storage_dir=tmp_path)
     assert loaded.load_persisted_records() == 1
@@ -2977,7 +2983,63 @@ def test_runtime_task_tracker_persists_and_loads_active_records(tmp_path):
     assert record.context_ref == {"workspace": "w1"}
     assert record.merged_input_payload["action_id"] == "jira.transition"
     assert record.metadata["portal_task_id"] == "portal-task-1"
+    assert record.admission_id == created.admission_id
+    assert record.input_hash == created.input_hash
+    assert record.task_session_id == "task-session-1"
+    assert record.attempt_count == 1
+    assert record.active_attempt_id == running.active_attempt_id
     assert [item.task_id for item in loaded.list_active()] == ["task-persist"]
+
+
+def test_runtime_task_tracker_ignores_stale_attempt_terminal_write():
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker()
+    tracker.create_pending(
+        task_id="task-attempt",
+        request_id="task-task-attempt",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id="session-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-task-1",
+        merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+        metadata={"task_id": "task-attempt"},
+    )
+    first = tracker.mark_running("task-attempt")
+    assert first is not None
+    first_attempt_id = first.active_attempt_id
+    tracker.mark_resuming("task-attempt")
+    second = tracker.mark_running("task-attempt")
+    assert second is not None
+    assert second.active_attempt_id and second.active_attempt_id != first_attempt_id
+
+    ignored = tracker.mark_terminal(
+        "task-attempt",
+        status="success",
+        payload={"ok": True, "status": "success", "from": "old-attempt"},
+        attempt_id=first_attempt_id,
+    )
+
+    record = tracker.get("task-attempt")
+    assert ignored is None
+    assert record is not None
+    assert record.status == "running"
+    assert record.active_attempt_id == second.active_attempt_id
+    assert record.payload == {}
+
+    tracker.mark_terminal(
+        "task-attempt",
+        status="success",
+        payload={"ok": True, "status": "success", "from": "current-attempt"},
+        attempt_id=second.active_attempt_id,
+    )
+    record = tracker.get("task-attempt")
+    assert record is not None
+    assert record.status == "success"
+    assert record.payload["from"] == "current-attempt"
 
 
 @pytest.mark.asyncio
@@ -3023,12 +3085,122 @@ async def test_api_tasks_execute_duplicate_active_task_reuses_existing_record(mo
 
     assert first_response.status == 202
     assert second_response.status == 200
+    first_body = json.loads(first_response.body)
+    assert second_body["admission_id"] == first_body["admission_id"]
+    assert second_body["input_hash"] == first_body["input_hash"]
+    assert second_body["engine"] == "native"
     assert second_body["task_id"] == "task-dedupe-1"
     assert second_body["status"] in {"accepted", "running"}
     assert len(spawned) == 1
 
     release.set()
     await spawned[0]
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_duplicate_conflicting_admission_returns_409(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    release = asyncio.Event()
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        await release.wait()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        def __init__(self, action_id):
+            self._action_id = action_id
+
+        async def json(self):
+            return {
+                "task_id": "task-dedupe-conflict",
+                "task_type": "adapter_action_task",
+                "input_payload": {"action_id": self._action_id},
+            }
+
+    first_response = await runtime_api.api_tasks_execute(_Request("jira.transition"))
+    conflict_response = await runtime_api.api_tasks_execute(_Request("jira.close"))
+    conflict_body = json.loads(conflict_response.body)
+
+    assert first_response.status == 202
+    assert conflict_response.status == 409
+    assert conflict_body["error"] == "task_id_conflicts_with_existing_admission"
+    assert conflict_body["engine"] == "native"
+    assert conflict_body["admission_id"]
+    assert len(spawned) == 1
+
+    release.set()
+    await spawned[0]
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_generic_agent_task_uses_file_safe_task_session(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    captured = {}
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {
+                "task_id": "task-generic-safe",
+                "task_type": "generic_agent_task",
+                "input_payload": {
+                    "task_session_id": "generic-task:task-generic-safe",
+                    "prompt": "Run a long generic task.",
+                },
+            }
+
+    response = await runtime_api.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    await spawned[0]
+
+    assert response.status == 202
+    assert body["task_session_id"] == "generic-task-task-generic-safe"
+    assert captured["session_id"] == "generic-task-task-generic-safe"
+    assert captured["input_payload"]["task_session_id"] == "generic-task-task-generic-safe"
+    assert captured["metadata"]["runtime_task_session_id"] == "generic-task-task-generic-safe"
 
 
 @pytest.mark.asyncio
@@ -3097,7 +3269,81 @@ async def test_resume_persisted_runtime_tasks_replays_active_record(tmp_path, mo
     assert record.resume_count == 1
     assert captured["metadata"]["runtime_task_resumed"] is True
     assert captured["metadata"]["runtime_task_resume_count"] == 1
+    assert captured["metadata"]["runtime_task_admission_id"] == record.admission_id
+    assert captured["metadata"]["runtime_task_input_hash"] == record.input_hash
+    assert captured["metadata"]["runtime_task_attempt_id"]
+    assert captured["metadata"]["runtime_task_attempt_count"] == 2
     assert "task.resumed" in emitted
+
+
+@pytest.mark.asyncio
+async def test_run_task_execution_persists_pending_permission_observation(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    runtime_api.runtime_task_tracker.create_pending(
+        task_id="task-permission-1",
+        request_id="task-task-permission-1",
+        task_type="generic_agent_task",
+        source="portal",
+        session_id="generic-task-task-permission-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-task-1",
+        merged_input_payload={"task_type": "generic_agent_task", "prompt": "Needs permission"},
+        metadata={"task_id": "task-permission-1", "portal_task_id": "portal-task-1"},
+        task_session_id="generic-task-task-permission-1",
+    )
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "blocked",
+                "output_payload": {
+                    "status": "blocked",
+                    "pending_permission_request": {"id": "perm-1", "tool": "shell"},
+                    "summary": "Permission required",
+                },
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": "approve_permission",
+                "audit_ref": None,
+            },
+        )()
+
+    async def _emit_task_lifecycle_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_emit_task_lifecycle_event", _emit_task_lifecycle_event)
+
+    await runtime_api._run_task_execution_in_background(
+        task_id="task-permission-1",
+        request_id="task-task-permission-1",
+        task_type="generic_agent_task",
+        session_id="generic-task-task-permission-1",
+        source="portal",
+        runtime_agent_id="agent-1",
+        context_ref=None,
+        merged_input_payload={"task_type": "generic_agent_task", "prompt": "Needs permission"},
+        metadata={"task_id": "task-permission-1", "portal_task_id": "portal-task-1"},
+        trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+    )
+
+    record = runtime_api.runtime_task_tracker.get("task-permission-1")
+    assert record is not None
+    assert record.status == "blocked"
+    assert record.pending_permission_request == {"id": "perm-1", "tool": "shell"}
+    assert record.completion_source == "execution_result"
+
+    payload = runtime_api._runtime_task_status_payload(record)
+    assert payload["pending_permission_request"] == {"id": "perm-1", "tool": "shell"}
+    assert payload["attempt_count"] == 1
+    assert payload["active_attempt_id"] is None
 
 
 @pytest.mark.asyncio

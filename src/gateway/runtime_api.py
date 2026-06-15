@@ -325,6 +325,39 @@ def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _resolve_runtime_task_session_id(
+    *,
+    task_id: str,
+    task_type: str,
+    session_id: Optional[str],
+    input_payload: Dict[str, Any],
+    metadata: Dict[str, Any],
+) -> Optional[str]:
+    """Return the durable Native task session id for task-style execution."""
+    for value in (
+        input_payload.get("task_session_id"),
+        metadata.get("portal_task_session_id"),
+        metadata.get("runtime_task_session_id"),
+        input_payload.get("_runtime_session_id"),
+        metadata.get("task_session_id"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return _safe_runtime_task_session_id(value.strip())
+    if session_id:
+        return _safe_runtime_task_session_id(session_id)
+    if task_type == "agent_async_task" and task_id:
+        return _safe_runtime_task_session_id(f"agent-task-{task_id}")
+    if task_type == "generic_agent_task" and task_id:
+        return _safe_runtime_task_session_id(f"generic-task-{task_id}")
+    return None
+
+
+def _safe_runtime_task_session_id(value: str) -> str:
+    """Keep task-backed chat session ids portable across file-backed stores."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip(".-")
+    return cleaned or f"task-session-{hashlib.sha256(str(value).encode('utf-8')).hexdigest()[:16]}"
+
+
 def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
     if value is None:
         return None
@@ -1524,6 +1557,16 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             metadata["portal_workflow_rule_id"] = parsed["workflow_rule_id"]
         if parsed["shared_context_ref"]:
             metadata["shared_context_ref"] = parsed["shared_context_ref"]
+        task_session_id = _resolve_runtime_task_session_id(
+            task_id=parsed["task_id"],
+            task_type=parsed["task_type"],
+            session_id=parsed["session_id"],
+            input_payload=merged_input_payload,
+            metadata=metadata,
+        )
+        if task_session_id:
+            merged_input_payload["task_session_id"] = task_session_id
+            metadata["runtime_task_session_id"] = task_session_id
         runtime_agent_id, _runtime_agent_name = _resolve_runtime_agent_identity(request)
         set_log_context(agent_id=runtime_agent_id)
         logger.info(
@@ -1536,6 +1579,30 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         request_id = f"task-{parsed['task_id']}"
         existing_record = runtime_task_tracker.get(parsed["task_id"])
         if existing_record is not None:
+            if not runtime_task_tracker.admission_matches(
+                existing_record,
+                task_type=parsed["task_type"],
+                source=parsed["source"] or "portal",
+                session_id=parsed["session_id"],
+                task_session_id=task_session_id,
+                context_ref=parsed["context_ref"] or None,
+                merged_input_payload=merged_input_payload,
+                metadata=metadata,
+            ):
+                return web.json_response(
+                    {
+                        "ok": False,
+                        "task_id": parsed["task_id"],
+                        "execution_type": "task",
+                        "request_id": existing_record.request_id,
+                        "status": existing_record.status,
+                        "error": "task_id_conflicts_with_existing_admission",
+                        "admission_id": existing_record.admission_id,
+                        "input_hash": existing_record.input_hash,
+                        "engine": "native",
+                    },
+                    status=409,
+                )
             if existing_record.status in {"accepted", "running"}:
                 try:
                     _schedule_runtime_task_record(existing_record)
@@ -1575,6 +1642,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             merged_input_payload=merged_input_payload,
             metadata=metadata,
             trace_headers=trace_headers,
+            task_session_id=task_session_id,
         )
 
         try:
@@ -1590,7 +1658,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             task_id=parsed["task_id"],
             portal_task_id=metadata.get("portal_task_id"),
             agent_id=runtime_agent_id,
-            session_id=parsed["session_id"],
+            session_id=parsed["session_id"] or task_session_id,
             trace_id=trace_headers.get("trace_id"),
             portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
         )
@@ -1604,6 +1672,10 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
                 "status": "accepted",
                 "trace_id": trace_headers.get("trace_id"),
                 "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+                "engine": "native",
+                "admission_id": record.admission_id,
+                "input_hash": record.input_hash,
+                "task_session_id": record.task_session_id,
             },
             status=202,
         )
@@ -1622,6 +1694,24 @@ def _spawn_runtime_background_task(coro: Any) -> asyncio.Task:
     return asyncio.create_task(coro)
 
 
+def _runtime_task_observability_fields(record: Any) -> Dict[str, Any]:
+    return {
+        "engine": "native",
+        "admission_id": getattr(record, "admission_id", None),
+        "admitted_at": getattr(record, "admitted_at", None),
+        "input_hash": getattr(record, "input_hash", None),
+        "task_session_id": getattr(record, "task_session_id", None),
+        "active_attempt_id": getattr(record, "active_attempt_id", None),
+        "attempt_count": getattr(record, "attempt_count", 0),
+        "last_attempt_started_at": getattr(record, "last_attempt_started_at", None),
+        "last_progress_at": getattr(record, "last_progress_at", None),
+        "pending_permission_request": getattr(record, "pending_permission_request", None),
+        "pending_question_request": getattr(record, "pending_question_request", None),
+        "completion_source": getattr(record, "completion_source", None),
+        "cancel_requested": getattr(record, "cancel_requested", False),
+    }
+
+
 def _runtime_task_status_payload(record: Any) -> Dict[str, Any]:
     if record.status in {"accepted", "running"}:
         return {
@@ -1637,6 +1727,7 @@ def _runtime_task_status_payload(record: Any) -> Dict[str, Any]:
             "finished_at": record.finished_at,
             "resume_count": getattr(record, "resume_count", 0),
             "last_resumed_at": getattr(record, "last_resumed_at", None),
+            **_runtime_task_observability_fields(record),
         }
     payload = dict(record.payload)
     payload["accepted_at"] = record.accepted_at
@@ -1644,6 +1735,7 @@ def _runtime_task_status_payload(record: Any) -> Dict[str, Any]:
     payload["finished_at"] = record.finished_at
     payload["resume_count"] = getattr(record, "resume_count", 0)
     payload["last_resumed_at"] = getattr(record, "last_resumed_at", None)
+    payload.update(_runtime_task_observability_fields(record))
     return payload
 
 
@@ -1683,12 +1775,17 @@ def _schedule_runtime_task_record(record: Any, *, resumed: bool = False) -> bool
     if resumed:
         metadata["runtime_task_resumed"] = True
         metadata["runtime_task_resume_count"] = getattr(record, "resume_count", 0)
+    metadata["runtime_task_admission_id"] = getattr(record, "admission_id", None)
+    metadata["runtime_task_input_hash"] = getattr(record, "input_hash", None)
+    metadata["runtime_task_session_id"] = getattr(record, "task_session_id", None)
+    metadata["runtime_task_attempt_count"] = getattr(record, "attempt_count", 0)
+    execution_session_id = record.session_id or getattr(record, "task_session_id", None)
 
     background_coro = _run_task_execution_in_background(
         task_id=record.task_id,
         request_id=record.request_id,
         task_type=record.task_type,
-        session_id=record.session_id,
+        session_id=execution_session_id,
         source=record.source or "portal",
         runtime_agent_id=record.agent_id,
         context_ref=record.context_ref or None,
@@ -1772,8 +1869,17 @@ async def _run_task_execution_in_background(
     trace_headers: Dict[str, Optional[str]],
 ) -> None:
     execution_started_at = time.perf_counter()
+    attempt_id: Optional[str] = None
     try:
-        runtime_task_tracker.mark_running(task_id)
+        running_record = runtime_task_tracker.mark_running(task_id)
+        if running_record is not None:
+            attempt_id = getattr(running_record, "active_attempt_id", None)
+            metadata = dict(metadata)
+            metadata["runtime_task_admission_id"] = getattr(running_record, "admission_id", None)
+            metadata["runtime_task_input_hash"] = getattr(running_record, "input_hash", None)
+            metadata["runtime_task_session_id"] = getattr(running_record, "task_session_id", None)
+            metadata["runtime_task_attempt_id"] = attempt_id
+            metadata["runtime_task_attempt_count"] = getattr(running_record, "attempt_count", 0)
         await _emit_task_lifecycle_event(
             "task.started",
             task_id=task_id,
@@ -1824,13 +1930,21 @@ async def _run_task_execution_in_background(
             execution_result=execution_result,
             trace_headers=trace_headers,
         )
+        current = runtime_task_tracker.get(task_id)
+        if current is not None:
+            response_payload.update(_runtime_task_observability_fields(current))
         status = str(execution_result.status or "error")
-        runtime_task_tracker.mark_terminal(
+        terminal_record = runtime_task_tracker.mark_terminal(
             task_id,
             status=status,
             payload=response_payload,
             error_message=str(response_payload.get("error") or "") or None,
+            attempt_id=attempt_id,
+            completion_source="execution_result",
         )
+        if terminal_record is None:
+            logger.info("Task result ignored because attempt is no longer current | task_id=%s attempt_id=%s", task_id, attempt_id or "-")
+            return
         await _emit_task_lifecycle_event(
             "task.completed" if status == "success" else "task.failed",
             task_id=task_id,
@@ -1862,6 +1976,9 @@ async def _run_task_execution_in_background(
                 "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
                 "error": "Task cancelled",
             }
+            current = runtime_task_tracker.get(task_id)
+            if current is not None:
+                cancelled_payload.update(_runtime_task_observability_fields(current))
             runtime_task_tracker.cancel(
                 task_id,
                 reason="Task cancelled",
@@ -1891,11 +2008,18 @@ async def _run_task_execution_in_background(
             "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
             "error": sanitized_message,
         }
-        runtime_task_tracker.mark_internal_failure(
+        current = runtime_task_tracker.get(task_id)
+        if current is not None:
+            failure_payload.update(_runtime_task_observability_fields(current))
+        terminal_record = runtime_task_tracker.mark_internal_failure(
             task_id,
             payload=failure_payload,
             error_message=sanitized_message,
+            attempt_id=attempt_id,
         )
+        if terminal_record is None:
+            logger.info("Task failure ignored because attempt is no longer current | task_id=%s attempt_id=%s", task_id, attempt_id or "-")
+            return
         await _emit_task_lifecycle_event(
             "task.failed",
             task_id=task_id,
@@ -1944,14 +2068,15 @@ async def api_task_cancel(request: web.Request) -> web.Response:
         if record is None:
             return web.json_response({"error": "Task not found"}, status=404)
         if record.status in {"success", "error", "blocked", "cancelled", "stale"}:
-            payload = dict(record.payload or {"task_id": task_id, "status": record.status})
+            payload = _runtime_task_status_payload(record)
             payload["cancel_requested"] = True
             payload["status"] = record.status
             return web.json_response(payload)
         payload = {"ok": False, "task_id": task_id, "execution_type": "task", "request_id": record.request_id, "status": "cancelled", "cancel_requested": True, "trace_id": record.trace_id, "portal_dispatch_id": record.portal_dispatch_id, "accepted_at": record.accepted_at, "started_at": record.started_at, "finished_at": None, "error": "Task cancelled by request"}
+        payload.update(_runtime_task_observability_fields(record))
         cancelled = runtime_task_tracker.cancel(task_id, reason="Task cancelled by request", payload=payload)
         if cancelled:
-            payload["finished_at"] = cancelled.finished_at
+            payload = _runtime_task_status_payload(cancelled)
         await _emit_task_lifecycle_event("task.cancelled", task_id=task_id, portal_task_id=record.portal_task_id, agent_id=record.agent_id, session_id=record.session_id, trace_id=record.trace_id, portal_dispatch_id=record.portal_dispatch_id)
         return web.json_response(payload)
     finally:
@@ -1991,18 +2116,22 @@ async def resume_persisted_runtime_tasks() -> int:
         except Exception as exc:
             sanitized_message = sanitize_exception_message(exc)
             logger.error("Persisted runtime task resume failed | task_id=%s", record.task_id, exc_info=True)
+            failure_payload = {
+                "ok": False,
+                "task_id": record.task_id,
+                "execution_type": "task",
+                "request_id": record.request_id,
+                "status": "error",
+                "trace_id": record.trace_id,
+                "portal_dispatch_id": record.portal_dispatch_id,
+                "error": sanitized_message,
+            }
+            current = runtime_task_tracker.get(record.task_id)
+            if current is not None:
+                failure_payload.update(_runtime_task_observability_fields(current))
             runtime_task_tracker.mark_internal_failure(
                 record.task_id,
-                payload={
-                    "ok": False,
-                    "task_id": record.task_id,
-                    "execution_type": "task",
-                    "request_id": record.request_id,
-                    "status": "error",
-                    "trace_id": record.trace_id,
-                    "portal_dispatch_id": record.portal_dispatch_id,
-                    "error": sanitized_message,
-                },
+                payload=failure_payload,
                 error_message=sanitized_message,
             )
             continue
