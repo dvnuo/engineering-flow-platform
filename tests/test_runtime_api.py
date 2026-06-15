@@ -2946,6 +2946,160 @@ def test_runtime_task_tracker_prune_removes_terminal_records_even_if_oldest_is_r
     assert len(remaining_terminal) == 1
 
 
+def test_runtime_task_tracker_persists_and_loads_active_records(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    tracker.create_pending(
+        task_id="task-persist",
+        request_id="task-task-persist",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id="session-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-task-1",
+        context_ref={"workspace": "w1"},
+        merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+        metadata={"task_id": "task-persist", "portal_task_id": "portal-task-1"},
+        trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+    )
+    tracker.mark_running("task-persist")
+
+    loaded = RuntimeTaskTracker(storage_dir=tmp_path)
+    assert loaded.load_persisted_records() == 1
+
+    record = loaded.get("task-persist")
+    assert record is not None
+    assert record.status == "running"
+    assert record.background_task is None
+    assert record.context_ref == {"workspace": "w1"}
+    assert record.merged_input_payload["action_id"] == "jira.transition"
+    assert record.metadata["portal_task_id"] == "portal-task-1"
+    assert [item.task_id for item in loaded.list_active()] == ["task-persist"]
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_duplicate_active_task_reuses_existing_record(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    release = asyncio.Event()
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        await release.wait()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {
+                "task_id": "task-dedupe-1",
+                "task_type": "adapter_action_task",
+                "input_payload": {"action_id": "jira.transition"},
+            }
+
+    first_response = await runtime_api.api_tasks_execute(_Request())
+    second_response = await runtime_api.api_tasks_execute(_Request())
+    second_body = json.loads(second_response.body)
+
+    assert first_response.status == 202
+    assert second_response.status == 200
+    assert second_body["task_id"] == "task-dedupe-1"
+    assert second_body["status"] in {"accepted", "running"}
+    assert len(spawned) == 1
+
+    release.set()
+    await spawned[0]
+
+
+@pytest.mark.asyncio
+async def test_resume_persisted_runtime_tasks_replays_active_record(tmp_path, monkeypatch):
+    from src.gateway import runtime_api
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    initial = RuntimeTaskTracker(storage_dir=tmp_path)
+    initial.create_pending(
+        task_id="task-resume-1",
+        request_id="task-task-resume-1",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id="session-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-task-1",
+        context_ref={"workspace": "w1"},
+        merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+        metadata={"task_id": "task-resume-1", "portal_task_id": "portal-task-1"},
+        trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+    )
+    initial.mark_running("task-resume-1")
+
+    runtime_api.runtime_task_tracker.reset()
+    tracker = RuntimeTaskTracker()
+    monkeypatch.setattr(runtime_api, "runtime_task_tracker", tracker)
+    monkeypatch.setenv("EFP_RUNTIME_TASKS_DIR", str(tmp_path))
+    spawned = []
+    captured = {}
+    emitted = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    async def _fake_emit_task_lifecycle_event(event_type, **kwargs):
+        emitted.append(event_type)
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_emit_task_lifecycle_event", _fake_emit_task_lifecycle_event)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    resumed = await runtime_api.resume_persisted_runtime_tasks()
+
+    assert resumed == 1
+    assert len(spawned) == 1
+    await spawned[0]
+
+    record = tracker.get("task-resume-1")
+    assert record is not None
+    assert record.status == "success"
+    assert record.resume_count == 1
+    assert captured["metadata"]["runtime_task_resumed"] is True
+    assert captured["metadata"]["runtime_task_resume_count"] == 1
+    assert "task.resumed" in emitted
+
+
 @pytest.mark.asyncio
 async def test_api_chat_returns_display_blocks(monkeypatch):
     from src.gateway import runtime_api
