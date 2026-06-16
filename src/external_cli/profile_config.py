@@ -551,17 +551,18 @@ def _apply_aws(
 
     metadata["aws"] = {
         "auth_type": "aws_auth_cli",
-        "credentials_path": str(credentials_path),
-        "credentials_section": credentials_section,
         "command": _format_command(aws_config["command"], (aws_config["password"],)),
-        "previous": {
-            "credentials": previous_credentials,
-        },
+        "previous": {},
     }
+    if previous_credentials is not None:
+        metadata["aws"]["credentials_path"] = str(credentials_path)
+        metadata["aws"]["credentials_section"] = credentials_section
+        metadata["aws"]["previous"]["credentials"] = previous_credentials
 
     try:
         _run_cli(
             aws_config["command"],
+            input_text=aws_config["password"],
             env=_aws_env(cli_environment),
             secrets=(aws_config["password"],),
             env_secrets=cli_environment.secrets,
@@ -584,12 +585,22 @@ def _build_aws_config(profile_config: dict[str, Any]) -> dict[str, Any] | None:
         "domain": domain,
         "username": username,
         "password": password,
-        "command": _aws_command(),
+        "command": _aws_configure_command(domain=domain, username=username),
     }
 
 
-def _aws_command() -> list[str]:
-    return [_AWS_AUTH_DEFAULT_COMMAND, "login", "--json"]
+def _aws_configure_command(*, domain: str, username: str) -> list[str]:
+    return [
+        _AWS_AUTH_DEFAULT_COMMAND,
+        "auth",
+        "login",
+        "--domain",
+        domain,
+        "--username",
+        username,
+        "--password-stdin",
+        "--json",
+    ]
 
 
 def _aws_env(cli_environment: _CliEnvironment) -> dict[str, str]:
@@ -612,8 +623,6 @@ def _restore_aws_profile(aws_meta: dict[str, Any]) -> None:
     credentials_section = _string_or_empty(aws_meta.get("credentials_section")) or profile_name
     previous = aws_meta.get("previous") if isinstance(aws_meta.get("previous"), dict) else {}
 
-    credentials_path = Path(str(aws_meta.get("credentials_path") or _aws_credentials_path()))
-
     previous_config = previous.get("config") if isinstance(previous.get("config"), dict) else None
     previous_credentials = previous.get("credentials") if isinstance(previous.get("credentials"), dict) else None
 
@@ -625,10 +634,13 @@ def _restore_aws_profile(aws_meta: dict[str, Any]) -> None:
         else:
             _set_ini_section_exact(config_path, config_section, previous_config)
 
-    if previous_credentials is None:
-        _remove_ini_section(credentials_path, credentials_section)
-    else:
-        _set_ini_section_exact(credentials_path, credentials_section, previous_credentials)
+    credentials_path_value = aws_meta.get("credentials_path")
+    if credentials_path_value or previous_credentials is not None:
+        credentials_path = Path(str(credentials_path_value or _aws_credentials_path()))
+        if previous_credentials is None:
+            _remove_ini_section(credentials_path, credentials_section)
+        else:
+            _set_ini_section_exact(credentials_path, credentials_section, previous_credentials)
 
     for key in ("auth_path", "helper_path"):
         raw_path = aws_meta.get(key)

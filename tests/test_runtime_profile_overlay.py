@@ -278,7 +278,18 @@ def test_runtime_profile_aws_external_config_runs_aws_auth_tool_and_clears_files
 
     assume_call = next(call for call in recorder.calls if call["args"][0] == "aws-auth")
     assume_args = assume_call["args"]
-    assert assume_args == ["aws-auth", "login", "--json"]
+    assert assume_args == [
+        "aws-auth",
+        "auth",
+        "login",
+        "--domain",
+        "HBEU",
+        "--username",
+        "aws-user",
+        "--password-stdin",
+        "--json",
+    ]
+    assert assume_call["input"] == "aws-password"
     assert "aws-password" not in " ".join(assume_args)
     assume_env = assume_call["env"]
     assert "AD_PASS" not in assume_env
@@ -307,6 +318,7 @@ def test_runtime_profile_aws_auth_failure_redacts_password(tmp_path, monkeypatch
 
     def fail_aws_auth(args, input=None, text=False, capture_output=False, check=False, env=None):
         captured["args"] = list(args)
+        captured["input"] = input
         captured["env"] = dict(env or {})
         return _FakeCompleted(returncode=1, stderr="login failed for aws-password")
 
@@ -324,7 +336,18 @@ def test_runtime_profile_aws_auth_failure_redacts_password(tmp_path, monkeypatch
             }
         )
 
-    assert captured["args"] == ["aws-auth", "login", "--json"]
+    assert captured["args"] == [
+        "aws-auth",
+        "auth",
+        "login",
+        "--domain",
+        "HBEU",
+        "--username",
+        "aws-user",
+        "--password-stdin",
+        "--json",
+    ]
+    assert captured["input"] == "aws-password"
     assert "AD_PASS" not in captured["env"]
     assert "aws-password" not in str(exc.value)
     assert "[REDACTED_SECRET]" in str(exc.value)
