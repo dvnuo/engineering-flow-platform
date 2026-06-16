@@ -534,7 +534,16 @@ def test_runtime_profile_apply_filters_unmanaged_nested_fields_from_snapshot(tmp
 def test_runtime_profile_apply_prunes_stale_managed_proxy_fields(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
-    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
+    for key in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "no_proxy",
+        "NO_PROXY",
+    ]:
         monkeypatch.delenv(key, raising=False)
 
     cfg = Config(str(config_path))
@@ -544,18 +553,40 @@ def test_runtime_profile_apply_prunes_stale_managed_proxy_fields(tmp_path, monke
         {"proxy": {"enabled": True, "url": "http://overlay.proxy.local:8080", "password": "secret"}},
     )
     assert os.environ["http_proxy"] == "http://overlay.proxy.local:8080"
+    assert os.environ["all_proxy"] == "http://overlay.proxy.local:8080"
+    assert os.environ["ALL_PROXY"] == "http://overlay.proxy.local:8080"
 
     cfg.set_managed_overlay("rp_proxy", 2, {"llm": {"provider": "openai"}})
     cfg.load()
     assert cfg.proxy.get("enabled") is None
     assert cfg.proxy.get("url") is None
     assert cfg.proxy.get("password") is None
+    for key in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "no_proxy",
+        "NO_PROXY",
+    ]:
+        assert key not in os.environ
 
 
 def test_runtime_profile_apply_allows_proxy_no_proxy_fields(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
-    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
+    for key in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "no_proxy",
+        "NO_PROXY",
+    ]:
         monkeypatch.delenv(key, raising=False)
 
     cfg = Config(str(config_path))
@@ -622,7 +653,16 @@ def test_set_managed_overlay_external_cli_failure_is_non_fatal(tmp_path, monkeyp
     config_path = tmp_path / "config.yaml"
     runtime_profile_path = tmp_path / "runtime_profile.yaml"
     _write_base_config(config_path)
-    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
+    for key in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "no_proxy",
+        "NO_PROXY",
+    ]:
         monkeypatch.delenv(key, raising=False)
     token = "gh-secret-token"
     proxy_password = "proxy-url-secret"
