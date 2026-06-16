@@ -9,11 +9,11 @@ services:
     volumes:
       # Config file - required
       - ./config.yaml:/app/config.yaml:ro
-      
+
       # Runtime workspace directory - persists across restarts.
-      # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
+      # Contains AGENTS.md and project working files.
       - ./workspace:/workspace
-      
+
       # Optional: logs directory
       - ./logs:/app/logs
     environment:
@@ -28,11 +28,5 @@ services:
 
 # Example workspace structure after running:
 # ./workspace/
-# ├── SOUL.md        # Agent persona
-# ├── USER.md        # User preferences
-# ├── AGENTS.md      # Workspace conventions
-# ├── TOOLS.md       # Tool configurations
-# ├── MEMORY.md      # Long-term memory
-# └── memory/
-#     ├── 2026-02-01.md
-#     └── 2026-02-02.md
+# |-- AGENTS.md      # Workspace instructions
+# `-- project files

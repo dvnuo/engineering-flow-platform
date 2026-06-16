@@ -126,9 +126,6 @@ def _write_base_config(path):
         "  model: gpt-4o\n"
         "  api_base: https://api.local\n"
         "  max_retries: 3\n"
-        "  system-prompt:\n"
-        "    tools:\n"
-        "      enabled: true\n"
         "jira:\n"
         "  enabled: false\n"
         "proxy:\n"
@@ -494,7 +491,6 @@ def test_runtime_profile_apply_preserves_unmanaged_llm_subtree(tmp_path):
     assert effective["llm"]["tools"] == ["git_clone", "jira_*"]
     assert effective["llm"]["api_base"] == "https://api.local"
     assert effective["llm"]["max_retries"] == 3
-    assert effective["llm"]["system-prompt"]["tools"]["enabled"] is True
 
 
 def test_runtime_profile_apply_filters_unmanaged_nested_fields_from_snapshot(tmp_path):
@@ -510,7 +506,6 @@ def test_runtime_profile_apply_filters_unmanaged_nested_fields_from_snapshot(tmp
                 "provider": "openai",
                 "model": "gpt-5",
                 "api_base": "https://should-not-be-written",
-                "system-prompt": {"tools": {"enabled": False}},
             },
             "github": {
                 "enabled": True,
@@ -525,7 +520,6 @@ def test_runtime_profile_apply_filters_unmanaged_nested_fields_from_snapshot(tmp
     assert effective["llm"]["provider"] == "openai"
     assert effective["llm"]["model"] == "gpt-5"
     assert effective["llm"]["api_base"] == "https://api.local"
-    assert effective["llm"]["system-prompt"]["tools"]["enabled"] is True
     assert effective["github"]["enabled"] is True
     assert effective["github"]["base_url"] == "https://github.example/api"
     assert "unexpected_nested" not in effective["github"]

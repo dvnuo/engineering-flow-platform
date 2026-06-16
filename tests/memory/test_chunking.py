@@ -9,22 +9,22 @@ class TestChunkMarkdown:
     
     def test_empty_text_returns_empty_list(self):
         """Empty text should return empty list."""
-        result = chunk_markdown("", "MEMORY.md")
+        result = chunk_markdown("", "PROJECT.md")
         assert result == []
     
     def test_whitespace_only_returns_empty_list(self):
         """Whitespace-only text should return empty list."""
-        result = chunk_markdown("   \n\n   ", "MEMORY.md")
+        result = chunk_markdown("   \n\n   ", "PROJECT.md")
         assert result == []
     
     def test_no_headings_chunks_entire_text(self):
         """Text without headings should be treated as single chunk."""
         text = "This is a short piece of text without any headings."
-        result = chunk_markdown(text, "MEMORY.md")
+        result = chunk_markdown(text, "PROJECT.md")
         
         assert len(result) == 1
         assert result[0].text == text
-        assert result[0].meta["source"] == "MEMORY.md"
+        assert result[0].meta["source"] == "PROJECT.md"
         assert result[0].meta["heading"] == ""
     
     def test_single_heading(self):
@@ -34,7 +34,7 @@ class TestChunkMarkdown:
 This is some content under the main heading.
 It has multiple lines of content.
 """
-        result = chunk_markdown(text, "MEMORY.md")
+        result = chunk_markdown(text, "PROJECT.md")
         
         assert len(result) == 1
         assert "Main Heading" in result[0].meta["heading"]
@@ -54,7 +54,7 @@ Content for section two.
 
 Content for section three.
 """
-        result = chunk_markdown(text, "MEMORY.md")
+        result = chunk_markdown(text, "PROJECT.md")
         
         assert len(result) == 3
         assert "Section One" in result[0].meta["heading"]
@@ -71,23 +71,23 @@ Content for section three.
 {long_paragraph}
 {long_paragraph}
 """
-        result = chunk_markdown(text, "MEMORY.md", max_chars=1200)
+        result = chunk_markdown(text, "PROJECT.md", max_chars=1200)
         
         # Should have multiple chunks
         assert len(result) > 1
     
-    def test_daily_note_kind(self):
-        """Daily notes should use 'daily' kind and include date."""
-        text = """# Daily Notes
+    def test_dated_document_kind(self):
+        """Dated documents should use the dated kind and include date."""
+        text = """# Work Log
 
-Some daily content.
+Some dated content.
 """
-        result = chunk_markdown(text, "2026-03-03.md", kind="daily", date="2026-03-03")
+        result = chunk_markdown(text, "2026-03-03.md", kind="dated", date="2026-03-03")
         
         assert len(result) == 1
-        assert result[0].meta["kind"] == "daily"
+        assert result[0].meta["kind"] == "dated"
         assert result[0].meta["date"] == "2026-03-03"
-        assert result[0].id.startswith("daily:")
+        assert result[0].id.startswith("dated:")
     
     def test_chunk_id_format(self):
         """Chunk IDs should follow the expected format."""
@@ -95,11 +95,11 @@ Some daily content.
 
 Content here.
 """
-        result = chunk_markdown(text, "MEMORY.md")
+        result = chunk_markdown(text, "PROJECT.md")
         
         assert len(result) == 1
         chunk_id = result[0].id
-        assert "mem:MEMORY.md#" in chunk_id
+        assert "doc:PROJECT.md#" in chunk_id
         assert "my-heading" in chunk_id
         # Chunk number should be present (e.g., -01)
         assert "-01" in chunk_id

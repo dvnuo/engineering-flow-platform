@@ -145,7 +145,6 @@ def load_runtime_api_lightweight():
             sanitize_exception_message=lambda x, *_a, **_k: str(x),
         ),
         "src.utils.logger": _module("src.utils.logger", clear_log_context=lambda: None, set_log_context=lambda **_k: None),
-        "src.hooks.session_memory": _module("src.hooks.session_memory", save_session_summary=_noop_async),
         "src.agents.errors": _module("src.agents.errors", extract_error_details=lambda *_a, **_k: {}, LLMError=RuntimeError),
         "src.hooks.file_context": file_context_pkg,
         "src.hooks.file_context.models": _module(

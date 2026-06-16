@@ -322,26 +322,10 @@ session:
 
 ---
 
-## Memory System
+## Workspace Instructions
 
-### Workspace Files
-
-Located at `/workspace/` by default:
-
-| File | Purpose |
-|------|---------|
-| `SOUL.md` | Agent persona and behavior |
-| `USER.md` | User preferences |
-| `AGENTS.md` | Workspace conventions |
-| `TOOLS.md` | Tool configurations |
-| `MEMORY.md` | Long-term memory |
-| `memory/YYYY-MM-DD.md` | Daily memory |
-
-### Memory Generation
-
-- **Startup**: Generates daily memory from session events
-- **Hourly**: Checks for changes, regenerates if needed
-- **Long-term**: Consolidates last 3 days to MEMORY.md
+Native runtime loads `/workspace/AGENTS.md` as the editable workspace
+instruction file. The Portal system prompt editor maps to that same file.
 
 ---
 

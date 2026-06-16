@@ -207,7 +207,7 @@ class TestGatewayRequestHandling:
 
 
 class TestGatewaySystemPromptContract:
-    """System prompt compatibility routes should match runtime behavior."""
+    """System prompt routes should expose AGENTS.md as the only native surface."""
 
     @pytest.mark.asyncio
     async def test_system_prompt_routes_are_agents_only(self, monkeypatch, tmp_path):
@@ -235,6 +235,7 @@ class TestGatewaySystemPromptContract:
             assert cfg["runtime_type"] == "native"
             assert cfg["sections"] == ["agents"]
             assert cfg["agents"]["can_disable"] is False
+            assert "unsupported_sections" not in cfg
             assert (tmp_path / "AGENTS.md").exists()
 
             ok_response = await client.put(
@@ -251,7 +252,7 @@ class TestGatewaySystemPromptContract:
 
             unsupported_response = await client.put(
                 "/api/agent/system-prompt/config",
-                json={"soul": {"enabled": True}},
+                json={"legacy": {"enabled": True}},
             )
             assert unsupported_response.status == 422
 
@@ -275,14 +276,13 @@ class TestGatewaySystemPromptContract:
             )
             assert invalid_enabled_response.status == 400
 
-            for name in ["soul", "user", "tools", "memory", "daily_notes"]:
-                get_unsupported = await client.get(f"/api/agent/system-prompt/{name}")
-                put_unsupported = await client.put(
-                    f"/api/agent/system-prompt/{name}",
-                    json={"content": "x"},
-                )
-                assert get_unsupported.status == 422
-                assert put_unsupported.status == 422
+            get_unsupported = await client.get("/api/agent/system-prompt/legacy")
+            put_unsupported = await client.put(
+                "/api/agent/system-prompt/legacy",
+                json={"content": "x"},
+            )
+            assert get_unsupported.status == 422
+            assert put_unsupported.status == 422
         finally:
             await client.close()
 
