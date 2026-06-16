@@ -9,6 +9,7 @@ import os
 import shlex
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,103 @@ _GIT_INCLUDE_END = "# END EFP_RUNTIME_PROFILE_GIT_INCLUDE"
 _REDACTED_SECRET = "[REDACTED_SECRET]"
 _PROXY_URL_ENV_KEYS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
 _PROFILE_SECRET_KEY_NAMES = frozenset({"api_key", "password", "token", "api_token", "access_token", "secret"})
+_AWS_ADFS_DEFAULT_COMMAND = "adfs assume"
+_AWS_ADFS_HELPER = r"""#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+
+def _redact(text: str, secrets: list[str]) -> str:
+    value = str(text or "")
+    for secret in sorted((s for s in secrets if s), key=len, reverse=True):
+        value = value.replace(secret, "[REDACTED_SECRET]")
+    return value
+
+
+def _credentials_payload(raw: object) -> dict:
+    data = raw.get("Credentials") if isinstance(raw, dict) and isinstance(raw.get("Credentials"), dict) else raw
+    if not isinstance(data, dict):
+        raise ValueError("credential command did not return a JSON object")
+    payload = {
+        "Version": int(data.get("Version") or 1),
+        "AccessKeyId": data.get("AccessKeyId") or data.get("aws_access_key_id") or data.get("access_key_id"),
+        "SecretAccessKey": data.get("SecretAccessKey") or data.get("aws_secret_access_key") or data.get("secret_access_key"),
+        "SessionToken": data.get("SessionToken") or data.get("Token") or data.get("aws_session_token") or data.get("session_token"),
+    }
+    expiration = data.get("Expiration") or data.get("expiration")
+    if expiration:
+        payload["Expiration"] = expiration
+    missing = [key for key in ("AccessKeyId", "SecretAccessKey", "SessionToken") if not payload.get(key)]
+    if missing:
+        raise ValueError("credential command JSON missing " + ", ".join(missing))
+    return payload
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: aws-adfs-credential-process.py <auth-json>", file=sys.stderr)
+        return 2
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    command = config.get("command")
+    if not isinstance(command, list) or not all(isinstance(arg, str) and arg for arg in command):
+        print("invalid ADFS credential command", file=sys.stderr)
+        return 2
+    username = str(config.get("username") or "")
+    password = str(config.get("password") or "")
+    secrets = [username, password]
+    env = os.environ.copy()
+    if username:
+        env["username"] = username
+        env["ADFS_USERNAME"] = username
+        env["AWS_ADFS_USERNAME"] = username
+    if password:
+        env["password"] = password
+        env["ADFS_PASSWORD"] = password
+        env["AWS_ADFS_PASSWORD"] = password
+    profile = str(config.get("profile") or "").strip()
+    if profile:
+        env["AWS_PROFILE"] = profile
+        env["AWS_DEFAULT_PROFILE"] = profile
+    region = str(config.get("region") or "").strip()
+    if region:
+        env["AWS_REGION"] = region
+        env["AWS_DEFAULT_REGION"] = region
+    output = str(config.get("output") or "").strip()
+    if output:
+        env["AWS_DEFAULT_OUTPUT"] = output
+    command = [
+        arg.replace("{username}", username)
+        .replace("{password}", password)
+        .replace("{profile}", profile)
+        .replace("{region}", region)
+        for arg in command
+    ]
+    stdin_text = f"{username}\n{password}\n" if "--stdin" in command else None
+    result = subprocess.run(command, input=stdin_text, text=True, capture_output=True, check=False, env=env)
+    if result.returncode != 0:
+        detail = _redact((result.stderr or result.stdout or "").strip(), secrets)
+        if detail:
+            print(detail, file=sys.stderr)
+        return result.returncode or 1
+    stdout = (result.stdout or "").strip()
+    try:
+        raw_payload = json.loads(stdout)
+        payload = _credentials_payload(raw_payload)
+    except Exception as exc:
+        print(_redact(f"invalid ADFS credential output: {exc}", secrets), file=sys.stderr)
+        return 1
+    print(json.dumps(payload, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
 _yaml = YAML()
 _yaml.default_flow_style = False
 
@@ -537,7 +635,7 @@ def _apply_aws(
     *,
     metadata: dict[str, Any],
 ) -> None:
-    aws_profile = _build_aws_profile(profile_config)
+    aws_profile = _build_aws_adfs_profile(profile_config)
     if aws_profile is None:
         return
 
@@ -550,52 +648,113 @@ def _apply_aws(
     previous_config = _read_ini_section(config_path, config_section)
     previous_credentials = _read_ini_section(credentials_path, credentials_section)
 
-    config_values = {}
-    for key in ("region", "output"):
-        if aws_profile.get(key):
-            config_values[key] = aws_profile[key]
-    _set_ini_section_exact(config_path, config_section, config_values)
-
-    credential_values = {}
-    if aws_profile.get("access_key_id"):
-        credential_values["aws_access_key_id"] = aws_profile["access_key_id"]
-    if aws_profile.get("secret_access_key"):
-        credential_values["aws_secret_access_key"] = aws_profile["secret_access_key"]
-    if aws_profile.get("session_token"):
-        credential_values["aws_session_token"] = aws_profile["session_token"]
-    if credential_values:
-        _set_ini_section_exact(credentials_path, credentials_section, credential_values)
-
+    auth_path = _aws_adfs_auth_path()
+    helper_path = _aws_adfs_helper_path()
     metadata["aws"] = {
         "profile": profile_name,
+        "auth_type": "adfs_credential_process",
         "config_path": str(config_path),
         "credentials_path": str(credentials_path),
         "config_section": config_section,
         "credentials_section": credentials_section,
+        "auth_path": str(auth_path),
+        "helper_path": str(helper_path),
         "previous": {
             "config": previous_config,
             "credentials": previous_credentials,
         },
     }
 
+    _write_aws_adfs_helper(helper_path)
+    _write_private_text(
+        auth_path,
+        json.dumps(
+            {
+                "command": aws_profile["command"],
+                "username": aws_profile["username"],
+                "password": aws_profile["password"],
+                "profile": profile_name,
+                "region": aws_profile.get("region") or "",
+                "output": aws_profile.get("output") or "",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
 
-def _build_aws_profile(profile_config: dict[str, Any]) -> dict[str, str] | None:
+    config_values = {
+        "credential_process": _format_credential_process([sys.executable, str(helper_path), str(auth_path)]),
+    }
+    for key in ("region", "output"):
+        if aws_profile.get(key):
+            config_values[key] = aws_profile[key]
+    _set_ini_section_exact(config_path, config_section, config_values)
+    _remove_ini_section(credentials_path, credentials_section)
+
+
+def _build_aws_adfs_profile(profile_config: dict[str, Any]) -> dict[str, Any] | None:
     aws = profile_config.get("aws") if isinstance(profile_config, dict) else None
     if not isinstance(aws, dict) or aws.get("enabled") is False:
         return None
     profile = _single_line(aws.get("profile") or aws.get("profile_name") or "default") or "default"
+    username = _single_line(
+        aws.get("username")
+        or aws.get("adfs_username")
+        or aws.get("account")
+        or aws.get("account_name")
+    )
+    password = _string_or_empty(aws.get("password") or aws.get("adfs_password"))
+    if not username or not password:
+        return None
+    command = _aws_adfs_command(aws)
     built = {
         "profile": profile,
         "region": _single_line(aws.get("region") or aws.get("default_region")),
         "output": _single_line(aws.get("output")),
-        "account_id": _single_line(aws.get("account_id")),
-        "access_key_id": _single_line(aws.get("access_key_id") or aws.get("aws_access_key_id")),
-        "secret_access_key": _string_or_empty(aws.get("secret_access_key") or aws.get("aws_secret_access_key")),
-        "session_token": _string_or_empty(aws.get("session_token") or aws.get("aws_session_token")),
+        "username": username,
+        "password": password,
+        "command": command,
     }
-    if not any(value for key, value in built.items() if key != "profile"):
-        return None
     return built
+
+
+def _aws_adfs_command(aws: dict[str, Any]) -> list[str]:
+    raw_command = (
+        aws.get("assume_command")
+        or aws.get("adfs_command")
+        or os.environ.get("EFP_AWS_ADFS_ASSUME_COMMAND")
+        or _AWS_ADFS_DEFAULT_COMMAND
+    )
+    command = _shell_words(raw_command)
+    if not command:
+        command = _shell_words(_AWS_ADFS_DEFAULT_COMMAND)
+    args = aws.get("assume_args") or aws.get("adfs_args")
+    command.extend(_shell_words(args))
+    return command
+
+
+def _shell_words(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [_single_line(item) for item in value if _single_line(item)]
+    text = _string_or_empty(value)
+    if not text:
+        return []
+    return shlex.split(text)
+
+
+def _format_credential_process(args: list[str]) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline(args)
+    return shlex.join(args)
+
+
+def _write_aws_adfs_helper(path: Path) -> None:
+    _write_private_text(path, _AWS_ADFS_HELPER)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
 
 
 def _restore_aws_profile(aws_meta: dict[str, Any]) -> None:
@@ -619,6 +778,11 @@ def _restore_aws_profile(aws_meta: dict[str, Any]) -> None:
         _remove_ini_section(credentials_path, credentials_section)
     else:
         _set_ini_section_exact(credentials_path, credentials_section, previous_credentials)
+
+    for key in ("auth_path", "helper_path"):
+        raw_path = aws_meta.get(key)
+        if raw_path:
+            _remove_file_if_exists(Path(str(raw_path)))
 
 
 def _extract_git_user(profile_config: dict[str, Any]) -> tuple[str, str] | None:
@@ -739,6 +903,8 @@ def _is_profile_secret_key(key: str) -> bool:
         "accesstoken",
         "secretaccesskey",
         "sessiontoken",
+        "adfspassword",
+        "awspassword",
         "secret",
     } or str(key or "").lower() in _PROFILE_SECRET_KEY_NAMES
 
@@ -811,6 +977,14 @@ def _aws_config_path() -> Path:
 
 def _aws_credentials_path() -> Path:
     return _home_path() / ".aws" / "credentials"
+
+
+def _aws_adfs_auth_path() -> Path:
+    return _home_path() / ".config" / "efp" / "runtime-profile-aws-adfs-auth.json"
+
+
+def _aws_adfs_helper_path() -> Path:
+    return _home_path() / ".config" / "efp" / "aws-adfs-credential-process.py"
 
 
 def _aws_config_section_name(profile_name: str) -> str:
