@@ -1729,15 +1729,55 @@ def _runtime_task_waiting_for_user(record: Any) -> bool:
     )
 
 
+def _rehydrate_waiting_runtime_task_session_lane(session_key: Optional[str]) -> Optional[Any]:
+    if not session_key or runtime_task_session_coordinator.active_task_id(session_key):
+        return None
+    finder = getattr(runtime_task_tracker, "find_waiting_for_user_by_session", None)
+    waiting_record = finder(session_key) if callable(finder) else None
+    if waiting_record is None:
+        return None
+    decision = runtime_task_session_coordinator.schedule(
+        session_key,
+        waiting_record.task_id,
+        admitted_seq=int(getattr(waiting_record, "admitted_seq", 0) or 0),
+        delivery=str(getattr(waiting_record, "input_delivery", "steer") or "steer"),
+    )
+    if decision.action not in {"start", "active"}:
+        return None
+    runtime_task_session_coordinator.hold_for_user_input(session_key, waiting_record.task_id)
+    logger.info(
+        "Runtime task session lane rehydrated for pending user input | task_id=%s session_id=%s",
+        waiting_record.task_id,
+        session_key,
+    )
+    return waiting_record
+
+
+def _rehydrate_waiting_runtime_task_session_lanes() -> int:
+    lister = getattr(runtime_task_tracker, "list_waiting_for_user", None)
+    waiting_records = lister() if callable(lister) else []
+    rehydrated_count = 0
+    for record in waiting_records:
+        session_key = _runtime_task_session_key(record)
+        if not session_key:
+            continue
+        rehydrated = _rehydrate_waiting_runtime_task_session_lane(session_key)
+        if rehydrated is not None and rehydrated.task_id == record.task_id:
+            rehydrated_count += 1
+    return rehydrated_count
+
+
 def _reconcile_runtime_task_session_lane(session_key: Optional[str]) -> None:
     if not session_key:
         return
     active_task_id = runtime_task_session_coordinator.active_task_id(session_key)
     if not active_task_id:
+        _rehydrate_waiting_runtime_task_session_lane(session_key)
         return
     active_record = runtime_task_tracker.get(active_task_id)
     if active_record is None:
         runtime_task_session_coordinator.clear(session_key)
+        _rehydrate_waiting_runtime_task_session_lane(session_key)
         return
     if _runtime_task_waiting_for_user(active_record):
         return
@@ -2430,6 +2470,7 @@ async def resume_persisted_runtime_tasks() -> int:
 
     runtime_task_tracker.configure_storage(storage_dir)
     loaded_count = runtime_task_tracker.load_persisted_records()
+    rehydrated_waiting_count = _rehydrate_waiting_runtime_task_session_lanes()
     resumed_count = 0
     for record in runtime_task_tracker.list_active():
         background_task = getattr(record, "background_task", None)
@@ -2474,10 +2515,11 @@ async def resume_persisted_runtime_tasks() -> int:
         )
     if loaded_count or resumed_count:
         logger.info(
-            "Runtime task recovery initialized | storage_dir=%s loaded=%s resumed=%s",
+            "Runtime task recovery initialized | storage_dir=%s loaded=%s resumed=%s waiting_lanes=%s",
             storage_dir,
             loaded_count,
             resumed_count,
+            rehydrated_waiting_count,
         )
     return resumed_count
 

@@ -260,6 +260,21 @@ class RuntimeTaskTracker:
     def list_active(self) -> list[RuntimeTaskRecord]:
         return [record for record in self._records.values() if record.status not in _TASK_TERMINAL_STATUSES]
 
+    def list_waiting_for_user(self) -> list[RuntimeTaskRecord]:
+        return sorted(
+            [record for record in self._records.values() if _record_waiting_for_user(record)],
+            key=_record_order_key,
+        )
+
+    def find_waiting_for_user_by_session(self, session_id: str) -> Optional[RuntimeTaskRecord]:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return None
+        for record in self.list_waiting_for_user():
+            if _record_session_key(record) == normalized_session_id:
+                return record
+        return None
+
     def mark_resuming(self, task_id: str) -> Optional[RuntimeTaskRecord]:
         record = self._records.get(task_id)
         if record is None or record.status in _TASK_TERMINAL_STATUSES:
@@ -391,7 +406,7 @@ class RuntimeTaskTracker:
         while len(self._records) > self._max_records:
             removable_task_id: Optional[str] = None
             for task_id, record in self._records.items():
-                if record.status in _TASK_TERMINAL_STATUSES:
+                if record.status in _TASK_TERMINAL_STATUSES and not _record_waiting_for_user(record):
                     removable_task_id = task_id
                     break
             if removable_task_id is None:
@@ -520,6 +535,25 @@ def _admission_id(*, task_id: str, input_hash: str) -> str:
 def _attempt_id(*, task_id: str, attempt_count: int, started_at: str) -> str:
     digest = _stable_digest({"task_id": task_id, "attempt_count": attempt_count, "started_at": started_at})
     return f"task_attempt_{digest[:24]}"
+
+
+def _record_session_key(record: RuntimeTaskRecord) -> Optional[str]:
+    return record.task_session_id or record.session_id
+
+
+def _record_order_key(record: RuntimeTaskRecord) -> tuple[int, str, str]:
+    admitted_seq = int(record.admitted_seq or 0)
+    return (admitted_seq if admitted_seq > 0 else 2**63 - 1, record.accepted_at or "", record.task_id)
+
+
+def _record_waiting_for_user(record: RuntimeTaskRecord) -> bool:
+    return bool(
+        record.status == "blocked"
+        and (
+            record.pending_permission_request is not None
+            or record.pending_question_request is not None
+        )
+    )
 
 
 def _find_observation(value: Any, key: str) -> Optional[Dict[str, Any]]:

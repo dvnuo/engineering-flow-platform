@@ -3579,6 +3579,118 @@ async def test_blocked_runtime_task_holds_session_lane_until_cancel(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_persisted_blocked_runtime_task_rehydrates_session_lane_before_new_input(monkeypatch, tmp_path):
+    from src.gateway import runtime_api
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    persisted_tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    blocked_record = persisted_tracker.create_pending(
+        task_id="task-persisted-blocked-lane",
+        request_id="task-task-persisted-blocked-lane",
+        task_type="generic_agent_task",
+        source="portal",
+        session_id="persisted-blocked-lane",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-blocked-1",
+        merged_input_payload={
+            "task_type": "generic_agent_task",
+            "task_session_id": "persisted-blocked-lane",
+            "prompt": "Needs permission.",
+        },
+        metadata={"task_id": "task-persisted-blocked-lane", "portal_task_id": "portal-blocked-1"},
+        trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+        task_session_id="persisted-blocked-lane",
+    )
+    persisted_tracker.mark_terminal(
+        blocked_record.task_id,
+        status="blocked",
+        payload={
+            "ok": False,
+            "status": "blocked",
+            "pending_permission_request": {
+                "request_id": "perm-persisted-1",
+                "tool_id": "write",
+            },
+        },
+    )
+
+    runtime_api.runtime_task_session_coordinator.reset()
+    recovered_tracker = RuntimeTaskTracker()
+    monkeypatch.setattr(runtime_api, "runtime_task_tracker", recovered_tracker)
+    monkeypatch.setenv("EFP_RUNTIME_TASKS_DIR", str(tmp_path))
+    spawned = []
+    calls = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        calls.append(kwargs["request_id"])
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    resumed_count = await runtime_api.resume_persisted_runtime_tasks()
+    assert resumed_count == 0
+    assert spawned == []
+
+    recovered_blocked = runtime_api.runtime_task_tracker.get("task-persisted-blocked-lane")
+    assert recovered_blocked is not None
+    blocked_status = runtime_api._runtime_task_status_payload(recovered_blocked)
+    assert blocked_status["status"] == "blocked"
+    assert blocked_status["session_lane_status"] == "blocked"
+    assert blocked_status["session_active_task_id"] == "task-persisted-blocked-lane"
+
+    class _ExecuteRequest:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {
+                "task_id": "task-after-persisted-blocked-lane",
+                "task_type": "generic_agent_task",
+                "input_payload": {
+                    "task_session_id": "persisted-blocked-lane",
+                    "prompt": "Run after restart.",
+                },
+            }
+
+    response = await runtime_api.api_tasks_execute(_ExecuteRequest())
+    assert response.status == 202
+    assert spawned == []
+
+    queued_record = runtime_api.runtime_task_tracker.get("task-after-persisted-blocked-lane")
+    assert queued_record is not None
+    queued_status = runtime_api._runtime_task_status_payload(queued_record)
+    assert queued_status["session_lane_status"] == "queued"
+    assert queued_status["session_active_task_id"] == "task-persisted-blocked-lane"
+
+    class _CancelRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-persisted-blocked-lane"}
+
+    cancel_response = await runtime_api.api_task_cancel(_CancelRequest())
+    assert cancel_response.status == 200
+    assert len(spawned) == 1
+    await spawned[0]
+
+    assert calls == ["task-task-after-persisted-blocked-lane"]
+    assert runtime_api.runtime_task_tracker.get("task-persisted-blocked-lane").status == "cancelled"
+    assert runtime_api.runtime_task_tracker.get("task-after-persisted-blocked-lane").status == "success"
+
+
+@pytest.mark.asyncio
 async def test_api_task_permission_respond_resumes_blocked_task(monkeypatch):
     from src.gateway import runtime_api
 
