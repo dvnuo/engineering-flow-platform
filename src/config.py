@@ -219,15 +219,10 @@ def _has_github_profile_token(section: Any) -> bool:
 def _has_aws_profile_config(section: Any) -> bool:
     if not isinstance(section, dict) or section.get("enabled") is False:
         return False
-    username = str(
-        section.get("username")
-        or section.get("adfs_username")
-        or section.get("account")
-        or section.get("account_name")
-        or ""
-    ).strip()
-    password = str(section.get("password") or section.get("adfs_password") or "").strip()
-    return bool(username and password)
+    domain = str(section.get("domain") or "").strip()
+    username = str(section.get("username") or "").strip()
+    password = str(section.get("password") or "").strip()
+    return bool(domain and username and password)
 
 
 def _has_git_profile_user(section: Any) -> bool:
@@ -313,47 +308,9 @@ class Config:
         },
         "aws": {
             "enabled": True,
-            "profile": True,
-            "profile_name": True,
-            "region": True,
-            "default_region": True,
-            "output": True,
-            "account_no": True,
-            "account_id": True,
-            "aws_account_no": True,
-            "username": True,
-            "adfs_username": True,
-            "account": True,
-            "account_name": True,
-            "password": True,
-            "adfs_password": True,
-            "assume_command": True,
-            "adfs_command": True,
-            "assume_args": True,
-            "adfs_args": True,
-            "role": True,
-            "role_name": True,
             "domain": True,
-            "config": True,
-            "config_path": True,
-            "adfs_config": True,
-            "idp_proxy": True,
-            "idpProxy": True,
-            "session_duration_minutes": True,
-            "sessionDurationMinutes": True,
-            "log": True,
-            "log_level": True,
-            "jenkins": True,
-            "no_warning": True,
-            "display_token": True,
-            "nossl": True,
-            "adfs3_uat": True,
-            "access_key_id": True,
-            "aws_access_key_id": True,
-            "secret_access_key": True,
-            "aws_secret_access_key": True,
-            "session_token": True,
-            "aws_session_token": True,
+            "username": True,
+            "password": True,
         },
         "git": {
             "user": {

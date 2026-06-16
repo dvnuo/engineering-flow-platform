@@ -213,10 +213,8 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
             },
             "aws": {
                 "enabled": True,
-                "profile": "prod",
-                "region": "us-east-1",
-                "output": "json",
-                "username": "adfs-user",
+                "domain": "HBEU",
+                "username": "aws-user",
                 "password": "aws-password",
             },
         },
@@ -232,6 +230,7 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
     assert "aws-password" not in config_path.read_text(encoding="utf-8")
     assert applied[0]["jira"]["instances"][0]["token"] == "jira-token"
     assert applied[0]["confluence"]["instances"][0]["token"] == "conf-token"
+    assert applied[0]["aws"]["domain"] == "HBEU"
     assert applied[0]["aws"]["password"] == "aws-password"
     assert cfg.get_managed_overlay_meta()["managed_sections"] == [
         "aws",
@@ -255,29 +254,16 @@ def test_runtime_profile_aws_external_config_runs_adfs_assume_with_ad_pass_and_c
         {
             "aws": {
                 "enabled": True,
-                "profile": "prod",
-                "region": "us-east-1",
-                "output": "json",
-                "username": "adfs-user",
-                "password": "aws-password",
-                "account_no": "123456789012",
-                "role": "Engineer",
                 "domain": "HBEU",
-                "session_duration_minutes": "720",
+                "username": "aws-user",
+                "password": "aws-password",
             }
         }
     )
 
     aws_config = home / ".aws" / "config"
     aws_credentials = home / ".aws" / "credentials"
-    if os.name != "nt":
-        assert aws_config.stat().st_mode & 0o777 == 0o600
-
-    config_text = aws_config.read_text(encoding="utf-8")
-    assert "[profile prod]" in config_text
-    assert "region = us-east-1" in config_text
-    assert "output = json" in config_text
-    assert "credential_process =" not in config_text
+    assert not aws_config.exists()
     assert not aws_credentials.exists()
 
     auth_path = home / ".config" / "efp" / "runtime-profile-aws-adfs-auth.json"
@@ -289,13 +275,8 @@ def test_runtime_profile_aws_external_config_runs_adfs_assume_with_ad_pass_and_c
     assume_args = assume_call["args"]
     assert "--jenkins" in assume_args
     assert "-n" in assume_args
-    assert assume_args[assume_args.index("-u") + 1] == "adfs-user"
-    assert assume_args[assume_args.index("-p") + 1] == "prod"
-    assert assume_args[assume_args.index("-R") + 1] == "us-east-1"
-    assert assume_args[assume_args.index("-a") + 1] == "123456789012"
-    assert assume_args[assume_args.index("-r") + 1] == "Engineer"
     assert assume_args[assume_args.index("-d") + 1] == "HBEU"
-    assert assume_args[assume_args.index("--session-duration-minutes") + 1] == "720"
+    assert assume_args[assume_args.index("-u") + 1] == "aws-user"
     assert "aws-password" not in " ".join(assume_args)
     assume_env = assume_call["env"]
     assert assume_env["AD_PASS"] == "aws-password"
@@ -308,7 +289,6 @@ def test_runtime_profile_aws_external_config_runs_adfs_assume_with_ad_pass_and_c
     metadata_text = metadata_path.read_text(encoding="utf-8")
     assert "aws-password" not in metadata_text
     metadata = json.loads(metadata_text)
-    assert metadata["aws"]["profile"] == "prod"
     assert metadata["aws"]["auth_type"] == "adfs_assume_cli"
 
     profile_config_module.clear_runtime_profile_external_config()
@@ -337,16 +317,14 @@ def test_runtime_profile_aws_adfs_assume_failure_redacts_ad_pass(tmp_path, monke
             {
                 "aws": {
                     "enabled": True,
-                    "profile": "prod",
-                    "region": "us-east-1",
-                    "username": "adfs-user",
+                    "domain": "HBEU",
+                    "username": "aws-user",
                     "password": "aws-password",
-                    "assume_command": "custom-adfs-assume",
                 }
             }
         )
 
-    assert captured["args"][:1] == ["custom-adfs-assume"]
+    assert captured["args"][:1] == ["adfs-assume"]
     assert captured["env"]["AD_PASS"] == "aws-password"
     assert "aws-password" not in str(exc.value)
     assert "[REDACTED_SECRET]" in str(exc.value)

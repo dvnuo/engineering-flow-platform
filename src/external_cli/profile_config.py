@@ -539,122 +539,61 @@ def _apply_aws(
     *,
     metadata: dict[str, Any],
 ) -> None:
-    aws_profile = _build_aws_adfs_profile(profile_config)
-    if aws_profile is None:
+    aws_config = _build_aws_config(profile_config)
+    if aws_config is None:
         return
 
-    profile_name = aws_profile["profile"]
-    config_section = _aws_config_section_name(profile_name)
-    credentials_section = profile_name
-    config_path = _aws_config_path()
     credentials_path = _aws_credentials_path()
+    credentials_section = "default"
 
-    previous_config = _read_ini_section(config_path, config_section)
     previous_credentials = _read_ini_section(credentials_path, credentials_section)
 
     metadata["aws"] = {
-        "profile": profile_name,
         "auth_type": "adfs_assume_cli",
-        "config_path": str(config_path),
         "credentials_path": str(credentials_path),
-        "config_section": config_section,
         "credentials_section": credentials_section,
-        "command": _format_command(aws_profile["command"], (aws_profile["password"],)),
+        "command": _format_command(aws_config["command"], (aws_config["password"],)),
         "previous": {
-            "config": previous_config,
             "credentials": previous_credentials,
         },
     }
 
-    config_values: dict[str, str] = {}
-    for key in ("region", "output"):
-        if aws_profile.get(key):
-            config_values[key] = aws_profile[key]
     try:
-        _set_ini_section_exact(config_path, config_section, config_values)
         _run_cli(
-            aws_profile["command"],
-            env=_aws_adfs_env(aws_profile),
-            secrets=(aws_profile["password"],),
-            env_secrets=(aws_profile["password"],),
+            aws_config["command"],
+            env=_aws_env(aws_config),
+            secrets=(aws_config["password"],),
+            env_secrets=(aws_config["password"],),
         )
     except Exception:
         _restore_aws_profile(metadata["aws"])
         raise
 
 
-def _build_aws_adfs_profile(profile_config: dict[str, Any]) -> dict[str, Any] | None:
+def _build_aws_config(profile_config: dict[str, Any]) -> dict[str, Any] | None:
     aws = profile_config.get("aws") if isinstance(profile_config, dict) else None
     if not isinstance(aws, dict) or aws.get("enabled") is False:
         return None
-    profile = _single_line(aws.get("profile") or aws.get("profile_name") or "default") or "default"
-    username = _single_line(
-        aws.get("username")
-        or aws.get("adfs_username")
-        or aws.get("account")
-        or aws.get("account_name")
-    )
-    password = _string_or_empty(aws.get("password") or aws.get("adfs_password"))
-    if not username or not password:
+    domain = _single_line(aws.get("domain"))
+    username = _single_line(aws.get("username"))
+    password = _string_or_empty(aws.get("password"))
+    if not domain or not username or not password:
         return None
-    region = _single_line(aws.get("region") or aws.get("default_region"))
-    output = _single_line(aws.get("output"))
-    command = _aws_adfs_command(aws, profile=profile, region=region, username=username)
-    built = {
-        "profile": profile,
-        "region": region,
-        "output": output,
+    return {
+        "domain": domain,
         "username": username,
         "password": password,
-        "command": command,
+        "command": _aws_command(domain=domain, username=username),
     }
-    return built
 
 
-def _aws_adfs_command(aws: dict[str, Any], *, profile: str, region: str, username: str) -> list[str]:
-    raw_command = (
-        aws.get("assume_command")
-        or aws.get("adfs_command")
-        or os.environ.get("EFP_AWS_ADFS_ASSUME_COMMAND")
-        or _AWS_ADFS_DEFAULT_COMMAND
-    )
-    command = _shell_words(raw_command)
-    if not command:
-        command = _shell_words(_AWS_ADFS_DEFAULT_COMMAND)
-    if _flag_enabled(aws.get("jenkins"), default=True):
-        command.append("--jenkins")
-    if _flag_enabled(aws.get("no_warning"), default=True):
-        command.append("-n")
-    _append_cli_arg(command, "-u", username)
-    _append_cli_arg(command, "-p", profile)
-    _append_cli_arg(command, "-R", region)
-    _append_cli_arg(command, "-a", _first_aws_text(aws, "account_no", "account_id", "aws_account_no"))
-    _append_cli_arg(command, "-r", _first_aws_text(aws, "role", "role_name"))
-    _append_cli_arg(command, "-d", _first_aws_text(aws, "domain"))
-    _append_cli_arg(command, "-c", _first_aws_text(aws, "config", "config_path", "adfs_config"))
-    _append_cli_arg(command, "--idp-proxy", _first_aws_text(aws, "idp_proxy", "idpProxy"))
-    _append_cli_arg(command, "--session-duration-minutes", _first_aws_text(aws, "session_duration_minutes", "sessionDurationMinutes"))
-    _append_cli_arg(command, "--log", _first_aws_text(aws, "log", "log_level"))
-    if _flag_enabled(aws.get("display_token")):
-        command.append("-t")
-    if _flag_enabled(aws.get("nossl")):
-        command.append("--nossl")
-    if _flag_enabled(aws.get("adfs3_uat")):
-        command.append("--adfs3-uat")
-    command.extend(_shell_words(aws.get("assume_args") or aws.get("adfs_args")))
-    return command
+def _aws_command(*, domain: str, username: str) -> list[str]:
+    return [_AWS_ADFS_DEFAULT_COMMAND, "--jenkins", "-n", "-d", domain, "-u", username]
 
 
-def _aws_adfs_env(aws_profile: dict[str, Any]) -> dict[str, str]:
+def _aws_env(aws_config: dict[str, Any]) -> dict[str, str]:
     env = os.environ.copy()
-    env["AD_PASS"] = aws_profile["password"]
-    env["AWS_PROFILE"] = aws_profile["profile"]
-    env["AWS_DEFAULT_PROFILE"] = aws_profile["profile"]
-    if aws_profile.get("region"):
-        env["AWS_REGION"] = aws_profile["region"]
-        env["AWS_DEFAULT_REGION"] = aws_profile["region"]
-    if aws_profile.get("output"):
-        env["AWS_DEFAULT_OUTPUT"] = aws_profile["output"]
+    env["AD_PASS"] = aws_config["password"]
     env["PATH"] = _path_with_runtime_venv_bins(env.get("PATH", ""))
     return env
 
@@ -665,55 +604,24 @@ def _path_with_runtime_venv_bins(path_value: str) -> str:
     return os.pathsep.join(prefix + parts)
 
 
-def _append_cli_arg(command: list[str], flag: str, value: Any) -> None:
-    text = _single_line(value)
-    if text:
-        command.extend([flag, text])
-
-
-def _first_aws_text(aws: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        text = _single_line(aws.get(key))
-        if text:
-            return text
-    return ""
-
-
-def _flag_enabled(value: Any, *, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value != 0
-    return str(value).strip().lower() in {"1", "true", "on", "yes", "y", "enabled"}
-
-
-def _shell_words(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [_single_line(item) for item in value if _single_line(item)]
-    text = _string_or_empty(value)
-    if not text:
-        return []
-    return shlex.split(text)
-
-
 def _restore_aws_profile(aws_meta: dict[str, Any]) -> None:
     profile_name = _string_or_empty(aws_meta.get("profile")) or "default"
     config_section = _string_or_empty(aws_meta.get("config_section")) or _aws_config_section_name(profile_name)
     credentials_section = _string_or_empty(aws_meta.get("credentials_section")) or profile_name
     previous = aws_meta.get("previous") if isinstance(aws_meta.get("previous"), dict) else {}
 
-    config_path = Path(str(aws_meta.get("config_path") or _aws_config_path()))
     credentials_path = Path(str(aws_meta.get("credentials_path") or _aws_credentials_path()))
 
     previous_config = previous.get("config") if isinstance(previous.get("config"), dict) else None
     previous_credentials = previous.get("credentials") if isinstance(previous.get("credentials"), dict) else None
 
-    if previous_config is None:
-        _remove_ini_section(config_path, config_section)
-    else:
-        _set_ini_section_exact(config_path, config_section, previous_config)
+    config_path_value = aws_meta.get("config_path")
+    if config_path_value or previous_config is not None:
+        config_path = Path(str(config_path_value or _aws_config_path()))
+        if previous_config is None:
+            _remove_ini_section(config_path, config_section)
+        else:
+            _set_ini_section_exact(config_path, config_section, previous_config)
 
     if previous_credentials is None:
         _remove_ini_section(credentials_path, credentials_section)
@@ -835,19 +743,8 @@ def _collect_profile_config_redaction_secrets(value: Any, secrets: list[str], ke
 
 def _is_profile_secret_key(key: str) -> bool:
     normalized = "".join(ch for ch in str(key or "").lower() if ch.isalnum())
-    return normalized in {
-        "apikey",
-        "accesskeyid",
-        "password",
-        "token",
-        "apitoken",
-        "accesstoken",
-        "secretaccesskey",
-        "sessiontoken",
-        "adfspassword",
-        "awspassword",
-        "secret",
-    } or str(key or "").lower() in _PROFILE_SECRET_KEY_NAMES
+    secret_markers = ("apikey", "password", "token", "apitoken", "accesstoken", "secret", "access")
+    return any(marker in normalized for marker in secret_markers) or str(key or "").lower() in _PROFILE_SECRET_KEY_NAMES
 
 
 def _profile_proxy_redaction_secrets(profile_config: dict[str, Any]) -> tuple[str, ...]:
@@ -918,14 +815,6 @@ def _aws_config_path() -> Path:
 
 def _aws_credentials_path() -> Path:
     return _home_path() / ".aws" / "credentials"
-
-
-def _aws_adfs_auth_path() -> Path:
-    return _home_path() / ".config" / "efp" / "runtime-profile-aws-adfs-auth.json"
-
-
-def _aws_adfs_helper_path() -> Path:
-    return _home_path() / ".config" / "efp" / "aws-adfs-credential-process.py"
 
 
 def _aws_config_section_name(profile_name: str) -> str:
