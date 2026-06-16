@@ -219,15 +219,10 @@ def _has_github_profile_token(section: Any) -> bool:
 def _has_aws_profile_config(section: Any) -> bool:
     if not isinstance(section, dict) or section.get("enabled") is False:
         return False
-    username = str(
-        section.get("username")
-        or section.get("adfs_username")
-        or section.get("account")
-        or section.get("account_name")
-        or ""
-    ).strip()
-    password = str(section.get("password") or section.get("adfs_password") or "").strip()
-    return bool(username and password)
+    domain = str(section.get("domain") or "").strip()
+    username = str(section.get("username") or "").strip()
+    password = str(section.get("password") or "").strip()
+    return bool(domain and username and password)
 
 
 def _has_git_profile_user(section: Any) -> bool:
@@ -313,47 +308,9 @@ class Config:
         },
         "aws": {
             "enabled": True,
-            "profile": True,
-            "profile_name": True,
-            "region": True,
-            "default_region": True,
-            "output": True,
-            "account_no": True,
-            "account_id": True,
-            "aws_account_no": True,
-            "username": True,
-            "adfs_username": True,
-            "account": True,
-            "account_name": True,
-            "password": True,
-            "adfs_password": True,
-            "assume_command": True,
-            "adfs_command": True,
-            "assume_args": True,
-            "adfs_args": True,
-            "role": True,
-            "role_name": True,
             "domain": True,
-            "config": True,
-            "config_path": True,
-            "adfs_config": True,
-            "idp_proxy": True,
-            "idpProxy": True,
-            "session_duration_minutes": True,
-            "sessionDurationMinutes": True,
-            "log": True,
-            "log_level": True,
-            "jenkins": True,
-            "no_warning": True,
-            "display_token": True,
-            "nossl": True,
-            "adfs3_uat": True,
-            "access_key_id": True,
-            "aws_access_key_id": True,
-            "secret_access_key": True,
-            "aws_secret_access_key": True,
-            "session_token": True,
-            "aws_session_token": True,
+            "username": True,
+            "password": True,
         },
         "git": {
             "user": {
@@ -554,7 +511,6 @@ class Config:
         persisted_overlay = copy.deepcopy(external_cli_overlay)
         persisted_overlay.pop("jira", None)
         persisted_overlay.pop("confluence", None)
-        persisted_overlay.pop("aws", None)
         new_sections = set(external_cli_overlay.keys())
 
         config_document = self._load_yaml_document(self.config_path)
@@ -741,19 +697,22 @@ class Config:
     
     SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "access_token", "secret"}
     
-    def _encrypt_sensitive_fields(self, obj: Any) -> None:
+    def _encrypt_sensitive_fields(self, obj: Any, path: tuple[str, ...] = ()) -> None:
         """Recursively encrypt sensitive fields in config."""
         if self._is_mapping(obj):
             for key, value in obj.items():
+                child_path = (*path, str(key))
+                if path == ("aws",) and key == "password":
+                    continue
                 # Skip encryption for env var placeholders or already encrypted values
                 if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value and not value.startswith("ENC:") and not value.startswith("${"):
                     obj[key] = self._encrypt_value(value)
                 elif self._is_mapping(value) or self._is_sequence(value):
-                    self._encrypt_sensitive_fields(value)
+                    self._encrypt_sensitive_fields(value, child_path)
         elif self._is_sequence(obj):
             for item in obj:
                 if self._is_mapping(item) or self._is_sequence(item):
-                    self._encrypt_sensitive_fields(item)
+                    self._encrypt_sensitive_fields(item, path)
     
     def _decrypt_sensitive_fields(self, obj: Any) -> None:
         """Recursively decrypt sensitive fields in config."""
