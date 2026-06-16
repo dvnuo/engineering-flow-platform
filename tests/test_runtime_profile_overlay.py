@@ -223,11 +223,16 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
     persisted = _read_yaml(config_path)
     assert "jira" not in persisted
     assert "confluence" not in persisted
-    assert "aws" not in persisted
+    assert persisted["aws"] == {
+        "enabled": True,
+        "domain": "HBEU",
+        "username": "aws-user",
+        "password": "aws-password",
+    }
     assert persisted["instruction_texts"]
     assert "jira-token" not in config_path.read_text(encoding="utf-8")
     assert "conf-token" not in config_path.read_text(encoding="utf-8")
-    assert "aws-password" not in config_path.read_text(encoding="utf-8")
+    assert "aws-password" in config_path.read_text(encoding="utf-8")
     assert applied[0]["jira"]["instances"][0]["token"] == "jira-token"
     assert applied[0]["confluence"]["instances"][0]["token"] == "conf-token"
     assert applied[0]["aws"]["domain"] == "HBEU"
@@ -240,12 +245,12 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
     ]
 
 
-def test_runtime_profile_aws_external_config_runs_adfs_assume_with_ad_pass_and_clears_files(tmp_path, monkeypatch):
+def test_runtime_profile_aws_external_config_runs_aws_auth_tool_and_clears_files(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "/usr/local/bin")
-    for key in ("password", "ADFS_PASSWORD", "AWS_ADFS_PASSWORD"):
+    for key in ("password", "AD_PASS"):
         monkeypatch.delenv(key, raising=False)
     recorder = _CliRecorder(record_env=True)
     monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
@@ -271,25 +276,20 @@ def test_runtime_profile_aws_external_config_runs_adfs_assume_with_ad_pass_and_c
     assert not auth_path.exists()
     assert not helper_path.exists()
 
-    assume_call = next(call for call in recorder.calls if call["args"][0] == "adfs-assume")
+    assume_call = next(call for call in recorder.calls if call["args"][0] == "aws-auth")
     assume_args = assume_call["args"]
-    assert "--jenkins" in assume_args
-    assert "-n" in assume_args
-    assert assume_args[assume_args.index("-d") + 1] == "HBEU"
-    assert assume_args[assume_args.index("-u") + 1] == "aws-user"
+    assert assume_args == ["aws-auth", "login", "--json"]
     assert "aws-password" not in " ".join(assume_args)
     assume_env = assume_call["env"]
-    assert assume_env["AD_PASS"] == "aws-password"
+    assert "AD_PASS" not in assume_env
     assert "password" not in assume_env
-    assert "ADFS_PASSWORD" not in assume_env
-    assert "AWS_ADFS_PASSWORD" not in assume_env
     assert "/app/venv/bin" in assume_env["PATH"]
 
     metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
     metadata_text = metadata_path.read_text(encoding="utf-8")
     assert "aws-password" not in metadata_text
     metadata = json.loads(metadata_text)
-    assert metadata["aws"]["auth_type"] == "adfs_assume_cli"
+    assert metadata["aws"]["auth_type"] == "aws_auth_cli"
 
     profile_config_module.clear_runtime_profile_external_config()
     assert not aws_config.exists()
@@ -299,18 +299,18 @@ def test_runtime_profile_aws_external_config_runs_adfs_assume_with_ad_pass_and_c
     assert not metadata_path.exists()
 
 
-def test_runtime_profile_aws_adfs_assume_failure_redacts_ad_pass(tmp_path, monkeypatch):
+def test_runtime_profile_aws_auth_failure_redacts_password(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     captured = {}
 
-    def fail_adfs(args, input=None, text=False, capture_output=False, check=False, env=None):
+    def fail_aws_auth(args, input=None, text=False, capture_output=False, check=False, env=None):
         captured["args"] = list(args)
         captured["env"] = dict(env or {})
         return _FakeCompleted(returncode=1, stderr="login failed for aws-password")
 
-    monkeypatch.setattr(profile_config_module.subprocess, "run", fail_adfs)
+    monkeypatch.setattr(profile_config_module.subprocess, "run", fail_aws_auth)
 
     with pytest.raises(RuntimeError) as exc:
         profile_config_module.apply_runtime_profile_external_config(
@@ -324,8 +324,8 @@ def test_runtime_profile_aws_adfs_assume_failure_redacts_ad_pass(tmp_path, monke
             }
         )
 
-    assert captured["args"][:1] == ["adfs-assume"]
-    assert captured["env"]["AD_PASS"] == "aws-password"
+    assert captured["args"] == ["aws-auth", "login", "--json"]
+    assert "AD_PASS" not in captured["env"]
     assert "aws-password" not in str(exc.value)
     assert "[REDACTED_SECRET]" in str(exc.value)
     assert not (home / ".aws" / "config").exists()

@@ -511,7 +511,6 @@ class Config:
         persisted_overlay = copy.deepcopy(external_cli_overlay)
         persisted_overlay.pop("jira", None)
         persisted_overlay.pop("confluence", None)
-        persisted_overlay.pop("aws", None)
         new_sections = set(external_cli_overlay.keys())
 
         config_document = self._load_yaml_document(self.config_path)
@@ -698,19 +697,22 @@ class Config:
     
     SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "access_token", "secret"}
     
-    def _encrypt_sensitive_fields(self, obj: Any) -> None:
+    def _encrypt_sensitive_fields(self, obj: Any, path: tuple[str, ...] = ()) -> None:
         """Recursively encrypt sensitive fields in config."""
         if self._is_mapping(obj):
             for key, value in obj.items():
+                child_path = (*path, str(key))
+                if path == ("aws",) and key == "password":
+                    continue
                 # Skip encryption for env var placeholders or already encrypted values
                 if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value and not value.startswith("ENC:") and not value.startswith("${"):
                     obj[key] = self._encrypt_value(value)
                 elif self._is_mapping(value) or self._is_sequence(value):
-                    self._encrypt_sensitive_fields(value)
+                    self._encrypt_sensitive_fields(value, child_path)
         elif self._is_sequence(obj):
             for item in obj:
                 if self._is_mapping(item) or self._is_sequence(item):
-                    self._encrypt_sensitive_fields(item)
+                    self._encrypt_sensitive_fields(item, path)
     
     def _decrypt_sensitive_fields(self, obj: Any) -> None:
         """Recursively decrypt sensitive fields in config."""

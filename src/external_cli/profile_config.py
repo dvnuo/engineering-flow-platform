@@ -27,7 +27,7 @@ _GIT_INCLUDE_END = "# END EFP_RUNTIME_PROFILE_GIT_INCLUDE"
 _REDACTED_SECRET = "[REDACTED_SECRET]"
 _PROXY_URL_ENV_KEYS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
 _PROFILE_SECRET_KEY_NAMES = frozenset({"api_key", "password", "token", "api_token", "access_token", "secret"})
-_AWS_ADFS_DEFAULT_COMMAND = "adfs-assume"
+_AWS_AUTH_DEFAULT_COMMAND = "aws-auth"
 _RUNTIME_VENV_BIN_DIRS = ("/app/venv/bin", "/opt/venv/bin")
 _yaml = YAML()
 _yaml.default_flow_style = False
@@ -66,7 +66,7 @@ def apply_runtime_profile_external_config(
             cli_environment=cli_environment,
         )
         _apply_github(profile_config, metadata=metadata, cli_environment=cli_environment)
-        _apply_aws(profile_config, metadata=metadata)
+        _apply_aws(profile_config, metadata=metadata, cli_environment=cli_environment)
         _apply_git_user(profile_config, metadata=metadata, cli_environment=cli_environment)
     except Exception:
         if _metadata_has_managed_entries(metadata):
@@ -538,6 +538,7 @@ def _apply_aws(
     profile_config: dict[str, Any],
     *,
     metadata: dict[str, Any],
+    cli_environment: _CliEnvironment,
 ) -> None:
     aws_config = _build_aws_config(profile_config)
     if aws_config is None:
@@ -549,7 +550,7 @@ def _apply_aws(
     previous_credentials = _read_ini_section(credentials_path, credentials_section)
 
     metadata["aws"] = {
-        "auth_type": "adfs_assume_cli",
+        "auth_type": "aws_auth_cli",
         "credentials_path": str(credentials_path),
         "credentials_section": credentials_section,
         "command": _format_command(aws_config["command"], (aws_config["password"],)),
@@ -561,9 +562,9 @@ def _apply_aws(
     try:
         _run_cli(
             aws_config["command"],
-            env=_aws_env(aws_config),
+            env=_aws_env(cli_environment),
             secrets=(aws_config["password"],),
-            env_secrets=(aws_config["password"],),
+            env_secrets=cli_environment.secrets,
         )
     except Exception:
         _restore_aws_profile(metadata["aws"])
@@ -583,17 +584,18 @@ def _build_aws_config(profile_config: dict[str, Any]) -> dict[str, Any] | None:
         "domain": domain,
         "username": username,
         "password": password,
-        "command": _aws_command(domain=domain, username=username),
+        "command": _aws_command(),
     }
 
 
-def _aws_command(*, domain: str, username: str) -> list[str]:
-    return [_AWS_ADFS_DEFAULT_COMMAND, "--jenkins", "-n", "-d", domain, "-u", username]
+def _aws_command() -> list[str]:
+    return [_AWS_AUTH_DEFAULT_COMMAND, "login", "--json"]
 
 
-def _aws_env(aws_config: dict[str, Any]) -> dict[str, str]:
-    env = os.environ.copy()
-    env["AD_PASS"] = aws_config["password"]
+def _aws_env(cli_environment: _CliEnvironment) -> dict[str, str]:
+    env = dict(cli_environment.env)
+    for key in ("AD_PASS", "password"):
+        env.pop(key, None)
     env["PATH"] = _path_with_runtime_venv_bins(env.get("PATH", ""))
     return env
 
