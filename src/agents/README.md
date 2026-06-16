@@ -4,17 +4,16 @@
 
 ```
 agents/
-├── executor.py            # SkillsExecutor, execute_skill()
-├── subagent.py           # SubAgent spawning & management
-├── subagent_schemas.py   # SubAgent tool schemas
-├── core.py               # Agent with ReAct pattern
-├── llm.py               # LLM client
-├── heartbeat.py         # Periodic background checks
-├── memory.py            # Memory system
-├── model_fallback.py    # Model fallback logic
-├── queue.py             # Message queue
-├── thinking.py          # Thinking levels
-└── compaction.py        # Context compaction
+鈹溾攢鈹€ executor.py            # SkillsExecutor, execute_skill()
+鈹溾攢鈹€ subagent.py           # SubAgent spawning & management
+鈹溾攢鈹€ subagent_schemas.py   # SubAgent tool schemas
+鈹溾攢鈹€ core.py               # Agent with ReAct pattern
+鈹溾攢鈹€ llm.py               # LLM client
+鈹溾攢鈹€ heartbeat.py         # Periodic background checks
+鈹溾攢鈹€ model_fallback.py    # Model fallback logic
+鈹溾攢鈹€ queue.py             # Message queue
+鈹溾攢鈹€ thinking.py          # Thinking levels
+鈹斺攢鈹€ compaction.py        # Context compaction
 ```
 
 ## Components

@@ -17,7 +17,7 @@ class Chunk:
     """A chunk of text from a markdown document.
     
     Attributes:
-        id: Stable identifier for the chunk (e.g., "mem:MEMORY.md#h1-01:chunk-01")
+        id: Stable identifier for the chunk (e.g., "doc:PROJECT.md#h1-01:chunk-01")
         text: The chunk content (trimmed, non-empty)
         meta: Metadata including source, heading, kind, date
     """
@@ -42,11 +42,11 @@ def chunk_markdown(
     
     Args:
         text: The markdown text to chunk
-        source_name: Name of the source file (e.g., "MEMORY.md")
+        source_name: Name of the source file (e.g., "PROJECT.md")
         max_chars: Maximum characters per chunk (default 1200)
         min_chars: Minimum characters for a chunk (default 200)
-        kind: Type of document ("core" or "daily")
-        date: Optional date for daily notes (YYYY-MM-DD format)
+        kind: Type of document ("doc" or "dated")
+        date: Optional date for dated documents (YYYY-MM-DD format)
     
     Returns:
         List of Chunk objects
@@ -238,8 +238,8 @@ def _generate_chunk_id(
     """Generate a stable chunk ID.
     
     Format:
-    - Core: mem:MEMORY.md#section-01-chunk-01
-    - Daily: daily:2026-03-02.md#section-01-chunk-01
+    - Document: doc:PROJECT.md#section-01-chunk-01
+    - Dated document: dated:2026-03-02.md#section-01-chunk-01
     
     If heading is empty, uses "-" as slug.
     """
@@ -252,11 +252,9 @@ def _generate_chunk_id(
         heading_slug = heading_slug[:20]
     
     # Include section index to avoid collisions for same heading in different sections
-    if kind == "daily":
-        return f"daily:{source_name}#sec-{section_index:02d}-{heading_slug}-{chunk_num:02d}"
-    else:
-        # For core files, use mem: prefix
-        return f"mem:{source_name}#sec-{section_index:02d}-{heading_slug}-{chunk_num:02d}"
+    if kind == "dated":
+        return f"dated:{source_name}#sec-{section_index:02d}-{heading_slug}-{chunk_num:02d}"
+    return f"doc:{source_name}#sec-{section_index:02d}-{heading_slug}-{chunk_num:02d}"
 
 
 def extract_heading(text: str) -> str:

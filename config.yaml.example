@@ -129,30 +129,8 @@ llm:
       preview_chars: 2000
       persist_full_content: true
   
-  # ============================================
-  # System Prompt Configuration
-  # ============================================
-  # Legacy memory prompt controls. Native runtime prompt defaults load AGENTS.md only.
-  # Workspace files are loaded from /workspace unless workspace.path overrides it.
-  system-prompt:
-    # SOUL.md - Agent's personality and values (Who you are)
-    soul:
-      enabled: true
-    # USER.md - User information (Who you're helping)
-    user:
-      enabled: true
-    # AGENTS.md - Workspace conventions and rules
-    agents:
-      enabled: true
-    # TOOLS.md - Tool configurations and constraints
-    tools:
-      enabled: true
-    # MEMORY.md - Long-term curated memory
-    memory:
-      enabled: true
-    # Daily Notes - Automatically loaded from memory/ directory
-    daily_notes:
-      enabled: true
+  # Workspace instructions are stored in AGENTS.md under the configured
+  # workspace. Edit it directly or through the Portal system prompt editor.
 
 # ============================================
 # Session Configuration (OPTIONAL)
@@ -178,14 +156,6 @@ session:
     enabled: true  # Enable session caching
     max_sessions: 1000  # Max sessions to keep in memory
     ttl_seconds: 3600  # Cache TTL in seconds (default: 1 hour)
-
-# ============================================
-# Memory Configuration (OPTIONAL)
-# ============================================
-# Memory storage using LightweightMemory (TF-IDF based)
-
-memory:
-  enabled: true  # Enable memory storage
 
 # ============================================
 # Cost Tracking Configuration (OPTIONAL)
@@ -218,9 +188,6 @@ workspace:
   # Main workspace directory
   path: "/workspace"
 
-  # Memory subdirectory for daily notes
-  memory_dir: "/workspace/memory"
-
   # Session storage (can be overridden in session config)
   sessions_dir: "/workspace/sessions"
 
@@ -231,11 +198,9 @@ workspace:
 #
 # Structure:
 #   /workspace/
-#   ├── sessions/              ← Individual session files
-#   │   ├── {sanitized_id}_{hash}.jsonl  (one file per session)
-#   │   └── archive/           (archived sessions)
-#   └── memory/                ← Daily notes
-#       └── YYYY-MM-DD.md
+#   鈹溾攢鈹€ sessions/              鈫?Individual session files
+#   鈹?  鈹溾攢鈹€ {sanitized_id}_{hash}.jsonl  (one file per session)
+#   鈹?  鈹斺攢鈹€ archive/           (archived sessions)
 #
 # Runtime workspace data is under /workspace by default.
 # ============================================

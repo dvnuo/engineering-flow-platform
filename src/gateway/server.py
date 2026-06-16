@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT_AGENTS_SECTION = "agents"
 SYSTEM_PROMPT_AGENTS_FILENAME = "AGENTS.md"
-UNSUPPORTED_SYSTEM_PROMPT_SECTIONS = ["soul", "user", "tools", "memory", "daily_notes"]
 
 
 def _runtime_workspace_root() -> Path:
@@ -104,7 +103,6 @@ def _agents_system_prompt_config_payload() -> dict[str, object]:
         "runtime_type": "native",
         "sections": [SYSTEM_PROMPT_AGENTS_SECTION],
         SYSTEM_PROMPT_AGENTS_SECTION: _agents_metadata(),
-        "unsupported_sections": UNSUPPORTED_SYSTEM_PROMPT_SECTIONS,
     }
 
 
@@ -583,101 +581,8 @@ class Gateway:
 
         logger.info(f"Gateway started on http://{self.host}:{self.port}")
 
-        # Run memory bootstrap in background after server starts
-        asyncio.create_task(self._run_memory_bootstrap())
-
         if self.jira_enabled:
             logger.info("Jira webhook route enabled; writeback uses external jira CLI")
-
-    async def _run_memory_bootstrap(self) -> None:
-        """Run memory bootstrap in background."""
-        try:
-            from src.memory.daily_generator import ensure_daily_memories
-            from src.memory.long_term_generator import update_long_term_memory_from_daily
-            from src.config import config as runtime_config
-
-            logger.info("[Memory] Starting background bootstrap...")
-
-            workspace = runtime_config.session.get("workspace", str(_runtime_workspace_root()))
-
-            # Create daily memories (without LLM for now)
-            created_daily = await ensure_daily_memories(
-                workspace=workspace,
-                llm_client=None,
-                backfill_only_missing=True,
-            )
-
-            logger.info(f"[Memory] Bootstrap complete: {len(created_daily) if created_daily else 0} daily files")
-
-            # Generate long-term memory from recent dailies
-            try:
-                if created_daily:
-                    logger.info("[Memory] Long-term memory update skipped in EFP runtime native mode")
-            except Exception as e:
-                logger.warning(f"[Memory] Long-term memory update skipped: {e}")
-
-
-            # Start periodic check for session changes
-            await self._start_periodic_memory_check(workspace)
-
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            logger.error(f"[Memory] Bootstrap failed: {e}")
-
-    async def _start_periodic_memory_check(self, workspace: str):
-        """Periodically check for session changes and update daily memory."""
-        from pathlib import Path
-        from src.memory.daily_generator import ensure_daily_memories
-
-        CHECK_INTERVAL = 3600  # 1 hour in seconds
-        sessions_dir = Path(workspace) / ".sessions"
-
-        last_mtime = 0
-
-        # Get initial file modification times
-        if sessions_dir.exists():
-            for f in sessions_dir.glob("*.jsonl"):
-                last_mtime = max(last_mtime, f.stat().st_mtime)
-
-        logger.info("[Memory] Starting periodic session check...")
-
-        while True:
-            await asyncio.sleep(CHECK_INTERVAL)
-
-            try:
-                # Check if any session file has been modified
-                current_mtime = 0
-                if sessions_dir.exists():
-                    for f in sessions_dir.glob("*.jsonl"):
-                        current_mtime = max(current_mtime, f.stat().st_mtime)
-
-                # If new activity, regenerate today's memory
-                if current_mtime > last_mtime:
-                    logger.info("[Memory] Session changes detected, updating daily memory...")
-                    created_daily = await ensure_daily_memories(
-                        workspace=workspace,
-                        llm_client=None,
-                        backfill_only_missing=True,  # Always regenerate today
-                    )
-                    logger.info(f"[Memory] Updated: {len(created_daily) if created_daily else 0} daily files")
-
-                    # Also update long-term memory
-                    try:
-                        logger.info("[Memory] Long-term memory update skipped in EFP runtime native mode")
-                    except Exception as e:
-                        logger.warning(f"[Memory] Long-term update skipped: {e}")
-
-                    last_mtime = current_mtime
-                else:
-                    logger.debug("[Memory] No session changes detected")
-
-            except asyncio.CancelledError:
-                logger.info("[Memory] Periodic check cancelled")
-                raise
-            except Exception as e:
-                logger.error(f"[Memory] Periodic check failed: {e}")
 
     async def stop(self) -> None:
         """Stop the gateway server."""
