@@ -1,6 +1,9 @@
 import hashlib
 import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from ruamel.yaml import YAML
@@ -214,8 +217,8 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
                 "profile": "prod",
                 "region": "us-east-1",
                 "output": "json",
-                "access_key_id": "AKIA_TEST",
-                "secret_access_key": "aws-secret",
+                "username": "adfs-user",
+                "password": "aws-password",
             },
         },
     )
@@ -227,10 +230,10 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
     assert persisted["instruction_texts"]
     assert "jira-token" not in config_path.read_text(encoding="utf-8")
     assert "conf-token" not in config_path.read_text(encoding="utf-8")
-    assert "aws-secret" not in config_path.read_text(encoding="utf-8")
+    assert "aws-password" not in config_path.read_text(encoding="utf-8")
     assert applied[0]["jira"]["instances"][0]["token"] == "jira-token"
     assert applied[0]["confluence"]["instances"][0]["token"] == "conf-token"
-    assert applied[0]["aws"]["secret_access_key"] == "aws-secret"
+    assert applied[0]["aws"]["password"] == "aws-password"
     assert cfg.get_managed_overlay_meta()["managed_sections"] == [
         "aws",
         "confluence",
@@ -239,7 +242,7 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
     ]
 
 
-def test_runtime_profile_aws_external_config_writes_and_clears_aws_cli_files(tmp_path, monkeypatch):
+def test_runtime_profile_aws_external_config_writes_adfs_credential_process_and_clears_files(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -251,9 +254,8 @@ def test_runtime_profile_aws_external_config_writes_and_clears_aws_cli_files(tmp
                 "profile": "prod",
                 "region": "us-east-1",
                 "output": "json",
-                "access_key_id": "AKIA_TEST",
-                "secret_access_key": "aws-secret",
-                "session_token": "aws-session",
+                "username": "adfs-user",
+                "password": "aws-password",
             }
         }
     )
@@ -262,28 +264,92 @@ def test_runtime_profile_aws_external_config_writes_and_clears_aws_cli_files(tmp
     aws_credentials = home / ".aws" / "credentials"
     if os.name != "nt":
         assert aws_config.stat().st_mode & 0o777 == 0o600
-        assert aws_credentials.stat().st_mode & 0o777 == 0o600
 
     config_text = aws_config.read_text(encoding="utf-8")
     assert "[profile prod]" in config_text
     assert "region = us-east-1" in config_text
     assert "output = json" in config_text
+    assert "credential_process =" in config_text
+    assert "aws-adfs-credential-process.py" in config_text
+    assert "runtime-profile-aws-adfs-auth.json" in config_text
+    assert not aws_credentials.exists()
 
-    credentials_text = aws_credentials.read_text(encoding="utf-8")
-    assert "[prod]" in credentials_text
-    assert "aws_access_key_id = AKIA_TEST" in credentials_text
-    assert "aws_secret_access_key = aws-secret" in credentials_text
-    assert "aws_session_token = aws-session" in credentials_text
+    auth_path = home / ".config" / "efp" / "runtime-profile-aws-adfs-auth.json"
+    helper_path = home / ".config" / "efp" / "aws-adfs-credential-process.py"
+    auth_text = auth_path.read_text(encoding="utf-8")
+    assert '"command": [' in auth_text
+    assert '"adfs"' in auth_text
+    assert '"assume"' in auth_text
+    assert '"username": "adfs-user"' in auth_text
+    assert '"password": "aws-password"' in auth_text
+    assert helper_path.exists()
+    if os.name != "nt":
+        assert auth_path.stat().st_mode & 0o777 == 0o600
+        assert helper_path.stat().st_mode & 0o777 == 0o700
 
     metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
     metadata_text = metadata_path.read_text(encoding="utf-8")
-    assert "aws-secret" not in metadata_text
-    assert json.loads(metadata_text)["aws"]["profile"] == "prod"
+    assert "aws-password" not in metadata_text
+    metadata = json.loads(metadata_text)
+    assert metadata["aws"]["profile"] == "prod"
+    assert metadata["aws"]["auth_type"] == "adfs_credential_process"
 
     profile_config_module.clear_runtime_profile_external_config()
     assert not aws_config.exists()
     assert not aws_credentials.exists()
+    assert not auth_path.exists()
+    assert not helper_path.exists()
     assert not metadata_path.exists()
+
+
+def test_runtime_profile_aws_credential_process_helper_invokes_adfs_command(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    fake_adfs = tmp_path / "fake_adfs.py"
+    fake_adfs.write_text(
+        "import json, os, sys\n"
+        "assert sys.argv[1:] == ['adfs-user', 'aws-password']\n"
+        "assert os.environ['ADFS_USERNAME'] == 'adfs-user'\n"
+        "assert os.environ['ADFS_PASSWORD'] == 'aws-password'\n"
+        "print(json.dumps({'Credentials': {'AccessKeyId': 'AKIA_ADFS', 'SecretAccessKey': 'SECRET_ADFS', 'SessionToken': 'TOKEN_ADFS', 'Expiration': '2030-01-01T00:00:00Z'}}))\n",
+        encoding="utf-8",
+    )
+
+    profile_config_module.apply_runtime_profile_external_config(
+        {
+            "aws": {
+                "enabled": True,
+                "profile": "prod",
+                "region": "us-east-1",
+                "username": "adfs-user",
+                "password": "aws-password",
+                "assume_command": [sys.executable, str(fake_adfs), "{username}", "{password}"],
+            }
+        }
+    )
+    metadata = json.loads((home / ".config" / "efp" / "runtime-profile-external-config.json").read_text(encoding="utf-8"))
+    helper_path = Path(metadata["aws"]["helper_path"])
+    auth_path = Path(metadata["aws"]["auth_path"])
+
+    result = subprocess.run(
+        [sys.executable, str(helper_path), str(auth_path)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "Version": 1,
+        "AccessKeyId": "AKIA_ADFS",
+        "SecretAccessKey": "SECRET_ADFS",
+        "SessionToken": "TOKEN_ADFS",
+        "Expiration": "2030-01-01T00:00:00Z",
+    }
+    assert "aws-password" not in result.stderr
 
 
 def test_runtime_profile_apply_prunes_previous_portal_atlassian_entries(tmp_path, monkeypatch):

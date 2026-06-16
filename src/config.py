@@ -219,22 +219,15 @@ def _has_github_profile_token(section: Any) -> bool:
 def _has_aws_profile_config(section: Any) -> bool:
     if not isinstance(section, dict) or section.get("enabled") is False:
         return False
-    return bool(
-        str(
-            section.get("access_key_id")
-            or section.get("aws_access_key_id")
-            or section.get("secret_access_key")
-            or section.get("aws_secret_access_key")
-            or section.get("session_token")
-            or section.get("aws_session_token")
-            or section.get("region")
-            or section.get("default_region")
-            or section.get("profile")
-            or section.get("profile_name")
-            or section.get("account_id")
-            or ""
-        ).strip()
-    )
+    username = str(
+        section.get("username")
+        or section.get("adfs_username")
+        or section.get("account")
+        or section.get("account_name")
+        or ""
+    ).strip()
+    password = str(section.get("password") or section.get("adfs_password") or "").strip()
+    return bool(username and password)
 
 
 def _has_git_profile_user(section: Any) -> bool:
@@ -326,6 +319,16 @@ class Config:
             "default_region": True,
             "output": True,
             "account_id": True,
+            "username": True,
+            "adfs_username": True,
+            "account": True,
+            "account_name": True,
+            "password": True,
+            "adfs_password": True,
+            "assume_command": True,
+            "adfs_command": True,
+            "assume_args": True,
+            "adfs_args": True,
             "access_key_id": True,
             "aws_access_key_id": True,
             "secret_access_key": True,
