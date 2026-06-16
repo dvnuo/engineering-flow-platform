@@ -2,7 +2,6 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -242,10 +241,15 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
     ]
 
 
-def test_runtime_profile_aws_external_config_writes_adfs_credential_process_and_clears_files(tmp_path, monkeypatch):
+def test_runtime_profile_aws_external_config_runs_adfs_assume_with_ad_pass_and_clears_files(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/local/bin")
+    for key in ("password", "ADFS_PASSWORD", "AWS_ADFS_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    recorder = _CliRecorder(record_env=True)
+    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
 
     profile_config_module.apply_runtime_profile_external_config(
         {
@@ -256,6 +260,10 @@ def test_runtime_profile_aws_external_config_writes_adfs_credential_process_and_
                 "output": "json",
                 "username": "adfs-user",
                 "password": "aws-password",
+                "account_no": "123456789012",
+                "role": "Engineer",
+                "domain": "HBEU",
+                "session_duration_minutes": "720",
             }
         }
     )
@@ -269,30 +277,39 @@ def test_runtime_profile_aws_external_config_writes_adfs_credential_process_and_
     assert "[profile prod]" in config_text
     assert "region = us-east-1" in config_text
     assert "output = json" in config_text
-    assert "credential_process =" in config_text
-    assert "aws-adfs-credential-process.py" in config_text
-    assert "runtime-profile-aws-adfs-auth.json" in config_text
+    assert "credential_process =" not in config_text
     assert not aws_credentials.exists()
 
     auth_path = home / ".config" / "efp" / "runtime-profile-aws-adfs-auth.json"
     helper_path = home / ".config" / "efp" / "aws-adfs-credential-process.py"
-    auth_text = auth_path.read_text(encoding="utf-8")
-    assert '"command": [' in auth_text
-    assert '"adfs"' in auth_text
-    assert '"assume"' in auth_text
-    assert '"username": "adfs-user"' in auth_text
-    assert '"password": "aws-password"' in auth_text
-    assert helper_path.exists()
-    if os.name != "nt":
-        assert auth_path.stat().st_mode & 0o777 == 0o600
-        assert helper_path.stat().st_mode & 0o777 == 0o700
+    assert not auth_path.exists()
+    assert not helper_path.exists()
+
+    assume_call = next(call for call in recorder.calls if call["args"][0] == "adfs-assume")
+    assume_args = assume_call["args"]
+    assert "--jenkins" in assume_args
+    assert "-n" in assume_args
+    assert assume_args[assume_args.index("-u") + 1] == "adfs-user"
+    assert assume_args[assume_args.index("-p") + 1] == "prod"
+    assert assume_args[assume_args.index("-R") + 1] == "us-east-1"
+    assert assume_args[assume_args.index("-a") + 1] == "123456789012"
+    assert assume_args[assume_args.index("-r") + 1] == "Engineer"
+    assert assume_args[assume_args.index("-d") + 1] == "HBEU"
+    assert assume_args[assume_args.index("--session-duration-minutes") + 1] == "720"
+    assert "aws-password" not in " ".join(assume_args)
+    assume_env = assume_call["env"]
+    assert assume_env["AD_PASS"] == "aws-password"
+    assert "password" not in assume_env
+    assert "ADFS_PASSWORD" not in assume_env
+    assert "AWS_ADFS_PASSWORD" not in assume_env
+    assert "/app/venv/bin" in assume_env["PATH"]
 
     metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
     metadata_text = metadata_path.read_text(encoding="utf-8")
     assert "aws-password" not in metadata_text
     metadata = json.loads(metadata_text)
     assert metadata["aws"]["profile"] == "prod"
-    assert metadata["aws"]["auth_type"] == "adfs_credential_process"
+    assert metadata["aws"]["auth_type"] == "adfs_assume_cli"
 
     profile_config_module.clear_runtime_profile_external_config()
     assert not aws_config.exists()
@@ -302,54 +319,39 @@ def test_runtime_profile_aws_external_config_writes_adfs_credential_process_and_
     assert not metadata_path.exists()
 
 
-def test_runtime_profile_aws_credential_process_helper_invokes_adfs_command(tmp_path, monkeypatch):
+def test_runtime_profile_aws_adfs_assume_failure_redacts_ad_pass(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    captured = {}
 
-    fake_adfs = tmp_path / "fake_adfs.py"
-    fake_adfs.write_text(
-        "import json, os, sys\n"
-        "assert sys.argv[1:] == ['adfs-user', 'aws-password']\n"
-        "assert os.environ['ADFS_USERNAME'] == 'adfs-user'\n"
-        "assert os.environ['ADFS_PASSWORD'] == 'aws-password'\n"
-        "print(json.dumps({'Credentials': {'AccessKeyId': 'AKIA_ADFS', 'SecretAccessKey': 'SECRET_ADFS', 'SessionToken': 'TOKEN_ADFS', 'Expiration': '2030-01-01T00:00:00Z'}}))\n",
-        encoding="utf-8",
-    )
+    def fail_adfs(args, input=None, text=False, capture_output=False, check=False, env=None):
+        captured["args"] = list(args)
+        captured["env"] = dict(env or {})
+        return _FakeCompleted(returncode=1, stderr="login failed for aws-password")
 
-    profile_config_module.apply_runtime_profile_external_config(
-        {
-            "aws": {
-                "enabled": True,
-                "profile": "prod",
-                "region": "us-east-1",
-                "username": "adfs-user",
-                "password": "aws-password",
-                "assume_command": [sys.executable, str(fake_adfs), "{username}", "{password}"],
+    monkeypatch.setattr(profile_config_module.subprocess, "run", fail_adfs)
+
+    with pytest.raises(RuntimeError) as exc:
+        profile_config_module.apply_runtime_profile_external_config(
+            {
+                "aws": {
+                    "enabled": True,
+                    "profile": "prod",
+                    "region": "us-east-1",
+                    "username": "adfs-user",
+                    "password": "aws-password",
+                    "assume_command": "custom-adfs-assume",
+                }
             }
-        }
-    )
-    metadata = json.loads((home / ".config" / "efp" / "runtime-profile-external-config.json").read_text(encoding="utf-8"))
-    helper_path = Path(metadata["aws"]["helper_path"])
-    auth_path = Path(metadata["aws"]["auth_path"])
+        )
 
-    result = subprocess.run(
-        [sys.executable, str(helper_path), str(auth_path)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload == {
-        "Version": 1,
-        "AccessKeyId": "AKIA_ADFS",
-        "SecretAccessKey": "SECRET_ADFS",
-        "SessionToken": "TOKEN_ADFS",
-        "Expiration": "2030-01-01T00:00:00Z",
-    }
-    assert "aws-password" not in result.stderr
+    assert captured["args"][:1] == ["custom-adfs-assume"]
+    assert captured["env"]["AD_PASS"] == "aws-password"
+    assert "aws-password" not in str(exc.value)
+    assert "[REDACTED_SECRET]" in str(exc.value)
+    assert not (home / ".aws" / "config").exists()
+    assert not (home / ".aws" / "credentials").exists()
 
 
 def test_runtime_profile_apply_prunes_previous_portal_atlassian_entries(tmp_path, monkeypatch):
