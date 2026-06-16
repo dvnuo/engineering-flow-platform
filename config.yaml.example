@@ -198,9 +198,9 @@ workspace:
 #
 # Structure:
 #   /workspace/
-#   鈹溾攢鈹€ sessions/              鈫?Individual session files
-#   鈹?  鈹溾攢鈹€ {sanitized_id}_{hash}.jsonl  (one file per session)
-#   鈹?  鈹斺攢鈹€ archive/           (archived sessions)
+#   |-- sessions/              Individual session files
+#   |   |-- {sanitized_id}_{hash}.jsonl  (one file per session)
+#   |   `-- archive/           Archived sessions
 #
 # Runtime workspace data is under /workspace by default.
 # ============================================
