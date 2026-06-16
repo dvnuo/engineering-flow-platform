@@ -192,6 +192,151 @@ async def run_runtime_chat(
     return payload
 
 
+async def resume_runtime_chat(
+    *,
+    session_id: str,
+    user_name: str | None = None,
+    portal_user_id: str | None = None,
+    portal_user_name: str | None = None,
+    transient_model_message: str | None = None,
+    reasoning_replay: bool | None = None,
+    stream_callback: Any = None,
+    request_path: str = "/api/chat/resume",
+    execution_metadata: Mapping[str, Any] | None = None,
+    agent_id: str | None = None,
+    agent_name: str | None = None,
+    request_id: str | None = None,
+    model: str | None = None,
+    track_usage: bool = True,
+) -> dict[str, Any]:
+    """Resume an existing native runtime session without appending a new user message."""
+
+    runtime_model = _resolve_model(model)
+    provider = _build_github_copilot_provider(runtime_model)
+    event_bus = RuntimeEventBus()
+    runtime = AgentRuntime(
+        provider=provider,
+        config=_runtime_config(
+            runtime_model,
+            track_usage=track_usage,
+            execution_metadata=execution_metadata,
+        ),
+        store=get_runtime_session_store(),
+        event_bus=event_bus,
+        metadata={
+            "gateway": "runtime_api",
+            "request_path": request_path,
+            "agent_id": agent_id,
+            "agent_name": agent_name,
+        },
+    )
+    _seed_runtime_question_response(runtime, session_id=session_id, execution_metadata=execution_metadata)
+
+    forwarder: asyncio.Task | None = None
+    subscription = None
+    if stream_callback is not None:
+        subscription = event_bus.subscribe(session_id=session_id)
+        forwarder = asyncio.create_task(
+            _forward_runtime_events(
+                subscription,
+                stream_callback,
+                projector=RuntimeEventProjector(
+                    request_id=request_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model=runtime_model,
+                ),
+            )
+        )
+
+    run_metadata = _run_metadata(
+        request_path=request_path,
+        request_id=request_id,
+        user_name=user_name,
+        portal_user_id=portal_user_id,
+        portal_user_name=portal_user_name,
+        attached_images=None,
+        attachments=None,
+        transient_model_message=transient_model_message,
+        reasoning_replay=reasoning_replay,
+        execution_metadata=execution_metadata,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        model=runtime_model,
+    )
+
+    try:
+        result = await runtime.resume(
+            session_id=session_id,
+            metadata=run_metadata,
+        )
+        await get_runtime_session_manager().record_runtime_result(
+            session_id,
+            result,
+            request_id=request_id,
+        )
+    except ProviderTransportError as exc:
+        raise RuntimeChatError(
+            str(exc),
+            status_code=401 if "token is required" in str(exc).lower() else 502,
+            error_type="provider_transport_error",
+            details={"provider": "github-copilot"},
+        ) from exc
+    finally:
+        if subscription is not None:
+            subscription.close()
+        if forwarder is not None:
+            await _await_forwarder_done(forwarder)
+
+    payload = _result_payload(
+        result,
+        request_id=request_id,
+        model=runtime_model,
+    )
+    if result.status == LoopStatus.ERROR:
+        raise RuntimeChatError(
+            payload.get("error") or "EFP runtime execution failed.",
+            status_code=_runtime_error_status_code(result),
+            error_type=payload.get("error_type") or "runtime_execution_error",
+            details={
+                "provider": "github-copilot",
+                "runtime_status": result.status,
+                "request_id": request_id,
+            },
+        )
+    return payload
+
+
+def _seed_runtime_question_response(
+    runtime: AgentRuntime,
+    *,
+    session_id: str,
+    execution_metadata: Mapping[str, Any] | None,
+) -> None:
+    if not isinstance(execution_metadata, Mapping):
+        return
+    response = execution_metadata.get("runtime_question_response")
+    if not isinstance(response, Mapping):
+        return
+    request = response.get("request")
+    if not isinstance(request, Mapping):
+        return
+    answers = response.get("answers")
+    if answers is None:
+        return
+    request_session_id = request.get("session_id") if isinstance(request.get("session_id"), str) else session_id
+    tool_call_id = request.get("tool_call_id")
+    if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+        metadata = request.get("metadata")
+        if isinstance(metadata, Mapping):
+            tool_call_id = metadata.get("tool_call_id") if isinstance(metadata.get("tool_call_id"), str) else None
+    if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+        return
+    seed_answer = getattr(runtime.question_broker, "seed_answer", None)
+    if callable(seed_answer):
+        seed_answer(request_session_id, tool_call_id, answers)
+
+
 def _runtime_session_root() -> Path:
     return runtime_session_root()
 

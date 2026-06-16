@@ -2950,7 +2950,7 @@ def test_runtime_task_tracker_persists_and_loads_active_records(tmp_path):
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
     tracker = RuntimeTaskTracker(storage_dir=tmp_path)
-    tracker.create_pending(
+    created = tracker.create_pending(
         task_id="task-persist",
         request_id="task-task-persist",
         task_type="adapter_action_task",
@@ -2964,8 +2964,14 @@ def test_runtime_task_tracker_persists_and_loads_active_records(tmp_path):
         merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
         metadata={"task_id": "task-persist", "portal_task_id": "portal-task-1"},
         trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+        task_session_id="task-session-1",
     )
-    tracker.mark_running("task-persist")
+    running = tracker.mark_running("task-persist")
+    assert created.admission_id
+    assert created.input_hash
+    assert running is not None
+    assert running.attempt_count == 1
+    assert running.active_attempt_id
 
     loaded = RuntimeTaskTracker(storage_dir=tmp_path)
     assert loaded.load_persisted_records() == 1
@@ -2977,7 +2983,63 @@ def test_runtime_task_tracker_persists_and_loads_active_records(tmp_path):
     assert record.context_ref == {"workspace": "w1"}
     assert record.merged_input_payload["action_id"] == "jira.transition"
     assert record.metadata["portal_task_id"] == "portal-task-1"
+    assert record.admission_id == created.admission_id
+    assert record.input_hash == created.input_hash
+    assert record.task_session_id == "task-session-1"
+    assert record.attempt_count == 1
+    assert record.active_attempt_id == running.active_attempt_id
     assert [item.task_id for item in loaded.list_active()] == ["task-persist"]
+
+
+def test_runtime_task_tracker_ignores_stale_attempt_terminal_write():
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker()
+    tracker.create_pending(
+        task_id="task-attempt",
+        request_id="task-task-attempt",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id="session-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-task-1",
+        merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+        metadata={"task_id": "task-attempt"},
+    )
+    first = tracker.mark_running("task-attempt")
+    assert first is not None
+    first_attempt_id = first.active_attempt_id
+    tracker.mark_resuming("task-attempt")
+    second = tracker.mark_running("task-attempt")
+    assert second is not None
+    assert second.active_attempt_id and second.active_attempt_id != first_attempt_id
+
+    ignored = tracker.mark_terminal(
+        "task-attempt",
+        status="success",
+        payload={"ok": True, "status": "success", "from": "old-attempt"},
+        attempt_id=first_attempt_id,
+    )
+
+    record = tracker.get("task-attempt")
+    assert ignored is None
+    assert record is not None
+    assert record.status == "running"
+    assert record.active_attempt_id == second.active_attempt_id
+    assert record.payload == {}
+
+    tracker.mark_terminal(
+        "task-attempt",
+        status="success",
+        payload={"ok": True, "status": "success", "from": "current-attempt"},
+        attempt_id=second.active_attempt_id,
+    )
+    record = tracker.get("task-attempt")
+    assert record is not None
+    assert record.status == "success"
+    assert record.payload["from"] == "current-attempt"
 
 
 @pytest.mark.asyncio
@@ -3023,12 +3085,122 @@ async def test_api_tasks_execute_duplicate_active_task_reuses_existing_record(mo
 
     assert first_response.status == 202
     assert second_response.status == 200
+    first_body = json.loads(first_response.body)
+    assert second_body["admission_id"] == first_body["admission_id"]
+    assert second_body["input_hash"] == first_body["input_hash"]
+    assert second_body["engine"] == "native"
     assert second_body["task_id"] == "task-dedupe-1"
     assert second_body["status"] in {"accepted", "running"}
     assert len(spawned) == 1
 
     release.set()
     await spawned[0]
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_duplicate_conflicting_admission_returns_409(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    release = asyncio.Event()
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        await release.wait()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        def __init__(self, action_id):
+            self._action_id = action_id
+
+        async def json(self):
+            return {
+                "task_id": "task-dedupe-conflict",
+                "task_type": "adapter_action_task",
+                "input_payload": {"action_id": self._action_id},
+            }
+
+    first_response = await runtime_api.api_tasks_execute(_Request("jira.transition"))
+    conflict_response = await runtime_api.api_tasks_execute(_Request("jira.close"))
+    conflict_body = json.loads(conflict_response.body)
+
+    assert first_response.status == 202
+    assert conflict_response.status == 409
+    assert conflict_body["error"] == "task_id_conflicts_with_existing_admission"
+    assert conflict_body["engine"] == "native"
+    assert conflict_body["admission_id"]
+    assert len(spawned) == 1
+
+    release.set()
+    await spawned[0]
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_generic_agent_task_uses_file_safe_task_session(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    captured = {}
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {
+                "task_id": "task-generic-safe",
+                "task_type": "generic_agent_task",
+                "input_payload": {
+                    "task_session_id": "generic-task:task-generic-safe",
+                    "prompt": "Run a long generic task.",
+                },
+            }
+
+    response = await runtime_api.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    await spawned[0]
+
+    assert response.status == 202
+    assert body["task_session_id"] == "generic-task-task-generic-safe"
+    assert captured["session_id"] == "generic-task-task-generic-safe"
+    assert captured["input_payload"]["task_session_id"] == "generic-task-task-generic-safe"
+    assert captured["metadata"]["runtime_task_session_id"] == "generic-task-task-generic-safe"
 
 
 @pytest.mark.asyncio
@@ -3097,7 +3269,592 @@ async def test_resume_persisted_runtime_tasks_replays_active_record(tmp_path, mo
     assert record.resume_count == 1
     assert captured["metadata"]["runtime_task_resumed"] is True
     assert captured["metadata"]["runtime_task_resume_count"] == 1
+    assert captured["metadata"]["runtime_task_admission_id"] == record.admission_id
+    assert captured["metadata"]["runtime_task_input_hash"] == record.input_hash
+    assert captured["metadata"]["runtime_task_attempt_id"]
+    assert captured["metadata"]["runtime_task_attempt_count"] == 2
     assert "task.resumed" in emitted
+
+
+@pytest.mark.asyncio
+async def test_run_task_execution_persists_pending_permission_observation(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    runtime_api.runtime_task_tracker.create_pending(
+        task_id="task-permission-1",
+        request_id="task-task-permission-1",
+        task_type="generic_agent_task",
+        source="portal",
+        session_id="generic-task-task-permission-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-task-1",
+        merged_input_payload={"task_type": "generic_agent_task", "prompt": "Needs permission"},
+        metadata={"task_id": "task-permission-1", "portal_task_id": "portal-task-1"},
+        task_session_id="generic-task-task-permission-1",
+    )
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "blocked",
+                "output_payload": {
+                    "status": "blocked",
+                    "pending_permission_request": {"id": "perm-1", "tool": "shell"},
+                    "summary": "Permission required",
+                },
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": "approve_permission",
+                "audit_ref": None,
+            },
+        )()
+
+    async def _emit_task_lifecycle_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_emit_task_lifecycle_event", _emit_task_lifecycle_event)
+
+    await runtime_api._run_task_execution_in_background(
+        task_id="task-permission-1",
+        request_id="task-task-permission-1",
+        task_type="generic_agent_task",
+        session_id="generic-task-task-permission-1",
+        source="portal",
+        runtime_agent_id="agent-1",
+        context_ref=None,
+        merged_input_payload={"task_type": "generic_agent_task", "prompt": "Needs permission"},
+        metadata={"task_id": "task-permission-1", "portal_task_id": "portal-task-1"},
+        trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+    )
+
+    record = runtime_api.runtime_task_tracker.get("task-permission-1")
+    assert record is not None
+    assert record.status == "blocked"
+    assert record.pending_permission_request == {"id": "perm-1", "tool": "shell"}
+    assert record.completion_source == "execution_result"
+
+    payload = runtime_api._runtime_task_status_payload(record)
+    assert payload["pending_permission_request"] == {"id": "perm-1", "tool": "shell"}
+    assert payload["attempt_count"] == 1
+    assert payload["active_attempt_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_serializes_same_runtime_task_session(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    runtime_api.runtime_task_session_coordinator.reset()
+    release_first = asyncio.Event()
+    spawned = []
+    calls = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        calls.append(kwargs["request_id"])
+        if kwargs["request_id"] == "task-task-lane-1":
+            await release_first.wait()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True, "request_id": kwargs["request_id"]},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        def __init__(self, task_id):
+            self._task_id = task_id
+
+        async def json(self):
+            return {
+                "task_id": self._task_id,
+                "task_type": "generic_agent_task",
+                "input_payload": {
+                    "task_session_id": "shared-lane",
+                    "prompt": f"Run {self._task_id}.",
+                },
+            }
+
+    first_response = await runtime_api.api_tasks_execute(_Request("task-lane-1"))
+    second_response = await runtime_api.api_tasks_execute(_Request("task-lane-2"))
+
+    assert first_response.status == 202
+    assert second_response.status == 202
+    assert len(spawned) == 1
+
+    second_record = runtime_api.runtime_task_tracker.get("task-lane-2")
+    assert second_record is not None
+    second_status = runtime_api._runtime_task_status_payload(second_record)
+    assert second_status["session_lane_status"] == "queued"
+    assert second_status["session_active_task_id"] == "task-lane-1"
+    assert second_status["session_queue_position"] == 1
+
+    release_first.set()
+    await spawned[0]
+    assert len(spawned) == 2
+    await spawned[1]
+
+    assert calls == ["task-task-lane-1", "task-task-lane-2"]
+    assert runtime_api.runtime_task_tracker.get("task-lane-1").status == "success"
+    assert runtime_api.runtime_task_tracker.get("task-lane-2").status == "success"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_session_delivery_promotes_steer_before_queue(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    runtime_api.runtime_task_session_coordinator.reset()
+    release_first = asyncio.Event()
+    spawned = []
+    calls = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        calls.append(kwargs["request_id"])
+        if kwargs["request_id"] == "task-task-delivery-1":
+            await release_first.wait()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        def __init__(self, task_id, delivery=None):
+            self._task_id = task_id
+            self._delivery = delivery
+
+        async def json(self):
+            payload = {
+                "task_session_id": "delivery-lane",
+                "prompt": f"Run {self._task_id}.",
+            }
+            if self._delivery:
+                payload["delivery"] = self._delivery
+            return {
+                "task_id": self._task_id,
+                "task_type": "generic_agent_task",
+                "input_payload": payload,
+            }
+
+    await runtime_api.api_tasks_execute(_Request("task-delivery-1"))
+    queue_response = await runtime_api.api_tasks_execute(_Request("task-delivery-queue", "queue"))
+    steer_response = await runtime_api.api_tasks_execute(_Request("task-delivery-steer", "steer"))
+
+    assert json.loads(queue_response.body)["delivery"] == "queue"
+    assert json.loads(steer_response.body)["delivery"] == "steer"
+    assert len(spawned) == 1
+
+    release_first.set()
+    await spawned[0]
+    for _ in range(10):
+        if len(spawned) >= 3:
+            break
+        await asyncio.sleep(0)
+    assert len(spawned) == 3
+    await asyncio.gather(*spawned[1:])
+
+    assert calls == [
+        "task-task-delivery-1",
+        "task-task-delivery-steer",
+        "task-task-delivery-queue",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_blocked_runtime_task_holds_session_lane_until_cancel(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    runtime_api.runtime_task_session_coordinator.reset()
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        if kwargs["request_id"] == "task-task-blocked-lane-1":
+            return type(
+                "R",
+                (),
+                {
+                    "request_id": kwargs["request_id"],
+                    "status": "blocked",
+                    "output_payload": {
+                        "status": "blocked",
+                        "pending_permission_request": {"request_id": "perm-lane", "tool_id": "write"},
+                    },
+                    "artifacts": [],
+                    "runtime_events": [],
+                    "next_action_hint": "approve_permission",
+                    "audit_ref": None,
+                },
+            )()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _ExecuteRequest:
+        headers = INTERNAL_HEADERS
+
+        def __init__(self, task_id):
+            self._task_id = task_id
+
+        async def json(self):
+            return {
+                "task_id": self._task_id,
+                "task_type": "generic_agent_task",
+                "input_payload": {
+                    "task_session_id": "blocked-lane",
+                    "prompt": f"Run {self._task_id}.",
+                },
+            }
+
+    class _CancelRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-blocked-lane-1"}
+
+    await runtime_api.api_tasks_execute(_ExecuteRequest("task-blocked-lane-1"))
+    await spawned[0]
+    first_record = runtime_api.runtime_task_tracker.get("task-blocked-lane-1")
+    assert first_record is not None
+    first_status = runtime_api._runtime_task_status_payload(first_record)
+    assert first_status["status"] == "blocked"
+    assert first_status["session_lane_status"] == "blocked"
+
+    await runtime_api.api_tasks_execute(_ExecuteRequest("task-blocked-lane-2"))
+    assert len(spawned) == 1
+    second_record = runtime_api.runtime_task_tracker.get("task-blocked-lane-2")
+    assert second_record is not None
+    assert runtime_api._runtime_task_status_payload(second_record)["session_lane_status"] == "queued"
+
+    cancel_response = await runtime_api.api_task_cancel(_CancelRequest())
+    assert cancel_response.status == 200
+    assert len(spawned) == 2
+    await spawned[1]
+
+    assert runtime_api.runtime_task_tracker.get("task-blocked-lane-1").status == "cancelled"
+    assert runtime_api.runtime_task_tracker.get("task-blocked-lane-2").status == "success"
+
+
+@pytest.mark.asyncio
+async def test_persisted_blocked_runtime_task_rehydrates_session_lane_before_new_input(monkeypatch, tmp_path):
+    from src.gateway import runtime_api
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    persisted_tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    blocked_record = persisted_tracker.create_pending(
+        task_id="task-persisted-blocked-lane",
+        request_id="task-task-persisted-blocked-lane",
+        task_type="generic_agent_task",
+        source="portal",
+        session_id="persisted-blocked-lane",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-blocked-1",
+        merged_input_payload={
+            "task_type": "generic_agent_task",
+            "task_session_id": "persisted-blocked-lane",
+            "prompt": "Needs permission.",
+        },
+        metadata={"task_id": "task-persisted-blocked-lane", "portal_task_id": "portal-blocked-1"},
+        trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+        task_session_id="persisted-blocked-lane",
+    )
+    persisted_tracker.mark_terminal(
+        blocked_record.task_id,
+        status="blocked",
+        payload={
+            "ok": False,
+            "status": "blocked",
+            "pending_permission_request": {
+                "request_id": "perm-persisted-1",
+                "tool_id": "write",
+            },
+        },
+    )
+
+    runtime_api.runtime_task_session_coordinator.reset()
+    recovered_tracker = RuntimeTaskTracker()
+    monkeypatch.setattr(runtime_api, "runtime_task_tracker", recovered_tracker)
+    monkeypatch.setenv("EFP_RUNTIME_TASKS_DIR", str(tmp_path))
+    spawned = []
+    calls = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        calls.append(kwargs["request_id"])
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    resumed_count = await runtime_api.resume_persisted_runtime_tasks()
+    assert resumed_count == 0
+    assert spawned == []
+
+    recovered_blocked = runtime_api.runtime_task_tracker.get("task-persisted-blocked-lane")
+    assert recovered_blocked is not None
+    blocked_status = runtime_api._runtime_task_status_payload(recovered_blocked)
+    assert blocked_status["status"] == "blocked"
+    assert blocked_status["session_lane_status"] == "blocked"
+    assert blocked_status["session_active_task_id"] == "task-persisted-blocked-lane"
+
+    class _ExecuteRequest:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {
+                "task_id": "task-after-persisted-blocked-lane",
+                "task_type": "generic_agent_task",
+                "input_payload": {
+                    "task_session_id": "persisted-blocked-lane",
+                    "prompt": "Run after restart.",
+                },
+            }
+
+    response = await runtime_api.api_tasks_execute(_ExecuteRequest())
+    assert response.status == 202
+    assert spawned == []
+
+    queued_record = runtime_api.runtime_task_tracker.get("task-after-persisted-blocked-lane")
+    assert queued_record is not None
+    queued_status = runtime_api._runtime_task_status_payload(queued_record)
+    assert queued_status["session_lane_status"] == "queued"
+    assert queued_status["session_active_task_id"] == "task-persisted-blocked-lane"
+
+    class _CancelRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-persisted-blocked-lane"}
+
+    cancel_response = await runtime_api.api_task_cancel(_CancelRequest())
+    assert cancel_response.status == 200
+    assert len(spawned) == 1
+    await spawned[0]
+
+    assert calls == ["task-task-after-persisted-blocked-lane"]
+    assert runtime_api.runtime_task_tracker.get("task-persisted-blocked-lane").status == "cancelled"
+    assert runtime_api.runtime_task_tracker.get("task-after-persisted-blocked-lane").status == "success"
+
+
+@pytest.mark.asyncio
+async def test_api_task_permission_respond_resumes_blocked_task(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    runtime_api.runtime_task_session_coordinator.reset()
+    spawned = []
+    captured = {}
+    record = runtime_api.runtime_task_tracker.create_pending(
+        task_id="task-permission-respond",
+        request_id="task-task-permission-respond",
+        task_type="generic_agent_task",
+        source="portal",
+        session_id="permission-respond-lane",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-task-1",
+        merged_input_payload={
+            "task_type": "generic_agent_task",
+            "task_session_id": "permission-respond-lane",
+            "prompt": "Needs permission.",
+        },
+        metadata={"task_id": "task-permission-respond", "portal_task_id": "portal-task-1"},
+        task_session_id="permission-respond-lane",
+    )
+    runtime_api.runtime_task_session_coordinator.schedule(
+        "permission-respond-lane",
+        record.task_id,
+        admitted_seq=record.admitted_seq,
+    )
+    runtime_api.runtime_task_tracker.mark_terminal(
+        record.task_id,
+        status="blocked",
+        payload={
+            "ok": False,
+            "status": "blocked",
+            "pending_permission_request": {
+                "request_id": "perm-respond-1",
+                "tool_id": "write",
+                "args": {"file": "demo.txt"},
+                "patterns": ["demo.txt"],
+            },
+        },
+    )
+    runtime_api.runtime_task_session_coordinator.hold_for_user_input("permission-respond-lane", record.task_id)
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-permission-respond"}
+
+        async def json(self):
+            return {"request_id": "perm-respond-1", "decision": "approve"}
+
+    response = await runtime_api.api_task_permission_respond(_Request())
+    assert response.status == 202
+    assert len(spawned) == 1
+    await spawned[0]
+
+    assert captured["input_payload"]["_runtime_resume"] is True
+    tool_permissions = captured["metadata"]["runtime_profile"]["config"]["tool_permissions"]
+    assert tool_permissions["write"]["action"] == "allow"
+    assert tool_permissions["write"]["patterns"] == ["demo.txt"]
+    assert runtime_api.runtime_task_tracker.get("task-permission-respond").status == "success"
+
+
+@pytest.mark.asyncio
+async def test_api_task_question_respond_resumes_blocked_task(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    runtime_api.runtime_task_session_coordinator.reset()
+    spawned = []
+    captured = {}
+    record = runtime_api.runtime_task_tracker.create_pending(
+        task_id="task-question-respond",
+        request_id="task-task-question-respond",
+        task_type="generic_agent_task",
+        source="portal",
+        session_id="question-respond-lane",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="portal-task-1",
+        merged_input_payload={
+            "task_type": "generic_agent_task",
+            "task_session_id": "question-respond-lane",
+            "prompt": "Needs answer.",
+        },
+        metadata={"task_id": "task-question-respond", "portal_task_id": "portal-task-1"},
+        task_session_id="question-respond-lane",
+    )
+    runtime_api.runtime_task_session_coordinator.schedule(
+        "question-respond-lane",
+        record.task_id,
+        admitted_seq=record.admitted_seq,
+    )
+    pending_question = {
+        "request_id": "question-respond-1",
+        "session_id": "question-respond-lane",
+        "tool_call_id": "call-question",
+        "questions": [{"question": "Which stack?"}],
+    }
+    runtime_api.runtime_task_tracker.mark_terminal(
+        record.task_id,
+        status="blocked",
+        payload={"ok": False, "status": "blocked", "pending_question_request": pending_question},
+    )
+    runtime_api.runtime_task_session_coordinator.hold_for_user_input("question-respond-lane", record.task_id)
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-question-respond"}
+
+        async def json(self):
+            return {"request_id": "question-respond-1", "answers": [["TypeScript"]]}
+
+    response = await runtime_api.api_task_question_respond(_Request())
+    assert response.status == 202
+    assert len(spawned) == 1
+    await spawned[0]
+
+    assert captured["input_payload"]["_runtime_resume"] is True
+    question_response = captured["metadata"]["runtime_question_response"]
+    assert question_response["request"]["tool_call_id"] == "call-question"
+    assert question_response["answers"] == [["TypeScript"]]
+    assert runtime_api.runtime_task_tracker.get("task-question-respond").status == "success"
 
 
 @pytest.mark.asyncio
