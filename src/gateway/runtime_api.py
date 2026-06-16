@@ -40,6 +40,7 @@ from src.gateway.chat_payloads import (
     build_runtime_response_payload,
     normalize_assistant_history_message,
 )
+from src.gateway.chat_run_registry import chat_run_registry
 from src.gateway.runtime_chat import (
     RuntimeChatError,
     run_runtime_chat,
@@ -698,6 +699,124 @@ def _sse_event_bytes(event_name: str, payload: Any) -> bytes:
     ).encode("utf-8")
 
 
+async def _try_write_sse_event(
+    response: web.StreamResponse,
+    event_name: str,
+    payload: Any,
+    *,
+    request_id: Optional[str] = None,
+) -> bool:
+    try:
+        await response.write(_sse_event_bytes(event_name, payload))
+        return True
+    except (ConnectionResetError, RuntimeError):
+        if request_id:
+            chat_run_registry.mark_detached(request_id)
+        return False
+
+
+async def _chat_run_status_from_session(session_id: str, request_id: str) -> Optional[Dict[str, Any]]:
+    if not session_id or not request_id:
+        return None
+    try:
+        session = await session_manager.get_existing_session(session_id)
+    except Exception:
+        logger.debug("Failed to inspect session while resolving chat run status", exc_info=True)
+        return None
+    if not isinstance(session, dict):
+        return None
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    if str(metadata.get("last_execution_id") or "").strip() != request_id:
+        return None
+    raw_status = str(metadata.get("last_runtime_status") or "").strip().lower()
+    if raw_status in {"success", "completed", "complete", "ok"}:
+        state = "completed"
+    elif raw_status in {"error", "failed", "failure"}:
+        state = "failed"
+    elif raw_status in {"cancelled", "canceled"}:
+        state = "cancelled"
+    else:
+        state = "completed" if raw_status else "unknown"
+    return {
+        "ok": True,
+        "engine": "native",
+        "session_id": session_id,
+        "request_id": request_id,
+        "state": state,
+        "terminal": state in {"completed", "failed", "cancelled"},
+        "started_at": "",
+        "updated_at": str(metadata.get("last_runtime_updated_at") or ""),
+        "latest_event_at": str(metadata.get("last_runtime_updated_at") or ""),
+        "latest_event_seq": 0,
+        "replay_available": False,
+        "final_payload": None,
+        "source_of_truth": "session_metadata",
+    }
+
+
+async def _chat_run_status_payload(session_id: str, request_id: str) -> Dict[str, Any]:
+    record = chat_run_registry.get(request_id, session_id=session_id or None)
+    if record is not None:
+        payload = record.to_payload()
+        payload["source_of_truth"] = "run_registry"
+        return payload
+    fallback = await _chat_run_status_from_session(session_id, request_id)
+    if fallback is not None:
+        return fallback
+    return {
+        "ok": False,
+        "engine": "native",
+        "session_id": session_id,
+        "request_id": request_id,
+        "state": "unknown",
+        "terminal": False,
+        "replay_available": False,
+        "error": "chat_run_not_found",
+    }
+
+
+async def _stream_existing_chat_run(
+    request: web.Request,
+    *,
+    session_id: str,
+    request_id: str,
+) -> web.StreamResponse:
+    response = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await response.prepare(request)
+    connected = await _try_write_sse_event(
+        response,
+        "start",
+        {**build_stream_start_event_payload(session_id, request_id), "resumed": True},
+        request_id=request_id,
+    )
+    if not connected:
+        return response
+    while True:
+        payload = await _chat_run_status_payload(session_id, request_id)
+        connected = await _try_write_sse_event(response, "run_status", payload, request_id=request_id)
+        if not connected:
+            return response
+        if payload.get("terminal"):
+            final_payload = payload.get("final_payload")
+            if isinstance(final_payload, dict):
+                connected = await _try_write_sse_event(response, "final", final_payload, request_id=request_id)
+            if connected:
+                await _try_write_sse_event(response, "done", {"ok": True, "session_id": session_id, "request_id": request_id}, request_id=request_id)
+            return response
+        if payload.get("state") == "unknown":
+            await _try_write_sse_event(response, "done", {"ok": False, "session_id": session_id, "request_id": request_id}, request_id=request_id)
+            return response
+        await asyncio.sleep(0.5)
+
+
 def _json_compatible(value: Any) -> Any:
     try:
         json.dumps(value)
@@ -1252,6 +1371,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             request_id=request_id,
             session_id=session_id,
         )
+        existing_run = chat_run_registry.get(request_id, session_id=session_id)
+        if existing_run is not None:
+            return await _stream_existing_chat_run(request, session_id=session_id, request_id=request_id)
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
         attached_images = await _collect_attached_images(
@@ -1324,9 +1446,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         await response.prepare(request)
         response_prepared = True
 
-        # Send start event
-        await response.write(
-            _sse_event_bytes("start", build_stream_start_event_payload(session_id, request_id))
+        # Send start event. A later write failure only detaches this viewer; the
+        # agent run and gateway event publishing continue for refresh recovery.
+        client_connected = await _try_write_sse_event(
+            response,
+            "start",
+            build_stream_start_event_payload(session_id, request_id),
+            request_id=request_id,
         )
 
         event_queue = asyncio.Queue()
@@ -1344,6 +1470,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             agent_name=runtime_agent_name,
             model=model,
         )
+        chat_run_registry.start(session_id=session_id, request_id=request_id, engine="native")
         if runtime_agent_id and session_id:
             try:
                 await publish_session_metadata(
@@ -1378,6 +1505,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 transient_model_message=transient_model_message,
             )
         )
+        chat_run_registry.attach_task(request_id, run_task)
 
         while not run_task.done() or not event_queue.empty():
             try:
@@ -1388,7 +1516,14 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                     event_payloads = runtime_event_projector.project(event)
                 for event_payload in event_payloads:
                     await _emit_gateway_runtime_event(event_payload)
-                    await response.write(_sse_event_bytes("runtime_event", event_payload))
+                    chat_run_registry.record_event(request_id, event_payload)
+                    if client_connected:
+                        client_connected = await _try_write_sse_event(
+                            response,
+                            "runtime_event",
+                            event_payload,
+                            request_id=request_id,
+                        )
             except asyncio.TimeoutError:
                 continue
 
@@ -1438,21 +1573,30 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             'session_id': session_id,
             'request_id': request_id,
         }
-        await response.write(_sse_event_bytes("usage", usage_data))
 
         response_data = build_runtime_response_payload(
             result if isinstance(result, dict) else None,
             session_id,
         )
         response_data.setdefault("request_id", request_id)
-        await response.write(_sse_event_bytes("final", response_data))
+        chat_run_registry.complete(request_id, response_data)
+        if client_connected:
+            client_connected = await _try_write_sse_event(response, "usage", usage_data, request_id=request_id)
+        if client_connected:
+            client_connected = await _try_write_sse_event(response, "final", response_data, request_id=request_id)
 
         # Send done event
-        await response.write(_sse_event_bytes("done", {
-            "ok": True,
-            "session_id": session_id,
-            "request_id": request_id,
-        }))
+        if client_connected:
+            await _try_write_sse_event(
+                response,
+                "done",
+                {
+                    "ok": True,
+                    "session_id": session_id,
+                    "request_id": request_id,
+                },
+                request_id=request_id,
+            )
 
         return response
 
@@ -1481,21 +1625,25 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             error_type=stream_error_type,
             metadata=execution_metadata,
         )
+        error_payload = {
+            "error": str(e),
+            "error_type": stream_error_type,
+            "details": stream_details,
+            "session_id": session_id,
+            "request_id": request_id,
+        }
+        if request_id:
+            chat_run_registry.fail(request_id, error_payload)
         if response is not None and response_prepared:
             try:
-                await response.write(
-                    _sse_event_bytes(
-                        "error",
-                        {
-                            "error": str(e),
-                            "error_type": stream_error_type,
-                            "details": stream_details,
-                            "session_id": session_id,
-                            "request_id": request_id,
-                        },
+                connected = await _try_write_sse_event(response, "error", error_payload, request_id=request_id)
+                if connected:
+                    await _try_write_sse_event(
+                        response,
+                        "done",
+                        {"ok": False, "session_id": session_id, "request_id": request_id},
+                        request_id=request_id,
                     )
-                )
-                await response.write(_sse_event_bytes("done", {"ok": False, "session_id": session_id, "request_id": request_id}))
             except Exception:
                 pass
             return response
@@ -1514,6 +1662,35 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 await _cleanup_one_shot_attachments(session_id, attachment_ids)
         finally:
             clear_log_context()
+
+
+async def api_chat_run_status(request: web.Request) -> web.Response:
+    request_id = str(request.match_info.get("request_id") or "").strip()
+    session_id = str(request.query.get("session_id") or "").strip()
+    if not request_id:
+        return web.json_response({"ok": False, "error": "request_id_required"}, status=400)
+    payload = await _chat_run_status_payload(session_id, request_id)
+    status_code = 404 if payload.get("error") == "chat_run_not_found" else 200
+    return web.json_response(payload, status=status_code)
+
+
+async def api_chat_run_cancel(request: web.Request) -> web.Response:
+    request_id = str(request.match_info.get("request_id") or "").strip()
+    session_id = str(request.query.get("session_id") or "").strip()
+    if not request_id:
+        return web.json_response({"ok": False, "error": "request_id_required"}, status=400)
+    record = chat_run_registry.get(request_id, session_id=session_id or None)
+    if record is None:
+        return web.json_response({"ok": False, "error": "chat_run_not_found", "request_id": request_id, "session_id": session_id}, status=404)
+    cancelled = chat_run_registry.cancel(request_id)
+    return web.json_response({
+        "ok": cancelled,
+        "engine": "native",
+        "request_id": request_id,
+        "session_id": record.session_id,
+        "state": "cancelled" if cancelled else record.state,
+        "terminal": True if cancelled else record.terminal,
+    })
 
 
 async def api_tasks_execute(request: web.Request) -> web.Response:
@@ -2893,6 +3070,8 @@ def setup_runtime_api_routes(app: web.Application):
 
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
+    app.router.add_get('/api/chat/runs/{request_id}', api_chat_run_status)
+    app.router.add_post('/api/chat/runs/{request_id}/cancel', api_chat_run_cancel)
     app.router.add_post('/api/tasks/execute', api_tasks_execute)
     app.router.add_get('/api/tasks/{task_id}', api_task_status)
     app.router.add_post('/api/tasks/{task_id}/cancel', api_task_cancel)

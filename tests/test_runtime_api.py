@@ -34,6 +34,8 @@ class TestRuntimeApiRoutes:
 
         assert "/" not in routes
         assert '/api/chat' in routes
+        assert '/api/chat/runs/{request_id}' in routes
+        assert '/api/chat/runs/{request_id}/cancel' in routes
         assert '/api/sessions' in routes
         assert '/api/sessions/{session_id}/rename' in routes
         assert '/api/sessions/{session_id}' in routes
