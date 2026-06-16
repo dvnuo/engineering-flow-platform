@@ -153,7 +153,16 @@ class TestConfigEdgeCases:
 class TestConfigProxy:
     """Tests for proxy configuration handling."""
 
-    PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
+    PROXY_ENV_KEYS = [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "no_proxy",
+        "NO_PROXY",
+    ]
 
     def _prepare_proxy_env(self, monkeypatch, clear: bool = True):
         """Ensure proxy env vars are tracked and optionally cleared for test isolation."""
@@ -182,6 +191,8 @@ class TestConfigProxy:
         assert os.environ["https_proxy"] == expected_url
         assert os.environ["HTTP_PROXY"] == expected_url
         assert os.environ["HTTPS_PROXY"] == expected_url
+        assert os.environ["all_proxy"] == expected_url
+        assert os.environ["ALL_PROXY"] == expected_url
 
     def test_apply_proxy_with_special_characters_in_credentials(self, tmp_path, monkeypatch):
         """Test apply_proxy() URL-encodes special characters in credentials."""
@@ -203,6 +214,8 @@ class TestConfigProxy:
         assert os.environ["https_proxy"] == expected_url
         assert os.environ["HTTP_PROXY"] == expected_url
         assert os.environ["HTTPS_PROXY"] == expected_url
+        assert os.environ["all_proxy"] == expected_url
+        assert os.environ["ALL_PROXY"] == expected_url
 
     def test_apply_proxy_disabled_clears_proxy_env_when_proxy_section_exists(self, tmp_path, monkeypatch):
         """Test disabled proxy clears proxy-related env vars when section exists."""

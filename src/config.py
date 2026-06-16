@@ -244,6 +244,16 @@ class Config:
         Path.home() / ".efp" / "config.yaml",  # User config directory
         Path(__file__).parent / "config.yaml",  # Project directory
     ]
+    PROXY_ENV_VARS = (
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "no_proxy",
+        "NO_PROXY",
+    )
 
     PROJECT_EXAMPLE = Path(__file__).parent.parent / 'config.yaml.example'
     MANAGED_OVERLAY_SECTIONS = {
@@ -549,7 +559,14 @@ class Config:
         changed_sections = sorted(previous_sections | new_sections)
         self.reload(changed_sections=changed_sections)
         if "proxy" in changed_sections:
-            self.apply_proxy()
+            if (
+                "proxy" in previous_sections
+                and "proxy" not in new_sections
+                and "proxy" not in self._config
+            ):
+                self._clear_proxy_env()
+            else:
+                self.apply_proxy()
         return changed_sections
 
     def clear_managed_overlay(self) -> None:
@@ -583,7 +600,10 @@ class Config:
         self._cleanup_legacy_runtime_profile_file()
         self.reload(changed_sections=previous_sections)
         if "proxy" in previous_sections:
-            self.apply_proxy()
+            if "proxy" in self._config:
+                self.apply_proxy()
+            else:
+                self._clear_proxy_env()
 
     def get_effective_config(self) -> Dict[str, Any]:
         return copy.deepcopy(self._config)
@@ -934,6 +954,10 @@ class Config:
     def proxy(self) -> Dict[str, Any]:
         """Get proxy configuration."""
         return self._config.get("proxy", {})
+
+    def _clear_proxy_env(self) -> None:
+        for var in self.PROXY_ENV_VARS:
+            os.environ.pop(var, None)
     
     def apply_proxy(self) -> None:
         """Apply proxy settings to os.environ."""
@@ -951,6 +975,8 @@ class Config:
             os.environ["https_proxy"] = url
             os.environ["HTTP_PROXY"] = url
             os.environ["HTTPS_PROXY"] = url
+            os.environ["all_proxy"] = url
+            os.environ["ALL_PROXY"] = url
             # Handle no_proxy for internal addresses
             no_proxy = no_proxy_value(proxy_config)
             os.environ["no_proxy"] = no_proxy
@@ -958,8 +984,7 @@ class Config:
         elif "proxy" in self._config:
             # Only clear if proxy section exists but is disabled
             # Don't clear inherited env vars when proxy section is absent
-            for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
-                os.environ.pop(var, None)
+            self._clear_proxy_env()
     
     @property
     def heartbeat(self) -> Dict[str, Any]:
