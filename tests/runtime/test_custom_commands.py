@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_command_registry_discovers_and_parses_command_files(tmp_path: Path):
     first_dir = tmp_path / "first"
-    second_dir = tmp_path / ".opencode" / "command"
+    second_dir = tmp_path / ".efp" / "command"
     hidden_dir = second_dir / ".hidden"
     nested_dir = second_dir / "review"
     first_dir.mkdir()
@@ -167,7 +167,7 @@ def test_command_registry_list_returns_safe_effective_command_info(tmp_path: Pat
     assert config_infos["review"].description == "Config review"
     assert config_infos["review"].command_file is None
 
-    command_dir = tmp_path / ".opencode" / "commands"
+    command_dir = tmp_path / ".efp" / "commands"
     command_dir.mkdir(parents=True)
     command_file = command_dir / "review.md"
     command_file.write_text(
@@ -845,7 +845,7 @@ async def test_default_command_file_available_when_loaded_from_nested_dir(
     project = tmp_path / "project"
     nested = project / "src" / "pkg"
     nested.mkdir(parents=True)
-    command_dir = project / ".opencode" / "commands"
+    command_dir = project / ".efp" / "commands"
     command_dir.mkdir(parents=True)
     command_file = command_dir / "audit.md"
     command_file.write_text("# Audit\nInspect project context.", encoding="utf-8")
@@ -940,7 +940,9 @@ async def test_builtin_review_available_without_config_or_command_directory(
 
 @pytest.mark.asyncio
 async def test_config_command_overrides_builtin_init(tmp_path: Path):
-    (tmp_path / "opencode.json").write_text(
+    config_path = tmp_path / ".efp/config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
         json.dumps(
             {
                 "command": {
@@ -972,7 +974,7 @@ async def test_config_command_overrides_builtin_init(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_markdown_command_overrides_builtin_review(tmp_path: Path):
-    command_file = tmp_path / ".opencode" / "commands" / "review.md"
+    command_file = tmp_path / ".efp" / "commands" / "review.md"
     command_file.parent.mkdir(parents=True)
     command_file.write_text("File review $ARGUMENTS", encoding="utf-8")
     loaded = load_runtime_config(tmp_path)

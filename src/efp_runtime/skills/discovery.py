@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import os
 from pathlib import Path
 from typing import Any
 
@@ -13,14 +14,14 @@ SKILL_FILE_NAMES = {"skill.md", "SKILL.md"}
 DEFAULT_GLOBAL_SKILL_DIRECTORIES = (
     "~/.claude/skills",
     "~/.agents/skills",
-    "~/.config/opencode/skill",
-    "~/.config/opencode/skills",
+    "~/.efp/skill",
+    "~/.efp/skills",
 )
 DEFAULT_PROJECT_SKILL_DIRECTORIES = (
     ".claude/skills",
     ".agents/skills",
-    ".opencode/skill",
-    ".opencode/skills",
+    ".efp/skill",
+    ".efp/skills",
 )
 
 
@@ -28,7 +29,7 @@ class SkillDiscovery:
     """Discover SKILL.md/skill.md packages from configured directories."""
 
     def __init__(self, directories: Iterable[str | Path]):
-        self.directories = [Path(directory).expanduser() for directory in directories]
+        self.directories = [_expand_user_path(directory) for directory in directories]
         self._skills: dict[str, SkillPackage] | None = None
 
     def discover(self, *, refresh: bool = False) -> list[SkillPackage]:
@@ -55,7 +56,7 @@ def discover_skills(directories: Iterable[str | Path]) -> list[SkillPackage]:
     packages_by_name: dict[str, SkillPackage] = {}
     seen_roots: set[Path] = set()
     for configured_dir in directories:
-        directory = Path(configured_dir).expanduser()
+        directory = _expand_user_path(configured_dir)
         if not directory.exists():
             continue
         for skill_file in _iter_skill_files(directory):
@@ -80,11 +81,11 @@ def default_skill_directories(
 
     if not include_defaults:
         return []
-    root = Path(workspace_root).expanduser().resolve(strict=False)
+    root = _expand_user_path(workspace_root).resolve(strict=False)
     start = _ancestor_search_start(root, cwd)
     directories: list[Path] = []
     for directory in DEFAULT_GLOBAL_SKILL_DIRECTORIES:
-        path = Path(directory).expanduser().resolve(strict=False)
+        path = _expand_user_path(directory).resolve(strict=False)
         if path.is_dir():
             directories.append(path)
     for ancestor in _project_skill_ancestors(root, start):
@@ -236,7 +237,7 @@ def _is_hidden(path: Path) -> bool:
 def _ancestor_search_start(root: Path, cwd: str | Path | None) -> Path:
     if cwd is None or (isinstance(cwd, str) and not cwd.strip()):
         return root
-    raw_path = Path(cwd).expanduser()
+    raw_path = _expand_user_path(cwd)
     candidate = raw_path if raw_path.is_absolute() else root / raw_path
     resolved = candidate.resolve(strict=False)
     if resolved.is_file():
@@ -267,6 +268,20 @@ def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
         seen.add(resolved)
         deduped.append(resolved)
     return deduped
+
+
+def _expand_user_path(path: str | Path) -> Path:
+    text = str(path)
+    if text == "~":
+        return _home_path()
+    if text.startswith("~/") or text.startswith("~\\"):
+        return _home_path() / text[2:]
+    return Path(path).expanduser()
+
+
+def _home_path() -> Path:
+    value = os.getenv("HOME") or os.getenv("USERPROFILE")
+    return Path(value).expanduser() if value else Path.home().expanduser()
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:

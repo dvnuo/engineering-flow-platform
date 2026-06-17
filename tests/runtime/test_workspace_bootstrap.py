@@ -17,7 +17,7 @@ async def test_workspace_runtime_loads_config_command_and_agent_registry(
     tmp_path: Path,
 ):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "command": {
                 "audit": {
@@ -60,7 +60,7 @@ async def test_workspace_runtime_loads_config_command_and_agent_registry(
 @pytest.mark.asyncio
 async def test_workspace_default_agent_is_passed_to_agent_runtime(tmp_path: Path):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "defaultAgent": "review",
             "agents": {
@@ -88,7 +88,7 @@ async def test_workspace_explicit_default_agent_overrides_loaded_default(
     tmp_path: Path,
 ):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "defaultAgent": "general",
             "agents": {
@@ -117,7 +117,7 @@ def test_workspace_runtime_requires_injected_provider(tmp_path: Path):
 
 def test_workspace_load_options_forward_paths_and_include_defaults(tmp_path: Path):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "defaultAgent": "general",
             "agents": {"general": {"prompt": "Default profile."}},
@@ -162,7 +162,7 @@ def test_load_runtime_workspace_resolves_parent_root_from_nested_dir(tmp_path: P
     nested = project / "src" / "pkg"
     nested.mkdir(parents=True)
     _write_json(
-        project / "opencode.json",
+        project / ".efp/config.json",
         {"command": {"audit": "Audit $ARGUMENTS."}},
     )
 
@@ -171,7 +171,7 @@ def test_load_runtime_workspace_resolves_parent_root_from_nested_dir(tmp_path: P
     assert workspace.workspace_root == project.resolve()
     assert workspace.config.workspace_root == project.resolve()
     assert workspace.load_result.loaded_paths == [
-        (project / "opencode.json").resolve(),
+        (project / ".efp/config.json").resolve(),
     ]
     assert workspace.command_registry is not None
     assert workspace.command_registry.get("audit").content == "Audit $ARGUMENTS."
@@ -183,7 +183,7 @@ def test_create_agent_runtime_from_workspace_resolves_parent_root_from_nested_di
     project = tmp_path / "project"
     nested = project / "src" / "pkg"
     nested.mkdir(parents=True)
-    _write_json(project / "opencode.json", {"runtime_mode": "plan"})
+    _write_json(project / ".efp/config.json", {"runtime_mode": "plan"})
     provider = ScriptedLLMProvider([{"content": "Done."}])
 
     runtime = create_agent_runtime_from_workspace(

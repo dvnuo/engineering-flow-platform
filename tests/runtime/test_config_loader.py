@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_default_file_lookup_and_merge_order(tmp_path: Path):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "permissions": {"edit": "deny"},
             "disabledTools": ["read"],
@@ -32,7 +32,7 @@ def test_default_file_lookup_and_merge_order(tmp_path: Path):
             "runtime_mode": "build",
         },
     )
-    nested = tmp_path / ".opencode" / "config.json"
+    nested = tmp_path / ".efp" / "config.jsonc"
     _write_json(
         nested,
         {
@@ -47,7 +47,7 @@ def test_default_file_lookup_and_merge_order(tmp_path: Path):
     found = find_runtime_config_files(tmp_path)
     result = load_runtime_config(tmp_path)
 
-    assert found == [tmp_path / "opencode.json", nested]
+    assert found == [tmp_path / ".efp/config.json", nested]
     assert result.loaded_paths == found
     assert result.raw["runtime_mode"] == "build"
     assert result.config.runtime_mode == "plan"
@@ -60,14 +60,14 @@ def test_default_file_lookup_and_merge_order(tmp_path: Path):
     assert result.config.active_skills == ["base", "review"]
 
 
-def test_load_runtime_config_resolves_parent_opencode_json_from_nested_dir(
+def test_load_runtime_config_resolves_parent_efp_config_from_nested_dir(
     tmp_path: Path,
 ):
     project = tmp_path / "project"
     nested = project / "src" / "pkg"
     nested.mkdir(parents=True)
     _write_json(
-        project / "opencode.json",
+        project / ".efp/config.json",
         {
             "runtime_mode": "plan",
             "instructions": ["README.md"],
@@ -77,20 +77,20 @@ def test_load_runtime_config_resolves_parent_opencode_json_from_nested_dir(
     found = find_runtime_config_files(nested)
     result = load_runtime_config(nested)
 
-    assert found == [(project / "opencode.json").resolve()]
+    assert found == [(project / ".efp/config.json").resolve()]
     assert result.loaded_paths == found
     assert result.config.workspace_root == project.resolve()
     assert result.config.runtime_mode == "plan"
     assert result.config.instruction_paths == [(project / "README.md").resolve()]
 
 
-def test_load_runtime_config_resolves_parent_dot_opencode_config_from_nested_dir(
+def test_load_runtime_config_resolves_parent_dot_efp_config_from_nested_dir(
     tmp_path: Path,
 ):
     project = tmp_path / "project"
     nested = project / "src" / "pkg"
     nested.mkdir(parents=True)
-    config_path = project / ".opencode" / "config.json"
+    config_path = project / ".efp" / "config.json"
     _write_json(config_path, {"runtime": {"mode": "plan"}})
 
     result = load_runtime_config(nested)
@@ -108,7 +108,7 @@ def test_parent_default_commands_marker_resolves_workspace_root(
     project = tmp_path / "project"
     nested = project / "src" / "pkg"
     nested.mkdir(parents=True)
-    commands = project / ".opencode" / "commands"
+    commands = project / ".efp" / "commands"
     commands.mkdir(parents=True)
     (commands / "audit.md").write_text("Audit nested work.", encoding="utf-8")
 
@@ -131,7 +131,7 @@ def test_parent_default_skill_marker_resolves_workspace_root(
     project = tmp_path / "project"
     nested = project / "src" / "pkg"
     nested.mkdir(parents=True)
-    skills = project / ".opencode" / default_name
+    skills = project / ".efp" / default_name
     _write_skill(skills, "project-skill", content="# Project skill")
 
     result = load_runtime_config(nested)
@@ -149,7 +149,7 @@ def test_loader_exposes_default_project_skill_as_command(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    skills = tmp_path / ".opencode" / "skill"
+    skills = tmp_path / ".efp" / "skill"
     skill_dir = _write_skill(skills, "project-skill", content="# Project skill")
 
     result = load_runtime_config(tmp_path)
@@ -213,8 +213,8 @@ def test_nested_project_marker_wins_over_parent_marker(tmp_path: Path):
     inner = outer / "packages" / "app"
     nested = inner / "src" / "pkg"
     nested.mkdir(parents=True)
-    inner_config = inner / ".opencode" / "config.json"
-    _write_json(outer / "opencode.json", {"runtime_mode": "build"})
+    inner_config = inner / ".efp" / "config.json"
+    _write_json(outer / ".efp/config.json", {"runtime_mode": "build"})
     _write_json(inner_config, {"runtime_mode": "plan"})
 
     result = load_runtime_config(nested)
@@ -229,7 +229,7 @@ def test_include_defaults_false_does_not_resolve_parent_marker(tmp_path: Path):
     project = tmp_path / "project"
     nested = project / "src" / "pkg"
     nested.mkdir(parents=True)
-    _write_json(project / "opencode.json", {"runtime_mode": "plan"})
+    _write_json(project / ".efp/config.json", {"runtime_mode": "plan"})
 
     result = load_runtime_config(nested, include_defaults=False)
 
@@ -245,7 +245,8 @@ def test_include_defaults_false_does_not_resolve_parent_marker(tmp_path: Path):
 
 
 def test_jsonc_comments_trailing_commas_and_comment_like_strings(tmp_path: Path):
-    path = tmp_path / "opencode.jsonc"
+    path = tmp_path / ".efp/config.jsonc"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         """
         {
@@ -275,7 +276,7 @@ def test_config_variable_substitutes_env_in_json_string(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("EFP_TEST_MODEL", 'local/"model"\nnext')
-    _write_json(tmp_path / "opencode.json", {"model": "prefix-{env:EFP_TEST_MODEL}"})
+    _write_json(tmp_path / ".efp/config.json", {"model": "prefix-{env:EFP_TEST_MODEL}"})
 
     result = load_runtime_config(tmp_path)
 
@@ -290,14 +291,14 @@ def test_config_variable_missing_env_becomes_empty_string(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.delenv("EFP_TEST_MISSING_MODEL", raising=False)
-    _write_json(tmp_path / "opencode.json", {"model": "{env:EFP_TEST_MISSING_MODEL}"})
+    _write_json(tmp_path / ".efp/config.json", {"model": "{env:EFP_TEST_MISSING_MODEL}"})
 
     with pytest.raises(ValueError, match="default_model"):
         load_runtime_config(tmp_path)
 
 
 def test_config_variable_reads_file_relative_to_config_directory(tmp_path: Path):
-    config_path = tmp_path / ".opencode" / "config.jsonc"
+    config_path = tmp_path / ".efp" / "config.jsonc"
     secret_path = config_path.parent / "secret.txt"
     secret_path.parent.mkdir(parents=True)
     secret_path.write_text("  local secret\n", encoding="utf-8")
@@ -317,7 +318,7 @@ def test_config_variable_reads_file_from_home(
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     (home / "secret.txt").write_text("home secret\n", encoding="utf-8")
-    _write_json(tmp_path / "opencode.json", {"systemPrompt": ["{file:~/secret.txt}"]})
+    _write_json(tmp_path / ".efp/config.json", {"systemPrompt": ["{file:~/secret.txt}"]})
 
     result = load_runtime_config(tmp_path)
 
@@ -326,9 +327,10 @@ def test_config_variable_reads_file_from_home(
 
 
 def test_config_variable_json_escapes_file_content_inside_string(tmp_path: Path):
-    secret_path = tmp_path / "secret.txt"
+    secret_path = tmp_path / ".efp" / "secret.txt"
+    secret_path.parent.mkdir(parents=True, exist_ok=True)
     secret_path.write_text('  quote "one"\npath C:\\tmp\n', encoding="utf-8")
-    _write_json(tmp_path / "opencode.json", {"systemPrompt": ["{file:secret.txt}"]})
+    _write_json(tmp_path / ".efp/config.json", {"systemPrompt": ["{file:secret.txt}"]})
 
     result = load_runtime_config(tmp_path)
 
@@ -338,7 +340,7 @@ def test_config_variable_json_escapes_file_content_inside_string(tmp_path: Path)
 
 
 def test_config_variable_missing_file_error_includes_context(tmp_path: Path):
-    config_path = tmp_path / ".opencode" / "config.jsonc"
+    config_path = tmp_path / ".efp" / "config.jsonc"
     _write_json(config_path, {"systemPrompt": ["{file:missing.txt}"]})
 
     with pytest.raises(ValueError) as error:
@@ -352,7 +354,8 @@ def test_config_variable_missing_file_error_includes_context(tmp_path: Path):
 
 
 def test_config_variable_file_token_in_jsonc_line_comment_is_ignored(tmp_path: Path):
-    path = tmp_path / "opencode.jsonc"
+    path = tmp_path / ".efp/config.jsonc"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         """
         {
@@ -370,7 +373,8 @@ def test_config_variable_file_token_in_jsonc_line_comment_is_ignored(tmp_path: P
 
 
 def test_config_variable_token_outside_json_string_is_not_expanded(tmp_path: Path):
-    path = tmp_path / "opencode.jsonc"
+    path = tmp_path / ".efp/config.jsonc"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"model": {file:missing.txt}}', encoding="utf-8")
 
     with pytest.raises(ValueError) as error:
@@ -398,7 +402,7 @@ def test_runtime_config_field_mapping(tmp_path: Path):
             "activeSkills": ["review", "review"],
             "commandDirectories": ["commands", "commands"],
             "toolDirectories": ["tools", "more-tools"],
-            "toolSurface": "opencode",
+            "toolSurface": "native",
             "includeLegacyToolAliases": True,
             "runtime": {"mode": "plan"},
         },
@@ -432,7 +436,7 @@ def test_runtime_config_instruction_globs_are_preserved_for_runtime(
     tmp_path: Path,
 ):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "instructions": [
                 "docs/*.instructions.md",
@@ -582,30 +586,30 @@ def test_default_skill_directories_precede_configured_directories(
     home = tmp_path / "home"
     global_claude = home / ".claude" / "skills"
     global_agents = home / ".agents" / "skills"
-    global_opencode_skill = home / ".config" / "opencode" / "skill"
-    global_opencode_skills = home / ".config" / "opencode" / "skills"
-    opencode_skill = tmp_path / ".opencode" / "skill"
-    opencode_skills = tmp_path / ".opencode" / "skills"
+    global_efp_skill = home / ".efp" / "skill"
+    global_efp_skills = home / ".efp" / "skills"
+    efp_skill = tmp_path / ".efp" / "skill"
+    efp_skills = tmp_path / ".efp" / "skills"
     claude_skills = tmp_path / ".claude" / "skills"
     agents_skills = tmp_path / ".agents" / "skills"
     for directory in (
         global_claude,
         global_agents,
-        global_opencode_skill,
-        global_opencode_skills,
-        opencode_skill,
-        opencode_skills,
+        global_efp_skill,
+        global_efp_skills,
+        efp_skill,
+        efp_skills,
         claude_skills,
         agents_skills,
     ):
         directory.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "skillDirectories": [
                 "skills",
-                ".opencode/skills",
+                ".efp/skills",
             ],
         },
     )
@@ -615,48 +619,48 @@ def test_default_skill_directories_precede_configured_directories(
     assert result.config.skill_directories == [
         global_claude.resolve(),
         global_agents.resolve(),
-        global_opencode_skill.resolve(),
-        global_opencode_skills.resolve(),
+        global_efp_skill.resolve(),
+        global_efp_skills.resolve(),
         claude_skills.resolve(),
         agents_skills.resolve(),
-        opencode_skill.resolve(),
-        opencode_skills.resolve(),
+        efp_skill.resolve(),
+        efp_skills.resolve(),
         (tmp_path / "skills").resolve(),
     ]
 
 
-def test_default_skill_directory_order_prefers_project_opencode(
+def test_default_skill_directory_order_prefers_project_efp(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     home = tmp_path / "home"
     global_claude = home / ".claude" / "skills"
     global_agents = home / ".agents" / "skills"
-    global_opencode_skill = home / ".config" / "opencode" / "skill"
-    global_opencode_skills = home / ".config" / "opencode" / "skills"
+    global_efp_skill = home / ".efp" / "skill"
+    global_efp_skills = home / ".efp" / "skills"
     project_claude = tmp_path / ".claude" / "skills"
     project_agents = tmp_path / ".agents" / "skills"
-    project_opencode_skill = tmp_path / ".opencode" / "skill"
-    project_opencode_skills = tmp_path / ".opencode" / "skills"
+    project_efp_skill = tmp_path / ".efp" / "skill"
+    project_efp_skills = tmp_path / ".efp" / "skills"
     for directory in (
         global_claude,
         global_agents,
-        global_opencode_skill,
-        global_opencode_skills,
+        global_efp_skill,
+        global_efp_skills,
         project_claude,
         project_agents,
-        project_opencode_skill,
-        project_opencode_skills,
+        project_efp_skill,
+        project_efp_skills,
     ):
         directory.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     _write_skill(global_claude, "shared-skill", content="# Global external")
-    _write_skill(global_opencode_skills, "shared-skill", content="# Global opencode")
+    _write_skill(global_efp_skills, "shared-skill", content="# Global EFP")
     _write_skill(project_agents, "shared-skill", content="# Project external")
     winner = _write_skill(
-        project_opencode_skills,
+        project_efp_skills,
         "shared-skill",
-        content="# Project opencode",
+        content="# Project EFP",
     )
 
     result = load_runtime_config(tmp_path)
@@ -665,16 +669,16 @@ def test_default_skill_directory_order_prefers_project_opencode(
     assert result.config.skill_directories == [
         global_claude.resolve(),
         global_agents.resolve(),
-        global_opencode_skill.resolve(),
-        global_opencode_skills.resolve(),
+        global_efp_skill.resolve(),
+        global_efp_skills.resolve(),
         project_claude.resolve(),
         project_agents.resolve(),
-        project_opencode_skill.resolve(),
-        project_opencode_skills.resolve(),
+        project_efp_skill.resolve(),
+        project_efp_skills.resolve(),
     ]
     assert skill is not None
     assert skill.root == winner
-    assert skill.content == "# Project opencode"
+    assert skill.content == "# Project EFP"
 
 
 def test_missing_default_skill_directories_are_ignored(
@@ -685,7 +689,7 @@ def test_missing_default_skill_directories_are_ignored(
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "skillDirectories": ["skills"],
         },
@@ -705,13 +709,13 @@ def test_include_defaults_false_does_not_add_default_skill_directories(
     home = tmp_path / "home"
     (home / ".claude" / "skills").mkdir(parents=True)
     (home / ".agents" / "skills").mkdir(parents=True)
-    (home / ".config" / "opencode" / "skill").mkdir(parents=True)
-    (home / ".config" / "opencode" / "skills").mkdir(parents=True)
+    (home / ".efp" / "skill").mkdir(parents=True)
+    (home / ".efp" / "skills").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     (tmp_path / ".claude" / "skills").mkdir(parents=True)
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
-    (tmp_path / ".opencode" / "skill").mkdir(parents=True)
-    (tmp_path / ".opencode" / "skills").mkdir(parents=True)
+    (tmp_path / ".efp" / "skill").mkdir(parents=True)
+    (tmp_path / ".efp" / "skills").mkdir(parents=True)
     _write_json(
         tmp_path / "custom.json",
         {
@@ -757,10 +761,10 @@ def test_skills_paths_list_form_dedupes_with_skill_directories(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    default_skills = tmp_path / ".opencode" / "skill"
+    default_skills = tmp_path / ".efp" / "skill"
     default_skills.mkdir(parents=True)
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "skillDirectories": ["shared-skills", "configured-skills"],
             "skills": {
@@ -789,7 +793,7 @@ def test_configured_skill_directory_overrides_same_name_global_and_project_defau
 ):
     home = tmp_path / "home"
     global_root = home / ".claude" / "skills"
-    project_root = tmp_path / ".opencode" / "skill"
+    project_root = tmp_path / ".efp" / "skill"
     configured_root = tmp_path / "configured-skills"
     for directory in (global_root, project_root, configured_root):
         directory.mkdir(parents=True)
@@ -798,7 +802,7 @@ def test_configured_skill_directory_overrides_same_name_global_and_project_defau
     _write_skill(project_root, "shared-skill", content="# Project")
     winner = _write_skill(configured_root, "shared-skill", content="# Configured")
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "skillDirectories": ["configured-skills"],
         },
@@ -881,23 +885,23 @@ def test_include_defaults_false_does_not_add_builtin_agents(tmp_path: Path):
 
 def test_default_agent_and_mode_directories_are_loaded(tmp_path: Path):
     _write_text(
-        tmp_path / ".opencode" / "agent" / "review.md",
+        tmp_path / ".efp" / "agent" / "review.md",
         "Review from singular agent directory.",
     )
     _write_text(
-        tmp_path / ".opencode" / "agents" / "debug.md",
+        tmp_path / ".efp" / "agents" / "debug.md",
         "Debug from plural agent directory.",
     )
     _write_text(
-        tmp_path / ".opencode" / "agent" / "nested" / "trace.md",
+        tmp_path / ".efp" / "agent" / "nested" / "trace.md",
         "Nested agent files are loaded recursively.",
     )
     _write_text(
-        tmp_path / ".opencode" / "mode" / "plan.md",
+        tmp_path / ".efp" / "mode" / "plan.md",
         "Plan from singular mode directory.",
     )
     _write_text(
-        tmp_path / ".opencode" / "modes" / "build.md",
+        tmp_path / ".efp" / "modes" / "build.md",
         """
         ---
         mode: subagent
@@ -906,7 +910,7 @@ def test_default_agent_and_mode_directories_are_loaded(tmp_path: Path):
         """,
     )
     _write_text(
-        tmp_path / ".opencode" / "modes" / "nested" / "skip.md",
+        tmp_path / ".efp" / "modes" / "nested" / "skip.md",
         "Nested mode files are not loaded by default.",
     )
 
@@ -935,10 +939,10 @@ def test_include_defaults_false_skips_default_agent_and_mode_directories(
     tmp_path: Path,
 ):
     for relative_path in (
-        ".opencode/agent/review.md",
-        ".opencode/agents/debug.md",
-        ".opencode/mode/plan.md",
-        ".opencode/modes/build.md",
+        ".efp/agent/review.md",
+        ".efp/agents/debug.md",
+        ".efp/mode/plan.md",
+        ".efp/modes/build.md",
     ):
         _write_text(tmp_path / relative_path, "Default markdown profile.")
 
@@ -949,7 +953,7 @@ def test_include_defaults_false_skips_default_agent_and_mode_directories(
 
 def test_markdown_plan_agent_overrides_builtin_plan(tmp_path: Path):
     _write_text(
-        tmp_path / ".opencode" / "agents" / "plan.md",
+        tmp_path / ".efp" / "agents" / "plan.md",
         """
         ---
         description: Workspace plan
@@ -971,7 +975,7 @@ def test_markdown_plan_agent_overrides_builtin_plan(tmp_path: Path):
 
 def test_config_plan_agent_overrides_markdown_and_builtin_plan(tmp_path: Path):
     _write_text(
-        tmp_path / ".opencode" / "agents" / "plan.md",
+        tmp_path / ".efp" / "agents" / "plan.md",
         """
         ---
         description: Markdown plan
@@ -982,7 +986,7 @@ def test_config_plan_agent_overrides_markdown_and_builtin_plan(tmp_path: Path):
         """,
     )
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "agents": {
                 "plan": {
@@ -1006,7 +1010,7 @@ def test_config_plan_agent_overrides_markdown_and_builtin_plan(tmp_path: Path):
 
 def test_config_disabled_agent_removes_builtin_by_name(tmp_path: Path):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "agents": {
                 "plan": {"disabled": True},
@@ -1051,11 +1055,11 @@ def test_loader_returns_command_definitions_registry_and_default_directory(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    default_commands = tmp_path / ".opencode" / "commands"
+    default_commands = tmp_path / ".efp" / "commands"
     default_commands.mkdir(parents=True)
     (default_commands / "test.md").write_text("Markdown override.", encoding="utf-8")
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "command": {
                 "test": {
@@ -1113,7 +1117,7 @@ def test_loader_returns_singular_default_command_directory(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    default_commands = tmp_path / ".opencode" / "command"
+    default_commands = tmp_path / ".efp" / "command"
     default_commands.mkdir(parents=True)
     (default_commands / "test.md").write_text("Singular command.", encoding="utf-8")
 
@@ -1129,9 +1133,9 @@ def test_loader_orders_global_singular_plural_then_configured_command_directorie
     monkeypatch: pytest.MonkeyPatch,
 ):
     home = tmp_path / "home"
-    global_commands = home / ".config" / "opencode" / "commands"
-    singular_commands = tmp_path / ".opencode" / "command"
-    plural_commands = tmp_path / ".opencode" / "commands"
+    global_commands = home / ".efp" / "commands"
+    singular_commands = tmp_path / ".efp" / "command"
+    plural_commands = tmp_path / ".efp" / "commands"
     project_commands = tmp_path / "project-commands"
     global_commands.mkdir(parents=True)
     singular_commands.mkdir(parents=True)
@@ -1143,7 +1147,7 @@ def test_loader_orders_global_singular_plural_then_configured_command_directorie
     (plural_commands / "dup.md").write_text("Plural command.", encoding="utf-8")
     (project_commands / "dup.md").write_text("Configured command.", encoding="utf-8")
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "commandDirectories": ["project-commands"],
         },
@@ -1166,9 +1170,9 @@ def test_include_defaults_false_skips_default_command_directories(
     monkeypatch: pytest.MonkeyPatch,
 ):
     home = tmp_path / "home"
-    global_commands = home / ".config" / "opencode" / "commands"
-    singular_commands = tmp_path / ".opencode" / "command"
-    plural_commands = tmp_path / ".opencode" / "commands"
+    global_commands = home / ".efp" / "commands"
+    singular_commands = tmp_path / ".efp" / "command"
+    plural_commands = tmp_path / ".efp" / "commands"
     project_commands = tmp_path / "project-commands"
     global_commands.mkdir(parents=True)
     singular_commands.mkdir(parents=True)
@@ -1199,7 +1203,7 @@ def test_include_defaults_false_skips_default_command_directories(
 
 def test_loader_consumes_commands_alias(tmp_path: Path):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "commands": {
                 "fmt": {
@@ -1222,7 +1226,7 @@ def test_loader_consumes_commands_alias(tmp_path: Path):
 
 def test_agents_mapping_config_generates_agent_registry(tmp_path: Path):
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "defaultAgent": "general",
             "agents": {
@@ -1243,7 +1247,7 @@ def test_agents_mapping_config_generates_agent_registry(tmp_path: Path):
 
     result = load_runtime_config(
         tmp_path,
-        paths=["opencode.json"],
+        paths=[".efp/config.json"],
         include_defaults=False,
     )
     registry = result.agent_registry
@@ -1321,7 +1325,7 @@ def test_agent_singular_alias_is_compatible_with_agents(tmp_path: Path):
 
 def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Path):
     _write_text(
-        tmp_path / ".opencode" / "agents" / "review.md",
+        tmp_path / ".efp" / "agents" / "review.md",
         """
         ---
         description: Markdown review
@@ -1333,9 +1337,9 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
         """,
     )
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
-            "agentDirectories": [".opencode/agents"],
+            "agentDirectories": [".efp/agents"],
             "agents": {
                 "review": {
                     "description": "Config review",
@@ -1349,7 +1353,7 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
 
     result = load_runtime_config(
         tmp_path,
-        paths=["opencode.json"],
+        paths=[".efp/config.json"],
         include_defaults=False,
     )
     registry = result.agent_registry
@@ -1365,11 +1369,11 @@ def test_markdown_agents_are_loaded_and_config_overrides_same_name(tmp_path: Pat
 
 def test_config_agent_overrides_default_markdown_agent(tmp_path: Path):
     _write_text(
-        tmp_path / ".opencode" / "agent" / "review.md",
+        tmp_path / ".efp" / "agent" / "review.md",
         "Markdown prompt.",
     )
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {
             "agents": {
                 "review": {
@@ -1400,13 +1404,13 @@ def test_agent_directories_are_resolved_and_used(tmp_path: Path):
         """,
     )
     _write_json(
-        tmp_path / "opencode.json",
+        tmp_path / ".efp/config.json",
         {"agentDirectories": ["profiles"]},
     )
 
     result = load_runtime_config(
         tmp_path,
-        paths=["opencode.json"],
+        paths=[".efp/config.json"],
         include_defaults=False,
     )
     registry = result.agent_registry
@@ -1477,11 +1481,11 @@ def test_agent_loader_keys_are_not_unconsumed_config(tmp_path: Path):
         "agents": [],
         "model": "example-model",
     }
-    _write_json(tmp_path / "opencode.json", raw)
+    _write_json(tmp_path / ".efp/config.json", raw)
 
     result = load_runtime_config(
         tmp_path,
-        paths=["opencode.json"],
+        paths=[".efp/config.json"],
         include_defaults=False,
     )
 
@@ -1498,7 +1502,7 @@ def test_unconsumed_config_is_preserved_in_metadata(tmp_path: Path):
         "plugins": ["local-plugin"],
         "runtime": {"mode": "build", "future": True},
     }
-    _write_json(tmp_path / "opencode.json", raw)
+    _write_json(tmp_path / ".efp/config.json", raw)
 
     result = load_runtime_config(tmp_path)
 
@@ -1514,7 +1518,8 @@ def test_unconsumed_config_is_preserved_in_metadata(tmp_path: Path):
 
 
 def test_invalid_json_error_includes_file_path(tmp_path: Path):
-    path = tmp_path / "opencode.json"
+    path = tmp_path / ".efp/config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"permissions": ', encoding="utf-8")
 
     with pytest.raises(ValueError) as error:
