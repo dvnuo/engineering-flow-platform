@@ -584,13 +584,6 @@ class AgentRuntime:
                 if structured_output_active
                 else []
             )
-            instruction_context_messages = self._build_instruction_context_messages(
-                run_metadata
-            )
-            _record_system_instruction_paths(
-                run_metadata,
-                instruction_context_messages,
-            )
             available_skill_context_messages = (
                 self._build_available_skill_context_messages()
             )
@@ -599,7 +592,8 @@ class AgentRuntime:
                 *system_prompt_messages,
                 *structured_output_messages,
                 *agent_profile_messages,
-                *instruction_context_messages,
+            ]
+            post_instruction_context_messages = [
                 *available_skill_context_messages,
                 *skill_context_messages,
             ]
@@ -614,7 +608,7 @@ class AgentRuntime:
             run_metadata["structured_output_context_count"] = len(
                 structured_output_messages
             )
-            run_metadata["instruction_context_count"] = len(instruction_context_messages)
+            run_metadata["instruction_context_count"] = 0
             run_metadata["available_skill_context_count"] = len(
                 available_skill_context_messages
             )
@@ -678,6 +672,10 @@ class AgentRuntime:
                 session_id=resolved_session_id,
                 metadata=run_metadata,
                 context_messages=context_messages,
+                context_message_provider=lambda metadata: [
+                    *self._build_instruction_context_messages(metadata),
+                    *post_instruction_context_messages,
+                ],
                 tools=run_tools,
                 structured_output_required=structured_output_active,
                 structured_output_tool_id=structured_output_tool_id,
@@ -813,13 +811,6 @@ class AgentRuntime:
                 if structured_output_active
                 else []
             )
-            instruction_context_messages = self._build_instruction_context_messages(
-                run_metadata
-            )
-            _record_system_instruction_paths(
-                run_metadata,
-                instruction_context_messages,
-            )
             available_skill_context_messages = (
                 self._build_available_skill_context_messages()
             )
@@ -828,7 +819,8 @@ class AgentRuntime:
                 *system_prompt_messages,
                 *structured_output_messages,
                 *agent_profile_messages,
-                *instruction_context_messages,
+            ]
+            post_instruction_context_messages = [
                 *available_skill_context_messages,
                 *skill_context_messages,
             ]
@@ -840,7 +832,7 @@ class AgentRuntime:
             run_metadata["structured_output_context_count"] = len(
                 structured_output_messages
             )
-            run_metadata["instruction_context_count"] = len(instruction_context_messages)
+            run_metadata["instruction_context_count"] = 0
             run_metadata["available_skill_context_count"] = len(
                 available_skill_context_messages
             )
@@ -902,6 +894,10 @@ class AgentRuntime:
                 session_id=session_id,
                 metadata=run_metadata,
                 context_messages=context_messages,
+                context_message_provider=lambda metadata: [
+                    *self._build_instruction_context_messages(metadata),
+                    *post_instruction_context_messages,
+                ],
                 append_user_message=False,
                 tools=run_tools,
                 structured_output_required=structured_output_active,
@@ -2805,23 +2801,6 @@ def _tool_enabled_for_run(
         overrides=run_tools,
     )
     return tool_id in enabled_tool_ids
-
-
-def _record_system_instruction_paths(
-    metadata: dict[str, Any],
-    messages: Iterable[Message],
-) -> None:
-    paths = [
-        str(path)
-        for message in messages
-        if message.metadata.get("source") == "file"
-        for path in [message.metadata.get("path")]
-        if path
-    ]
-    if paths:
-        metadata["system_instruction_paths"] = paths
-    else:
-        metadata.pop("system_instruction_paths", None)
 
 
 def _resolve_skill_discovery(

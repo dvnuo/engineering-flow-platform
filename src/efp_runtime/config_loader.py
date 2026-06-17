@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
+import glob
 import json
 import os
 from pathlib import Path
@@ -937,23 +938,23 @@ def _instruction_sources(
     value: Any,
     *,
     workspace_root: Path,
-) -> tuple[list[Path], list[str]]:
-    paths: list[Path] = []
+) -> tuple[list[str | Path], list[str]]:
+    paths: list[str | Path] = []
     texts: list[str] = []
 
     for entry in _coerce_sequence(value):
         if isinstance(entry, Mapping):
             if "path" in entry:
                 paths.extend(
-                    _resolve_path_values(workspace_root, entry["path"])
+                    _resolve_instruction_path_values(workspace_root, entry["path"])
                 )
             if "text" in entry:
                 texts.extend(_string_values(entry["text"]))
             continue
         if _path_has_value(entry):
-            paths.append(_resolve_workspace_path(workspace_root, entry))
+            paths.extend(_resolve_instruction_path_values(workspace_root, entry))
 
-    return _dedupe_paths(paths), _dedupe_strings(texts)
+    return _dedupe_instruction_paths(paths), _dedupe_strings(texts)
 
 
 def _merged_alias_mapping(
@@ -1014,6 +1015,21 @@ def _resolve_path_values(workspace_root: Path, value: Any) -> list[Path]:
         for path in _coerce_sequence(value)
         if _path_has_value(path)
     ]
+
+
+def _resolve_instruction_path_values(
+    workspace_root: Path,
+    value: Any,
+) -> list[str | Path]:
+    paths: list[str | Path] = []
+    for path in _coerce_sequence(value):
+        if not _path_has_value(path):
+            continue
+        if isinstance(path, (str, Path)) and glob.has_magic(str(path)):
+            paths.append(str(path))
+            continue
+        paths.append(_resolve_workspace_path(workspace_root, path))
+    return paths
 
 
 def _string_values(value: Any) -> list[str]:
@@ -1098,6 +1114,18 @@ def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
     for path in paths:
         marker = str(path)
         if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(path)
+    return deduped
+
+
+def _dedupe_instruction_paths(paths: Iterable[str | Path]) -> list[str | Path]:
+    deduped: list[str | Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        marker = str(path)
+        if not marker.strip() or marker in seen:
             continue
         seen.add(marker)
         deduped.append(path)

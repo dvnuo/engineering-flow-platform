@@ -58,6 +58,9 @@ from .provider import LLMProvider, ProviderOutput, ProviderResult, RuntimeReques
 from .stream_events import bridge_llm_stream_events
 
 
+ContextMessageProvider = Callable[[Mapping[str, Any]], Iterable[Message]]
+
+
 class LoopStatus:
     COMPLETED = "completed"
     ERROR = "error"
@@ -257,6 +260,7 @@ class RuntimeLoopRunner:
         max_iterations: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
         context_messages: Optional[list[Message]] = None,
+        context_message_provider: Optional[ContextMessageProvider] = None,
         append_user_message: bool = True,
         user_parts: Optional[List[MessagePart]] = None,
         tools: Optional[Mapping[str, bool]] = None,
@@ -449,7 +453,6 @@ class RuntimeLoopRunner:
                 metadata=run_metadata,
             )
             history = compaction_outcome.history
-            request_history = [*(context_messages or []), *history]
             request_metadata = _request_metadata(
                 run_metadata,
                 session_id=resolved_session_id,
@@ -460,6 +463,13 @@ class RuntimeLoopRunner:
                 request_metadata,
                 compaction_outcome.replay,
             )
+            request_context_messages = _request_context_messages(
+                context_messages=context_messages,
+                context_message_provider=context_message_provider,
+                metadata=request_metadata,
+                run_metadata=run_metadata,
+            )
+            request_history = [*request_context_messages, *history]
             request = await self._prepare_runtime_request(
                 session_id=resolved_session_id,
                 history=history,
@@ -531,10 +541,12 @@ class RuntimeLoopRunner:
                 provider_output = await self._invoke_provider_with_retries(
                     request,
                     history=history,
-                    request_history=request_history,
                     tools=enabled_tools,
                     runtime_events=runtime_events,
                     run_id=run_id,
+                    run_metadata=run_metadata,
+                    context_messages=context_messages,
+                    context_message_provider=context_message_provider,
                     iteration=iteration,
                     max_iterations=iteration_limit,
                 )
@@ -1132,10 +1144,12 @@ class RuntimeLoopRunner:
         request: RuntimeRequest,
         *,
         history: list[Message],
-        request_history: list[Message],
         tools: list[Any],
         runtime_events: List[RuntimeEvent],
         run_id: str,
+        run_metadata: dict[str, Any],
+        context_messages: Optional[list[Message]],
+        context_message_provider: Optional[ContextMessageProvider],
         iteration: int,
         max_iterations: int,
     ) -> ProviderOutput:
@@ -1172,9 +1186,6 @@ class RuntimeLoopRunner:
                         budget=overflow_budget,
                     )
                 )
-                provider_context_messages = request_history[
-                    : max(0, len(request_history) - len(history))
-                ]
                 retry_history = history
                 replay_info: _CompactionReplayInfo | None = None
                 if self.compaction_auto:
@@ -1199,8 +1210,14 @@ class RuntimeLoopRunner:
                     overflow_metadata,
                     replay_info,
                 )
+                retry_context_messages = _request_context_messages(
+                    context_messages=context_messages,
+                    context_message_provider=context_message_provider,
+                    metadata=overflow_metadata,
+                    run_metadata=run_metadata,
+                )
                 retry_request_history = [
-                    *provider_context_messages,
+                    *retry_context_messages,
                     *retry_history,
                 ]
                 overflow_request = await self._prepare_runtime_request(
@@ -1783,6 +1800,7 @@ async def run_runtime_loop(
     context_reserve_tokens: int | None = None,
     metadata: Optional[dict[str, Any]] = None,
     context_messages: Optional[list[Message]] = None,
+    context_message_provider: Optional[ContextMessageProvider] = None,
     append_user_message: bool = True,
     user_parts: Optional[List[MessagePart]] = None,
     event_bus: Optional[RuntimeEventBus] = None,
@@ -1842,6 +1860,7 @@ async def run_runtime_loop(
         session=session,
         metadata=metadata,
         context_messages=context_messages,
+        context_message_provider=context_message_provider,
         append_user_message=append_user_message,
         user_parts=user_parts,
         tools=tools,
@@ -2386,6 +2405,46 @@ def _request_metadata(
     )
     request_metadata["loop"] = merged_loop_metadata
     return request_metadata
+
+
+def _request_context_messages(
+    *,
+    context_messages: Optional[list[Message]],
+    context_message_provider: Optional[ContextMessageProvider],
+    metadata: dict[str, Any],
+    run_metadata: dict[str, Any],
+) -> list[Message]:
+    messages = list(context_messages or [])
+    if context_message_provider is None:
+        return messages
+
+    dynamic_messages = list(context_message_provider(metadata) or [])
+    _record_dynamic_instruction_context_metadata(metadata, dynamic_messages)
+    _record_dynamic_instruction_context_metadata(run_metadata, dynamic_messages)
+    return [*messages, *dynamic_messages]
+
+
+def _record_dynamic_instruction_context_metadata(
+    metadata: dict[str, Any],
+    messages: Iterable[Message],
+) -> None:
+    instruction_messages = [
+        message
+        for message in messages
+        if message.metadata.get("kind") == "instruction_context"
+    ]
+    metadata["instruction_context_count"] = len(instruction_messages)
+    paths = [
+        str(path)
+        for message in instruction_messages
+        if message.metadata.get("source") == "file"
+        for path in [message.metadata.get("path")]
+        if path
+    ]
+    if paths:
+        metadata["system_instruction_paths"] = paths
+    else:
+        metadata.pop("system_instruction_paths", None)
 
 
 def _with_model_context_compaction_metadata(

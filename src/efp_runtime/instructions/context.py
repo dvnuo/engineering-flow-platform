@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from ..session.models import Message, MessagePart, MessageRole
 
 
 DEFAULT_INSTRUCTION_FILES = ("AGENTS.md",)
+DEFAULT_INSTRUCTION_GLOBS = (".efp/instructions/*.instructions.md",)
 _TRUNCATION_NOTICE = "[Instruction content truncated to {kept} of {original} chars.]"
 
 
@@ -24,6 +26,7 @@ class InstructionContextBuilder:
         instruction_texts: Iterable[str] = (),
         include_default_files: bool = True,
         default_file_names: Iterable[str] = DEFAULT_INSTRUCTION_FILES,
+        default_glob_patterns: Iterable[str] = DEFAULT_INSTRUCTION_GLOBS,
         max_instruction_chars: int = 20000,
     ) -> None:
         if max_instruction_chars < 0:
@@ -33,6 +36,9 @@ class InstructionContextBuilder:
         self.instruction_texts = list(instruction_texts)
         self.include_default_files = bool(include_default_files)
         self.default_file_names = [str(name) for name in default_file_names]
+        self.default_glob_patterns = [
+            str(pattern) for pattern in default_glob_patterns if str(pattern).strip()
+        ]
         self.max_instruction_chars = max_instruction_chars
 
     def build_messages(
@@ -70,19 +76,33 @@ class InstructionContextBuilder:
     ) -> list[Path]:
         paths: list[Path] = []
         root = _resolved_directory_path(self.workspace_root)
+        search_cwd = _metadata_cwd(metadata) if cwd is None else cwd
         if self.include_default_files and root is not None:
             default_path = _first_ancestor_instruction_path(
                 root,
-                cwd=_metadata_cwd(metadata) if cwd is None else cwd,
+                cwd=search_cwd,
                 default_file_names=self.default_file_names,
             )
             if default_path is not None:
                 paths.append(default_path)
+            for pattern in self.default_glob_patterns:
+                paths.extend(
+                    _expand_configured_paths(
+                        pattern,
+                        workspace_root=root,
+                        cwd=search_cwd,
+                        search_ancestors=True,
+                    )
+                )
 
         for raw_path in self.instruction_paths:
-            path = _resolve_configured_path(raw_path, workspace_root=root)
-            if path is not None:
-                paths.append(path)
+            paths.extend(
+                _configured_instruction_paths(
+                    raw_path,
+                    workspace_root=root,
+                    cwd=search_cwd,
+                )
+            )
 
         return paths
 
@@ -289,6 +309,66 @@ def _resolve_configured_path(
     return workspace_root / expanded
 
 
+def _configured_instruction_paths(
+    path: str | Path,
+    *,
+    workspace_root: Path | None,
+    cwd: str | Path | None,
+) -> list[Path]:
+    if isinstance(path, str) and not path.strip():
+        return []
+    if _has_glob_magic(path):
+        return _expand_configured_paths(
+            path,
+            workspace_root=workspace_root,
+            cwd=cwd,
+            search_ancestors=True,
+        )
+    resolved = _resolve_configured_path(path, workspace_root=workspace_root)
+    return [] if resolved is None else [resolved]
+
+
+def _has_glob_magic(path: str | Path) -> bool:
+    return glob.has_magic(str(path))
+
+
+def _expand_configured_paths(
+    pattern: str | Path,
+    *,
+    workspace_root: Path | None,
+    cwd: str | Path | None,
+    search_ancestors: bool,
+) -> list[Path]:
+    if isinstance(pattern, str) and not pattern.strip():
+        return []
+    raw_pattern = str(pattern)
+    expanded = Path(raw_pattern).expanduser()
+    matches: list[Path] = []
+    if expanded.is_absolute():
+        matches.extend(Path(match) for match in glob.glob(str(expanded), recursive=True))
+    elif workspace_root is not None:
+        bases = (
+            _ancestor_search_directories(workspace_root, cwd)
+            if search_ancestors
+            else [workspace_root]
+        )
+        for base in bases:
+            matches.extend(
+                Path(match)
+                for match in glob.glob(str(base / raw_pattern), recursive=True)
+            )
+
+    resolved_matches: list[Path] = []
+    seen: set[Path] = set()
+    for match in sorted(matches, key=lambda item: (str(item).casefold(), str(item))):
+        resolved = _resolved_file_path(match)
+        if resolved is None or resolved in seen:
+            continue
+        seen.add(resolved)
+        resolved_matches.append(resolved)
+    return resolved_matches
+
+
 def _resolved_file_path(path: Path) -> Path | None:
     try:
         resolved = path.resolve(strict=False)
@@ -344,6 +424,20 @@ def _is_relative_to(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _ancestor_search_directories(
+    workspace_root: Path,
+    cwd: str | Path | None,
+) -> list[Path]:
+    directories: list[Path] = []
+    current = _ancestor_search_start(workspace_root, cwd)
+    while _is_relative_to(current, workspace_root):
+        directories.append(current)
+        if current == workspace_root:
+            break
+        current = current.parent
+    return directories
 
 
 def _relative_posix(root: Path, path: Path) -> str:
