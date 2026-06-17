@@ -13,6 +13,8 @@ from efp_runtime.loop import ScriptedLLMProvider
 from efp_runtime.models import MessagePart, MessageRole
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.session.store import InMemorySessionStore
+from efp_runtime.tools.definition import ToolDef
+from efp_runtime.tools.registry import ToolRegistry
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +44,32 @@ def test_builder_loads_agents_as_only_workspace_default_file(tmp_path: Path):
     assert messages[0].parts[0].metadata == messages[0].metadata
     assert "Claude instructions." not in messages[0].parts[0].text
     assert "Context instructions." not in messages[0].parts[0].text
+
+
+def test_builder_loads_workspace_instruction_glob_after_agents(tmp_path: Path):
+    nested = tmp_path / "src" / "pkg"
+    nested.mkdir(parents=True)
+    (tmp_path / "AGENTS.md").write_text("Agent instructions.", encoding="utf-8")
+    instructions = tmp_path / ".efp" / "instructions"
+    instructions.mkdir(parents=True)
+    (instructions / "b.instructions.md").write_text("B rules.", encoding="utf-8")
+    (instructions / "a.instructions.md").write_text("A rules.", encoding="utf-8")
+    (instructions / "ignored.md").write_text("Ignored.", encoding="utf-8")
+
+    messages = InstructionContextBuilder(workspace_root=tmp_path).build_messages(
+        metadata={"cwd": nested}
+    )
+
+    assert [message.metadata["path"] for message in messages] == [
+        str((tmp_path / "AGENTS.md").resolve()),
+        str((instructions / "a.instructions.md").resolve()),
+        str((instructions / "b.instructions.md").resolve()),
+    ]
+    text = "\n".join(message.parts[0].text for message in messages)
+    assert "Agent instructions." in text
+    assert "A rules." in text
+    assert "B rules." in text
+    assert "Ignored." not in text
 
 
 def test_nested_cwd_ignores_claude_and_context_by_default(tmp_path: Path):
@@ -78,6 +106,7 @@ def test_explicit_instruction_paths_support_relative_absolute_and_home(
     home_file = home / "home.md"
     home_file.write_text("Home instructions.", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
 
     messages = InstructionContextBuilder(
         workspace_root=tmp_path,
@@ -102,6 +131,43 @@ def test_explicit_instruction_paths_support_relative_absolute_and_home(
         "Absolute instructions.",
         "Home instructions.",
     ]
+
+
+def test_explicit_instruction_paths_support_globs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "b.instructions.md").write_text("B explicit.", encoding="utf-8")
+    (rules / "a.instructions.md").write_text("A explicit.", encoding="utf-8")
+    (rules / "ignored.md").write_text("Ignored explicit.", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "home.instructions.md").write_text("Home explicit.", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    messages = InstructionContextBuilder(
+        workspace_root=tmp_path,
+        include_default_files=False,
+        instruction_paths=[
+            "rules/*.instructions.md",
+            str(rules / "*.instructions.md"),
+            "~/*.instructions.md",
+        ],
+    ).build_messages()
+
+    assert [message.metadata["path"] for message in messages] == [
+        str((rules / "a.instructions.md").resolve()),
+        str((rules / "b.instructions.md").resolve()),
+        str((home / "home.instructions.md").resolve()),
+    ]
+    text = "\n".join(message.parts[0].text for message in messages)
+    assert "A explicit." in text
+    assert "B explicit." in text
+    assert "Home explicit." in text
+    assert "Ignored explicit." not in text
 
 
 def test_inline_instruction_text_generates_system_message():
@@ -174,6 +240,64 @@ async def test_agent_runtime_run_injects_instruction_context_without_persisting_
         MessageRole.ASSISTANT,
     ]
     assert all(message.role is not MessageRole.SYSTEM for message in history)
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_refreshes_instruction_context_each_provider_request(
+    tmp_path: Path,
+):
+    instructions = tmp_path / ".efp" / "instructions"
+    instructions.mkdir(parents=True)
+    rule_file = instructions / "rules.instructions.md"
+    rule_file.write_text("Initial rules.", encoding="utf-8")
+
+    async def refresh_rules(_args, _context):
+        rule_file.write_text("Updated rules.", encoding="utf-8")
+        return "updated"
+
+    provider = ScriptedLLMProvider(
+        [
+            {"tool_calls": [_tool_call("call-refresh", "refresh_rules")]},
+            {"content": "Done."},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        tool_registry=ToolRegistry(
+            [
+                ToolDef(
+                    id="refresh_rules",
+                    description="Refresh instruction rules.",
+                    input_schema={"type": "object", "properties": {}},
+                    execute=refresh_rules,
+                )
+            ]
+        ),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=2,
+            include_default_system_prompt=False,
+            include_environment_context=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    await runtime.run("Refresh instructions.", session_id="session-refresh-rules")
+
+    assert len(provider.requests) == 2
+    first_text = "\n".join(
+        message.text for message in provider.requests[0].provider_request.messages
+    )
+    second_text = "\n".join(
+        message.text for message in provider.requests[1].provider_request.messages
+    )
+    assert "Initial rules." in first_text
+    assert "Updated rules." not in first_text
+    assert "Updated rules." in second_text
+    assert provider.requests[1].metadata["instruction_context_count"] == 1
+    assert provider.requests[1].metadata["system_instruction_paths"] == [
+        str(rule_file.resolve())
+    ]
 
 
 @pytest.mark.asyncio
@@ -309,3 +433,14 @@ def _write_skill(
         encoding="utf-8",
     )
     return skill_dir
+
+
+def _tool_call(call_id: str, tool_name: str) -> dict[str, object]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": tool_name,
+            "arguments": "{}",
+        },
+    }

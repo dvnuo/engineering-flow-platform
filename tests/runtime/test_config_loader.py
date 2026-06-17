@@ -428,6 +428,28 @@ def test_runtime_config_field_mapping(tmp_path: Path):
     assert config.runtime_mode == "plan"
 
 
+def test_runtime_config_instruction_globs_are_preserved_for_runtime(
+    tmp_path: Path,
+):
+    _write_json(
+        tmp_path / "opencode.json",
+        {
+            "instructions": [
+                "docs/*.instructions.md",
+                {"path": ["rules/*.md", "docs/AGENTS.md"]},
+            ],
+        },
+    )
+
+    result = load_runtime_config(tmp_path)
+
+    assert result.config.instruction_paths == [
+        "docs/*.instructions.md",
+        "rules/*.md",
+        (tmp_path / "docs/AGENTS.md").resolve(),
+    ]
+
+
 @pytest.mark.parametrize(
     "alias",
     ["includeEnvironmentContext", "include_environment_context"],
