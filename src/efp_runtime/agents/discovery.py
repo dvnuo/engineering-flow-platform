@@ -13,8 +13,8 @@ from .profile import AgentProfile
 from .registry import AgentRegistry
 
 
-DEFAULT_AGENT_DIRECTORIES = (".opencode/agent", ".opencode/agents")
-DEFAULT_MODE_DIRECTORIES = (".opencode/mode", ".opencode/modes")
+DEFAULT_AGENT_DIRECTORIES = (".efp/agent", ".efp/agents")
+DEFAULT_MODE_DIRECTORIES = (".efp/mode", ".efp/modes")
 AGENT_MARKDOWN_EXTENSIONS = {".md", ".markdown"}
 
 _MAX_ITERATION_ALIASES = ("maxIterations", "max_iterations", "steps", "maxSteps")
@@ -164,7 +164,7 @@ def agent_profile_from_mapping(
     fallback_name: str | None = None,
     prompt: str | None = None,
 ) -> AgentProfile | None:
-    """Convert opencode-style agent config into an ``AgentProfile``.
+    """Convert EFP runtime agent config into an ``AgentProfile``.
 
     ``None`` is returned when the entry is explicitly disabled.
     """

@@ -308,7 +308,7 @@ def command_definitions_from_config(
     *,
     source: str = "config",
 ) -> list[CommandDefinition]:
-    """Build command definitions from opencode-style config mappings.
+    """Build command definitions from EFP runtime config mappings.
 
     Both ``command`` and the compatible ``commands`` alias are accepted. When
     both aliases appear, entries are emitted in config key order so registry

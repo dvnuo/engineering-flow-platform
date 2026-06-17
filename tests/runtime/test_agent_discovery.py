@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_discovers_markdown_agent_with_frontmatter_and_prompt(tmp_path: Path):
-    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir = tmp_path / ".efp" / "agents"
     _write(
         agent_dir / "review.md",
         """
@@ -42,7 +42,7 @@ def test_discovers_markdown_agent_with_frontmatter_and_prompt(tmp_path: Path):
 
 
 def test_nested_tools_mapping_and_skills_shorthand(tmp_path: Path):
-    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir = tmp_path / ".efp" / "agents"
     _write(
         agent_dir / "debug.markdown",
         """
@@ -73,7 +73,7 @@ def test_nested_tools_mapping_and_skills_shorthand(tmp_path: Path):
 
 
 def test_disabled_markdown_agent_is_skipped(tmp_path: Path):
-    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir = tmp_path / ".efp" / "agents"
     _write(
         agent_dir / "skip.md",
         """
@@ -100,7 +100,7 @@ def test_duplicate_agent_name_later_discovery_overrides_earlier(tmp_path: Path):
 
 
 def test_hidden_subdirectories_are_not_scanned(tmp_path: Path):
-    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir = tmp_path / ".efp" / "agents"
     _write(agent_dir / "visible.md", "Visible prompt.")
     _write(agent_dir / ".hidden" / "hidden.md", "Hidden prompt.")
 
@@ -110,7 +110,7 @@ def test_hidden_subdirectories_are_not_scanned(tmp_path: Path):
 
 
 def test_unknown_fields_are_preserved_in_raw_config(tmp_path: Path):
-    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir = tmp_path / ".efp" / "agents"
     _write(
         agent_dir / "review.md",
         """

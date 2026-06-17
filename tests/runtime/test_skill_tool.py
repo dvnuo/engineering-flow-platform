@@ -93,21 +93,21 @@ def test_skill_discovery_requires_valid_manifest_name(tmp_path):
     assert by_name["alternate-valid"].content == "# Alternate Valid"
 
 
-def test_default_skill_directories_include_opencode_skill_before_plural(
+def test_default_skill_directories_include_efp_skill_before_plural(
     tmp_path,
     monkeypatch,
 ):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    opencode_skill = tmp_path / ".opencode" / "skill"
-    opencode_skills = tmp_path / ".opencode" / "skills"
-    opencode_skill.mkdir(parents=True)
-    opencode_skills.mkdir(parents=True)
+    efp_skill = tmp_path / ".efp" / "skill"
+    efp_skills = tmp_path / ".efp" / "skills"
+    efp_skill.mkdir(parents=True)
+    efp_skills.mkdir(parents=True)
 
     assert default_skill_directories(tmp_path) == [
-        opencode_skill.resolve(),
-        opencode_skills.resolve(),
+        efp_skill.resolve(),
+        efp_skills.resolve(),
     ]
     assert default_skill_directories(tmp_path, include_defaults=False) == []
 
@@ -143,19 +143,19 @@ def test_default_skill_directories_include_global_before_project_defaults(
     workspace = tmp_path / "workspace"
     global_claude = home / ".claude" / "skills"
     global_agents = home / ".agents" / "skills"
-    global_opencode_skill = home / ".config" / "opencode" / "skill"
-    global_opencode_skills = home / ".config" / "opencode" / "skills"
-    opencode_skill = workspace / ".opencode" / "skill"
-    opencode_skills = workspace / ".opencode" / "skills"
+    global_efp_skill = home / ".efp" / "skill"
+    global_efp_skills = home / ".efp" / "skills"
+    efp_skill = workspace / ".efp" / "skill"
+    efp_skills = workspace / ".efp" / "skills"
     claude_skills = workspace / ".claude" / "skills"
     agents_skills = workspace / ".agents" / "skills"
     for directory in (
         global_claude,
         global_agents,
-        global_opencode_skill,
-        global_opencode_skills,
-        opencode_skill,
-        opencode_skills,
+        global_efp_skill,
+        global_efp_skills,
+        efp_skill,
+        efp_skills,
         claude_skills,
         agents_skills,
     ):
@@ -165,35 +165,35 @@ def test_default_skill_directories_include_global_before_project_defaults(
     assert default_skill_directories(workspace) == [
         global_claude.resolve(),
         global_agents.resolve(),
-        global_opencode_skill.resolve(),
-        global_opencode_skills.resolve(),
+        global_efp_skill.resolve(),
+        global_efp_skills.resolve(),
         claude_skills.resolve(),
         agents_skills.resolve(),
-        opencode_skill.resolve(),
-        opencode_skills.resolve(),
+        efp_skill.resolve(),
+        efp_skills.resolve(),
     ]
 
 
-def test_skill_discovery_loads_from_global_opencode_skill_directories(
+def test_skill_discovery_loads_from_global_efp_skill_directories(
     tmp_path,
     monkeypatch,
 ):
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
-    global_opencode_skill = home / ".config" / "opencode" / "skill"
-    global_opencode_skills = home / ".config" / "opencode" / "skills"
-    global_opencode_skill.mkdir(parents=True)
-    global_opencode_skills.mkdir(parents=True)
+    global_efp_skill = home / ".efp" / "skill"
+    global_efp_skills = home / ".efp" / "skills"
+    global_efp_skill.mkdir(parents=True)
+    global_efp_skills.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     singular = _write_skill(
-        global_opencode_skill,
+        global_efp_skill,
         "global-singular",
-        description="Global opencode singular skill",
+        description="Global EFP singular skill",
     )
     plural = _write_skill(
-        global_opencode_skills,
+        global_efp_skills,
         "global-plural",
-        description="Global opencode plural skill",
+        description="Global EFP plural skill",
     )
 
     discovery = SkillDiscovery(default_skill_directories(workspace))
@@ -202,25 +202,25 @@ def test_skill_discovery_loads_from_global_opencode_skill_directories(
     plural_skill = discovery.get("global-plural")
     assert singular_skill is not None
     assert singular_skill.root == singular
-    assert singular_skill.description == "Global opencode singular skill"
+    assert singular_skill.description == "Global EFP singular skill"
     assert plural_skill is not None
     assert plural_skill.root == plural
-    assert plural_skill.description == "Global opencode plural skill"
+    assert plural_skill.description == "Global EFP plural skill"
 
 
-def test_skill_discovery_loads_from_default_opencode_skill_directory(
+def test_skill_discovery_loads_from_default_efp_skill_directory(
     tmp_path,
     monkeypatch,
 ):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    opencode_skill = tmp_path / ".opencode" / "skill"
-    opencode_skill.mkdir(parents=True)
+    efp_skill = tmp_path / ".efp" / "skill"
+    efp_skill.mkdir(parents=True)
     skill_dir = _write_skill(
-        opencode_skill,
+        efp_skill,
         "local-skill",
-        description="Local opencode skill",
+        description="Local EFP skill",
     )
 
     discovery = SkillDiscovery(default_skill_directories(tmp_path))
@@ -228,7 +228,7 @@ def test_skill_discovery_loads_from_default_opencode_skill_directory(
 
     assert skill is not None
     assert skill.root == skill_dir
-    assert skill.description == "Local opencode skill"
+    assert skill.description == "Local EFP skill"
 
 
 def test_workspace_default_skill_overrides_same_name_global(
@@ -238,7 +238,7 @@ def test_workspace_default_skill_overrides_same_name_global(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     global_root = home / ".claude" / "skills"
-    project_root = workspace / ".opencode" / "skill"
+    project_root = workspace / ".efp" / "skill"
     global_root.mkdir(parents=True)
     project_root.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
@@ -295,21 +295,21 @@ def test_duplicate_skill_names_across_ancestors_use_nearest_cwd_directory(
     workspace = tmp_path / "workspace"
     nested = workspace / "src" / "pkg"
     nested.mkdir(parents=True)
-    (workspace / ".opencode" / "skill").mkdir(parents=True)
-    (workspace / "src" / ".opencode" / "skill").mkdir(parents=True)
-    (nested / ".opencode" / "skills").mkdir(parents=True)
+    (workspace / ".efp" / "skill").mkdir(parents=True)
+    (workspace / "src" / ".efp" / "skill").mkdir(parents=True)
+    (nested / ".efp" / "skills").mkdir(parents=True)
     _write_skill(
-        workspace / ".opencode" / "skill",
+        workspace / ".efp" / "skill",
         "shared-skill",
         content="# Workspace",
     )
     _write_skill(
-        workspace / "src" / ".opencode" / "skill",
+        workspace / "src" / ".efp" / "skill",
         "shared-skill",
         content="# Source",
     )
     winner = _write_skill(
-        nested / ".opencode" / "skills",
+        nested / ".efp" / "skills",
         "shared-skill",
         content="# Nested",
     )

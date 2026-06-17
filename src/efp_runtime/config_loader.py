@@ -38,22 +38,19 @@ from .skills.discovery import SkillDiscovery, default_skill_directories
 
 
 DEFAULT_CONFIG_FILE_NAMES = (
-    "opencode.json",
-    "opencode.jsonc",
-    ".opencode.json",
-    ".opencode/config.json",
-    ".opencode/config.jsonc",
+    ".efp/config.json",
+    ".efp/config.jsonc",
 )
 
 _RUNTIME_PROJECT_MARKER_DIRECTORIES = (
-    ".opencode/command",
-    ".opencode/commands",
-    ".opencode/skill",
-    ".opencode/skills",
-    ".opencode/agent",
-    ".opencode/agents",
-    ".opencode/mode",
-    ".opencode/modes",
+    ".efp/command",
+    ".efp/commands",
+    ".efp/skill",
+    ".efp/skills",
+    ".efp/agent",
+    ".efp/agents",
+    ".efp/mode",
+    ".efp/modes",
 )
 
 _RUNTIME_COMPATIBILITY_SKILL_MARKER_DIRECTORIES = (
@@ -366,7 +363,7 @@ def _config_variable_value(token: str, path: Path) -> str:
 
 
 def _resolve_config_file_reference(reference: str, path: Path) -> Path:
-    raw_path = Path(reference.strip()).expanduser()
+    raw_path = _expand_user_path(reference.strip())
     candidate = raw_path if raw_path.is_absolute() else path.parent / raw_path
     return candidate.resolve(strict=False)
 
@@ -842,14 +839,14 @@ def default_command_directories(
         return []
     root = _workspace_root_path(workspace_root)
     directories: list[Path] = []
-    global_directory = Path("~/.config/opencode/commands").expanduser().resolve(
+    global_directory = _expand_user_path("~/.efp/commands").resolve(
         strict=False,
     )
     if global_directory.is_dir():
         directories.append(global_directory)
     for default_directory in (
-        root / ".opencode" / "command",
-        root / ".opencode" / "commands",
+        root / ".efp" / "command",
+        root / ".efp" / "commands",
     ):
         path = default_directory.resolve(strict=False)
         if path.is_dir():
@@ -1188,19 +1185,33 @@ def _has_runtime_project_marker(directory: Path) -> bool:
 
 
 def _is_user_home_directory(directory: Path) -> bool:
-    return directory.resolve(strict=False) == Path.home().expanduser().resolve(
+    return directory.resolve(strict=False) == _expand_user_path("~").resolve(
         strict=False,
     )
 
 
 def _workspace_root_path(workspace_root: str | Path) -> Path:
-    return Path(workspace_root).expanduser().resolve(strict=False)
+    return _expand_user_path(workspace_root).resolve(strict=False)
 
 
 def _resolve_workspace_path(workspace_root: Path, path: Any) -> Path:
-    raw_path = Path(path).expanduser()
+    raw_path = _expand_user_path(path)
     candidate = raw_path if raw_path.is_absolute() else workspace_root / raw_path
     return candidate.resolve(strict=False)
+
+
+def _expand_user_path(path: Any) -> Path:
+    text = str(path)
+    if text == "~":
+        return _home_path()
+    if text.startswith("~/") or text.startswith("~\\"):
+        return _home_path() / text[2:]
+    return Path(path).expanduser()
+
+
+def _home_path() -> Path:
+    value = os.getenv("HOME") or os.getenv("USERPROFILE")
+    return Path(value).expanduser() if value else Path.home().expanduser()
 
 
 __all__ = [
