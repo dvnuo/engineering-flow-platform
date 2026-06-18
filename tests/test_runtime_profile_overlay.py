@@ -214,12 +214,24 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
                 "username": "aws-user",
                 "password": "aws-password",
             },
+            "jenkins": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "ci",
+                        "url": "https://jenkins.example.test",
+                        "username": "jenkins-user",
+                        "password": "jenkins-password",
+                    }
+                ],
+            },
         },
     )
 
     persisted = _read_yaml(config_path)
     assert "jira" not in persisted
     assert "confluence" not in persisted
+    assert "jenkins" not in persisted
     assert persisted["aws"] == {
         "enabled": True,
         "domain": "HBEU",
@@ -229,15 +241,18 @@ def test_runtime_profile_atlassian_overlay_is_external_only_and_not_portal_persi
     assert persisted["instruction_texts"]
     assert "jira-token" not in config_path.read_text(encoding="utf-8")
     assert "conf-token" not in config_path.read_text(encoding="utf-8")
+    assert "jenkins-password" not in config_path.read_text(encoding="utf-8")
     assert "aws-password" in config_path.read_text(encoding="utf-8")
     assert applied[0]["jira"]["instances"][0]["token"] == "jira-token"
     assert applied[0]["confluence"]["instances"][0]["token"] == "conf-token"
     assert applied[0]["aws"]["domain"] == "HBEU"
     assert applied[0]["aws"]["password"] == "aws-password"
+    assert applied[0]["jenkins"]["instances"][0]["password"] == "jenkins-password"
     assert cfg.get_managed_overlay_meta()["managed_sections"] == [
         "aws",
         "confluence",
         "instruction_texts",
+        "jenkins",
         "jira",
     ]
 
@@ -818,6 +833,17 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
                 "access_token": "gh-token",
                 "api_base_url": "https://github.example.test/api/v3",
             },
+            "jenkins": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "ci",
+                        "url": "https://jenkins.example.test/",
+                        "username": "jenkins-user",
+                        "password": "jenkins-password",
+                    }
+                ],
+            },
             "git": {"user": {"name": "Runtime Bot", "email": "runtime@example.test"}},
         },
     )
@@ -920,6 +946,38 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
             "check": False,
         }
     ]
+    jenkins_remove = _command_calls(recorder, ["jenkins", "instance", "remove"])
+    assert jenkins_remove == [
+        {
+            "args": ["jenkins", "instance", "remove", "ci", "--yes", "--json"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        }
+    ]
+    jenkins_add = _command_calls(recorder, ["jenkins", "instance", "add"])
+    assert jenkins_add == [
+        {
+            "args": [
+                "jenkins",
+                "instance",
+                "add",
+                "ci",
+                "--base-url",
+                "https://jenkins.example.test",
+                "--username",
+                "jenkins-user",
+                "--password-stdin",
+                "--default",
+                "--json",
+            ],
+            "input": "jenkins-password",
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        }
+    ]
     assert _command_calls(recorder, ["git", "config", "--global", "user.name"]) == [
         {
             "args": ["git", "config", "--global", "user.name", "Runtime Bot"],
@@ -954,6 +1012,7 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
         "jira": {"instances": [{"name": "jira-main"}]},
         "confluence": {"instances": [{"name": "docs"}]},
         "gh": {"hosts": ["github.example.test"]},
+        "jenkins": {"instances": [{"name": "ci"}]},
         "git": {
             "managed": {
                 "user.name": "Runtime Bot",
@@ -968,7 +1027,7 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
 
     metadata_text = json.dumps(metadata)
     all_argv = json.dumps([call["args"] for call in recorder.calls])
-    for secret in ("jira-token", "conf-token", "gh-token"):
+    for secret in ("jira-token", "conf-token", "gh-token", "jenkins-password"):
         assert secret not in all_argv
         assert secret not in metadata_text
 
@@ -999,6 +1058,22 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
         },
         {
             "args": ["confluence", "--json", "instance", "remove", "docs", "--yes"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        },
+    ]
+    assert _command_calls(recorder, ["jenkins", "instance", "remove"]) == [
+        {
+            "args": ["jenkins", "instance", "remove", "ci", "--yes", "--json"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        },
+        {
+            "args": ["jenkins", "instance", "remove", "ci", "--yes", "--json"],
             "input": None,
             "text": True,
             "capture_output": True,
@@ -1537,12 +1612,13 @@ def test_runtime_profile_external_cli_instructions_are_injected(tmp_path, monkey
     instructions = cfg.get_effective_config()["instruction_texts"]
     joined = "\n".join(instructions)
     assert "Use bash" in joined
-    assert "jira, confluence, gh, aws, and git" in joined
+    assert "jira, confluence, gh, aws, jenkins, and git" in joined
     assert "always pass --json" in joined
     assert "commands/schema/help llm" in joined
     assert "--dry-run" in joined
     assert "--yes" in joined
     assert "gh for GitHub issues, pull requests, and api calls" in joined
+    assert "jenkins for Jenkins controller operations" in joined
     assert "git for clone, fetch, push, and status" in joined
     assert "Credentials were applied by the runtime profile through the real CLIs" in joined
     assert "auth_failed" in joined

@@ -95,17 +95,17 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
 RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
     (
         "Use bash for external CLI tools configured by the runtime profile: "
-        "jira, confluence, gh, aws, and git."
+        "jira, confluence, gh, aws, jenkins, and git."
     ),
     (
-        "For jira and confluence, always pass --json. Before complex commands, "
+        "For jira, confluence, and jenkins, always pass --json. Before complex commands, "
         "inspect commands/schema/help llm; prefer --dry-run for writes, and use "
         "--yes only when a destructive action was explicitly confirmed."
     ),
-    "Use gh for GitHub issues, pull requests, and api calls; use aws for AWS operations; use git for clone, fetch, push, and status.",
+    "Use gh for GitHub issues, pull requests, and api calls; use aws for AWS operations; use jenkins for Jenkins controller operations; use git for clone, fetch, push, and status.",
     (
         "Credentials were applied by the runtime profile through the real CLIs; "
-        "if jira or confluence returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
+        "if jira, confluence, or jenkins returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
         "report a runtime profile configuration problem."
     ),
 ]
@@ -190,6 +190,7 @@ def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, 
     return (
         _has_atlassian_profile_instances(overlay.get("jira"))
         or _has_atlassian_profile_instances(overlay.get("confluence"))
+        or _has_atlassian_profile_instances(overlay.get("jenkins"))
         or _has_github_profile_token(overlay.get("github"))
         or _has_aws_profile_config(overlay.get("aws"))
         or _has_git_profile_user(overlay.get("git"))
@@ -263,6 +264,7 @@ class Config:
         "confluence",
         "github",
         "aws",
+        "jenkins",
         "git",
         "debug",
         *PORTAL_MANAGED_RUNTIME_FIELDS,
@@ -321,6 +323,12 @@ class Config:
             "domain": True,
             "username": True,
             "password": True,
+        },
+        "jenkins": {
+            "enabled": True,
+            "instances": True,
+            "default_instance": True,
+            "defaultInstance": True,
         },
         "git": {
             "user": {
@@ -521,6 +529,7 @@ class Config:
         persisted_overlay = copy.deepcopy(external_cli_overlay)
         persisted_overlay.pop("jira", None)
         persisted_overlay.pop("confluence", None)
+        persisted_overlay.pop("jenkins", None)
         new_sections = set(external_cli_overlay.keys())
 
         config_document = self._load_yaml_document(self.config_path)
