@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,6 +23,34 @@ from efp_runtime.tools.runtime import ToolRuntime
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.asyncio
+async def test_gateway_facade_marks_running_chat_and_terminal_result(tmp_path: Path):
+    store = FileSessionStore(tmp_path / "store")
+    manager = RuntimeSessionManager(store=store)
+
+    await manager.mark_runtime_running("running-session", request_id="req-running")
+
+    running_metadata = store.get_session("running-session").metadata
+    assert running_metadata["last_execution_id"] == "req-running"
+    assert running_metadata["last_runtime_status"] == "running"
+    assert running_metadata["latest_event_type"] == "chat.started"
+    assert running_metadata["latest_event_state"] == "running"
+    assert running_metadata["completion_state"] == "running"
+
+    await manager.record_runtime_result(
+        "running-session",
+        SimpleNamespace(status="completed", pending_permission_request=None, pending_question_request=None),
+        request_id="req-running",
+    )
+
+    terminal_metadata = store.get_session("running-session").metadata
+    assert terminal_metadata["last_execution_id"] == "req-running"
+    assert terminal_metadata["last_runtime_status"] == "completed"
+    assert terminal_metadata["latest_event_type"] == "chat.completed"
+    assert terminal_metadata["latest_event_state"] == "success"
+    assert terminal_metadata["completion_state"] == "completed"
 
 
 @pytest.mark.asyncio
