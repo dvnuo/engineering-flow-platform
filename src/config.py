@@ -104,7 +104,11 @@ RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
     ),
     "Use gh for GitHub issues, pull requests, and api calls; use aws for AWS operations; use jenkins for Jenkins controller operations; use git for clone, fetch, push, and status.",
     (
-        "Credentials were applied by the runtime profile through the real CLIs; "
+        "Jenkins runtime profile credentials are available as EFP_JENKINS_USERNAME and EFP_JENKINS_PASSWORD. "
+        "When the user provides a Jenkins controller URL or pipeline/job, configure or log in to that controller at that time and pass the password through stdin."
+    ),
+    (
+        "Credentials were applied by the runtime profile through real CLIs or environment variables; "
         "if jira, confluence, or jenkins returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
         "report a runtime profile configuration problem."
     ),
@@ -190,7 +194,7 @@ def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, 
     return (
         _has_atlassian_profile_instances(overlay.get("jira"))
         or _has_atlassian_profile_instances(overlay.get("confluence"))
-        or _has_atlassian_profile_instances(overlay.get("jenkins"))
+        or _has_jenkins_profile_credentials(overlay.get("jenkins"))
         or _has_github_profile_token(overlay.get("github"))
         or _has_aws_profile_config(overlay.get("aws"))
         or _has_git_profile_user(overlay.get("git"))
@@ -226,6 +230,14 @@ def _has_aws_profile_config(section: Any) -> bool:
     return bool(domain and username and password)
 
 
+def _has_jenkins_profile_credentials(section: Any) -> bool:
+    if not isinstance(section, dict) or section.get("enabled") is False:
+        return False
+    username = str(section.get("username") or "").strip()
+    password = str(section.get("password") or "").strip()
+    return bool(username and password)
+
+
 def _has_git_profile_user(section: Any) -> bool:
     user = section.get("user") if isinstance(section, dict) else None
     if not isinstance(user, dict):
@@ -254,6 +266,12 @@ class Config:
         "ALL_PROXY",
         "no_proxy",
         "NO_PROXY",
+    )
+    JENKINS_ENV_VARS = (
+        "EFP_JENKINS_USERNAME",
+        "EFP_JENKINS_PASSWORD",
+        "JENKINS_USERNAME",
+        "JENKINS_PASSWORD",
     )
 
     PROJECT_EXAMPLE = Path(__file__).parent.parent / 'config.yaml.example'
@@ -326,9 +344,8 @@ class Config:
         },
         "jenkins": {
             "enabled": True,
-            "instances": True,
-            "default_instance": True,
-            "defaultInstance": True,
+            "username": True,
+            "password": True,
         },
         "git": {
             "user": {
@@ -529,7 +546,6 @@ class Config:
         persisted_overlay = copy.deepcopy(external_cli_overlay)
         persisted_overlay.pop("jira", None)
         persisted_overlay.pop("confluence", None)
-        persisted_overlay.pop("jenkins", None)
         new_sections = set(external_cli_overlay.keys())
 
         config_document = self._load_yaml_document(self.config_path)
@@ -793,6 +809,8 @@ class Config:
                             logger.warning(f"Service reload failed: {service}")
                     if "proxy" in changed_sections:
                         self.apply_proxy()
+                    if "jenkins" in changed_sections:
+                        self.apply_jenkins_env()
                 return True
         except Exception:
             pass
@@ -994,6 +1012,26 @@ class Config:
             # Only clear if proxy section exists but is disabled
             # Don't clear inherited env vars when proxy section is absent
             self._clear_proxy_env()
+
+    @property
+    def jenkins(self) -> Dict[str, Any]:
+        return self._config.get("jenkins", {})
+
+    def _clear_jenkins_env(self) -> None:
+        for var in self.JENKINS_ENV_VARS:
+            os.environ.pop(var, None)
+
+    def apply_jenkins_env(self) -> None:
+        jenkins_config = self.jenkins
+        username = str(jenkins_config.get("username") or "").strip() if isinstance(jenkins_config, dict) else ""
+        password = str(jenkins_config.get("password") or "").strip() if isinstance(jenkins_config, dict) else ""
+        if isinstance(jenkins_config, dict) and jenkins_config.get("enabled") and username and password:
+            os.environ["EFP_JENKINS_USERNAME"] = username
+            os.environ["EFP_JENKINS_PASSWORD"] = password
+            os.environ["JENKINS_USERNAME"] = username
+            os.environ["JENKINS_PASSWORD"] = password
+        else:
+            self._clear_jenkins_env()
     
     @property
     def heartbeat(self) -> Dict[str, Any]:

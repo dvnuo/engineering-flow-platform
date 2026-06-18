@@ -21,6 +21,7 @@ _SENSITIVE_KEYS = {
     "github_token", "github_api_token",
     "openai_api_key", "llm_api_key",
     "proxy_password",
+    "jenkins_password", "efp_jenkins_password",
 }
 _COMPACT_SENSITIVE_KEYS = {key.replace("_", "") for key in _SENSITIVE_KEYS}
 

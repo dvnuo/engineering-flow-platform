@@ -67,7 +67,6 @@ def apply_runtime_profile_external_config(
         )
         _apply_github(profile_config, metadata=metadata, cli_environment=cli_environment)
         _apply_aws(profile_config, metadata=metadata, cli_environment=cli_environment)
-        _apply_jenkins(profile_config, metadata=metadata, cli_environment=cli_environment)
         _apply_git_user(profile_config, metadata=metadata, cli_environment=cli_environment)
     except Exception:
         if _metadata_has_managed_entries(metadata):
@@ -196,58 +195,6 @@ def _remove_atlassian_instance_if_exists(product: str, name: str, *, cli_environ
         return
 
 
-def _apply_jenkins(
-    profile_config: dict[str, Any],
-    *,
-    metadata: dict[str, Any],
-    cli_environment: _CliEnvironment,
-) -> None:
-    instances = _build_jenkins_instances(profile_config.get("jenkins") if isinstance(profile_config, dict) else None)
-    if not instances:
-        return
-
-    default_name = _default_instance_name(profile_config.get("jenkins"), instances)
-    jenkins_meta: dict[str, Any] = {"instances": []}
-    metadata["jenkins"] = jenkins_meta
-    for instance in instances:
-        _remove_jenkins_instance_if_exists(instance["name"], cli_environment=cli_environment)
-        _add_jenkins_instance(
-            instance,
-            default=instance["name"] == default_name,
-            cli_environment=cli_environment,
-        )
-        jenkins_meta["instances"].append({"name": instance["name"]})
-
-
-def _add_jenkins_instance(
-    instance: dict[str, Any],
-    *,
-    default: bool,
-    cli_environment: _CliEnvironment,
-) -> None:
-    args = [
-        "jenkins",
-        "instance",
-        "add",
-        instance["name"],
-        "--base-url",
-        instance["base_url"],
-        "--username",
-        instance["username"],
-        "--password-stdin",
-        "--json",
-    ]
-    if default:
-        args.insert(-1, "--default")
-    _run_cli(
-        args,
-        input_text=instance["password"],
-        secrets=(instance["password"],),
-        env=cli_environment.env,
-        env_secrets=cli_environment.secrets,
-    )
-
-
 def _remove_jenkins_instance(name: str, *, cli_environment: _CliEnvironment) -> None:
     _run_cli(
         ["jenkins", "instance", "remove", name, "--yes", "--json"],
@@ -255,18 +202,6 @@ def _remove_jenkins_instance(name: str, *, cli_environment: _CliEnvironment) -> 
         env=cli_environment.env,
         env_secrets=cli_environment.secrets,
     )
-
-
-def _remove_jenkins_instance_if_exists(name: str, *, cli_environment: _CliEnvironment) -> None:
-    try:
-        _run_cli(
-            ["jenkins", "instance", "remove", name, "--yes", "--json"],
-            allowed_returncodes=tuple(range(256)),
-            env=cli_environment.env,
-            env_secrets=cli_environment.secrets,
-        )
-    except RuntimeError:
-        return
 
 
 def _apply_github(
@@ -545,36 +480,6 @@ def _build_product_instances(product_config: Any, *, product: str) -> list[dict[
                 "auth": auth,
             }
         instances.append(instance)
-    return instances
-
-
-def _build_jenkins_instances(jenkins_config: Any) -> list[dict[str, Any]]:
-    if not isinstance(jenkins_config, dict):
-        return []
-    if jenkins_config.get("enabled") is False:
-        return []
-    raw_instances = jenkins_config.get("instances")
-    if not isinstance(raw_instances, list):
-        return []
-    instances: list[dict[str, Any]] = []
-    used_names: set[str] = set()
-    for index, raw in enumerate(raw_instances, 1):
-        if not isinstance(raw, dict) or raw.get("enabled") is False:
-            continue
-        base_url = _profile_instance_base_url(raw)
-        username = _single_line(raw.get("username") or raw.get("email"))
-        password = _string_or_empty(raw.get("password"))
-        if not (base_url and username and password):
-            continue
-        name = _unique_instance_name(str(raw.get("name") or f"jenkins-{index}").strip(), used_names, "jenkins", index)
-        instances.append(
-            {
-                "name": name,
-                "base_url": base_url,
-                "username": username,
-                "password": password,
-            }
-        )
     return instances
 
 

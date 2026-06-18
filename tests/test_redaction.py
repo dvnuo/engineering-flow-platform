@@ -68,6 +68,13 @@ def test_camelcase_sensitive_keys_are_redacted():
     assert out["accessToken"] == "***REDACTED***"
 
 
+def test_jenkins_password_env_keys_are_redacted():
+    data = {"EFP_JENKINS_PASSWORD": "jenkins-secret", "JENKINS_USERNAME": "builder"}
+    out = redact_value(data)
+    assert out["EFP_JENKINS_PASSWORD"] == "***REDACTED***"
+    assert out["JENKINS_USERNAME"] == "builder"
+
+
 def test_assignment_style_patterns_are_redacted():
     text = "access_token=abc refresh_token=xyz secret_key=qwe"
     out = redact_text(text)
