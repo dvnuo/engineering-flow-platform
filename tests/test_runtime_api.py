@@ -571,6 +571,121 @@ async def test_api_chat_stream_failure_persists_system_error_state(monkeypatch):
     assert isinstance(call["metadata"], dict)
 
 
+@pytest.mark.asyncio
+async def test_api_chat_stream_client_disconnect_does_not_persist_failure(monkeypatch):
+    from src.gateway import runtime_api
+
+    request_id = "portal-stream-disconnect-req-1"
+    session_id = "s-stream-disconnect"
+    runtime_api.chat_run_registry._records.pop(request_id, None)
+    persist_calls = []
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            decoded = data.decode()
+            if "event: runtime_event" in decoded:
+                raise ConnectionResetError("client disconnected")
+            self.writes.append(decoded)
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        await kwargs["stream_callback"].put(
+            {
+                "type": "runtime.event",
+                "event_type": "runtime.event",
+                "summary": "progress",
+                "created_at": "2026-06-18T00:00:00Z",
+            }
+        )
+        return {"response": "ok after disconnect", "usage": {}}
+
+    async def _fake_persist_chat_failure_state(**kwargs):
+        persist_calls.append(kwargs)
+
+    monkeypatch.setattr(runtime_api, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(runtime_api, "_persist_chat_failure_state", _fake_persist_chat_failure_state)
+    monkeypatch.setattr(runtime_api, "_emit_gateway_runtime_event", lambda _payload: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(runtime_api, "publish_session_metadata", lambda **_kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api, "_resolve_runtime_agent_identity", lambda _request: ("agent-1", "Agent One"))
+    monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
+    monkeypatch.setattr(runtime_api.session_manager, "mark_runtime_running", lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(runtime_api.web, "StreamResponse", _FakeStreamResponse)
+    monkeypatch.setattr(
+        runtime_api.global_config,
+        "_config",
+        {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}},
+        raising=False,
+    )
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello stream", "session_id": session_id, "client_request_id": request_id}
+
+    try:
+        response = await runtime_api.api_chat_stream(_Request())
+        status_payload = await runtime_api._chat_run_status_payload(session_id, request_id)
+    finally:
+        runtime_api.chat_run_registry._records.pop(request_id, None)
+
+    assert isinstance(response, _FakeStreamResponse)
+    assert persist_calls == []
+    assert any("event: start" in chunk for chunk in response.writes)
+    assert not any("event: final" in chunk for chunk in response.writes)
+    assert status_payload["source_of_truth"] == "run_registry"
+    assert status_payload["state"] == "completed"
+    assert status_payload["terminal"] is True
+    assert status_payload["detached_viewers"] == 1
+    assert status_payload["final_payload"]["response"] == "ok after disconnect"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runtime_status", "metadata_extra", "expected_state"),
+    [
+        ("waiting_for_permission", {}, "blocked"),
+        ("waiting_for_question", {}, "blocked"),
+        ("max_iterations", {}, "incomplete"),
+        ("mystery_status", {}, "failed"),
+        ("", {"pending_permission_request": {"id": "perm-1"}}, "blocked"),
+        ("", {"pending_question_request": {"id": "question-1"}}, "blocked"),
+    ],
+)
+async def test_chat_run_status_from_session_normalizes_native_non_success_states(
+    monkeypatch,
+    runtime_status,
+    metadata_extra,
+    expected_state,
+):
+    from src.gateway import runtime_api
+
+    async def _fake_get_existing_session(_session_id):
+        metadata = {
+            "last_execution_id": "portal-status-req-1",
+            "last_runtime_status": runtime_status,
+            "last_runtime_updated_at": "2026-06-18T00:00:00Z",
+        }
+        metadata.update(metadata_extra)
+        return {"history": [], "metadata": metadata}
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_existing_session", _fake_get_existing_session)
+
+    payload = await runtime_api._chat_run_status_from_session("s-status", "portal-status-req-1")
+
+    assert payload["state"] == expected_state
+    assert payload["terminal"] is True
+    assert payload["source_of_truth"] == "session_metadata"
+
+
 def test_runtime_api_source_guards_against_chat_metadata_event_name_drift():
     source = (Path(__file__).parent.parent / "src" / "gateway" / "runtime_api.py").read_text(encoding="utf-8")
     assert 'latest_event_type="chat.started"' in source
