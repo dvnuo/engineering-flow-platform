@@ -731,6 +731,8 @@ async def _chat_run_status_from_session(session_id: str, request_id: str) -> Opt
     raw_status = str(metadata.get("last_runtime_status") or "").strip().lower()
     if raw_status in {"success", "completed", "complete", "ok"}:
         state = "completed"
+    elif raw_status in {"running", "accepted", "queued", "in_progress"}:
+        state = "running"
     elif raw_status in {"error", "failed", "failure"}:
         state = "failed"
     elif raw_status in {"cancelled", "canceled"}:
@@ -1135,6 +1137,7 @@ async def api_chat(request: web.Request) -> web.Response:
         # Run EFP runtime; session_manager remains the gateway-side history mirror.
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         set_log_context(agent_id=runtime_agent_id)
+        await session_manager.mark_runtime_running(session_id, request_id=request_id)
         if runtime_agent_id and session_id:
             try:
                 await publish_session_metadata(
@@ -1362,6 +1365,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         original_user_text = (data.get('message') or '').strip()
         message = original_user_text
         session_id = _resolve_runtime_session_id(data)
+        if not session_manager._initialized:
+            await session_manager.initialize()
         attachment_ids = _normalize_attachment_ids(data.get("attachments", []))
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
@@ -1372,7 +1377,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             session_id=session_id,
         )
         existing_run = chat_run_registry.get(request_id, session_id=session_id)
-        if existing_run is not None:
+        if existing_run is not None or data.get("reconnect") is True:
             return await _stream_existing_chat_run(request, session_id=session_id, request_id=request_id)
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
@@ -1471,6 +1476,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             model=model,
         )
         chat_run_registry.start(session_id=session_id, request_id=request_id, engine="native")
+        await session_manager.mark_runtime_running(session_id, request_id=request_id)
         if runtime_agent_id and session_id:
             try:
                 await publish_session_metadata(

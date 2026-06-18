@@ -300,6 +300,21 @@ class RuntimeSessionManager:
             return
         await self.merge_metadata(session_id, {"last_execution_id": request_id})
 
+    async def mark_runtime_running(self, session_id: str, *, request_id: str) -> None:
+        if not session_id or not request_id:
+            return
+        await self.merge_metadata(
+            session_id,
+            {
+                "last_execution_id": request_id,
+                "last_runtime_status": "running",
+                "last_runtime_updated_at": _now_iso(),
+                "latest_event_type": "chat.started",
+                "latest_event_state": "running",
+                "completion_state": "running",
+            },
+        )
+
     async def get_context_state(self, session_id: str) -> Optional[dict[str, Any]]:
         session = await self.get_session(session_id)
         context_state = session.get("metadata", {}).get("context_state")
@@ -427,8 +442,22 @@ class RuntimeSessionManager:
         metadata = deepcopy(session.metadata)
         if request_id:
             metadata["last_execution_id"] = request_id
-        metadata["last_runtime_status"] = getattr(result, "status", None)
+        runtime_status = getattr(result, "status", None)
+        metadata["last_runtime_status"] = runtime_status
         metadata["last_runtime_updated_at"] = _now_iso()
+        normalized_status = str(runtime_status or "").strip().lower()
+        if normalized_status in {"success", "completed", "complete", "ok"}:
+            metadata["latest_event_type"] = "chat.completed"
+            metadata["latest_event_state"] = "success"
+            metadata["completion_state"] = "completed"
+        elif normalized_status in {"error", "failed", "failure"}:
+            metadata["latest_event_type"] = "chat.failed"
+            metadata["latest_event_state"] = "error"
+            metadata["completion_state"] = "error"
+        elif normalized_status in {"cancelled", "canceled"}:
+            metadata["latest_event_type"] = "chat.cancelled"
+            metadata["latest_event_state"] = "cancelled"
+            metadata["completion_state"] = "cancelled"
         pending_permission = getattr(result, "pending_permission_request", None)
         pending_question = getattr(result, "pending_question_request", None)
         if pending_permission is not None:
