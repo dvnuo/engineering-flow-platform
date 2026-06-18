@@ -729,23 +729,32 @@ async def _chat_run_status_from_session(session_id: str, request_id: str) -> Opt
     if str(metadata.get("last_execution_id") or "").strip() != request_id:
         return None
     raw_status = str(metadata.get("last_runtime_status") or "").strip().lower()
+    if not raw_status:
+        if metadata.get("pending_permission_request") is not None:
+            raw_status = "waiting_for_permission"
+        elif metadata.get("pending_question_request") is not None:
+            raw_status = "waiting_for_question"
     if raw_status in {"success", "completed", "complete", "ok"}:
         state = "completed"
     elif raw_status in {"running", "accepted", "queued", "in_progress"}:
         state = "running"
+    elif raw_status in {"waiting_for_permission", "waiting_for_question", "blocked", "permission_requested"}:
+        state = "blocked"
+    elif raw_status in {"max_iterations", "incomplete", "timeout", "timed_out"}:
+        state = "incomplete"
     elif raw_status in {"error", "failed", "failure"}:
         state = "failed"
     elif raw_status in {"cancelled", "canceled"}:
         state = "cancelled"
     else:
-        state = "completed" if raw_status else "unknown"
+        state = "failed" if raw_status else "unknown"
     return {
         "ok": True,
         "engine": "native",
         "session_id": session_id,
         "request_id": request_id,
         "state": state,
-        "terminal": state in {"completed", "failed", "cancelled"},
+        "terminal": state in {"completed", "failed", "cancelled", "blocked", "incomplete"},
         "started_at": "",
         "updated_at": str(metadata.get("last_runtime_updated_at") or ""),
         "latest_event_at": str(metadata.get("last_runtime_updated_at") or ""),
