@@ -31,6 +31,7 @@ from src.efp_runtime.session.gateway_facade import (
     runtime_session_root,
 )
 from src.efp_runtime.session.models import MessagePartType
+from src.efp_runtime.skills.discovery import default_skill_directories
 from src.utils.redaction import sanitize_exception_message
 
 
@@ -374,6 +375,13 @@ def _runtime_config(
     kwargs["workspace_root"] = _runtime_workspace_root()
     kwargs["default_provider_id"] = "github-copilot"
     kwargs["default_model"] = model
+    if not (
+        _mapping_has_key(managed_overlay_config, "skill_directories")
+        or _mapping_has_key(profile_config, "skill_directories")
+    ):
+        default_dirs = default_skill_directories(kwargs["workspace_root"])
+        if default_dirs:
+            kwargs["skill_directories"] = default_dirs
     if not (
         _mapping_has_key(managed_overlay_config, "track_usage")
         or _mapping_has_key(profile_config, "track_usage")
