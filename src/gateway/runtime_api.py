@@ -70,6 +70,13 @@ runtime_session_artifacts = RuntimeSessionArtifacts()
 
 
 MAX_PORTAL_IDENTITY_LENGTH = 256
+TASK_STATUS_EVENT_TAIL_ITEMS = 10
+TASK_STATUS_MAX_TEXT_CHARS = 20_000
+TASK_STATUS_MAX_LIST_ITEMS = 50
+TASK_STATUS_MAX_DICT_ITEMS = 100
+TASK_STATUS_MAX_DEPTH = 6
+TASK_STATUS_EVENT_KEYS = frozenset({"runtime_events", "events", "thinking_events"})
+TASK_STATUS_OMIT_KEYS = frozenset({"result", "raw_agent_payload", "_llm_debug"})
 _DERIVED_RUNTIME_RULE_KEYS = {
     "allowed_capability_ids",
     "allowed_capability_types",
@@ -86,6 +93,79 @@ _DERIVED_RUNTIME_RULE_KEYS = {
     "governance_external_allowlist",
     "governance_external_blocklist",
 }
+
+
+def _truncate_task_status_text(value: str, *, limit: int = TASK_STATUS_MAX_TEXT_CHARS) -> str:
+    if len(value) <= limit:
+        return value
+    omitted = len(value) - limit
+    return f"{value[:limit]}...[truncated {omitted} chars; full JSON is available from the task result download]"
+
+
+def _compact_task_status_value(value: Any, *, key: str | None = None, depth: int = 0) -> Any:
+    if key in TASK_STATUS_OMIT_KEYS:
+        return {"_omitted": True, "reason": "available_in_full_task_json_download"}
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _truncate_task_status_text(value)
+    if depth >= TASK_STATUS_MAX_DEPTH:
+        return _truncate_task_status_text(str(value))
+    if isinstance(value, dict):
+        items = list(value.items())
+        compact: Dict[str, Any] = {}
+        for item_key, item_value in items[:TASK_STATUS_MAX_DICT_ITEMS]:
+            normalized_key = str(item_key)
+            compact[normalized_key] = _compact_task_status_value(
+                item_value,
+                key=normalized_key,
+                depth=depth + 1,
+            )
+        if len(items) > TASK_STATUS_MAX_DICT_ITEMS:
+            compact["_truncated_keys_count"] = len(items) - TASK_STATUS_MAX_DICT_ITEMS
+        return compact
+    if isinstance(value, list):
+        selected = value[-TASK_STATUS_EVENT_TAIL_ITEMS:] if key in TASK_STATUS_EVENT_KEYS else value[:TASK_STATUS_MAX_LIST_ITEMS]
+        compact_list = [
+            _compact_task_status_value(item, depth=depth + 1)
+            for item in selected
+        ]
+        if key not in TASK_STATUS_EVENT_KEYS and len(value) > TASK_STATUS_MAX_LIST_ITEMS:
+            compact_list.append({"_truncated_items_count": len(value) - TASK_STATUS_MAX_LIST_ITEMS})
+        return compact_list
+    return _truncate_task_status_text(str(value))
+
+
+def _compact_runtime_task_status_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    compact: Dict[str, Any] = {}
+    for key, value in payload.items():
+        normalized_key = str(key)
+        if normalized_key in TASK_STATUS_EVENT_KEYS and isinstance(value, list):
+            compact[normalized_key] = _compact_task_status_value(value, key=normalized_key)
+            compact[f"{normalized_key}_count"] = len(value)
+            compact[f"{normalized_key}_truncated"] = len(value) > TASK_STATUS_EVENT_TAIL_ITEMS
+            continue
+        compact[normalized_key] = _compact_task_status_value(value, key=normalized_key)
+    compact["full_payload_available"] = True
+    return compact
+
+
+def _runtime_task_payload_with_observability(record: Any) -> Dict[str, Any]:
+    payload = dict(record.payload)
+    payload["accepted_at"] = record.accepted_at
+    payload["started_at"] = record.started_at
+    payload["finished_at"] = record.finished_at
+    payload["resume_count"] = getattr(record, "resume_count", 0)
+    payload["last_resumed_at"] = getattr(record, "last_resumed_at", None)
+    payload.update(_runtime_task_observability_fields(record))
+    return payload
+
+
+def _safe_task_result_filename(task_id: str) -> str:
+    safe_task_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(task_id or "task")).strip(".-")
+    if not safe_task_id:
+        safe_task_id = "task"
+    return f"task-{safe_task_id}-full.json"
 
 
 def _sanitize_portal_identity_value(value: Any) -> str:
@@ -2038,14 +2118,7 @@ def _runtime_task_status_payload(record: Any) -> Dict[str, Any]:
             "last_resumed_at": getattr(record, "last_resumed_at", None),
             **_runtime_task_observability_fields(record),
         }
-    payload = dict(record.payload)
-    payload["accepted_at"] = record.accepted_at
-    payload["started_at"] = record.started_at
-    payload["finished_at"] = record.finished_at
-    payload["resume_count"] = getattr(record, "resume_count", 0)
-    payload["last_resumed_at"] = getattr(record, "last_resumed_at", None)
-    payload.update(_runtime_task_observability_fields(record))
-    return payload
+    return _compact_runtime_task_status_payload(_runtime_task_payload_with_observability(record))
 
 
 def _has_runtime_task_resume_payload(record: Any) -> bool:
@@ -2418,6 +2491,33 @@ async def api_task_status(request: web.Request) -> web.Response:
         if record is None:
             return web.json_response({"error": "Task not found"}, status=404)
         return web.json_response(_runtime_task_status_payload(record))
+    finally:
+        clear_log_context()
+
+
+async def api_task_status_full(request: web.Request) -> web.Response:
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        portal_task_id=trace_headers.get("portal_task_id"),
+        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        path="/api/tasks/{task_id}/full",
+    )
+    try:
+        task_id = str(request.match_info.get("task_id") or "").strip()
+        if not task_id:
+            return web.json_response({"error": "task_id is required"}, status=400)
+        record = runtime_task_tracker.get(task_id)
+        if record is None:
+            return web.json_response({"error": "Task not found"}, status=404)
+        filename = _safe_task_result_filename(task_id)
+        return web.json_response(
+            _runtime_task_payload_with_observability(record),
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
     finally:
         clear_log_context()
 
@@ -3088,6 +3188,7 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_get('/api/chat/runs/{request_id}', api_chat_run_status)
     app.router.add_post('/api/chat/runs/{request_id}/cancel', api_chat_run_cancel)
     app.router.add_post('/api/tasks/execute', api_tasks_execute)
+    app.router.add_get('/api/tasks/{task_id}/full', api_task_status_full)
     app.router.add_get('/api/tasks/{task_id}', api_task_status)
     app.router.add_post('/api/tasks/{task_id}/cancel', api_task_cancel)
     app.router.add_post('/api/tasks/{task_id}/permission/respond', api_task_permission_respond)
