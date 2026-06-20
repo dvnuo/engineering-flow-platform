@@ -2532,6 +2532,68 @@ async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_api_task_status_compacts_terminal_payload_and_full_download():
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    task_id = "task-large-result"
+    runtime_api.runtime_task_tracker.create_pending(
+        task_id=task_id,
+        request_id="req-large-result",
+        task_type="generic_agent_task",
+        source="portal",
+        session_id="session-large-result",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id=task_id,
+    )
+    runtime_events = [
+        {"type": "step", "idx": idx, "message": "x" * 200}
+        for idx in range(25)
+    ]
+    runtime_api.runtime_task_tracker.mark_terminal(
+        task_id,
+        status="success",
+        payload={
+            "ok": True,
+            "task_id": task_id,
+            "execution_type": "task",
+            "request_id": "req-large-result",
+            "status": "success",
+            "output_payload": {
+                "summary": "done",
+                "result": {"events": runtime_events, "raw": "y" * 1000},
+                "raw_agent_payload": {"debug": "z" * 1000},
+            },
+            "runtime_events": runtime_events,
+        },
+    )
+
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": task_id}
+
+    status_response = await runtime_api.api_task_status(_StatusRequest())
+    status_body = json.loads(status_response.body)
+    assert status_body["status"] == "success"
+    assert status_body["full_payload_available"] is True
+    assert status_body["runtime_events_count"] == 25
+    assert status_body["runtime_events_truncated"] is True
+    assert len(status_body["runtime_events"]) == 10
+    assert status_body["runtime_events"][0]["idx"] == 15
+    assert status_body["output_payload"]["result"]["_omitted"] is True
+    assert status_body["output_payload"]["raw_agent_payload"]["_omitted"] is True
+
+    full_response = await runtime_api.api_task_status_full(_StatusRequest())
+    full_body = json.loads(full_response.body)
+    assert full_response.status == 200
+    assert "attachment" in full_response.headers["Content-Disposition"]
+    assert len(full_body["runtime_events"]) == 25
+    assert full_body["output_payload"]["result"]["raw"] == "y" * 1000
+
+
+@pytest.mark.asyncio
 async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkeypatch):
     from src.gateway import runtime_api
     runtime_api.runtime_task_tracker.reset()
