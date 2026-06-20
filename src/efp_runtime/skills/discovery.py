@@ -23,6 +23,8 @@ DEFAULT_PROJECT_SKILL_DIRECTORIES = (
     ".efp/skill",
     ".efp/skills",
 )
+RUNTIME_SKILLS_DIR_ENV = "EFP_SKILLS_DIR"
+RUNTIME_APP_SKILLS_DIR = "/app/skills"
 
 
 class SkillDiscovery:
@@ -84,6 +86,14 @@ def default_skill_directories(
     root = _expand_user_path(workspace_root).resolve(strict=False)
     start = _ancestor_search_start(root, cwd)
     directories: list[Path] = []
+    env_dir = os.getenv(RUNTIME_SKILLS_DIR_ENV)
+    if env_dir and env_dir.strip():
+        path = _expand_user_path(env_dir).resolve(strict=False)
+        if path.is_dir():
+            directories.append(path)
+    app_skills = Path(RUNTIME_APP_SKILLS_DIR).resolve(strict=False)
+    if app_skills.is_dir():
+        directories.append(app_skills)
     for directory in DEFAULT_GLOBAL_SKILL_DIRECTORIES:
         path = _expand_user_path(directory).resolve(strict=False)
         if path.is_dir():

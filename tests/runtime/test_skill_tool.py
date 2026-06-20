@@ -1,5 +1,6 @@
 import pytest
 
+import efp_runtime.skills.discovery as discovery_module
 from efp_runtime.context import render_tool_schemas
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.models import ToolCall
@@ -110,6 +111,30 @@ def test_default_skill_directories_include_efp_skill_before_plural(
         efp_skills.resolve(),
     ]
     assert default_skill_directories(tmp_path, include_defaults=False) == []
+
+
+def test_default_skill_directories_include_runtime_mounts_before_defaults(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    env_skills = tmp_path / "mounted-skills"
+    app_skills = tmp_path / "app-skills"
+    global_skills = home / ".efp" / "skills"
+    project_skills = tmp_path / ".efp" / "skills"
+    for directory in (env_skills, app_skills, global_skills, project_skills):
+        directory.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("EFP_SKILLS_DIR", str(env_skills))
+    monkeypatch.setattr(discovery_module, "RUNTIME_APP_SKILLS_DIR", str(app_skills))
+
+    assert default_skill_directories(tmp_path) == [
+        env_skills.resolve(),
+        app_skills.resolve(),
+        global_skills.resolve(),
+        project_skills.resolve(),
+    ]
 
 
 def test_default_skill_directories_discover_cwd_ancestors(tmp_path, monkeypatch):

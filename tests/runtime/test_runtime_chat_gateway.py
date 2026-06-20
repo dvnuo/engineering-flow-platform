@@ -465,6 +465,33 @@ def test_runtime_chat_uses_persisted_runtime_config_fields(monkeypatch):
     assert not hasattr(runtime_config, "compaction_preserve_recent_turns")
 
 
+def test_runtime_chat_adds_default_skill_directories(monkeypatch, tmp_path):
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+
+    class _FakeConfig:
+        @property
+        def session(self):
+            return {"max_iterations": 2}
+
+        def get_effective_config(self):
+            return {}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+    monkeypatch.setattr(
+        runtime_chat,
+        "default_skill_directories",
+        lambda workspace_root: [skills_dir],
+    )
+
+    runtime_config = runtime_chat._runtime_config(
+        "request-model",
+        track_usage=False,
+    )
+
+    assert runtime_config.skill_directories == [skills_dir]
+
+
 def test_runtime_chat_profile_track_usage_overrides_only_when_present(monkeypatch):
     monkeypatch.setattr(
         runtime_chat.config,
