@@ -218,7 +218,7 @@ async def test_agent_runtime_can_expose_lsp_provider_schema(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             enable_lsp_tool=True,
         ),
         lsp_client=RecordingLSPClient(),

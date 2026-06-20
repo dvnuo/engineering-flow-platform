@@ -40,7 +40,7 @@ async def test_build_mode_defaults_do_not_register_or_expose_plan_exit(tmp_path:
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
     )
 
     result = await runtime.run("Run normally.", session_id="session-build-mode")
@@ -62,7 +62,7 @@ async def test_plan_mode_exposes_plan_exit_and_hides_mutating_tools(tmp_path: Pa
         config=RuntimeConfig(
             workspace_root=tmp_path,
             runtime_mode="plan",
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -89,7 +89,7 @@ async def test_plan_mode_custom_alias_registry_hides_mutating_aliases(tmp_path: 
         config=RuntimeConfig(
             workspace_root=tmp_path,
             runtime_mode="plan",
-            max_iterations=1,
+            max_iterations=2,
         ),
         tool_registry=ToolRegistry(
             [
@@ -278,7 +278,7 @@ async def test_enable_plan_tool_registers_plan_exit_in_build_mode(tmp_path: Path
         config=RuntimeConfig(
             workspace_root=tmp_path,
             enable_plan_tool=True,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -302,7 +302,7 @@ async def test_plan_mode_read_only_false_does_not_force_hide_mutating_tools(
             workspace_root=tmp_path,
             runtime_mode="plan",
             plan_mode_read_only=False,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -326,7 +326,7 @@ async def test_plan_mode_enabled_tools_cannot_bypass_read_only_policy(
             runtime_mode="plan",
             enabled_tools=["apply_patch", "plan_exit", "read"],
             disabled_tools=["read"],
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -359,7 +359,7 @@ async def test_plan_mode_reminder_is_provider_only_context(tmp_path: Path):
         config=RuntimeConfig(
             workspace_root=tmp_path,
             runtime_mode="plan",
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 

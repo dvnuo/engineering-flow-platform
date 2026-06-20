@@ -454,7 +454,7 @@ async def test_slash_command_expands_into_provider_user_message(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             command_directories=[command_dir],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -491,7 +491,7 @@ async def test_skill_backed_slash_command_expands_into_provider_user_message(
         provider=provider,
         config=RuntimeConfig(
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -533,7 +533,7 @@ async def test_run_command_matches_slash_invocation_prompt_and_metadata(
     arguments = 'ticket-1 --flag "two words"'
     config = RuntimeConfig(
         command_directories=[command_dir],
-        max_iterations=1,
+        max_iterations=2,
         include_default_system_prompt=False,
         include_environment_context=False,
         include_runtime_reminders=False,
@@ -585,7 +585,7 @@ async def test_run_command_accepts_leading_slash_in_command_name(tmp_path: Path)
         provider=provider,
         config=RuntimeConfig(
             command_directories=[command_dir],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -645,7 +645,7 @@ async def test_run_command_invokes_skill_backed_command(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -688,7 +688,7 @@ async def test_run_command_emits_command_executed_event_once(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             command_directories=[command_dir],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -731,7 +731,7 @@ async def test_slash_command_emits_command_executed_event(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             command_directories=[command_dir],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -879,7 +879,7 @@ async def test_builtin_init_available_without_config_or_command_directory(
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -908,7 +908,7 @@ async def test_builtin_review_available_without_config_or_command_directory(
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1012,7 +1012,7 @@ async def test_injected_command_registry_expands_without_config_directories():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1071,7 +1071,7 @@ async def test_command_subtask_true_executes_task_tool_before_parent_provider():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1194,7 +1194,7 @@ async def test_command_agent_subagent_profile_executes_task_when_subtask_omitted
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1245,7 +1245,7 @@ async def test_command_subtask_false_overrides_subagent_profile_mode():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1292,7 +1292,7 @@ async def test_command_subtask_respects_disabled_task_tool():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             disabled_tools=["task"],
             include_default_system_prompt=False,
             include_environment_context=False,
@@ -1338,7 +1338,7 @@ async def test_command_subtask_respects_per_run_task_disable():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1392,7 +1392,7 @@ async def test_command_subtask_error_falls_back_to_ordinary_command_prompt():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1485,7 +1485,7 @@ async def test_command_agent_selects_profile_when_caller_omits_agent():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1528,7 +1528,7 @@ async def test_caller_agent_wins_over_command_agent():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1599,7 +1599,7 @@ async def test_command_model_records_requested_model_without_provider_model_swit
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1652,7 +1652,7 @@ async def test_command_model_sets_openai_payload_model_without_provider_model_sw
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1707,7 +1707,7 @@ async def test_command_tools_merge_profile_command_and_caller_overrides():
     )
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1, model_aware_tool_selection=False),
+        config=RuntimeConfig(max_iterations=2, model_aware_tool_selection=False),
         command_registry=registry,
         tool_registry=ToolRegistry(
             [_tool("read"), _tool("edit"), _tool("bash")]
@@ -1779,7 +1779,7 @@ async def test_slash_command_preserves_remaining_body(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             command_directories=[command_dir],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1806,7 +1806,7 @@ async def test_unknown_slash_command_is_left_as_user_text(tmp_path: Path):
         config=RuntimeConfig(
             command_directories=[command_dir],
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1839,7 +1839,7 @@ async def test_skill_slash_fallback_activates_discovered_skill_when_unhandled(
         provider=provider,
         config=RuntimeConfig(
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1878,7 +1878,7 @@ async def test_skill_slash_fallback_handles_multiline_form(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1908,7 +1908,7 @@ async def test_custom_command_wins_over_same_named_skill(tmp_path: Path):
         config=RuntimeConfig(
             command_directories=[command_dir],
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1938,7 +1938,7 @@ async def test_skill_command_does_not_trigger_custom_command(tmp_path: Path):
         config=RuntimeConfig(
             command_directories=[command_dir],
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -1977,7 +1977,7 @@ async def test_command_content_is_truncated_by_configured_limit(tmp_path: Path):
         config=RuntimeConfig(
             command_directories=[command_dir],
             max_command_chars=3,
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -2018,7 +2018,7 @@ async def test_command_shell_interpolation_renders_tool_results(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             tool_permissions={"bash": "allow"},
             include_default_system_prompt=False,
             include_environment_context=False,
@@ -2067,7 +2067,7 @@ async def test_command_shell_interpolation_permission_denial_is_visible(
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             tool_permissions={"bash": "deny"},
             include_default_system_prompt=False,
             include_environment_context=False,
@@ -2104,7 +2104,7 @@ async def test_command_arguments_and_body_shell_syntax_are_not_interpolated(
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             tool_permissions={"bash": "allow"},
             include_default_system_prompt=False,
             include_environment_context=False,
@@ -2145,7 +2145,7 @@ async def test_command_file_references_are_resolved_after_expansion(tmp_path: Pa
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,

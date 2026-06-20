@@ -17,7 +17,7 @@ class RuntimeConfig:
     """Static settings for an AgentRuntime instance."""
 
     workspace_root: str | Path | None = None
-    max_iterations: int = 4
+    max_iterations: int | None = None
     doom_loop_threshold: int | None = 3
     default_provider_id: str = "github-copilot"
     default_model: str = "gpt-5.4"
@@ -84,7 +84,7 @@ class RuntimeConfig:
     tool_output_dir: str | Path | None = None
 
     def __post_init__(self) -> None:
-        if self.max_iterations < 1:
+        if self.max_iterations is not None and self.max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
         if self.doom_loop_threshold is not None and self.doom_loop_threshold < 2:
             raise ValueError("doom_loop_threshold must be at least 2 or None")

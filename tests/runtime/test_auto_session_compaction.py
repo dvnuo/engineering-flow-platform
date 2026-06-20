@@ -520,7 +520,7 @@ async def test_resume_path_uses_auto_session_compaction():
         provider=provider,
         store=store,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             max_context_parts=3,
             compaction_tail_turns=1,
             include_default_system_prompt=False,

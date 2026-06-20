@@ -545,7 +545,10 @@ class AgentRuntime:
                 source="run",
             )
             self._inject_pending_background_task_results(resolved_session_id)
-            run_metadata["max_iterations"] = iteration_limit
+            _record_run_iteration_limit_metadata(
+                run_metadata,
+                max_iterations=iteration_limit,
+            )
             run_metadata["run_id"] = run_id
             command_subtask_events: list[RuntimeEvent] = []
             if selected_agent_source is not None:
@@ -787,7 +790,10 @@ class AgentRuntime:
             run_metadata = self._base_run_metadata(metadata)
             self._apply_session_model_default(run_metadata, session)
             run_metadata["run_id"] = run_id
-            run_metadata["max_iterations"] = iteration_limit
+            _record_run_iteration_limit_metadata(
+                run_metadata,
+                max_iterations=iteration_limit,
+            )
             if selected_agent_source is not None:
                 run_metadata["selected_agent_source"] = selected_agent_source
             if structured_output_active:
@@ -1519,7 +1525,10 @@ class AgentRuntime:
     def _base_run_metadata(self, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         run_metadata = dict(self.config.metadata)
         run_metadata.update(metadata or {})
-        run_metadata["max_iterations"] = self.config.max_iterations
+        _record_run_iteration_limit_metadata(
+            run_metadata,
+            max_iterations=self.config.max_iterations,
+        )
         run_metadata["runtime_mode"] = self.config.runtime_mode
         run_metadata["plan_mode_read_only"] = self.config.plan_mode_read_only
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
@@ -2322,10 +2331,24 @@ def _profile_configured_max_iterations(profile: Any) -> int | None:
     return max_iterations
 
 
-def _profile_max_iterations(profile: Any | None, default: int) -> int:
+def _record_run_iteration_limit_metadata(
+    metadata: dict[str, Any],
+    *,
+    max_iterations: int | None,
+) -> None:
+    if max_iterations is None:
+        metadata.pop("max_iterations", None)
+        metadata["max_iterations_unbounded"] = True
+        return
+    metadata["max_iterations"] = max_iterations
+    metadata.pop("max_iterations_unbounded", None)
+
+
+def _profile_max_iterations(profile: Any | None, default: int | None) -> int | None:
     if profile is None:
         return default
-    return _profile_configured_max_iterations(profile) or default
+    configured = _profile_configured_max_iterations(profile)
+    return configured if configured is not None else default
 
 
 def _profile_active_skills(profile: Any) -> list[str]:
@@ -2490,7 +2513,7 @@ def _resolve_config(
     if config is None:
         return RuntimeConfig(
             workspace_root=workspace_root,
-            max_iterations=max_iterations if max_iterations is not None else 4,
+            max_iterations=max_iterations,
             doom_loop_threshold=3,
             max_context_parts=max_context_parts,
             max_context_chars=max_context_chars,

@@ -56,7 +56,7 @@ async def test_default_runtime_injects_only_agents_instruction_before_skills(
             workspace_root=tmp_path,
             skill_directories=[skills_root],
             active_skills=["review-pr"],
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -102,7 +102,7 @@ async def test_opt_in_runtime_prepends_system_prompt_before_instructions_and_ski
             workspace_root=tmp_path,
             skill_directories=[skills_root],
             active_skills=["review-pr"],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=True,
             include_environment_context=True,
             include_runtime_reminders=True,
@@ -171,7 +171,7 @@ async def test_available_skills_context_is_injected_without_active_skill(
             skill_directories=[skills_root],
             include_default_system_prompt=False,
             include_runtime_reminders=False,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -229,7 +229,7 @@ async def test_available_skills_context_hides_denied_skills(tmp_path: Path):
             tool_permissions={"skill": {"internal-*": "deny"}},
             include_default_system_prompt=False,
             include_runtime_reminders=False,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -260,7 +260,7 @@ async def test_available_skills_context_is_omitted_when_no_skills(tmp_path: Path
             skill_directories=[skills_root],
             include_default_system_prompt=False,
             include_runtime_reminders=False,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -289,7 +289,7 @@ async def test_default_system_prompt_can_be_disabled_but_explicit_texts_remain(
             include_environment_context=False,
             include_runtime_reminders=False,
             system_prompt_texts=["Custom system layer."],
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -409,6 +409,21 @@ def test_runtime_reminders_can_be_enabled_and_disabled():
     assert "saved output metadata" in reminder.parts[0].text
     assert "ranged read or grep" in reminder.parts[0].text
 
+    unbounded = SystemPromptBuilder(
+        workspace_root=None,
+        include_default_system_prompt=False,
+        include_environment_context=False,
+        include_runtime_reminders=True,
+    ).build_messages(
+        metadata={
+            "max_iterations_unbounded": True,
+            "enable_question_tool": True,
+        }
+    )
+    assert len(unbounded) == 1
+    assert "close-bounded by max_iterations" not in unbounded[0].parts[0].text
+    assert "only when truly blocked after reading relevant context" in unbounded[0].parts[0].text
+
     disabled = SystemPromptBuilder(
         workspace_root=None,
         include_default_system_prompt=False,
@@ -452,7 +467,7 @@ async def test_system_prompt_context_is_not_persisted_or_duplicated_between_runs
             include_default_system_prompt=True,
             include_environment_context=True,
             include_runtime_reminders=False,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -545,7 +560,7 @@ async def test_environment_context_uses_requested_model(
             include_default_system_prompt=False,
             include_environment_context=True,
             include_runtime_reminders=False,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -574,7 +589,7 @@ async def test_environment_context_can_be_disabled(tmp_path: Path):
             workspace_root=tmp_path,
             include_environment_context=False,
             include_runtime_reminders=False,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 

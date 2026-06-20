@@ -4478,13 +4478,15 @@ def test_core_max_iterations_response_text_is_consistent():
     repo_root = Path(__file__).parent.parent
     runner_py = (repo_root / "src" / "efp_runtime" / "loop" / "runner.py").read_text(encoding="utf-8")
 
-    max_iter_anchor = "Maximum loop iterations reached."
+    max_iter_anchor = "CRITICAL - MAXIMUM STEPS REACHED"
     start = runner_py.find(max_iter_anchor)
     assert start != -1
     chunk = runner_py[start: start + 400]
 
     assert "LoopStatus.MAX_ITERATIONS" in runner_py
     assert "type=\"loop.max_iterations\"" in runner_py
+    assert "Maximum loop iterations reached." not in runner_py
+    assert "Tools are disabled until next user input" in chunk
     assert "Task completed after maximum iterations." not in runner_py
     assert "Task completed (max iterations reached)" not in runner_py
 

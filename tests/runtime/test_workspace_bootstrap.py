@@ -214,7 +214,7 @@ async def test_workspace_metadata_merges_through_agent_runtime_behavior(
         workspace_root=tmp_path,
         paths=["runtime.json"],
         include_defaults=False,
-        max_iterations=1,
+        max_iterations=2,
         metadata={"suite": "workspace"},
     )
     await runtime.run(
@@ -226,7 +226,7 @@ async def test_workspace_metadata_merges_through_agent_runtime_behavior(
     request = provider.requests[0]
     assert request.metadata["suite"] == "workspace"
     assert request.metadata["request_id"] == "run-1"
-    assert request.metadata["max_iterations"] == 1
+    assert request.metadata["max_iterations"] == 2
     assert request.metadata["raw_config"] == {"project": "alpha"}
     assert request.metadata["unconsumed_config"] == {"project": "alpha"}
 

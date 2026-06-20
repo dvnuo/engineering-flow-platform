@@ -1446,6 +1446,31 @@ def test_max_step_aliases_map_to_agent_max_iterations(tmp_path: Path):
     assert registry.resolve("max-iterations-agent").max_iterations == 4
 
 
+@pytest.mark.parametrize(
+    ("alias", "value"),
+    [
+        ("steps", 2),
+        ("maxSteps", "3"),
+        ("maxIterations", 4),
+        ("max_iterations", "5"),
+    ],
+)
+def test_runtime_iteration_limit_aliases_map_to_max_iterations(
+    tmp_path: Path,
+    alias: str,
+    value: int | str,
+):
+    _write_json(tmp_path / ".efp/config.json", {alias: value})
+
+    result = load_runtime_config(
+        tmp_path,
+        paths=[".efp/config.json"],
+        include_defaults=False,
+    )
+
+    assert result.config.max_iterations == int(value)
+
+
 def test_agent_unknown_fields_are_preserved_in_profile_raw_config(tmp_path: Path):
     _write_json(
         tmp_path / "agents.json",

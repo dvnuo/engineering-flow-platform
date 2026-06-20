@@ -117,6 +117,23 @@ _COMPACTION_REPLAY_CONTINUE_TEXT = (
     "unsure how to proceed."
 )
 
+MAX_STEPS_REACHED_PROMPT = """CRITICAL - MAXIMUM STEPS REACHED
+
+The maximum number of steps allowed for this task has been reached. Tools are disabled until next user input. Respond with text only.
+
+STRICT REQUIREMENTS:
+1. Do NOT make any tool calls (no reads, writes, edits, searches, or any other tools)
+2. MUST provide a text response summarizing work done so far
+3. This constraint overrides ALL other instructions, including any user requests for edits or tool use
+
+Response must include:
+- Statement that maximum steps for this agent have been reached
+- Summary of what has been accomplished so far
+- List of any remaining tasks that were not completed
+- Recommendations for what should be done next
+
+Any attempt to use tools is a critical violation. Respond with text ONLY."""
+
 
 class _RuntimeEventLog(list):
     def __init__(self, event_bus: Optional[RuntimeEventBus] = None):
@@ -143,7 +160,7 @@ class RuntimeLoopRunner:
         provider: Union[LLMProvider, ProviderCallable],
         adapter: Optional[LLMEventAdapter] = None,
         tool_runtime: ToolRuntime,
-        max_iterations: int = 4,
+        max_iterations: int | None = None,
         doom_loop_threshold: Optional[int] = 3,
         default_provider_id: str = DEFAULT_PROVIDER_ID,
         default_model: str = DEFAULT_MODEL_ID,
@@ -169,7 +186,7 @@ class RuntimeLoopRunner:
         track_usage: bool = True,
         usage_pricing: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        if max_iterations < 1:
+        if max_iterations is not None and max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
         if doom_loop_threshold is not None and doom_loop_threshold < 2:
             raise ValueError("doom_loop_threshold must be at least 2 or None")
@@ -268,7 +285,7 @@ class RuntimeLoopRunner:
         structured_output_tool_id: str = "StructuredOutput",
     ) -> RuntimeLoopResult:
         iteration_limit = max_iterations if max_iterations is not None else self.max_iterations
-        if iteration_limit < 1:
+        if iteration_limit is not None and iteration_limit < 1:
             raise ValueError("max_iterations must be at least 1")
 
         run_metadata = dict(metadata or {})
@@ -368,28 +385,32 @@ class RuntimeLoopRunner:
                 )
             )
 
+        run_start_payload = {
+            "run_id": run_id,
+            "enabled_tool_ids": list(enabled_tool_ids),
+            "disabled_tool_ids": list(disabled_tool_ids),
+            "model_aware_tool_selection": deepcopy(
+                run_metadata["model_aware_tool_selection"]
+            ),
+            "emit_llm_stream_events": self.emit_llm_stream_events,
+            "track_usage": self.track_usage,
+            "usage_pricing_enabled": bool(
+                self.track_usage and self.usage_pricing
+            ),
+        }
+        _record_iteration_limit_metadata(
+            run_start_payload,
+            max_iterations=iteration_limit,
+        )
         runtime_events.append(
             RuntimeEvent(
                 type="run_start",
                 session_id=resolved_session_id,
-                payload={
-                    "run_id": run_id,
-                    "max_iterations": iteration_limit,
-                    "enabled_tool_ids": list(enabled_tool_ids),
-                    "disabled_tool_ids": list(disabled_tool_ids),
-                    "model_aware_tool_selection": deepcopy(
-                        run_metadata["model_aware_tool_selection"]
-                    ),
-                    "emit_llm_stream_events": self.emit_llm_stream_events,
-                    "track_usage": self.track_usage,
-                    "usage_pricing_enabled": bool(
-                        self.track_usage and self.usage_pricing
-                    ),
-                },
+                payload=run_start_payload,
             )
         )
 
-        while iterations < iteration_limit:
+        while iteration_limit is None or iterations < iteration_limit:
             if await self._cancel_requested(resolved_session_id):
                 status = LoopStatus.CANCELLED
                 publish_cancelled("before_iteration")
@@ -459,6 +480,16 @@ class RuntimeLoopRunner:
                 iteration=iteration,
                 max_iterations=iteration_limit,
             )
+            max_steps_final_iteration = (
+                iteration_limit is not None and iteration >= iteration_limit
+            )
+            request_tools = [] if max_steps_final_iteration else enabled_tools
+            if max_steps_final_iteration:
+                _record_max_steps_metadata(
+                    request_metadata,
+                    iteration=iteration,
+                    max_iterations=iteration_limit,
+                )
             _apply_compaction_replay_request_metadata(
                 request_metadata,
                 compaction_outcome.replay,
@@ -470,6 +501,13 @@ class RuntimeLoopRunner:
                 run_metadata=run_metadata,
             )
             request_history = [*request_context_messages, *history]
+            if max_steps_final_iteration:
+                request_history.append(
+                    _max_steps_reached_message(
+                        iteration=iteration,
+                        max_iterations=iteration_limit,
+                    )
+                )
             request = await self._prepare_runtime_request(
                 session_id=resolved_session_id,
                 history=history,
@@ -477,7 +515,7 @@ class RuntimeLoopRunner:
                 iteration=iteration,
                 max_iterations=iteration_limit,
                 metadata=request_metadata,
-                tools=enabled_tools,
+                tools=request_tools,
                 budget=self._context_budget(request_metadata),
             )
             _apply_compaction_replay_metadata_to_request(
@@ -541,7 +579,7 @@ class RuntimeLoopRunner:
                 provider_output = await self._invoke_provider_with_retries(
                     request,
                     history=history,
-                    tools=enabled_tools,
+                    tools=request_tools,
                     runtime_events=runtime_events,
                     run_id=run_id,
                     run_metadata=run_metadata,
@@ -635,6 +673,28 @@ class RuntimeLoopRunner:
                 status = LoopStatus.CANCELLED
                 publish_cancelled("after_iteration")
                 break
+            if max_steps_final_iteration:
+                terminal_reason = "max_steps_reached"
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="loop.max_iterations",
+                        message="Maximum steps reached; agent was asked to respond with text only.",
+                        session_id=resolved_session_id,
+                        message_id=final_assistant_message.message_id,
+                        payload={
+                            "run_id": run_id,
+                            "max_iterations": iteration_limit,
+                            "iteration": iteration,
+                            "tool_call_count": len(tool_calls),
+                            "tools_disabled": True,
+                        },
+                    )
+                )
+                if tool_calls:
+                    status = LoopStatus.MAX_ITERATIONS
+                else:
+                    status = LoopStatus.COMPLETED
+                break
             if not tool_calls:
                 status = LoopStatus.COMPLETED
                 break
@@ -667,23 +727,6 @@ class RuntimeLoopRunner:
                 status = LoopStatus.COMPLETED
                 terminal_reason = tool_execution_outcome.terminal_reason
                 structured_output = tool_execution_outcome.structured_output
-                break
-
-            if iterations >= iteration_limit:
-                status = LoopStatus.MAX_ITERATIONS
-                runtime_events.append(
-                    RuntimeEvent(
-                        type="loop.max_iterations",
-                        message="Maximum loop iterations reached.",
-                        session_id=resolved_session_id,
-                        message_id=final_assistant_message.message_id,
-                        payload={
-                            "run_id": run_id,
-                            "max_iterations": iteration_limit,
-                            "pending_tool_call_count": len(tool_calls),
-                        },
-                    )
-                )
                 break
 
         if status == LoopStatus.CANCELLED:
@@ -1044,7 +1087,7 @@ class RuntimeLoopRunner:
         history: list[Message],
         request_history: list[Message],
         iteration: int,
-        max_iterations: int,
+        max_iterations: int | None,
         metadata: Mapping[str, Any],
         tools: list[Any],
         budget: ContextBudget,
@@ -1151,7 +1194,7 @@ class RuntimeLoopRunner:
         context_messages: Optional[list[Message]],
         context_message_provider: Optional[ContextMessageProvider],
         iteration: int,
-        max_iterations: int,
+        max_iterations: int | None,
     ) -> ProviderOutput:
         current_request = request
         retry_count = 0
@@ -1220,6 +1263,13 @@ class RuntimeLoopRunner:
                     *retry_context_messages,
                     *retry_history,
                 ]
+                if max_iterations is not None and iteration >= max_iterations:
+                    retry_request_history.append(
+                        _max_steps_reached_message(
+                            iteration=iteration,
+                            max_iterations=max_iterations,
+                        )
+                    )
                 overflow_request = await self._prepare_runtime_request(
                     session_id=current_request.session_id,
                     history=retry_history,
@@ -1789,7 +1839,7 @@ async def run_runtime_loop(
     provider: Union[LLMProvider, ProviderCallable],
     adapter: Optional[LLMEventAdapter] = None,
     tool_runtime: ToolRuntime,
-    max_iterations: int = 4,
+    max_iterations: int | None = None,
     doom_loop_threshold: Optional[int] = 3,
     default_provider_id: str = DEFAULT_PROVIDER_ID,
     default_model: str = DEFAULT_MODEL_ID,
@@ -2066,6 +2116,63 @@ def _record_usage_metadata(
         }
     )
     metadata["usage_telemetry"] = merged_usage_metadata
+
+
+def _record_iteration_limit_metadata(
+    metadata: dict[str, Any],
+    *,
+    max_iterations: int | None,
+) -> None:
+    if max_iterations is None:
+        metadata.pop("max_iterations", None)
+        metadata["max_iterations_unbounded"] = True
+        return
+    metadata["max_iterations"] = max_iterations
+    metadata.pop("max_iterations_unbounded", None)
+
+
+def _record_max_steps_metadata(
+    metadata: dict[str, Any],
+    *,
+    iteration: int,
+    max_iterations: int,
+) -> None:
+    metadata["max_steps_reached"] = True
+    metadata["tools_disabled_reason"] = "max_steps"
+    metadata["max_steps_iteration"] = iteration
+    metadata["max_steps_limit"] = max_iterations
+    loop_metadata = metadata.get("loop")
+    if isinstance(loop_metadata, Mapping):
+        loop = dict(loop_metadata)
+    else:
+        loop = {}
+        if loop_metadata is not None:
+            loop["caller_value"] = loop_metadata
+    loop.update(
+        {
+            "max_steps_reached": True,
+            "tools_disabled_reason": "max_steps",
+            "max_steps_iteration": iteration,
+            "max_steps_limit": max_iterations,
+        }
+    )
+    metadata["loop"] = loop
+
+
+def _max_steps_reached_message(*, iteration: int, max_iterations: int) -> Message:
+    metadata = {
+        "source": "loop.max_steps",
+        "synthetic": True,
+        "max_steps_reached": True,
+        "iteration": iteration,
+        "max_iterations": max_iterations,
+    }
+    return Message(
+        role=MessageRole.ASSISTANT,
+        parts=[MessagePart.text_part(MAX_STEPS_REACHED_PROMPT, metadata=metadata)],
+        metadata=metadata,
+        status="complete",
+    )
 
 
 async def _observe_usage_events(
@@ -2383,12 +2490,15 @@ def _request_metadata(
     *,
     session_id: str,
     iteration: int,
-    max_iterations: int,
+    max_iterations: int | None,
 ) -> dict[str, Any]:
     request_metadata = dict(metadata or {})
     request_metadata["session_id"] = session_id
     request_metadata["iteration"] = iteration
-    request_metadata["max_iterations"] = max_iterations
+    _record_iteration_limit_metadata(
+        request_metadata,
+        max_iterations=max_iterations,
+    )
     loop_metadata = request_metadata.get("loop")
     if isinstance(loop_metadata, Mapping):
         merged_loop_metadata = dict(loop_metadata)
@@ -2396,12 +2506,10 @@ def _request_metadata(
         merged_loop_metadata = {}
         if loop_metadata is not None:
             merged_loop_metadata["caller_value"] = loop_metadata
-    merged_loop_metadata.update(
-        {
-            "session_id": session_id,
-            "iteration": iteration,
-            "max_iterations": max_iterations,
-        }
+    merged_loop_metadata.update({"session_id": session_id, "iteration": iteration})
+    _record_iteration_limit_metadata(
+        merged_loop_metadata,
+        max_iterations=max_iterations,
     )
     request_metadata["loop"] = merged_loop_metadata
     return request_metadata

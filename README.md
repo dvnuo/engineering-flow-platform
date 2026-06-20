@@ -313,7 +313,7 @@ Sessions are automatically persisted to `/workspace/sessions/` by default.
 ```yaml
 session:
   max_history: 5        # Turns to keep in context
-  max_iterations: 30    # Max tool calls per turn
+  # max_iterations: 30  # Optional max agentic steps; omit for no limit
   persistence:
     enabled: true
     storage_dir: "/workspace/sessions"

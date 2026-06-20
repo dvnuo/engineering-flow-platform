@@ -346,7 +346,7 @@ async def test_subagent_runner_selects_profile_and_builds_child_prompt():
                 metadata={"tier": "specialist"},
             ),
         ],
-        base_config=RuntimeConfig(max_iterations=1),
+        base_config=RuntimeConfig(max_iterations=2),
     )
 
     result = await runner(
@@ -398,7 +398,7 @@ async def test_create_agent_task_tool_foreground_execution_still_selects_profile
                 prompt="Use the debugger profile.",
             ),
         ],
-        base_config=RuntimeConfig(max_iterations=1),
+        base_config=RuntimeConfig(max_iterations=2),
     )
     runtime = ToolRuntime(ToolRegistry([tool]))
 
@@ -441,7 +441,7 @@ async def test_profile_tools_are_applied_as_per_run_overrides():
             )
         ],
         base_config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             enabled_tools=["alpha", "beta"],
         ),
         tool_runtime_factory=tool_runtime_factory,
@@ -729,7 +729,7 @@ async def test_profile_active_skills_enter_child_context_without_base_pollution(
     base_config = RuntimeConfig(
         skill_directories=[tmp_path],
         active_skills=["base-skill"],
-        max_iterations=1,
+        max_iterations=2,
         include_default_system_prompt=False,
         include_environment_context=False,
         include_runtime_reminders=False,
@@ -908,7 +908,7 @@ async def test_create_task_tool_with_subagent_runner_returns_output_to_parent_lo
             AgentProfile(name="general"),
             AgentProfile(name="debugger", prompt="Debug the task."),
         ],
-        base_config=RuntimeConfig(max_iterations=1),
+        base_config=RuntimeConfig(max_iterations=2),
     )
     runner = RuntimeLoopRunner(
         store=_store(),
@@ -986,7 +986,7 @@ async def _visible_child_tool_ids(profile: AgentProfile) -> list[str]:
     runner = create_subagent_task_runner(
         provider=provider,
         profiles=[profile],
-        base_config=RuntimeConfig(max_iterations=1),
+        base_config=RuntimeConfig(max_iterations=2),
         tool_runtime_factory=tool_runtime_factory,
     )
     result = await runner(

@@ -365,7 +365,7 @@ async def test_agent_runtime_with_file_store_persists_text_only_run(tmp_path: Pa
     runtime = AgentRuntime(
         provider=provider,
         workspace_root=tmp_path,
-        max_iterations=1,
+        max_iterations=2,
         store=store,
     )
 

@@ -133,7 +133,7 @@ async def test_agent_runtime_writes_prompt_reference_parts_to_history_and_reques
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
     )
 
     result = await runtime.run("Use @notes.txt", session_id="session-prompt-ref")
@@ -169,7 +169,7 @@ async def test_agent_runtime_can_keep_prompt_references_as_plain_text(tmp_path: 
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             resolve_prompt_references=False,
         ),
     )

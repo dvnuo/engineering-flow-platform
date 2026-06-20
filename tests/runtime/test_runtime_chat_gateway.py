@@ -465,6 +465,25 @@ def test_runtime_chat_uses_persisted_runtime_config_fields(monkeypatch):
     assert not hasattr(runtime_config, "compaction_preserve_recent_turns")
 
 
+def test_runtime_chat_leaves_max_iterations_unbounded_when_unconfigured(monkeypatch):
+    class _FakeConfig:
+        @property
+        def session(self):
+            return {}
+
+        def get_effective_config(self):
+            return {}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    runtime_config = runtime_chat._runtime_config(
+        "request-model",
+        track_usage=True,
+    )
+
+    assert runtime_config.max_iterations is None
+
+
 def test_runtime_chat_adds_default_skill_directories(monkeypatch, tmp_path):
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()

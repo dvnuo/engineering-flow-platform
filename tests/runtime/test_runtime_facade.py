@@ -24,7 +24,7 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             metadata={"suite": "facade"},
         ),
     )
@@ -77,7 +77,7 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     assert request.metadata["instruction_context_count"] == 0
     assert request.metadata["skill_context_count"] == 0
     assert request.metadata["loop"]["iteration"] == 1
-    assert request.provider_request.metadata["loop"]["max_iterations"] == 1
+    assert request.provider_request.metadata["loop"]["max_iterations"] == 2
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ async def test_agent_runtime_session_management_facade_with_default_store(tmp_pa
     )
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
     )
 
     created = runtime.create_session(
@@ -176,7 +176,7 @@ async def test_agent_runtime_switch_model_sets_session_default_for_run_and_resum
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),
@@ -218,7 +218,7 @@ async def test_agent_runtime_switch_model_mapping_sets_session_model_without_str
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_runtime_reminders=False,
         ),

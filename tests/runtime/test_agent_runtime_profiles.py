@@ -47,7 +47,7 @@ async def test_named_agent_injects_profile_prompt_into_provider_system_context()
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -88,7 +88,7 @@ async def test_builtin_read_only_agent_records_metadata_and_applies_prompt():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -133,7 +133,7 @@ async def test_profile_prompt_is_not_written_to_session_history():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -161,7 +161,7 @@ async def test_default_agent_is_used_when_run_omits_agent():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -193,7 +193,7 @@ async def test_switch_agent_persists_event_and_run_resume_use_session_profile():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -259,7 +259,7 @@ async def test_caller_command_and_mention_agents_override_session_agent():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -310,7 +310,7 @@ async def test_agent_mention_selects_profile_and_strips_token():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -340,7 +340,7 @@ async def test_agent_mention_alone_selects_profile_and_sends_clean_prompt():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -372,7 +372,7 @@ async def test_caller_agent_wins_over_agent_mention_without_stripping():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -416,7 +416,7 @@ async def test_command_agent_wins_over_agent_mention_without_stripping():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -448,7 +448,7 @@ async def test_unknown_agent_mention_is_left_as_prompt_text():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -478,7 +478,7 @@ async def test_file_reference_at_first_token_is_not_consumed_as_agent_mention(
         provider=provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -494,7 +494,7 @@ async def test_file_reference_at_first_token_is_not_consumed_as_agent_mention(
     assert "agent_mention" not in request.metadata
     assert message.parts[0].text == "@README.md"
     assert message.attachments[0].text_ref == "README.md"
-    assert message.attachments[0].metadata["content"] == "read me\n"
+    assert message.attachments[0].metadata["content"].replace("\r\n", "\n") == "read me\n"
 
 
 @pytest.mark.asyncio
@@ -503,7 +503,7 @@ async def test_direct_agent_profile_does_not_require_registry():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -539,7 +539,7 @@ async def test_profile_active_skills_are_base_and_skill_commands_are_temporary(
         config=RuntimeConfig(
             skill_directories=[tmp_path],
             active_skills=["runtime-skill"],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -588,7 +588,7 @@ async def test_profile_active_skills_do_not_leak_to_next_plain_run(tmp_path: Pat
         provider=provider,
         config=RuntimeConfig(
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -636,7 +636,7 @@ async def test_profile_active_skills_apply_when_profile_selected_by_command(
         provider=provider,
         config=RuntimeConfig(
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -672,7 +672,7 @@ async def test_profile_tools_apply_and_caller_tools_override_profile_tools():
     )
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=2),
         tool_registry=ToolRegistry([_tool("alpha"), _tool("beta")]),
         agent_registry=registry,
     )
@@ -789,7 +789,7 @@ async def test_invalid_profile_permission_metadata_raises_before_provider_call()
     )
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=2),
         tool_registry=ToolRegistry([_tool("alpha")]),
     )
 
@@ -889,7 +889,7 @@ async def test_profile_metadata_is_run_metadata_without_top_level_model_switch()
         name="review",
         metadata={"model": "profile-model", "mode": "review", "temperature": 0.2},
     )
-    runtime = AgentRuntime(provider=provider, config=RuntimeConfig(max_iterations=1))
+    runtime = AgentRuntime(provider=provider, config=RuntimeConfig(max_iterations=2))
 
     await runtime.run("Record metadata.", session_id="session-profile-metadata", agent=profile)
 

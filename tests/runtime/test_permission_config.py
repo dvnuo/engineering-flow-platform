@@ -602,7 +602,7 @@ async def test_permission_config_does_not_control_tool_schema_visibility(
         provider=visible_provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
                 model_aware_tool_selection=False,
                 tool_permissions={"edit": "deny"},
         ),
@@ -630,7 +630,7 @@ async def test_permission_config_does_not_control_tool_schema_visibility(
         provider=disabled_provider,
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             model_aware_tool_selection=False,
             disabled_tools=["edit"],
             tool_permissions={"edit": "deny"},
