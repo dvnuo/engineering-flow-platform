@@ -206,7 +206,7 @@ async def test_agent_runtime_passes_config_max_context_chars_to_provider_request
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             max_context_chars=420,
             context_reserve_chars=20,
         ),

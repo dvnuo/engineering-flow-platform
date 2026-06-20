@@ -39,7 +39,7 @@ async def test_agent_runtime_default_request_uses_efp_core_tools(tmp_path: Path)
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
     )
 
     result = await runtime.run("List tools.", session_id="session-default-surface")
@@ -62,7 +62,7 @@ async def test_model_aware_selection_uses_only_registered_file_tools_by_default(
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
     )
 
     result = await runtime.run(

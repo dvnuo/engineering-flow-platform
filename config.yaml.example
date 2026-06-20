@@ -141,9 +141,9 @@ session:
   max_history: 5  # Keep last 5 conversation turns
   auto_save: true  # Automatically save sessions to disk
 
-  # Maximum iterations for tool execution loop
-  # Prevents infinite loops when LLM keeps requesting tools
-  max_iterations: 30
+  # Optional maximum agentic steps; omit to keep the loop unbounded until the model stops
+  # Alias-compatible with opencode-style `steps`.
+  # max_iterations: 30
 
   # Persistence layer settings (per-session files)
   persistence:

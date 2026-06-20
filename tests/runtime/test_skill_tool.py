@@ -590,7 +590,7 @@ async def test_agent_runtime_default_provider_request_tools_include_skill(tmp_pa
         config=RuntimeConfig(
             workspace_root=tmp_path,
             skill_directories=[skills_dir],
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -674,7 +674,7 @@ async def test_agent_runtime_skill_metadata_counts_only_visible_skills(tmp_path)
             workspace_root=tmp_path,
             skill_directories=[skills_dir],
             tool_permissions={"skill": {"*": "allow", "internal-*": "deny"}},
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -705,7 +705,7 @@ async def test_agent_runtime_filters_denied_active_skill_context(tmp_path):
             skill_directories=[skills_dir],
             active_skills=["internal-docs", "public-docs"],
             tool_permissions={"skill": {"*": "allow", "internal-*": "deny"}},
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,

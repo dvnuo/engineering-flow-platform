@@ -322,7 +322,7 @@ async def test_agent_runtime_passes_enabled_compaction_summarizer_to_runner():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             max_context_parts=2,
             enable_compaction_summarizer=True,
         ),
@@ -363,7 +363,7 @@ async def test_agent_runtime_does_not_call_summarizer_when_config_disabled():
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1, max_context_parts=2),
+        config=RuntimeConfig(max_iterations=2, max_context_parts=2),
         compaction_summarizer=fake,
     )
     runtime.store.create_session(session_id="session-disabled-summary")

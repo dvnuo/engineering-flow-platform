@@ -47,7 +47,9 @@ async def test_text_only_provider_response_creates_final_assistant_text():
     assert request.provider_request.messages[0].text == "Say done."
     assert request.prepared_request.request is request.provider_request
     assert request.metadata["loop"]["iteration"] == 1
-    assert request.metadata["loop"]["max_iterations"] == 4
+    assert request.max_iterations is None
+    assert "max_iterations" not in request.metadata["loop"]
+    assert request.metadata["loop"]["max_iterations_unbounded"] is True
 
 
 @pytest.mark.asyncio
@@ -173,24 +175,12 @@ async def test_max_context_parts_compacts_provider_request_metadata():
 
 
 @pytest.mark.asyncio
-async def test_max_iterations_stops_with_explicit_status_after_tool_results():
+async def test_max_iterations_requests_text_only_summary_on_final_step():
     async def execute(args, context):
         return "ok"
 
     store = InMemorySessionStore()
-    provider = ScriptedLLMProvider(
-        [
-            {
-                "tool_calls": [
-                    {
-                        "id": "call_again",
-                        "type": "function",
-                        "function": {"name": "again", "arguments": "{}"},
-                    }
-                ]
-            }
-        ]
-    )
+    provider = ScriptedLLMProvider([{"content": "Maximum steps reached. Summary."}])
     runner = RuntimeLoopRunner(
         store=store,
         provider=provider,
@@ -211,19 +201,80 @@ async def test_max_iterations_stops_with_explicit_status_after_tool_results():
 
     result = await runner.run(session_id="session-max", user_text="Loop once.")
 
-    assert result.status == LoopStatus.MAX_ITERATIONS
+    assert result.status == LoopStatus.COMPLETED
     assert result.iterations == 1
     assert result.final_assistant_message is not None
-    assert result.final_assistant_message.parts[0].type is MessagePartType.TOOL_CALL
+    assert result.final_assistant_message.parts[0].text == "Maximum steps reached. Summary."
     assert any(event.type == "loop.max_iterations" for event in result.runtime_events)
+    request = provider.requests[0]
+    assert request.max_iterations == 1
+    assert request.provider_request.tools == []
+    assert request.provider_request.messages[-1].role == "assistant"
+    assert "CRITICAL - MAXIMUM STEPS REACHED" in request.provider_request.messages[-1].text
+    finish = result.runtime_events[-1]
+    assert finish.type == "run_finish"
+    assert finish.payload["status"] == LoopStatus.COMPLETED
+    assert finish.payload["terminal_reason"] == "max_steps_reached"
 
     history = store.read_history(result.session_id)
     assert [message.role for message in history] == [
         MessageRole.USER,
         MessageRole.ASSISTANT,
-        MessageRole.TOOL,
     ]
-    assert history[2].parts[0].type is MessagePartType.TOOL_RESULT
+
+
+@pytest.mark.asyncio
+async def test_default_loop_is_unbounded_until_model_stops():
+    async def execute(args, context):
+        return "ok"
+
+    store = InMemorySessionStore()
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": f"call_again_{index}",
+                        "type": "function",
+                        "function": {"name": "again", "arguments": "{}"},
+                    }
+                ]
+            }
+            for index in range(5)
+        ]
+        + [{"content": "Done after repeated tools."}]
+    )
+    runner = RuntimeLoopRunner(
+        store=store,
+        provider=provider,
+        tool_runtime=ToolRuntime(
+            ToolRegistry(
+                [
+                    ToolDef(
+                        id="again",
+                        description="Return ok",
+                        input_schema={"type": "object", "properties": {}},
+                        execute=execute,
+                    )
+                ]
+            )
+        ),
+        doom_loop_threshold=None,
+    )
+
+    result = await runner.run(session_id="session-unbounded", user_text="Keep going.")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.iterations == 6
+    assert result.final_assistant_message is not None
+    assert result.final_assistant_message.parts[0].text == "Done after repeated tools."
+    assert len(provider.requests) == 6
+    assert all(request.max_iterations is None for request in provider.requests)
+    assert not any(event.type == "loop.max_iterations" for event in result.runtime_events)
+    assert not any(
+        "CRITICAL - MAXIMUM STEPS REACHED" in message.text
+        for message in provider.requests[-1].provider_request.messages
+    )
 
 
 def test_loop_package_imports_standalone_with_pythonpath_src():

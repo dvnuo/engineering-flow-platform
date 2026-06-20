@@ -9,7 +9,7 @@ import pytest
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
 from efp_runtime.permissions import ASK, PermissionMetadata
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
-from efp_runtime.session.models import MessagePart, MessageRole
+from efp_runtime.session.models import MessagePart, MessagePartType, MessageRole
 from efp_runtime.tools.builtin import create_structured_output_tool
 from efp_runtime.tools.definition import ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
@@ -194,7 +194,7 @@ async def test_plain_text_with_output_schema_returns_missing_structured_output_e
     provider = ScriptedLLMProvider([{"content": "plain text"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
     )
 
     result = await runtime.run(
@@ -265,10 +265,16 @@ async def test_invalid_structured_output_at_max_iterations_becomes_error(
     assert missing_event.payload["iterations"] == 1
     assert missing_event.payload["prior_status"] == LoopStatus.MAX_ITERATIONS
 
+    request = provider.requests[0]
+    assert request.provider_request.tools == []
+    assert "CRITICAL - MAXIMUM STEPS REACHED" in request.provider_request.messages[-1].text
+
     history = runtime.store.read_history("session-structured-invalid")
-    tool_result = history[2].parts[0].tool_result
-    assert tool_result is not None
-    assert tool_result.status == "validation_error"
+    assert [message.role for message in history] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+    ]
+    assert history[1].parts[0].type is MessagePartType.TOOL_CALL
 
 
 @pytest.mark.asyncio
@@ -278,7 +284,7 @@ async def test_waiting_for_permission_is_not_structured_output_error(tmp_path: P
     )
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
         tool_registry=ToolRegistry([_permission_tool("approval_required")]),
     )
 
@@ -301,7 +307,7 @@ async def test_structured_output_not_visible_without_schema(tmp_path: Path):
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
     )
 
     result = await runtime.run("Run normally.", session_id="session-no-structured")
@@ -319,7 +325,7 @@ async def test_structured_output_can_be_explicitly_disabled_for_run(tmp_path: Pa
     provider = ScriptedLLMProvider([{"content": "plain text"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=1),
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
     )
 
     result = await runtime.run(

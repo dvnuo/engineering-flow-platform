@@ -27,7 +27,7 @@ async def test_config_active_skills_are_injected_before_user_history(tmp_path: P
         config=RuntimeConfig(
             skill_directories=[tmp_path],
             active_skills=["review-pr"],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -60,7 +60,7 @@ async def test_injected_skill_context_builder_is_used_without_config_directories
         provider=provider,
         config=RuntimeConfig(
             active_skills=["review-pr"],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -83,7 +83,7 @@ async def test_skill_command_adds_active_skill_and_cleans_user_text(tmp_path: Pa
         provider=provider,
         config=RuntimeConfig(
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -114,7 +114,7 @@ async def test_skill_command_only_still_sends_context(tmp_path: Path):
         provider=provider,
         config=RuntimeConfig(
             skill_directories=[tmp_path],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -143,7 +143,7 @@ async def test_skill_clear_removes_active_skills_and_stops_injection(tmp_path: P
         config=RuntimeConfig(
             skill_directories=[tmp_path],
             active_skills=["review-pr"],
-            max_iterations=1,
+            max_iterations=2,
             include_default_system_prompt=False,
             include_environment_context=False,
             include_runtime_reminders=False,
@@ -181,7 +181,7 @@ async def test_skill_context_is_not_persisted_or_duplicated_between_runs(tmp_pat
         config=RuntimeConfig(
             skill_directories=[tmp_path],
             active_skills=["review-pr"],
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -223,7 +223,7 @@ async def test_unknown_active_skill_error_includes_available_names(tmp_path: Pat
     provider = ScriptedLLMProvider([{"content": "Unused."}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(skill_directories=[tmp_path], max_iterations=1),
+        config=RuntimeConfig(skill_directories=[tmp_path], max_iterations=2),
     )
 
     with pytest.raises(KeyError) as error:

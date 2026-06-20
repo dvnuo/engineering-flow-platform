@@ -27,7 +27,7 @@ class RuntimeRequest:
     session_id: str
     messages: List[Message]
     iteration: int
-    max_iterations: int
+    max_iterations: int | None
     metadata: dict[str, Any] = field(default_factory=dict)
     provider_request: ProviderRequest = field(
         default_factory=lambda: ProviderRequest(messages=[])

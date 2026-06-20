@@ -466,13 +466,15 @@ def _runtime_config_profile_kwargs(
     }
 
 
-def _resolve_max_iterations() -> int:
-    value = config.session.get("max_iterations", 30)
+def _resolve_max_iterations() -> int | None:
+    value = config.session.get("max_iterations")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        return 30
-    return parsed if parsed > 0 else 30
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _resolve_model(model: str | None = None) -> str:

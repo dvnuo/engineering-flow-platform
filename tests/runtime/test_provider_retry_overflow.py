@@ -19,6 +19,7 @@ from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest
 from efp_runtime.models import Message, MessagePart, ToolCall
 from efp_runtime.session.models import Session
 from efp_runtime.session.store import InMemorySessionStore
+from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
 
@@ -232,6 +233,52 @@ async def test_context_overflow_triggers_compacted_retry_and_succeeds():
     assert overflow_events[0].payload["attempt"] == 1
     assert overflow_events[0].payload["compaction"]["overflow_retry"] is True
     assert provider.message_snapshots[1][-1] == ("user", "latest request")
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_retry_preserves_max_steps_text_only_request():
+    async def execute(args, context):
+        return "unused"
+
+    provider = SequenceProvider(
+        [
+            ProviderContextOverflowError("context too long"),
+            {"content": "Stopped after max steps."},
+        ]
+    )
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(
+            ToolRegistry(
+                [
+                    ToolDef(
+                        id="again",
+                        description="Return unused",
+                        input_schema={"type": "object", "properties": {}},
+                        execute=execute,
+                    )
+                ]
+            )
+        ),
+        max_iterations=1,
+        max_context_parts=5,
+    )
+
+    result = await runner.run(
+        session=_old_session("old 1", "old 2", "old 3", "old 4"),
+        user_text="latest request",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(provider.requests) == 2
+    assert provider.requests[0].provider_request.tools == []
+    assert provider.requests[1].provider_request.tools == []
+    assert provider.metadata_snapshots[1]["max_steps_reached"] is True
+    assert provider.metadata_snapshots[1]["overflow_retry"] is True
+    assert provider.message_snapshots[1][-1][0] == "assistant"
+    assert "CRITICAL - MAXIMUM STEPS REACHED" in provider.message_snapshots[1][-1][1]
+    assert any(event.type == "loop.max_iterations" for event in result.runtime_events)
 
 
 @pytest.mark.asyncio

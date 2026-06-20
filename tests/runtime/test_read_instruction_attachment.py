@@ -120,7 +120,7 @@ async def test_agent_runtime_default_registry_attaches_read_instructions(tmp_pat
         provider=ScriptedLLMProvider([{"content": "unused"}]),
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
         ),
     )
 
@@ -161,7 +161,7 @@ async def test_agent_runtime_can_disable_read_instruction_attachment(tmp_path: P
         provider=ScriptedLLMProvider([{"content": "unused"}]),
         config=RuntimeConfig(
             workspace_root=tmp_path,
-            max_iterations=1,
+            max_iterations=2,
             attach_read_instructions=False,
         ),
     )

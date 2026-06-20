@@ -336,7 +336,7 @@ def _child_config(
     max_iterations = (
         profile.max_iterations
         if profile.max_iterations is not None
-        else (base_config.max_iterations if base_config is not None else 4)
+        else (base_config.max_iterations if base_config is not None else None)
     )
     profile_permission_overlay = normalize_agent_permission_overlay(profile.metadata)
     base_tool_permissions = (

@@ -1345,7 +1345,7 @@ def _runtime_request_with_tool_history(
         session_id="session-history",
         messages=[],
         iteration=1,
-        max_iterations=1,
+        max_iterations=2,
         provider_request=ProviderRequest(
             messages=[
                 RequestMessage(
@@ -1375,7 +1375,7 @@ def _runtime_request_with_tool_call_and_result_history(
         session_id="session-tool-history",
         messages=[],
         iteration=1,
-        max_iterations=1,
+        max_iterations=2,
         provider_request=ProviderRequest(
             messages=[
                 RequestMessage(
@@ -1427,7 +1427,7 @@ def _runtime_request_with_metadata(metadata: dict[str, object]) -> RuntimeReques
         session_id="session-metadata",
         messages=[],
         iteration=1,
-        max_iterations=1,
+        max_iterations=2,
         provider_request=ProviderRequest(
             messages=[
                 RequestMessage(

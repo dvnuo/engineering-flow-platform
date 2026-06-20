@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import glob
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,10 @@ _RUNTIME_CONFIG_KEYS = {
     "model",
     "defaultModel",
     "default_model",
+    "steps",
+    "maxSteps",
+    "maxIterations",
+    "max_iterations",
     "maxContextTokens",
     "max_context_tokens",
     "contextReserveTokens",
@@ -498,6 +503,8 @@ def _runtime_config_from_raw(
 
     kwargs.update(_model_context_fields(raw))
 
+    kwargs.update(_iteration_limit_fields(raw))
+
     kwargs.update(_compaction_policy_fields(raw))
 
     instruction_paths, instruction_texts = _instruction_sources(
@@ -750,6 +757,11 @@ _COMPACTION_TOP_LEVEL_FIELDS = {
     "compaction_prune_protect_chars",
 }
 
+_INTEGER_PATTERN = re.compile(r"^[+-]?\d+$")
+
+
+_ITERATION_LIMIT_ALIASES = ("steps", "maxSteps", "maxIterations", "max_iterations")
+
 
 def _model_context_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
     fields: dict[str, Any] = {}
@@ -775,6 +787,13 @@ def _model_context_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
     if context_reserve_tokens is not None:
         fields["context_reserve_tokens"] = context_reserve_tokens
     return fields
+
+
+def _iteration_limit_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
+    value = _first_alias_value(raw, _ITERATION_LIMIT_ALIASES)
+    if value is None:
+        return {}
+    return {"max_iterations": _positive_int(value, field_name="max_iterations")}
 
 
 def _compaction_policy_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -1045,6 +1064,20 @@ def _first_alias_value(raw: Mapping[str, Any], aliases: Iterable[str]) -> Any:
         if alias in alias_set and alias_value is not None:
             value = alias_value
     return value
+
+
+def _positive_int(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a positive integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and _INTEGER_PATTERN.match(value.strip()):
+        parsed = int(value.strip())
+    else:
+        raise ValueError(f"{field_name} must be a positive integer")
+    if parsed < 1:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return parsed
 
 
 def _first_runtime_context_alias_value(

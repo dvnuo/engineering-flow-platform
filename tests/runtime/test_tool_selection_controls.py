@@ -57,7 +57,7 @@ async def test_model_hint_gpt_5_prefers_apply_patch_tool():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=2),
         tool_registry=_file_tool_registry(),
     )
 
@@ -87,7 +87,7 @@ async def test_model_hint_gpt_4_prefers_direct_file_tools():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=2),
         tool_registry=_file_tool_registry(),
     )
 
@@ -116,7 +116,7 @@ async def test_model_hint_gpt_oss_prefers_direct_file_tools():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=2),
         tool_registry=_file_tool_registry(),
     )
 
@@ -138,7 +138,7 @@ async def test_without_model_hint_keeps_default_file_tool_selection():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=2),
         tool_registry=_file_tool_registry(),
     )
 
@@ -161,7 +161,7 @@ async def test_model_aware_tool_selection_can_be_disabled_by_config():
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
-            max_iterations=1,
+            max_iterations=2,
             model_aware_tool_selection=False,
         ),
         tool_registry=_file_tool_registry(),
@@ -193,7 +193,7 @@ async def test_per_run_override_cannot_reenable_model_disabled_tool():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=2),
         tool_registry=_file_tool_registry(),
     )
 
@@ -214,7 +214,7 @@ async def test_structured_output_tool_remains_available_with_model_selection():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1),
+        config=RuntimeConfig(max_iterations=2),
         tool_registry=_file_tool_registry(),
     )
 
@@ -264,7 +264,7 @@ async def test_config_disabled_tool_is_not_shown_to_provider():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1, disabled_tools=["beta"]),
+        config=RuntimeConfig(max_iterations=2, disabled_tools=["beta"]),
         tool_registry=ToolRegistry([_tool("alpha"), _tool("beta")]),
     )
 
@@ -283,7 +283,7 @@ async def test_per_run_override_disables_config_enabled_tool():
     provider = ScriptedLLMProvider([{"content": "done"}])
     runtime = AgentRuntime(
         provider=provider,
-        config=RuntimeConfig(max_iterations=1, enabled_tools=["alpha", "beta"]),
+        config=RuntimeConfig(max_iterations=2, enabled_tools=["alpha", "beta"]),
         tool_registry=ToolRegistry([_tool("alpha"), _tool("beta")]),
     )
 
