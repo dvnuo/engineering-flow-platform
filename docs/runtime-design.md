@@ -122,8 +122,10 @@ The runtime facade backs gateway history, session list/delete/rename, metadata,
 pending permissions/questions, todos, fork/revert/summary/query helpers, and
 recovery metadata with `FileSessionStore`.
 
-The default runtime session root is `~/.efp/runtime`; it can be overridden with
-`EFP_RUNTIME_SESSION_ROOT`.
+The default runtime session root is `~/.efp/runtime`. `EFP_RUNTIME_SESSION_ROOT`
+overrides it explicitly. When that override is absent and `EFP_WORKSPACE_DIR` is
+set, the runtime uses `$EFP_WORKSPACE_DIR/.efp/runtime` so Portal-managed native
+agents persist sessions on the workspace mount.
 
 ## Skills And Commands
 

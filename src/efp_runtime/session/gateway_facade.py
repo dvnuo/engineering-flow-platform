@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 JIRA_SESSION_PREFIX = "jira:"
 RUNTIME_SESSION_ROOT_ENV = "EFP_RUNTIME_SESSION_ROOT"
+RUNTIME_WORKSPACE_DIR_ENV = "EFP_WORKSPACE_DIR"
 DEFAULT_MAX_HISTORY = 999999
 DEFAULT_AUTO_SAVE = True
 
@@ -39,9 +40,12 @@ _manager_singletons: dict[Path, "RuntimeSessionManager"] = {}
 def runtime_session_root(root: str | Path | None = None) -> Path:
     if root is not None:
         return Path(root).expanduser().resolve()
-    configured = os.environ.get(RUNTIME_SESSION_ROOT_ENV)
+    configured = str(os.environ.get(RUNTIME_SESSION_ROOT_ENV) or "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
+    workspace = str(os.environ.get(RUNTIME_WORKSPACE_DIR_ENV) or "").strip()
+    if workspace:
+        return (Path(workspace).expanduser() / ".efp" / "runtime").resolve()
     return (Path.home() / ".efp" / "runtime").resolve()
 
 
