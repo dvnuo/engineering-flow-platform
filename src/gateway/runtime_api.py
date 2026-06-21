@@ -441,6 +441,28 @@ def _safe_runtime_task_session_id(value: str) -> str:
     return cleaned or f"task-session-{hashlib.sha256(str(value).encode('utf-8')).hexdigest()[:16]}"
 
 
+TASK_SESSION_ID_PREFIXES = (
+    "agent-task:",
+    "agent-task-",
+    "generic-task:",
+    "generic-task-",
+    "delegation:",
+    "delegation-",
+    "task-",
+)
+
+
+def _runtime_session_id_is_task_session(session_id: Any) -> bool:
+    if not isinstance(session_id, str):
+        return False
+    return session_id.strip().startswith(TASK_SESSION_ID_PREFIXES)
+
+
+def _request_includes_task_sessions(request: web.Request) -> bool:
+    raw = str(request.query.get("include_task_sessions", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _resolve_runtime_task_delivery(input_payload: Dict[str, Any], metadata: Dict[str, Any]) -> str:
     for value in (
         input_payload.get("delivery"),
@@ -2894,12 +2916,16 @@ async def api_sessions(request: web.Request) -> web.Response:
             await session_manager.initialize()
         
         limit = int(request.query.get('limit', 10))
+        include_task_sessions = _request_includes_task_sessions(request)
         session_ids = await session_manager.list_sessions()
         logger.info(f"[api_sessions] Found {len(session_ids)} sessions: {session_ids[:5]}")
         
         # Format sessions with details, filter out empty sessions
         detailed_sessions = []
-        for session_id in session_ids[:limit]:
+        for session_id in session_ids:
+            if not include_task_sessions and _runtime_session_id_is_task_session(session_id):
+                logger.info(f"[api_sessions] Skipping task session: {session_id}")
+                continue
             # Get session info
             session_info = await session_manager.get_session_info(session_id)
             
@@ -2932,6 +2958,8 @@ async def api_sessions(request: web.Request) -> web.Response:
                 'message_count': len(user_messages),
             })
             logger.info(f"[api_sessions] Added session: {session_id} -> name='{session_name}'")
+            if len(detailed_sessions) >= limit:
+                break
         
         logger.info(f"[api_sessions] Returning {len(detailed_sessions)} sessions")
         return web.json_response({'sessions': detailed_sessions})
