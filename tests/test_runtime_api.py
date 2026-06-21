@@ -133,6 +133,69 @@ def test_resolve_runtime_session_id_avoids_same_second_collisions_without_client
 
 
 @pytest.mark.asyncio
+async def test_api_sessions_hides_task_sessions_by_default(monkeypatch):
+    from src.gateway import runtime_api
+
+    class _FakeSessionManager:
+        _initialized = True
+
+        async def initialize(self):
+            raise AssertionError("already initialized")
+
+        async def list_sessions(self):
+            return [
+                "agent-task-task-1",
+                "generic-task-task-2",
+                "delegation-rule-1-event-1",
+                "s-human",
+            ]
+
+        async def get_session_info(self, session_id):
+            return {
+                "title": session_id,
+                "history": [{"role": "user", "content": f"hello from {session_id}"}],
+                "updated_at": "2026-06-21T00:00:00Z",
+            }
+
+    monkeypatch.setattr(runtime_api, "session_manager", _FakeSessionManager())
+
+    response = await runtime_api.api_sessions(type("Request", (), {"query": {"limit": "10"}})())
+    payload = json.loads(response.body)
+
+    assert [item["session_id"] for item in payload["sessions"]] == ["s-human"]
+
+
+@pytest.mark.asyncio
+async def test_api_sessions_can_include_task_sessions_for_debug(monkeypatch):
+    from src.gateway import runtime_api
+
+    class _FakeSessionManager:
+        _initialized = True
+
+        async def initialize(self):
+            raise AssertionError("already initialized")
+
+        async def list_sessions(self):
+            return ["agent-task-task-1", "s-human"]
+
+        async def get_session_info(self, session_id):
+            return {
+                "title": session_id,
+                "history": [{"role": "user", "content": f"hello from {session_id}"}],
+                "updated_at": "2026-06-21T00:00:00Z",
+            }
+
+    monkeypatch.setattr(runtime_api, "session_manager", _FakeSessionManager())
+
+    response = await runtime_api.api_sessions(
+        type("Request", (), {"query": {"limit": "10", "include_task_sessions": "1"}})()
+    )
+    payload = json.loads(response.body)
+
+    assert [item["session_id"] for item in payload["sessions"]] == ["agent-task-task-1", "s-human"]
+
+
+@pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
     from src.gateway import runtime_api
 
