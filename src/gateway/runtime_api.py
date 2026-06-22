@@ -2445,10 +2445,10 @@ async def _run_task_execution_in_background(
         if current is None:
             logger.info("Task cancellation ignored because task record no longer exists | task_id=%s attempt_id=%s", task_id, attempt_id or "-")
             return
-        if current is not None and attempt_id is not None and getattr(current, "active_attempt_id", None) != attempt_id:
+        if attempt_id is not None and getattr(current, "active_attempt_id", None) != attempt_id:
             logger.info("Stale task cancellation ignored because attempt is no longer current | task_id=%s attempt_id=%s", task_id, attempt_id)
             return
-        if current is None or current.status != "cancelled":
+        if current.status != "cancelled":
             cancelled_payload = {
                 "ok": False,
                 "task_id": task_id,
