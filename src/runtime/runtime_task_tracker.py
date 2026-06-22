@@ -421,6 +421,8 @@ class RuntimeTaskTracker:
         active_records: list[RuntimeTaskRecord] = []
         terminal_records: list[RuntimeTaskRecord] = []
         for path in sorted(self._storage_dir.glob("*.json")):
+            if record_limit is not None and len(active_records) >= record_limit:
+                break
             if file_size_limit is not None:
                 try:
                     if path.stat().st_size > file_size_limit:
