@@ -3665,6 +3665,79 @@ async def test_api_tasks_execute_duplicate_conflicting_admission_returns_409(mon
 
 
 @pytest.mark.asyncio
+async def test_api_tasks_execute_restart_stale_matching_admission_redelivers(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    release = asyncio.Event()
+    spawned = []
+    emitted = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        await release.wait()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+    monkeypatch.setattr(runtime_api, "_emit_task_lifecycle_event", lambda event_type, **_kwargs: emitted.append(event_type) or asyncio.sleep(0))
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {
+                "task_id": "task-restart-stale-redelivery",
+                "task_type": "adapter_action_task",
+                "input_payload": {"action_id": "jira.transition"},
+            }
+
+    first_response = await runtime_api.api_tasks_execute(_Request())
+    await asyncio.sleep(0)
+    stale_record = runtime_api.runtime_task_tracker.mark_stale(
+        "task-restart-stale-redelivery",
+        reason=runtime_api.RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE,
+        payload={
+            "ok": False,
+            "task_id": "task-restart-stale-redelivery",
+            "execution_type": "task",
+            "request_id": "task-task-restart-stale-redelivery",
+            "status": "stale",
+            "state_code": "runtime_restart_task_replay_disabled",
+            "error": runtime_api.RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE,
+        },
+    )
+
+    second_response = await runtime_api.api_tasks_execute(_Request())
+    second_body = json.loads(second_response.body)
+
+    assert first_response.status == 202
+    assert stale_record is not None and stale_record.status == "stale"
+    assert second_response.status == 202
+    assert second_body["status"] == "accepted"
+    assert second_body["task_id"] == "task-restart-stale-redelivery"
+    assert len(spawned) == 2
+    await asyncio.wait_for(asyncio.gather(spawned[0], return_exceptions=True), timeout=1)
+    assert spawned[0].done()
+    assert "task.cancelled" not in emitted
+
+    release.set()
+    await asyncio.gather(spawned[1], return_exceptions=True)
+    assert runtime_api.runtime_task_tracker.get("task-restart-stale-redelivery").status == "success"
+
+
+@pytest.mark.asyncio
 async def test_api_tasks_execute_generic_agent_task_uses_file_safe_task_session(monkeypatch):
     from src.gateway import runtime_api
 
@@ -3716,7 +3789,7 @@ async def test_api_tasks_execute_generic_agent_task_uses_file_safe_task_session(
 
 
 @pytest.mark.asyncio
-async def test_resume_persisted_runtime_tasks_replays_active_record(tmp_path, monkeypatch):
+async def test_resume_persisted_runtime_tasks_marks_active_record_stale_by_default(tmp_path, monkeypatch):
     from src.gateway import runtime_api
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
@@ -3743,53 +3816,22 @@ async def test_resume_persisted_runtime_tasks_replays_active_record(tmp_path, mo
     monkeypatch.setattr(runtime_api, "runtime_task_tracker", tracker)
     monkeypatch.setenv("EFP_RUNTIME_TASKS_DIR", str(tmp_path))
     spawned = []
-    captured = {}
-    emitted = []
-
-    async def _fake_execute_runtime_task_request(**kwargs):
-        captured.update(kwargs)
-        return type(
-            "R",
-            (),
-            {
-                "request_id": kwargs["request_id"],
-                "status": "success",
-                "output_payload": {"ok": True},
-                "artifacts": [],
-                "runtime_events": [],
-                "next_action_hint": None,
-                "audit_ref": None,
-            },
-        )()
-
-    async def _fake_emit_task_lifecycle_event(event_type, **kwargs):
-        emitted.append(event_type)
-
-    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
-    monkeypatch.setattr(runtime_api, "_emit_task_lifecycle_event", _fake_emit_task_lifecycle_event)
     monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
-    resumed = await runtime_api.resume_persisted_runtime_tasks()
+    stale_count = await runtime_api.resume_persisted_runtime_tasks()
 
-    assert resumed == 1
-    assert len(spawned) == 1
-    await spawned[0]
+    assert stale_count == 1
+    assert spawned == []
 
     record = tracker.get("task-resume-1")
     assert record is not None
-    assert record.status == "success"
-    assert record.resume_count == 1
-    assert captured["metadata"]["runtime_task_resumed"] is True
-    assert captured["metadata"]["runtime_task_resume_count"] == 1
-    assert captured["metadata"]["runtime_task_admission_id"] == record.admission_id
-    assert captured["metadata"]["runtime_task_input_hash"] == record.input_hash
-    assert captured["metadata"]["runtime_task_attempt_id"]
-    assert captured["metadata"]["runtime_task_attempt_count"] == 2
-    assert "task.resumed" in emitted
-
+    assert record.status == "stale"
+    assert record.resume_count == 0
+    assert record.payload["state_code"] == "runtime_restart_task_replay_disabled"
+    assert record.payload["error"] == runtime_api.RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE
 
 @pytest.mark.asyncio
-async def test_resume_persisted_runtime_tasks_limits_active_resumes(tmp_path, monkeypatch):
+async def test_resume_persisted_runtime_tasks_marks_all_active_records_stale(tmp_path, monkeypatch):
     from src.gateway import runtime_api
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
@@ -3817,39 +3859,19 @@ async def test_resume_persisted_runtime_tasks_limits_active_resumes(tmp_path, mo
     monkeypatch.setenv("EFP_RUNTIME_TASKS_DIR", str(tmp_path))
     monkeypatch.setenv("EFP_RUNTIME_TASKS_LOAD_MAX_RECORDS", "10")
     monkeypatch.setenv("EFP_RUNTIME_TASKS_LOAD_MAX_FILE_BYTES", "1000000")
-    monkeypatch.setenv("EFP_RUNTIME_TASKS_RESUME_MAX_ACTIVE", "1")
     monkeypatch.setenv("EFP_RUNTIME_TASKS_PERSIST_MAX_FILE_BYTES", "1000000")
     spawned = []
-
-    async def _fake_execute_runtime_task_request(**kwargs):
-        return type(
-            "R",
-            (),
-            {
-                "request_id": kwargs["request_id"],
-                "status": "success",
-                "output_payload": {"ok": True},
-                "artifacts": [],
-                "runtime_events": [],
-                "next_action_hint": None,
-                "audit_ref": None,
-            },
-        )()
-
-    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
-    monkeypatch.setattr(runtime_api, "_emit_task_lifecycle_event", lambda *_args, **_kwargs: asyncio.sleep(0))
     monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
-    resumed = await runtime_api.resume_persisted_runtime_tasks()
+    stale_count = await runtime_api.resume_persisted_runtime_tasks()
 
-    assert resumed == 1
-    assert len(spawned) == 1
-    await spawned[0]
+    assert stale_count == 2
+    assert spawned == []
 
     statuses = {task_id: tracker.get(task_id).status for task_id in ("task-resume-limit-1", "task-resume-limit-2")}
-    assert sorted(statuses.values()) == ["stale", "success"]
-    stale_task_id = next(task_id for task_id, status in statuses.items() if status == "stale")
-    assert tracker.get(stale_task_id).payload["error"] == "Runtime task recovery resume limit exceeded"
+    assert sorted(statuses.values()) == ["stale", "stale"]
+    for task_id in statuses:
+        assert tracker.get(task_id).payload["state_code"] == "runtime_restart_task_replay_disabled"
 
 
 @pytest.mark.asyncio

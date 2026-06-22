@@ -132,7 +132,9 @@ agents persist sessions on the workspace mount.
 The gateway persists runtime task tracker records under
 `$EFP_WORKSPACE_DIR/.efp/runtime_tasks` by default. This lets a restarted native
 runtime reconcile accepted Portal tasks instead of leaving them permanently
-running in Portal.
+running in Portal. Startup reconciliation follows the upstream OpenCode safety
+boundary: completed and blocked task metadata can be reloaded, but in-flight
+provider/tool activity is never automatically replayed after process loss.
 
 Startup recovery is intentionally bounded:
 
@@ -142,9 +144,9 @@ Startup recovery is intentionally bounded:
   parsed while looking for records to load. The default is `512`.
 - `EFP_RUNTIME_TASKS_LOAD_MAX_FILE_BYTES` skips individual persisted task files
   larger than the configured byte limit. The default is `2000000`.
-- `EFP_RUNTIME_TASKS_RESUME_MAX_ACTIVE` limits how many active tasks are resumed
-  concurrently during startup. The default is `8`; additional active records are
-  marked stale.
+- Active records from a previous process are marked stale with
+  `runtime_restart_task_replay_disabled` and should be re-dispatched if the work
+  is still required.
 - `EFP_RUNTIME_TASKS_PERSIST_MAX_FILE_BYTES` caps each persisted record. Large
   result payloads are omitted from the persisted tracker file while the task
   status and identifiers remain available. The default is `2000000`.
