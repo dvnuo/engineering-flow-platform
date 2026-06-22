@@ -3261,6 +3261,44 @@ def test_runtime_task_tracker_load_limits_skip_oversized_and_excess_records(tmp_
     assert len(count_guard.list_active()) == 1
 
 
+def test_runtime_task_tracker_load_limit_prioritizes_active_records(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    (tmp_path / "000-terminal.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-terminal",
+                "request_id": "task-task-terminal",
+                "task_type": "adapter_action_task",
+                "source": "portal",
+                "status": "success",
+                "accepted_at": "2026-06-22T00:00:00Z",
+                "payload": {"ok": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "001-active.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-active",
+                "request_id": "task-task-active",
+                "task_type": "adapter_action_task",
+                "source": "portal",
+                "status": "running",
+                "accepted_at": "2026-06-22T00:01:00Z",
+                "payload": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    assert tracker.load_persisted_records(max_records=1, max_file_bytes=100_000) == 1
+    assert tracker.get("task-active") is not None
+    assert tracker.get("task-terminal") is None
+
+
 def test_runtime_task_tracker_omits_large_payload_from_persistence(tmp_path):
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
@@ -3289,6 +3327,35 @@ def test_runtime_task_tracker_omits_large_payload_from_persistence(tmp_path):
     assert persisted["status"] == "success"
     assert persisted["payload"]["payload_omitted_from_persistence"] is True
     assert persisted["payload"]["reason"] == "runtime_task_record_exceeded_persistence_limit"
+
+
+def test_runtime_task_tracker_removes_stale_file_when_persistence_cap_cannot_write(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    tracker.create_pending(
+        task_id="task-too-small-cap",
+        request_id="task-task-too-small-cap",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id="session-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="task-too-small-cap",
+        merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+        metadata={"task_id": "task-too-small-cap"},
+    )
+    [record_path] = list(tmp_path.glob("*.json"))
+    tracker.configure_limits(max_persisted_record_bytes=1)
+
+    tracker.mark_terminal(
+        "task-too-small-cap",
+        status="success",
+        payload={"ok": True, "status": "success", "result": "x" * 20_000},
+    )
+
+    assert not record_path.exists()
 
 
 def test_runtime_task_tracker_ignores_stale_attempt_terminal_write():

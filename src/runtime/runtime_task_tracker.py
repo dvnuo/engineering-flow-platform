@@ -19,6 +19,10 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _json_dumps_compact(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
 def _coerce_positive_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -411,11 +415,12 @@ class RuntimeTaskTracker:
         if self._storage_dir is None or not self._storage_dir.exists():
             return 0
         record_limit = _coerce_non_negative_int(max_records)
+        if record_limit == 0:
+            return 0
         file_size_limit = _coerce_non_negative_int(max_file_bytes)
-        loaded: list[RuntimeTaskRecord] = []
+        active_records: list[RuntimeTaskRecord] = []
+        terminal_records: list[RuntimeTaskRecord] = []
         for path in sorted(self._storage_dir.glob("*.json")):
-            if record_limit is not None and len(loaded) >= record_limit:
-                break
             if file_size_limit is not None:
                 try:
                     if path.stat().st_size > file_size_limit:
@@ -427,8 +432,19 @@ class RuntimeTaskTracker:
                 record = _record_from_json(raw)
             except Exception:
                 continue
-            loaded.append(record)
+            if record.status in _TASK_TERMINAL_STATUSES:
+                if record_limit is None or len(active_records) + len(terminal_records) < record_limit:
+                    terminal_records.append(record)
+                continue
+            if record_limit is not None and len(active_records) >= record_limit:
+                continue
+            active_records.append(record)
+            while record_limit is not None and len(active_records) + len(terminal_records) > record_limit:
+                if not terminal_records:
+                    break
+                terminal_records.pop(0)
 
+        loaded = active_records + terminal_records
         loaded.sort(key=lambda record: record.accepted_at or "")
         max_admitted_seq = max([record.admitted_seq for record in self._records.values()] or [0])
         for record in loaded:
@@ -478,6 +494,8 @@ class RuntimeTaskTracker:
             tmp_path = path.with_suffix(path.suffix + ".tmp")
             encoded = self._encode_record_for_persistence(record)
             if encoded is None:
+                tmp_path.unlink(missing_ok=True)
+                self._delete_record_file(record.task_id)
                 return
             tmp_path.write_text(encoded, encoding="utf-8")
             tmp_path.replace(path)
@@ -486,7 +504,7 @@ class RuntimeTaskTracker:
 
     def _encode_record_for_persistence(self, record: RuntimeTaskRecord) -> str | None:
         record_payload = _record_to_json(record)
-        encoded = json.dumps(record_payload, ensure_ascii=False, sort_keys=True)
+        encoded = _json_dumps_compact(record_payload)
         max_bytes = self._max_persisted_record_bytes
         if max_bytes is None or len(encoded.encode("utf-8")) <= max_bytes:
             return encoded
@@ -496,7 +514,11 @@ class RuntimeTaskTracker:
             "payload_omitted_from_persistence": True,
             "reason": "runtime_task_record_exceeded_persistence_limit",
         }
-        encoded = json.dumps(record_payload, ensure_ascii=False, sort_keys=True)
+        encoded = _json_dumps_compact(record_payload)
+        if len(encoded.encode("utf-8")) <= max_bytes:
+            return encoded
+        minimal_record_payload = _minimal_record_for_persistence(record)
+        encoded = _json_dumps_compact(minimal_record_payload)
         if len(encoded.encode("utf-8")) <= max_bytes:
             return encoded
         return None
@@ -687,6 +709,47 @@ def _record_to_json(record: RuntimeTaskRecord) -> Dict[str, Any]:
             "last_progress_at": record.last_progress_at,
             "pending_permission_request": record.pending_permission_request,
             "pending_question_request": record.pending_question_request,
+            "completion_source": record.completion_source,
+            "cancel_requested": record.cancel_requested,
+        }
+    )
+
+
+def _minimal_record_for_persistence(record: RuntimeTaskRecord) -> Dict[str, Any]:
+    return _json_safe(
+        {
+            "task_id": record.task_id,
+            "request_id": record.request_id,
+            "task_type": record.task_type,
+            "source": record.source,
+            "session_id": record.session_id,
+            "agent_id": record.agent_id,
+            "status": record.status,
+            "accepted_at": record.accepted_at,
+            "started_at": record.started_at,
+            "finished_at": record.finished_at,
+            "trace_id": record.trace_id,
+            "portal_dispatch_id": record.portal_dispatch_id,
+            "portal_task_id": record.portal_task_id,
+            "payload": {
+                "ok": record.status == "success",
+                "status": record.status,
+                "payload_omitted_from_persistence": True,
+                "record_minimized_from_persistence": True,
+                "reason": "runtime_task_record_exceeded_persistence_limit",
+            },
+            "error_message": record.error_message,
+            "resume_count": record.resume_count,
+            "last_resumed_at": record.last_resumed_at,
+            "admission_id": record.admission_id,
+            "admitted_seq": record.admitted_seq,
+            "admitted_at": record.admitted_at,
+            "input_delivery": record.input_delivery,
+            "input_hash": record.input_hash,
+            "task_session_id": record.task_session_id,
+            "attempt_count": record.attempt_count,
+            "last_attempt_started_at": record.last_attempt_started_at,
+            "last_progress_at": record.last_progress_at,
             "completion_source": record.completion_source,
             "cancel_requested": record.cancel_requested,
         }
