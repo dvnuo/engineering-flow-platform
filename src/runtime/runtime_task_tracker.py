@@ -761,6 +761,8 @@ def _minimal_record_for_persistence(record: RuntimeTaskRecord) -> Dict[str, Any]
             "attempt_count": record.attempt_count,
             "last_attempt_started_at": record.last_attempt_started_at,
             "last_progress_at": record.last_progress_at,
+            "pending_permission_request": record.pending_permission_request,
+            "pending_question_request": record.pending_question_request,
             "completion_source": record.completion_source,
             "cancel_requested": record.cancel_requested,
         }

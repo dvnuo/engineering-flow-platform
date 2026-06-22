@@ -3467,6 +3467,42 @@ def test_runtime_task_tracker_keeps_active_file_when_persistence_cap_cannot_upda
     assert after["status"] == "accepted"
 
 
+def test_runtime_task_tracker_minimal_persistence_keeps_pending_permission(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    tracker.create_pending(
+        task_id="task-blocked-minimal",
+        request_id="task-task-blocked-minimal",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id="session-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="task-blocked-minimal",
+        merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+        metadata={"task_id": "task-blocked-minimal", "large": "x" * 5000},
+    )
+    tracker.configure_limits(max_persisted_record_bytes=2000)
+
+    tracker.mark_terminal(
+        "task-blocked-minimal",
+        status="blocked",
+        payload={
+            "ok": False,
+            "status": "blocked",
+            "pending_permission_request": {"id": "perm-1", "tool": "bash"},
+        },
+    )
+
+    [record_path] = list(tmp_path.glob("*.json"))
+    persisted = json.loads(record_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "blocked"
+    assert persisted["payload"]["record_minimized_from_persistence"] is True
+    assert persisted["pending_permission_request"] == {"id": "perm-1", "tool": "bash"}
+
+
 def test_runtime_task_tracker_ignores_stale_attempt_terminal_write():
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
