@@ -19,6 +19,26 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _coerce_positive_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _coerce_non_negative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized >= 0 else None
+
+
 @dataclass
 class RuntimeTaskRecord:
     task_id: str
@@ -66,11 +86,18 @@ class RuntimeTaskTracker:
     the in-memory behavior, while the runtime server can opt in during startup.
     """
 
-    def __init__(self, *, max_records: int = 512, storage_dir: Optional[str | Path] = None):
+    def __init__(
+        self,
+        *,
+        max_records: int = 512,
+        storage_dir: Optional[str | Path] = None,
+        max_persisted_record_bytes: int | None = None,
+    ):
         self._records: "OrderedDict[str, RuntimeTaskRecord]" = OrderedDict()
         self._max_records = max(1, int(max_records))
         self._next_admitted_seq = 1
         self._storage_dir: Optional[Path] = None
+        self._max_persisted_record_bytes = _coerce_positive_int(max_persisted_record_bytes)
         self.configure_storage(storage_dir)
 
     @property
@@ -82,6 +109,9 @@ class RuntimeTaskTracker:
             self._storage_dir = None
             return
         self._storage_dir = Path(storage_dir).expanduser()
+
+    def configure_limits(self, *, max_persisted_record_bytes: int | None = None) -> None:
+        self._max_persisted_record_bytes = _coerce_positive_int(max_persisted_record_bytes)
 
     def create_pending(
         self,
@@ -372,11 +402,26 @@ class RuntimeTaskTracker:
         )
         return bool(record.input_hash and record.input_hash == expected)
 
-    def load_persisted_records(self) -> int:
+    def load_persisted_records(
+        self,
+        *,
+        max_records: int | None = None,
+        max_file_bytes: int | None = None,
+    ) -> int:
         if self._storage_dir is None or not self._storage_dir.exists():
             return 0
+        record_limit = _coerce_non_negative_int(max_records)
+        file_size_limit = _coerce_non_negative_int(max_file_bytes)
         loaded: list[RuntimeTaskRecord] = []
         for path in sorted(self._storage_dir.glob("*.json")):
+            if record_limit is not None and len(loaded) >= record_limit:
+                break
+            if file_size_limit is not None:
+                try:
+                    if path.stat().st_size > file_size_limit:
+                        continue
+                except OSError:
+                    continue
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 record = _record_from_json(raw)
@@ -431,10 +476,30 @@ class RuntimeTaskTracker:
             self._storage_dir.mkdir(parents=True, exist_ok=True)
             path = self._record_path(record.task_id)
             tmp_path = path.with_suffix(path.suffix + ".tmp")
-            tmp_path.write_text(json.dumps(_record_to_json(record), ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            encoded = self._encode_record_for_persistence(record)
+            if encoded is None:
+                return
+            tmp_path.write_text(encoded, encoding="utf-8")
             tmp_path.replace(path)
         except (OSError, TypeError, ValueError):
             return
+
+    def _encode_record_for_persistence(self, record: RuntimeTaskRecord) -> str | None:
+        record_payload = _record_to_json(record)
+        encoded = json.dumps(record_payload, ensure_ascii=False, sort_keys=True)
+        max_bytes = self._max_persisted_record_bytes
+        if max_bytes is None or len(encoded.encode("utf-8")) <= max_bytes:
+            return encoded
+        record_payload["payload"] = {
+            "ok": record.status == "success",
+            "status": record.status,
+            "payload_omitted_from_persistence": True,
+            "reason": "runtime_task_record_exceeded_persistence_limit",
+        }
+        encoded = json.dumps(record_payload, ensure_ascii=False, sort_keys=True)
+        if len(encoded.encode("utf-8")) <= max_bytes:
+            return encoded
+        return None
 
     def _delete_record_file(self, task_id: str) -> None:
         if self._storage_dir is None:

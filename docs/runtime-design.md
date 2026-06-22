@@ -127,6 +127,26 @@ overrides it explicitly. When that override is absent and `EFP_WORKSPACE_DIR` is
 set, the runtime uses `$EFP_WORKSPACE_DIR/.efp/runtime` so Portal-managed native
 agents persist sessions on the workspace mount.
 
+## Runtime Task Recovery
+
+The gateway persists runtime task tracker records under
+`$EFP_WORKSPACE_DIR/.efp/runtime_tasks` by default. This lets a restarted native
+runtime reconcile accepted Portal tasks instead of leaving them permanently
+running in Portal.
+
+Startup recovery is intentionally bounded:
+
+- `EFP_RUNTIME_TASKS_LOAD_MAX_RECORDS` limits how many persisted records are
+  loaded at startup. The default is `256`.
+- `EFP_RUNTIME_TASKS_LOAD_MAX_FILE_BYTES` skips individual persisted task files
+  larger than the configured byte limit. The default is `2000000`.
+- `EFP_RUNTIME_TASKS_RESUME_MAX_ACTIVE` limits how many active tasks are resumed
+  concurrently during startup. The default is `8`; additional active records are
+  marked stale.
+- `EFP_RUNTIME_TASKS_PERSIST_MAX_FILE_BYTES` caps each persisted record. Large
+  result payloads are omitted from the persisted tracker file while the task
+  status and identifiers remain available. The default is `2000000`.
+
 ## Skills And Commands
 
 The runtime discovers skills from configured roots, `EFP_SKILLS_DIR`, or
@@ -169,7 +189,7 @@ The runtime intentionally does not implement:
 - Old Python local/external tool loaders.
 - Embedded browser UI.
 - Provider fallback to OpenAI, Anthropic, or Ollama.
-- Cross-process background task persistence or shell job restoration.
+- Shell job restoration.
 
 The current tool and capability contract is tracked in
 `docs/runtime-tool-surface.md` and guarded by runtime tests.

@@ -3233,6 +3233,64 @@ def test_runtime_task_tracker_persists_and_loads_active_records(tmp_path):
     assert [item.task_id for item in loaded.list_active()] == ["task-persist"]
 
 
+def test_runtime_task_tracker_load_limits_skip_oversized_and_excess_records(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    for task_id in ("task-load-1", "task-load-2"):
+        tracker.create_pending(
+            task_id=task_id,
+            request_id=f"task-{task_id}",
+            task_type="adapter_action_task",
+            source="portal",
+            session_id="session-1",
+            agent_id="agent-1",
+            trace_id="trace-1",
+            portal_dispatch_id="dispatch-1",
+            portal_task_id=task_id,
+            merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+            metadata={"task_id": task_id},
+        )
+    (tmp_path / "oversized.json").write_text(json.dumps({"task_id": "huge", "payload": "x" * 5000}), encoding="utf-8")
+
+    oversized_guard = RuntimeTaskTracker(storage_dir=tmp_path)
+    assert oversized_guard.load_persisted_records(max_records=10, max_file_bytes=100) == 0
+
+    count_guard = RuntimeTaskTracker(storage_dir=tmp_path)
+    assert count_guard.load_persisted_records(max_records=1, max_file_bytes=100_000) == 1
+    assert len(count_guard.list_active()) == 1
+
+
+def test_runtime_task_tracker_omits_large_payload_from_persistence(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path, max_persisted_record_bytes=4000)
+    tracker.create_pending(
+        task_id="task-big-payload",
+        request_id="task-task-big-payload",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id="session-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="task-big-payload",
+        merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+        metadata={"task_id": "task-big-payload"},
+    )
+    tracker.mark_terminal(
+        "task-big-payload",
+        status="success",
+        payload={"ok": True, "status": "success", "result": "x" * 20_000},
+    )
+
+    [record_path] = list(tmp_path.glob("*.json"))
+    persisted = json.loads(record_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "success"
+    assert persisted["payload"]["payload_omitted_from_persistence"] is True
+    assert persisted["payload"]["reason"] == "runtime_task_record_exceeded_persistence_limit"
+
+
 def test_runtime_task_tracker_ignores_stale_attempt_terminal_write():
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
@@ -3516,6 +3574,70 @@ async def test_resume_persisted_runtime_tasks_replays_active_record(tmp_path, mo
     assert captured["metadata"]["runtime_task_attempt_id"]
     assert captured["metadata"]["runtime_task_attempt_count"] == 2
     assert "task.resumed" in emitted
+
+
+@pytest.mark.asyncio
+async def test_resume_persisted_runtime_tasks_limits_active_resumes(tmp_path, monkeypatch):
+    from src.gateway import runtime_api
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    initial = RuntimeTaskTracker(storage_dir=tmp_path)
+    for task_id in ("task-resume-limit-1", "task-resume-limit-2"):
+        initial.create_pending(
+            task_id=task_id,
+            request_id=f"task-{task_id}",
+            task_type="adapter_action_task",
+            source="portal",
+            session_id=f"session-{task_id}",
+            agent_id="agent-1",
+            trace_id="trace-1",
+            portal_dispatch_id="dispatch-1",
+            portal_task_id=task_id,
+            merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+            metadata={"task_id": task_id, "portal_task_id": task_id},
+            trace_headers={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+        )
+        initial.mark_running(task_id)
+
+    runtime_api.runtime_task_tracker.reset()
+    tracker = RuntimeTaskTracker()
+    monkeypatch.setattr(runtime_api, "runtime_task_tracker", tracker)
+    monkeypatch.setenv("EFP_RUNTIME_TASKS_DIR", str(tmp_path))
+    monkeypatch.setenv("EFP_RUNTIME_TASKS_LOAD_MAX_RECORDS", "10")
+    monkeypatch.setenv("EFP_RUNTIME_TASKS_LOAD_MAX_FILE_BYTES", "1000000")
+    monkeypatch.setenv("EFP_RUNTIME_TASKS_RESUME_MAX_ACTIVE", "1")
+    monkeypatch.setenv("EFP_RUNTIME_TASKS_PERSIST_MAX_FILE_BYTES", "1000000")
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_emit_task_lifecycle_event", lambda *_args, **_kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    resumed = await runtime_api.resume_persisted_runtime_tasks()
+
+    assert resumed == 1
+    assert len(spawned) == 1
+    await spawned[0]
+
+    statuses = {task_id: tracker.get(task_id).status for task_id in ("task-resume-limit-1", "task-resume-limit-2")}
+    assert sorted(statuses.values()) == ["stale", "success"]
+    stale_task_id = next(task_id for task_id, status in statuses.items() if status == "stale")
+    assert tracker.get(stale_task_id).payload["error"] == "Runtime task recovery resume limit exceeded"
 
 
 @pytest.mark.asyncio

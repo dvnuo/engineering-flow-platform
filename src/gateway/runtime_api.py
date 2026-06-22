@@ -70,6 +70,10 @@ runtime_session_artifacts = RuntimeSessionArtifacts()
 
 
 MAX_PORTAL_IDENTITY_LENGTH = 256
+RUNTIME_TASK_LOAD_MAX_RECORDS_DEFAULT = 256
+RUNTIME_TASK_LOAD_MAX_FILE_BYTES_DEFAULT = 2_000_000
+RUNTIME_TASK_RESUME_MAX_ACTIVE_DEFAULT = 8
+RUNTIME_TASK_PERSIST_MAX_FILE_BYTES_DEFAULT = 2_000_000
 TASK_STATUS_EVENT_TAIL_ITEMS = 10
 TASK_STATUS_MAX_TEXT_CHARS = 20_000
 TASK_STATUS_MAX_LIST_ITEMS = 50
@@ -2776,19 +2780,89 @@ def _runtime_task_persistence_storage_dir() -> Optional[Path]:
     return resolve_runtime_workspace(config_data) / ".efp" / "runtime_tasks"
 
 
+def _runtime_task_non_negative_env(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return max(0, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return max(0, default)
+    return max(0, value)
+
+
+def _runtime_task_positive_env(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return max(1, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return max(1, default)
+    return max(1, value)
+
+
+def _runtime_task_persistence_limits() -> Dict[str, int]:
+    return {
+        "load_max_records": _runtime_task_non_negative_env(
+            "EFP_RUNTIME_TASKS_LOAD_MAX_RECORDS",
+            RUNTIME_TASK_LOAD_MAX_RECORDS_DEFAULT,
+        ),
+        "load_max_file_bytes": _runtime_task_non_negative_env(
+            "EFP_RUNTIME_TASKS_LOAD_MAX_FILE_BYTES",
+            RUNTIME_TASK_LOAD_MAX_FILE_BYTES_DEFAULT,
+        ),
+        "resume_max_active": _runtime_task_non_negative_env(
+            "EFP_RUNTIME_TASKS_RESUME_MAX_ACTIVE",
+            RUNTIME_TASK_RESUME_MAX_ACTIVE_DEFAULT,
+        ),
+        "persist_max_file_bytes": _runtime_task_positive_env(
+            "EFP_RUNTIME_TASKS_PERSIST_MAX_FILE_BYTES",
+            RUNTIME_TASK_PERSIST_MAX_FILE_BYTES_DEFAULT,
+        ),
+    }
+
+
 async def resume_persisted_runtime_tasks() -> int:
     storage_dir = _runtime_task_persistence_storage_dir()
     if storage_dir is None:
         runtime_task_tracker.configure_storage(None)
+        runtime_task_tracker.configure_limits(max_persisted_record_bytes=None)
         return 0
 
+    limits = _runtime_task_persistence_limits()
     runtime_task_tracker.configure_storage(storage_dir)
-    loaded_count = runtime_task_tracker.load_persisted_records()
+    runtime_task_tracker.configure_limits(
+        max_persisted_record_bytes=limits["persist_max_file_bytes"],
+    )
+    loaded_count = runtime_task_tracker.load_persisted_records(
+        max_records=limits["load_max_records"],
+        max_file_bytes=limits["load_max_file_bytes"],
+    )
     rehydrated_waiting_count = _rehydrate_waiting_runtime_task_session_lanes()
     resumed_count = 0
+    skipped_resume_count = 0
     for record in runtime_task_tracker.list_active():
         background_task = getattr(record, "background_task", None)
         if background_task is not None and not background_task.done():
+            continue
+        if resumed_count >= limits["resume_max_active"]:
+            skipped_resume_count += 1
+            runtime_task_tracker.mark_stale(
+                record.task_id,
+                reason="Runtime task recovery resume limit exceeded",
+                payload={
+                    "ok": False,
+                    "task_id": record.task_id,
+                    "execution_type": "task",
+                    "request_id": record.request_id,
+                    "status": "stale",
+                    "trace_id": record.trace_id,
+                    "portal_dispatch_id": record.portal_dispatch_id,
+                    "error": "Runtime task recovery resume limit exceeded",
+                    "resume_max_active": limits["resume_max_active"],
+                },
+            )
             continue
         resumed_record = runtime_task_tracker.mark_resuming(record.task_id) or record
         try:
@@ -2829,11 +2903,18 @@ async def resume_persisted_runtime_tasks() -> int:
         )
     if loaded_count or resumed_count:
         logger.info(
-            "Runtime task recovery initialized | storage_dir=%s loaded=%s resumed=%s waiting_lanes=%s",
+            "Runtime task recovery initialized | storage_dir=%s loaded=%s resumed=%s "
+            "skipped_resume_limit=%s waiting_lanes=%s load_max_records=%s "
+            "load_max_file_bytes=%s resume_max_active=%s persist_max_file_bytes=%s",
             storage_dir,
             loaded_count,
             resumed_count,
+            skipped_resume_count,
             rehydrated_waiting_count,
+            limits["load_max_records"],
+            limits["load_max_file_bytes"],
+            limits["resume_max_active"],
+            limits["persist_max_file_bytes"],
         )
     return resumed_count
 
