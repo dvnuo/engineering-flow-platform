@@ -15,6 +15,8 @@ import inspect
 import json
 import os
 import re
+import threading
+import time
 from typing import TYPE_CHECKING, Any, List, Optional, Protocol, Union
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -81,6 +83,7 @@ class CopilotTokenExchange:
 
 DEFAULT_COPILOT_REASONING_EFFORT = "high"
 DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS = 300
+GITHUB_COPILOT_TOKEN_REFRESH_MARGIN_SECONDS = 300
 SUPPORTED_COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 GITHUB_SOURCE_TOKEN_PREFIXES = (
     "ghp_",
@@ -139,26 +142,17 @@ class GitHubCopilotHTTPTransport:
         )
         self.token_expires_at: int | None = None
         self.token_source = "copilot"
-
-        parsed_base_url: str | None = None
-        if exchange_source_token and is_github_source_token(credential):
-            exchange = exchange_github_token_for_copilot_token(
-                credential,
-                github_api_base_url=self.github_api_base_url,
-                timeout=self.timeout,
-                user_agent=self.user_agent,
-                editor_version=self.editor_version,
-                editor_plugin_version=self.editor_plugin_version,
-                integration_id=self.integration_id,
-            )
-            credential = exchange.token
-            self.token_expires_at = exchange.expires_at
-            parsed_base_url = exchange.api_base_url
-            self.token_source = "github_exchange"
-
+        self._explicit_base_url = explicit_base_url
+        self._source_credential: str | None = None
+        self._refresh_lock = threading.Lock()
         self._token = credential
-        self.base_url = _normalize_base_url(explicit_base_url or parsed_base_url)
+        self.base_url = _normalize_base_url(self._explicit_base_url)
         self.endpoint = "{0}{1}".format(self.base_url, self.RESPONSES_PATH)
+
+        if exchange_source_token and is_github_source_token(credential):
+            self._source_credential = credential
+            self.token_source = "github_exchange"
+            self._refresh_source_token(force=True)
 
     async def send(self, payload: dict[str, Any]) -> TransportOutput:
         if payload.get("stream") is True:
@@ -206,6 +200,7 @@ class GitHubCopilotHTTPTransport:
                 "GitHub Copilot HTTP transport received a non-JSON payload"
             ) from exc
 
+        self._refresh_source_token_if_needed()
         request = urllib_request.Request(
             self.endpoint,
             data=body,
@@ -217,6 +212,35 @@ class GitHubCopilotHTTPTransport:
                 yield from parse_sse_json_events(_iter_response_lines(response))
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
+            if self._refresh_after_token_expired_http_error(exc, response_text):
+                request = urllib_request.Request(
+                    self.endpoint,
+                    data=body,
+                    headers=self._headers(stream=True),
+                    method="POST",
+                )
+                try:
+                    with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                        yield from parse_sse_json_events(_iter_response_lines(response))
+                        return
+                except urllib_error.HTTPError as retry_exc:
+                    exc = retry_exc
+                    response_text = _read_http_error_body(retry_exc)
+                except urllib_error.URLError as retry_exc:
+                    reason = _redact_secret(
+                        str(getattr(retry_exc, "reason", retry_exc)),
+                        self._token,
+                    )
+                    raise ProviderTransportError(
+                        "GitHub Copilot HTTP transport failed: {0}".format(reason)
+                    ) from None
+                except TimeoutError:
+                    raise ProviderTransportError(
+                        _format_timeout_message(
+                            "GitHub Copilot HTTP transport",
+                            self.timeout,
+                        )
+                    ) from None
             model_unavailable_error = _model_unavailable_error_from_http_error(
                 exc,
                 response_text=response_text,
@@ -248,6 +272,7 @@ class GitHubCopilotHTTPTransport:
                 "GitHub Copilot HTTP transport received a non-JSON payload"
             ) from exc
 
+        self._refresh_source_token_if_needed()
         request = urllib_request.Request(
             self.endpoint,
             data=body,
@@ -259,6 +284,36 @@ class GitHubCopilotHTTPTransport:
                 raw_body = response.read()
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
+            if self._refresh_after_token_expired_http_error(exc, response_text):
+                request = urllib_request.Request(
+                    self.endpoint,
+                    data=body,
+                    headers=self._headers(),
+                    method="POST",
+                )
+                try:
+                    with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                        raw_body = response.read()
+                except urllib_error.HTTPError as retry_exc:
+                    exc = retry_exc
+                    response_text = _read_http_error_body(retry_exc)
+                except urllib_error.URLError as retry_exc:
+                    reason = _redact_secret(
+                        str(getattr(retry_exc, "reason", retry_exc)),
+                        self._token,
+                    )
+                    raise ProviderTransportError(
+                        "GitHub Copilot HTTP transport failed: {0}".format(reason)
+                    ) from None
+                except TimeoutError:
+                    raise ProviderTransportError(
+                        _format_timeout_message(
+                            "GitHub Copilot HTTP transport",
+                            self.timeout,
+                        )
+                    ) from None
+                else:
+                    return self._decode_json_response(raw_body)
             model_unavailable_error = _model_unavailable_error_from_http_error(
                 exc,
                 response_text=response_text,
@@ -282,6 +337,9 @@ class GitHubCopilotHTTPTransport:
                 _format_timeout_message("GitHub Copilot HTTP transport", self.timeout)
             ) from None
 
+        return self._decode_json_response(raw_body)
+
+    def _decode_json_response(self, raw_body: bytes) -> dict[str, Any]:
         try:
             text = raw_body.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -300,6 +358,60 @@ class GitHubCopilotHTTPTransport:
                 "GitHub Copilot HTTP transport returned a non-object JSON response"
             )
         return data
+
+    def _refresh_source_token_if_needed(self) -> None:
+        self._refresh_source_token(force=False)
+
+    def _refresh_source_token(self, *, force: bool) -> None:
+        if self._source_credential is None:
+            return
+        if not force and not self._token_refresh_due():
+            return
+        with self._refresh_lock:
+            if not force and not self._token_refresh_due():
+                return
+            exchange = exchange_github_token_for_copilot_token(
+                self._source_credential,
+                github_api_base_url=self.github_api_base_url,
+                timeout=self.timeout,
+                user_agent=self.user_agent,
+                editor_version=self.editor_version,
+                editor_plugin_version=self.editor_plugin_version,
+                integration_id=self.integration_id,
+            )
+            self._apply_token_exchange(exchange)
+
+    def _token_refresh_due(self) -> bool:
+        if self._source_credential is None or self.token_expires_at is None:
+            return False
+        return (
+            self.token_expires_at - int(time.time())
+            < GITHUB_COPILOT_TOKEN_REFRESH_MARGIN_SECONDS
+        )
+
+    def _apply_token_exchange(self, exchange: CopilotTokenExchange) -> None:
+        self._token = exchange.token
+        self.token_expires_at = exchange.expires_at
+        self.base_url = _normalize_base_url(
+            self._explicit_base_url or exchange.api_base_url
+        )
+        self.endpoint = "{0}{1}".format(self.base_url, self.RESPONSES_PATH)
+
+    def _refresh_after_token_expired_http_error(
+        self,
+        exc: urllib_error.HTTPError,
+        response_text: str | None,
+    ) -> bool:
+        if self._source_credential is None:
+            return False
+        if getattr(exc, "code", None) != 401:
+            return False
+        reason = getattr(exc, "reason", None) or getattr(exc, "msg", "")
+        combined = "{0} {1}".format(reason, response_text or "").lower()
+        if "expired" not in combined:
+            return False
+        self._refresh_source_token(force=True)
+        return True
 
     def _headers(self, *, stream: bool = False) -> dict[str, str]:
         return {
