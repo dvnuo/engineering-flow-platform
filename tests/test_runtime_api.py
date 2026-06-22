@@ -3726,9 +3726,12 @@ async def test_api_tasks_execute_restart_stale_matching_admission_redelivers(mon
     assert second_body["status"] == "accepted"
     assert second_body["task_id"] == "task-restart-stale-redelivery"
     assert len(spawned) == 2
+    await asyncio.sleep(0)
+    assert spawned[0].done()
 
     release.set()
-    await asyncio.gather(*spawned)
+    await asyncio.gather(*spawned, return_exceptions=True)
+    assert runtime_api.runtime_task_tracker.get("task-restart-stale-redelivery").status == "success"
 
 
 @pytest.mark.asyncio

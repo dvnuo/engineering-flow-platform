@@ -1924,6 +1924,9 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
                     status=409,
                 )
             if _is_restart_stale_runtime_task_record(existing_record):
+                background_task = getattr(existing_record, "background_task", None)
+                if background_task is not None and not background_task.done():
+                    background_task.cancel()
                 runtime_task_tracker.remove(parsed["task_id"])
                 existing_record = None
             else:
@@ -2439,6 +2442,9 @@ async def _run_task_execution_in_background(
         )
     except asyncio.CancelledError:
         current = runtime_task_tracker.get(task_id)
+        if current is not None and attempt_id is not None and getattr(current, "active_attempt_id", None) != attempt_id:
+            logger.info("Stale task cancellation ignored because attempt is no longer current | task_id=%s attempt_id=%s", task_id, attempt_id)
+            return
         if current is None or current.status != "cancelled":
             cancelled_payload = {
                 "ok": False,
