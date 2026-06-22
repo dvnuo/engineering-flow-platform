@@ -3671,6 +3671,7 @@ async def test_api_tasks_execute_restart_stale_matching_admission_redelivers(mon
     runtime_api.runtime_task_tracker.reset()
     release = asyncio.Event()
     spawned = []
+    emitted = []
 
     async def _fake_execute_runtime_task_request(**kwargs):
         await release.wait()
@@ -3690,6 +3691,7 @@ async def test_api_tasks_execute_restart_stale_matching_admission_redelivers(mon
 
     monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
     monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+    monkeypatch.setattr(runtime_api, "_emit_task_lifecycle_event", lambda event_type, **_kwargs: emitted.append(event_type) or asyncio.sleep(0))
 
     class _Request:
         headers = INTERNAL_HEADERS
@@ -3728,6 +3730,7 @@ async def test_api_tasks_execute_restart_stale_matching_admission_redelivers(mon
     assert len(spawned) == 2
     await asyncio.wait_for(asyncio.gather(spawned[0], return_exceptions=True), timeout=1)
     assert spawned[0].done()
+    assert "task.cancelled" not in emitted
 
     release.set()
     await asyncio.gather(spawned[1], return_exceptions=True)
