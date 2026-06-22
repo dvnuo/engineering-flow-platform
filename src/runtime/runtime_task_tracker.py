@@ -505,7 +505,8 @@ class RuntimeTaskTracker:
             encoded = self._encode_record_for_persistence(record)
             if encoded is None:
                 tmp_path.unlink(missing_ok=True)
-                self._delete_record_file(record.task_id)
+                if record.status in _TASK_TERMINAL_STATUSES:
+                    self._delete_record_file(record.task_id)
                 return
             tmp_path.write_text(encoded, encoding="utf-8")
             tmp_path.replace(path)

@@ -3438,6 +3438,35 @@ def test_runtime_task_tracker_removes_stale_file_when_persistence_cap_cannot_wri
     assert not record_path.exists()
 
 
+def test_runtime_task_tracker_keeps_active_file_when_persistence_cap_cannot_update(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    tracker.create_pending(
+        task_id="task-active-too-small-cap",
+        request_id="task-task-active-too-small-cap",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id="session-1",
+        agent_id="agent-1",
+        trace_id="trace-1",
+        portal_dispatch_id="dispatch-1",
+        portal_task_id="task-active-too-small-cap",
+        merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
+        metadata={"task_id": "task-active-too-small-cap"},
+    )
+    [record_path] = list(tmp_path.glob("*.json"))
+    before = json.loads(record_path.read_text(encoding="utf-8"))
+    tracker.configure_limits(max_persisted_record_bytes=1)
+
+    tracker.mark_running("task-active-too-small-cap")
+
+    assert record_path.exists()
+    after = json.loads(record_path.read_text(encoding="utf-8"))
+    assert after == before
+    assert after["status"] == "accepted"
+
+
 def test_runtime_task_tracker_ignores_stale_attempt_terminal_write():
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
