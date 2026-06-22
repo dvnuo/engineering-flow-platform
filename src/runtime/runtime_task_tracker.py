@@ -411,6 +411,7 @@ class RuntimeTaskTracker:
         *,
         max_records: int | None = None,
         max_file_bytes: int | None = None,
+        max_scan_records: int | None = None,
     ) -> int:
         if self._storage_dir is None or not self._storage_dir.exists():
             return 0
@@ -418,10 +419,16 @@ class RuntimeTaskTracker:
         if record_limit == 0:
             return 0
         file_size_limit = _coerce_non_negative_int(max_file_bytes)
+        scan_limit = _coerce_non_negative_int(max_scan_records)
+        if scan_limit is None and record_limit is not None:
+            scan_limit = record_limit * 2
         active_records: list[RuntimeTaskRecord] = []
         terminal_records: list[RuntimeTaskRecord] = []
+        scanned_count = 0
         for path in sorted(self._storage_dir.glob("*.json")):
             if record_limit is not None and len(active_records) >= record_limit:
+                break
+            if scan_limit is not None and scanned_count >= scan_limit:
                 break
             if file_size_limit is not None:
                 try:
@@ -429,6 +436,7 @@ class RuntimeTaskTracker:
                         continue
                 except OSError:
                     continue
+            scanned_count += 1
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 record = _record_from_json(raw)
@@ -447,7 +455,7 @@ class RuntimeTaskTracker:
                 terminal_records.pop(0)
 
         loaded = active_records + terminal_records
-        loaded.sort(key=lambda record: record.accepted_at or "")
+        loaded.sort(key=lambda record: (record.accepted_at or "", record.task_id))
         max_admitted_seq = max([record.admitted_seq for record in self._records.values()] or [0])
         for record in loaded:
             if record.admitted_seq <= 0:

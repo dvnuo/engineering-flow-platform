@@ -138,6 +138,8 @@ Startup recovery is intentionally bounded:
 
 - `EFP_RUNTIME_TASKS_LOAD_MAX_RECORDS` limits how many persisted records are
   loaded at startup. The default is `256`.
+- `EFP_RUNTIME_TASKS_SCAN_MAX_RECORDS` limits how many candidate task files are
+  parsed while looking for records to load. The default is `512`.
 - `EFP_RUNTIME_TASKS_LOAD_MAX_FILE_BYTES` skips individual persisted task files
   larger than the configured byte limit. The default is `2000000`.
 - `EFP_RUNTIME_TASKS_RESUME_MAX_ACTIVE` limits how many active tasks are resumed

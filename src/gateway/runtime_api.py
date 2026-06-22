@@ -71,6 +71,7 @@ runtime_session_artifacts = RuntimeSessionArtifacts()
 
 MAX_PORTAL_IDENTITY_LENGTH = 256
 RUNTIME_TASK_LOAD_MAX_RECORDS_DEFAULT = 256
+RUNTIME_TASK_SCAN_MAX_RECORDS_DEFAULT = 512
 RUNTIME_TASK_LOAD_MAX_FILE_BYTES_DEFAULT = 2_000_000
 RUNTIME_TASK_RESUME_MAX_ACTIVE_DEFAULT = 8
 RUNTIME_TASK_PERSIST_MAX_FILE_BYTES_DEFAULT = 2_000_000
@@ -2808,6 +2809,10 @@ def _runtime_task_persistence_limits() -> Dict[str, int]:
             "EFP_RUNTIME_TASKS_LOAD_MAX_RECORDS",
             RUNTIME_TASK_LOAD_MAX_RECORDS_DEFAULT,
         ),
+        "scan_max_records": _runtime_task_non_negative_env(
+            "EFP_RUNTIME_TASKS_SCAN_MAX_RECORDS",
+            RUNTIME_TASK_SCAN_MAX_RECORDS_DEFAULT,
+        ),
         "load_max_file_bytes": _runtime_task_non_negative_env(
             "EFP_RUNTIME_TASKS_LOAD_MAX_FILE_BYTES",
             RUNTIME_TASK_LOAD_MAX_FILE_BYTES_DEFAULT,
@@ -2837,6 +2842,7 @@ async def resume_persisted_runtime_tasks() -> int:
     )
     loaded_count = runtime_task_tracker.load_persisted_records(
         max_records=limits["load_max_records"],
+        max_scan_records=limits["scan_max_records"],
         max_file_bytes=limits["load_max_file_bytes"],
     )
     rehydrated_waiting_count = _rehydrate_waiting_runtime_task_session_lanes()
@@ -2905,13 +2911,15 @@ async def resume_persisted_runtime_tasks() -> int:
         logger.info(
             "Runtime task recovery initialized | storage_dir=%s loaded=%s resumed=%s "
             "skipped_resume_limit=%s waiting_lanes=%s load_max_records=%s "
-            "load_max_file_bytes=%s resume_max_active=%s persist_max_file_bytes=%s",
+            "scan_max_records=%s load_max_file_bytes=%s resume_max_active=%s "
+            "persist_max_file_bytes=%s",
             storage_dir,
             loaded_count,
             resumed_count,
             skipped_resume_count,
             rehydrated_waiting_count,
             limits["load_max_records"],
+            limits["scan_max_records"],
             limits["load_max_file_bytes"],
             limits["resume_max_active"],
             limits["persist_max_file_bytes"],

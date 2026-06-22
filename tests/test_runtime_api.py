@@ -3317,6 +3317,68 @@ def test_runtime_task_tracker_load_limit_prioritizes_active_records(tmp_path):
     assert tracker.get("task-terminal") is None
 
 
+def test_runtime_task_tracker_load_scan_limit_bounds_candidate_parsing(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    for index in range(3):
+        (tmp_path / f"{index:03d}-terminal.json").write_text(
+            json.dumps(
+                {
+                    "task_id": f"task-terminal-{index}",
+                    "request_id": f"task-task-terminal-{index}",
+                    "task_type": "adapter_action_task",
+                    "source": "portal",
+                    "status": "success",
+                    "accepted_at": f"2026-06-22T00:0{index}:00Z",
+                    "payload": {"ok": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+    (tmp_path / "999-active.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-active-after-scan-limit",
+                "request_id": "task-task-active-after-scan-limit",
+                "task_type": "adapter_action_task",
+                "source": "portal",
+                "status": "running",
+                "accepted_at": "2026-06-22T00:10:00Z",
+                "payload": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    assert tracker.load_persisted_records(max_records=2, max_scan_records=2, max_file_bytes=100_000) == 2
+    assert tracker.get("task-active-after-scan-limit") is None
+
+
+def test_runtime_task_tracker_load_order_uses_task_id_tie_breaker(tmp_path):
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    for filename, task_id in (("000-z.json", "task-z"), ("001-a.json", "task-a")):
+        (tmp_path / filename).write_text(
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "request_id": f"task-{task_id}",
+                    "task_type": "adapter_action_task",
+                    "source": "portal",
+                    "status": "running",
+                    "accepted_at": "2026-06-22T00:00:00Z",
+                    "payload": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path)
+    assert tracker.load_persisted_records(max_file_bytes=100_000) == 2
+    assert [record.task_id for record in tracker.list_active()] == ["task-a", "task-z"]
+
+
 def test_runtime_task_tracker_omits_large_payload_from_persistence(tmp_path):
     from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 
