@@ -842,6 +842,128 @@ def test_github_source_token_exchange_keeps_explicit_base_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_github_source_token_refreshes_before_expiry(monkeypatch):
+    now = [1_000_000]
+    requests = []
+    exchange_count = {"value": 0}
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        if request.get_method() == "GET":
+            exchange_count["value"] += 1
+            token = (
+                "copilot-token-{0};proxy-ep=https%3A%2F%2Fproxy.enterprise.githubcopilot.com"
+            ).format(exchange_count["value"])
+            return _FakeHTTPResponse({"token": token, "expires_at": now[0] + 1000})
+        return _FakeHTTPResponse(_responses_response("HTTP answer."))
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(provider_module.time, "time", lambda: now[0])
+
+    transport = GitHubCopilotHTTPTransport(token="gho_source123", timeout=12)
+    now[0] = transport.token_expires_at - 299
+
+    result = await transport.send(
+        {
+            "model": "gpt-5.4",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "ok"}]}],
+            "reasoning": {"effort": "high"},
+            "stream": False,
+        }
+    )
+
+    assert result == _responses_response("HTTP answer.")
+    assert exchange_count["value"] == 2
+    assert [request.get_method() for request, _ in requests] == ["GET", "GET", "POST"]
+    response_headers = _request_headers(requests[-1][0])
+    assert response_headers["authorization"].startswith("Bearer copilot-token-2;")
+
+
+@pytest.mark.asyncio
+async def test_github_source_token_stream_refreshes_before_expiry(monkeypatch):
+    now = [1_000_000]
+    requests = []
+    exchange_count = {"value": 0}
+    body = (
+        b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        if request.get_method() == "GET":
+            exchange_count["value"] += 1
+            token = (
+                "copilot-token-{0};proxy-ep=https%3A%2F%2Fproxy.enterprise.githubcopilot.com"
+            ).format(exchange_count["value"])
+            return _FakeHTTPResponse({"token": token, "expires_at": now[0] + 1000})
+        return _FakeStreamingHTTPResponse(body)
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(provider_module.time, "time", lambda: now[0])
+
+    transport = GitHubCopilotHTTPTransport(token="gho_source123", timeout=12)
+    now[0] = transport.token_expires_at - 299
+
+    stream = await transport.send({"model": "gpt-5.4", "stream": True})
+    chunks = [chunk async for chunk in stream]
+
+    assert chunks == [{"type": "response.output_text.delta", "delta": "hello"}]
+    assert exchange_count["value"] == 2
+    assert [request.get_method() for request, _ in requests] == ["GET", "GET", "POST"]
+    response_headers = _request_headers(requests[-1][0])
+    assert response_headers["authorization"].startswith("Bearer copilot-token-2;")
+    assert response_headers["accept"] == "text/event-stream"
+
+
+@pytest.mark.asyncio
+async def test_github_source_token_expired_401_refreshes_and_retries_once(monkeypatch):
+    requests = []
+    exchange_count = {"value": 0}
+    post_count = {"value": 0}
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        if request.get_method() == "GET":
+            exchange_count["value"] += 1
+            token = (
+                "copilot-token-{0};proxy-ep=https%3A%2F%2Fproxy.enterprise.githubcopilot.com"
+            ).format(exchange_count["value"])
+            return _FakeHTTPResponse({"token": token, "expires_at": 4_102_444_800})
+        post_count["value"] += 1
+        if post_count["value"] == 1:
+            raise urllib_error.HTTPError(
+                request.full_url,
+                401,
+                "Unauthorized",
+                hdrs=None,
+                fp=io.BytesIO(b'{"error":"token expired"}'),
+            )
+        return _FakeHTTPResponse(_responses_response("Recovered."))
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="gho_source123", timeout=12)
+    result = await transport.send(
+        {
+            "model": "gpt-5.4",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "ok"}]}],
+            "reasoning": {"effort": "high"},
+            "stream": False,
+        }
+    )
+
+    assert result == _responses_response("Recovered.")
+    assert exchange_count["value"] == 2
+    assert post_count["value"] == 2
+    assert [request.get_method() for request, _ in requests] == ["GET", "POST", "GET", "POST"]
+    first_post_headers = _request_headers(requests[1][0])
+    second_post_headers = _request_headers(requests[3][0])
+    assert first_post_headers["authorization"].startswith("Bearer copilot-token-1;")
+    assert second_post_headers["authorization"].startswith("Bearer copilot-token-2;")
+
+
+@pytest.mark.asyncio
 async def test_github_copilot_http_transport_stream_parses_sse_chunks(
     monkeypatch,
 ):

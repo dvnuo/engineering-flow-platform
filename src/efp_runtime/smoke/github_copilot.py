@@ -93,7 +93,7 @@ async def _run_loop(
         store=InMemorySessionStore(),
         provider=provider,
         tool_runtime=ToolRuntime(ToolRegistry()),
-        max_iterations=1,
+        max_iterations=2,
     )
     return await runner.run(
         session_id="github-copilot-smoke",
@@ -173,13 +173,11 @@ def _assistant_text(result: RuntimeLoopResult) -> str:
 
 def _dry_run_response() -> dict[str, Any]:
     return {
-        "choices": [
+        "output": [
             {
-                "message": {
-                    "role": "assistant",
-                    "content": "dry-run ok",
-                },
-                "finish_reason": "stop",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "dry-run ok"}],
             }
         ]
     }
