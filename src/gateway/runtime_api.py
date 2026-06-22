@@ -73,8 +73,10 @@ MAX_PORTAL_IDENTITY_LENGTH = 256
 RUNTIME_TASK_LOAD_MAX_RECORDS_DEFAULT = 256
 RUNTIME_TASK_SCAN_MAX_RECORDS_DEFAULT = 512
 RUNTIME_TASK_LOAD_MAX_FILE_BYTES_DEFAULT = 2_000_000
-RUNTIME_TASK_RESUME_MAX_ACTIVE_DEFAULT = 8
 RUNTIME_TASK_PERSIST_MAX_FILE_BYTES_DEFAULT = 2_000_000
+RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE = (
+    "Runtime restarted before task completion; automatic task replay is disabled"
+)
 TASK_STATUS_EVENT_TAIL_ITEMS = 10
 TASK_STATUS_MAX_TEXT_CHARS = 20_000
 TASK_STATUS_MAX_LIST_ITEMS = 50
@@ -2817,10 +2819,6 @@ def _runtime_task_persistence_limits() -> Dict[str, int]:
             "EFP_RUNTIME_TASKS_LOAD_MAX_FILE_BYTES",
             RUNTIME_TASK_LOAD_MAX_FILE_BYTES_DEFAULT,
         ),
-        "resume_max_active": _runtime_task_non_negative_env(
-            "EFP_RUNTIME_TASKS_RESUME_MAX_ACTIVE",
-            RUNTIME_TASK_RESUME_MAX_ACTIVE_DEFAULT,
-        ),
         "persist_max_file_bytes": _runtime_task_positive_env(
             "EFP_RUNTIME_TASKS_PERSIST_MAX_FILE_BYTES",
             RUNTIME_TASK_PERSIST_MAX_FILE_BYTES_DEFAULT,
@@ -2846,85 +2844,44 @@ async def resume_persisted_runtime_tasks() -> int:
         max_file_bytes=limits["load_max_file_bytes"],
     )
     rehydrated_waiting_count = _rehydrate_waiting_runtime_task_session_lanes()
-    resumed_count = 0
-    skipped_resume_count = 0
+    stale_active_count = 0
     for record in runtime_task_tracker.list_active():
         background_task = getattr(record, "background_task", None)
         if background_task is not None and not background_task.done():
             continue
-        if resumed_count >= limits["resume_max_active"]:
-            skipped_resume_count += 1
-            runtime_task_tracker.mark_stale(
-                record.task_id,
-                reason="Runtime task recovery resume limit exceeded",
-                payload={
-                    "ok": False,
-                    "task_id": record.task_id,
-                    "execution_type": "task",
-                    "request_id": record.request_id,
-                    "status": "stale",
-                    "trace_id": record.trace_id,
-                    "portal_dispatch_id": record.portal_dispatch_id,
-                    "error": "Runtime task recovery resume limit exceeded",
-                    "resume_max_active": limits["resume_max_active"],
-                },
-            )
-            continue
-        resumed_record = runtime_task_tracker.mark_resuming(record.task_id) or record
-        try:
-            scheduled = _schedule_runtime_task_record(resumed_record, resumed=True)
-        except Exception as exc:
-            sanitized_message = sanitize_exception_message(exc)
-            logger.error("Persisted runtime task resume failed | task_id=%s", record.task_id, exc_info=True)
-            failure_payload = {
+        stale_active_count += 1
+        runtime_task_tracker.mark_stale(
+            record.task_id,
+            reason=RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE,
+            payload={
                 "ok": False,
                 "task_id": record.task_id,
                 "execution_type": "task",
                 "request_id": record.request_id,
-                "status": "error",
+                "status": "stale",
+                "state_code": "runtime_restart_task_replay_disabled",
                 "trace_id": record.trace_id,
                 "portal_dispatch_id": record.portal_dispatch_id,
-                "error": sanitized_message,
-            }
-            current = runtime_task_tracker.get(record.task_id)
-            if current is not None:
-                failure_payload.update(_runtime_task_observability_fields(current))
-            runtime_task_tracker.mark_internal_failure(
-                record.task_id,
-                payload=failure_payload,
-                error_message=sanitized_message,
-            )
-            continue
-        if not scheduled:
-            continue
-        resumed_count += 1
-        await _emit_task_lifecycle_event(
-            "task.resumed",
-            task_id=record.task_id,
-            portal_task_id=record.portal_task_id,
-            agent_id=record.agent_id,
-            session_id=record.session_id,
-            trace_id=record.trace_id,
-            portal_dispatch_id=record.portal_dispatch_id,
+                "error": RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE,
+                "next_recommendation": "Re-dispatch the task if it is still required.",
+            },
         )
-    if loaded_count or resumed_count:
+    if loaded_count or stale_active_count:
         logger.info(
-            "Runtime task recovery initialized | storage_dir=%s loaded=%s resumed=%s "
-            "skipped_resume_limit=%s waiting_lanes=%s load_max_records=%s "
-            "scan_max_records=%s load_max_file_bytes=%s resume_max_active=%s "
+            "Runtime task recovery initialized | storage_dir=%s loaded=%s active_marked_stale=%s "
+            "waiting_lanes=%s load_max_records=%s "
+            "scan_max_records=%s load_max_file_bytes=%s "
             "persist_max_file_bytes=%s",
             storage_dir,
             loaded_count,
-            resumed_count,
-            skipped_resume_count,
+            stale_active_count,
             rehydrated_waiting_count,
             limits["load_max_records"],
             limits["scan_max_records"],
             limits["load_max_file_bytes"],
-            limits["resume_max_active"],
             limits["persist_max_file_bytes"],
         )
-    return resumed_count
+    return 0
 
 
 async def _resume_runtime_tasks_on_startup(_app: web.Application) -> None:
