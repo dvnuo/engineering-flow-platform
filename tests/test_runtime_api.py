@@ -3665,6 +3665,73 @@ async def test_api_tasks_execute_duplicate_conflicting_admission_returns_409(mon
 
 
 @pytest.mark.asyncio
+async def test_api_tasks_execute_restart_stale_matching_admission_redelivers(monkeypatch):
+    from src.gateway import runtime_api
+
+    runtime_api.runtime_task_tracker.reset()
+    release = asyncio.Event()
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        await release.wait()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"ok": True},
+                "artifacts": [],
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(runtime_api, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {
+                "task_id": "task-restart-stale-redelivery",
+                "task_type": "adapter_action_task",
+                "input_payload": {"action_id": "jira.transition"},
+            }
+
+    first_response = await runtime_api.api_tasks_execute(_Request())
+    await asyncio.sleep(0)
+    stale_record = runtime_api.runtime_task_tracker.mark_stale(
+        "task-restart-stale-redelivery",
+        reason=runtime_api.RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE,
+        payload={
+            "ok": False,
+            "task_id": "task-restart-stale-redelivery",
+            "execution_type": "task",
+            "request_id": "task-task-restart-stale-redelivery",
+            "status": "stale",
+            "state_code": "runtime_restart_task_replay_disabled",
+            "error": runtime_api.RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE,
+        },
+    )
+
+    second_response = await runtime_api.api_tasks_execute(_Request())
+    second_body = json.loads(second_response.body)
+
+    assert first_response.status == 202
+    assert stale_record is not None and stale_record.status == "stale"
+    assert second_response.status == 202
+    assert second_body["status"] == "accepted"
+    assert second_body["task_id"] == "task-restart-stale-redelivery"
+    assert len(spawned) == 2
+
+    release.set()
+    await asyncio.gather(*spawned)
+
+
+@pytest.mark.asyncio
 async def test_api_tasks_execute_generic_agent_task_uses_file_safe_task_session(monkeypatch):
     from src.gateway import runtime_api
 
@@ -3746,9 +3813,9 @@ async def test_resume_persisted_runtime_tasks_marks_active_record_stale_by_defau
     spawned = []
     monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
-    resumed = await runtime_api.resume_persisted_runtime_tasks()
+    stale_count = await runtime_api.resume_persisted_runtime_tasks()
 
-    assert resumed == 0
+    assert stale_count == 1
     assert spawned == []
 
     record = tracker.get("task-resume-1")
@@ -3756,7 +3823,7 @@ async def test_resume_persisted_runtime_tasks_marks_active_record_stale_by_defau
     assert record.status == "stale"
     assert record.resume_count == 0
     assert record.payload["state_code"] == "runtime_restart_task_replay_disabled"
-    assert record.payload["error"] == "Runtime restarted before task completion; automatic task replay is disabled"
+    assert record.payload["error"] == runtime_api.RUNTIME_TASK_RESTART_REPLAY_DISABLED_MESSAGE
 
 @pytest.mark.asyncio
 async def test_resume_persisted_runtime_tasks_marks_all_active_records_stale(tmp_path, monkeypatch):
@@ -3791,9 +3858,9 @@ async def test_resume_persisted_runtime_tasks_marks_all_active_records_stale(tmp
     spawned = []
     monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
-    resumed = await runtime_api.resume_persisted_runtime_tasks()
+    stale_count = await runtime_api.resume_persisted_runtime_tasks()
 
-    assert resumed == 0
+    assert stale_count == 2
     assert spawned == []
 
     statuses = {task_id: tracker.get(task_id).status for task_id in ("task-resume-limit-1", "task-resume-limit-2")}

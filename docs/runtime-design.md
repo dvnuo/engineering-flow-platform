@@ -132,9 +132,9 @@ agents persist sessions on the workspace mount.
 The gateway persists runtime task tracker records under
 `$EFP_WORKSPACE_DIR/.efp/runtime_tasks` by default. This lets a restarted native
 runtime reconcile accepted Portal tasks instead of leaving them permanently
-running in Portal. Startup reconciliation follows the upstream opencode safety
-boundary: completed and blocked task metadata can be reloaded, but an in-flight
-provider/tool activity is not automatically replayed after process loss.
+running in Portal. Startup reconciliation follows the upstream OpenCode safety
+boundary: completed and blocked task metadata can be reloaded, but in-flight
+provider/tool activity is never automatically replayed after process loss.
 
 Startup recovery is intentionally bounded:
 

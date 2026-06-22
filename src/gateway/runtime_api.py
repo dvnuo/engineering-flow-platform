@@ -1923,30 +1923,34 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
                     },
                     status=409,
                 )
-            if existing_record.status in {"accepted", "running"}:
-                try:
-                    _schedule_runtime_task_record(existing_record)
-                except Exception as exc:
-                    sanitized_message = sanitize_exception_message(exc)
-                    logger.error("Task execute duplicate scheduling failed | task_id=%s", parsed["task_id"], exc_info=True)
-                    logger.debug("Task execute duplicate scheduling error detail: %s", sanitized_message)
-                    failure_payload = {
-                        "ok": False,
-                        "task_id": parsed["task_id"],
-                        "execution_type": "task",
-                        "request_id": existing_record.request_id,
-                        "status": "error",
-                        "trace_id": existing_record.trace_id,
-                        "portal_dispatch_id": existing_record.portal_dispatch_id,
-                        "error": sanitized_message,
-                    }
-                    runtime_task_tracker.mark_internal_failure(
-                        parsed["task_id"],
-                        payload=failure_payload,
-                        error_message=sanitized_message,
-                    )
-                    return web.json_response(failure_payload, status=500)
-            return web.json_response(_runtime_task_status_payload(existing_record), status=200)
+            if _is_restart_stale_runtime_task_record(existing_record):
+                runtime_task_tracker.remove(parsed["task_id"])
+                existing_record = None
+            else:
+                if existing_record.status in {"accepted", "running"}:
+                    try:
+                        _schedule_runtime_task_record(existing_record)
+                    except Exception as exc:
+                        sanitized_message = sanitize_exception_message(exc)
+                        logger.error("Task execute duplicate scheduling failed | task_id=%s", parsed["task_id"], exc_info=True)
+                        logger.debug("Task execute duplicate scheduling error detail: %s", sanitized_message)
+                        failure_payload = {
+                            "ok": False,
+                            "task_id": parsed["task_id"],
+                            "execution_type": "task",
+                            "request_id": existing_record.request_id,
+                            "status": "error",
+                            "trace_id": existing_record.trace_id,
+                            "portal_dispatch_id": existing_record.portal_dispatch_id,
+                            "error": sanitized_message,
+                        }
+                        runtime_task_tracker.mark_internal_failure(
+                            parsed["task_id"],
+                            payload=failure_payload,
+                            error_message=sanitized_message,
+                        )
+                        return web.json_response(failure_payload, status=500)
+                return web.json_response(_runtime_task_status_payload(existing_record), status=200)
 
         record = runtime_task_tracker.create_pending(
             task_id=parsed["task_id"],
@@ -2148,6 +2152,15 @@ def _runtime_task_status_payload(record: Any) -> Dict[str, Any]:
             **_runtime_task_observability_fields(record),
         }
     return _compact_runtime_task_status_payload(_runtime_task_payload_with_observability(record))
+
+
+def _is_restart_stale_runtime_task_record(record: Any) -> bool:
+    payload = getattr(record, "payload", None)
+    return (
+        getattr(record, "status", None) == "stale"
+        and isinstance(payload, dict)
+        and payload.get("state_code") == "runtime_restart_task_replay_disabled"
+    )
 
 
 def _has_runtime_task_resume_payload(record: Any) -> bool:
@@ -2881,7 +2894,7 @@ async def resume_persisted_runtime_tasks() -> int:
             limits["load_max_file_bytes"],
             limits["persist_max_file_bytes"],
         )
-    return 0
+    return stale_active_count
 
 
 async def _resume_runtime_tasks_on_startup(_app: web.Application) -> None:
