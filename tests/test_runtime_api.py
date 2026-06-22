@@ -3726,11 +3726,11 @@ async def test_api_tasks_execute_restart_stale_matching_admission_redelivers(mon
     assert second_body["status"] == "accepted"
     assert second_body["task_id"] == "task-restart-stale-redelivery"
     assert len(spawned) == 2
-    await asyncio.sleep(0)
+    await asyncio.wait_for(asyncio.gather(spawned[0], return_exceptions=True), timeout=1)
     assert spawned[0].done()
 
     release.set()
-    await asyncio.gather(*spawned, return_exceptions=True)
+    await asyncio.gather(spawned[1], return_exceptions=True)
     assert runtime_api.runtime_task_tracker.get("task-restart-stale-redelivery").status == "success"
 
 
@@ -3812,7 +3812,6 @@ async def test_resume_persisted_runtime_tasks_marks_active_record_stale_by_defau
     tracker = RuntimeTaskTracker()
     monkeypatch.setattr(runtime_api, "runtime_task_tracker", tracker)
     monkeypatch.setenv("EFP_RUNTIME_TASKS_DIR", str(tmp_path))
-    monkeypatch.delenv("EFP_RUNTIME_TASKS_RESUME_MAX_ACTIVE", raising=False)
     spawned = []
     monkeypatch.setattr(runtime_api, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
