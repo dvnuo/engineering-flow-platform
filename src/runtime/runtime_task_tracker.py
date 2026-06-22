@@ -19,6 +19,30 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _json_dumps_compact(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _coerce_non_negative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, normalized)
+
+
 @dataclass
 class RuntimeTaskRecord:
     task_id: str
@@ -66,11 +90,18 @@ class RuntimeTaskTracker:
     the in-memory behavior, while the runtime server can opt in during startup.
     """
 
-    def __init__(self, *, max_records: int = 512, storage_dir: Optional[str | Path] = None):
+    def __init__(
+        self,
+        *,
+        max_records: int = 512,
+        storage_dir: Optional[str | Path] = None,
+        max_persisted_record_bytes: int | None = None,
+    ):
         self._records: "OrderedDict[str, RuntimeTaskRecord]" = OrderedDict()
         self._max_records = max(1, int(max_records))
         self._next_admitted_seq = 1
         self._storage_dir: Optional[Path] = None
+        self._max_persisted_record_bytes = _coerce_positive_int(max_persisted_record_bytes)
         self.configure_storage(storage_dir)
 
     @property
@@ -82,6 +113,9 @@ class RuntimeTaskTracker:
             self._storage_dir = None
             return
         self._storage_dir = Path(storage_dir).expanduser()
+
+    def configure_limits(self, *, max_persisted_record_bytes: int | None = None) -> None:
+        self._max_persisted_record_bytes = _coerce_positive_int(max_persisted_record_bytes)
 
     def create_pending(
         self,
@@ -372,19 +406,56 @@ class RuntimeTaskTracker:
         )
         return bool(record.input_hash and record.input_hash == expected)
 
-    def load_persisted_records(self) -> int:
+    def load_persisted_records(
+        self,
+        *,
+        max_records: int | None = None,
+        max_file_bytes: int | None = None,
+        max_scan_records: int | None = None,
+    ) -> int:
         if self._storage_dir is None or not self._storage_dir.exists():
             return 0
-        loaded: list[RuntimeTaskRecord] = []
+        record_limit = _coerce_non_negative_int(max_records)
+        if record_limit == 0:
+            return 0
+        file_size_limit = _coerce_non_negative_int(max_file_bytes)
+        scan_limit = _coerce_non_negative_int(max_scan_records)
+        if scan_limit is None and record_limit is not None:
+            scan_limit = record_limit * 2
+        active_records: list[RuntimeTaskRecord] = []
+        terminal_records: list[RuntimeTaskRecord] = []
+        scanned_count = 0
         for path in sorted(self._storage_dir.glob("*.json")):
+            if record_limit is not None and len(active_records) >= record_limit:
+                break
+            if scan_limit is not None and scanned_count >= scan_limit:
+                break
+            if file_size_limit is not None:
+                try:
+                    if path.stat().st_size > file_size_limit:
+                        continue
+                except OSError:
+                    continue
+            scanned_count += 1
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 record = _record_from_json(raw)
             except Exception:
                 continue
-            loaded.append(record)
+            if record.status in _TASK_TERMINAL_STATUSES:
+                if record_limit is None or len(active_records) + len(terminal_records) < record_limit:
+                    terminal_records.append(record)
+                continue
+            if record_limit is not None and len(active_records) >= record_limit:
+                continue
+            active_records.append(record)
+            while record_limit is not None and len(active_records) + len(terminal_records) > record_limit:
+                if not terminal_records:
+                    break
+                terminal_records.pop(0)
 
-        loaded.sort(key=lambda record: record.accepted_at or "")
+        loaded = active_records + terminal_records
+        loaded.sort(key=lambda record: (record.accepted_at or "", record.task_id))
         max_admitted_seq = max([record.admitted_seq for record in self._records.values()] or [0])
         for record in loaded:
             if record.admitted_seq <= 0:
@@ -431,10 +502,37 @@ class RuntimeTaskTracker:
             self._storage_dir.mkdir(parents=True, exist_ok=True)
             path = self._record_path(record.task_id)
             tmp_path = path.with_suffix(path.suffix + ".tmp")
-            tmp_path.write_text(json.dumps(_record_to_json(record), ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            encoded = self._encode_record_for_persistence(record)
+            if encoded is None:
+                tmp_path.unlink(missing_ok=True)
+                if record.status in _TASK_TERMINAL_STATUSES:
+                    self._delete_record_file(record.task_id)
+                return
+            tmp_path.write_text(encoded, encoding="utf-8")
             tmp_path.replace(path)
         except (OSError, TypeError, ValueError):
             return
+
+    def _encode_record_for_persistence(self, record: RuntimeTaskRecord) -> str | None:
+        record_payload = _record_to_json(record)
+        encoded = _json_dumps_compact(record_payload)
+        max_bytes = self._max_persisted_record_bytes
+        if max_bytes is None or len(encoded.encode("utf-8")) <= max_bytes:
+            return encoded
+        record_payload["payload"] = {
+            "ok": record.status == "success",
+            "status": record.status,
+            "payload_omitted_from_persistence": True,
+            "reason": "runtime_task_record_exceeded_persistence_limit",
+        }
+        encoded = _json_dumps_compact(record_payload)
+        if len(encoded.encode("utf-8")) <= max_bytes:
+            return encoded
+        minimal_record_payload = _minimal_record_for_persistence(record)
+        encoded = _json_dumps_compact(minimal_record_payload)
+        if len(encoded.encode("utf-8")) <= max_bytes:
+            return encoded
+        return None
 
     def _delete_record_file(self, task_id: str) -> None:
         if self._storage_dir is None:
@@ -617,6 +715,49 @@ def _record_to_json(record: RuntimeTaskRecord) -> Dict[str, Any]:
             "input_hash": record.input_hash,
             "task_session_id": record.task_session_id,
             "active_attempt_id": record.active_attempt_id,
+            "attempt_count": record.attempt_count,
+            "last_attempt_started_at": record.last_attempt_started_at,
+            "last_progress_at": record.last_progress_at,
+            "pending_permission_request": record.pending_permission_request,
+            "pending_question_request": record.pending_question_request,
+            "completion_source": record.completion_source,
+            "cancel_requested": record.cancel_requested,
+        }
+    )
+
+
+def _minimal_record_for_persistence(record: RuntimeTaskRecord) -> Dict[str, Any]:
+    return _json_safe(
+        {
+            "task_id": record.task_id,
+            "request_id": record.request_id,
+            "task_type": record.task_type,
+            "source": record.source,
+            "session_id": record.session_id,
+            "agent_id": record.agent_id,
+            "status": record.status,
+            "accepted_at": record.accepted_at,
+            "started_at": record.started_at,
+            "finished_at": record.finished_at,
+            "trace_id": record.trace_id,
+            "portal_dispatch_id": record.portal_dispatch_id,
+            "portal_task_id": record.portal_task_id,
+            "payload": {
+                "ok": record.status == "success",
+                "status": record.status,
+                "payload_omitted_from_persistence": True,
+                "record_minimized_from_persistence": True,
+                "reason": "runtime_task_record_exceeded_persistence_limit",
+            },
+            "error_message": record.error_message,
+            "resume_count": record.resume_count,
+            "last_resumed_at": record.last_resumed_at,
+            "admission_id": record.admission_id,
+            "admitted_seq": record.admitted_seq,
+            "admitted_at": record.admitted_at,
+            "input_delivery": record.input_delivery,
+            "input_hash": record.input_hash,
+            "task_session_id": record.task_session_id,
             "attempt_count": record.attempt_count,
             "last_attempt_started_at": record.last_attempt_started_at,
             "last_progress_at": record.last_progress_at,
