@@ -40,7 +40,7 @@ def _coerce_non_negative_int(value: Any) -> int | None:
         normalized = int(value)
     except (TypeError, ValueError):
         return None
-    return normalized if normalized >= 0 else None
+    return max(0, normalized)
 
 
 @dataclass

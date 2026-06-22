@@ -3251,7 +3251,19 @@ def test_runtime_task_tracker_load_limits_skip_oversized_and_excess_records(tmp_
             merged_input_payload={"task_type": "adapter_action_task", "action_id": "jira.transition"},
             metadata={"task_id": task_id},
         )
-    (tmp_path / "oversized.json").write_text(json.dumps({"task_id": "huge", "payload": "x" * 5000}), encoding="utf-8")
+    (tmp_path / "oversized.json").write_text(
+        json.dumps(
+            {
+                "task_id": "huge",
+                "request_id": "task-huge",
+                "task_type": "adapter_action_task",
+                "source": "portal",
+                "status": "running",
+                "payload": {"result": "x" * 5000},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     oversized_guard = RuntimeTaskTracker(storage_dir=tmp_path)
     assert oversized_guard.load_persisted_records(max_records=10, max_file_bytes=100) == 0
@@ -3259,6 +3271,12 @@ def test_runtime_task_tracker_load_limits_skip_oversized_and_excess_records(tmp_
     count_guard = RuntimeTaskTracker(storage_dir=tmp_path)
     assert count_guard.load_persisted_records(max_records=1, max_file_bytes=100_000) == 1
     assert len(count_guard.list_active()) == 1
+
+    negative_record_guard = RuntimeTaskTracker(storage_dir=tmp_path)
+    assert negative_record_guard.load_persisted_records(max_records=-1, max_file_bytes=100_000) == 0
+
+    negative_file_guard = RuntimeTaskTracker(storage_dir=tmp_path)
+    assert negative_file_guard.load_persisted_records(max_records=10, max_file_bytes=-1) == 0
 
 
 def test_runtime_task_tracker_load_limit_prioritizes_active_records(tmp_path):
