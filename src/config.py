@@ -296,6 +296,10 @@ class Config:
         "JENKINS_USERNAME",
         "JENKINS_PASSWORD",
     )
+    MOBILE_ENV_VARS = (
+        "BROWSERSTACK_USERNAME",
+        "BROWSERSTACK_ACCESS_KEY",
+    )
 
     PROJECT_EXAMPLE = Path(__file__).parent.parent / 'config.yaml.example'
     MANAGED_OVERLAY_SECTIONS = {
@@ -424,6 +428,7 @@ class Config:
             "revision": None,
         }
         self._managed_sections: List[str] = []
+        self._mobile_env_vars: set[str] = set()
         self._external_config_status: Dict[str, Any] = {
             "success": True,
             "error": None,
@@ -862,6 +867,8 @@ class Config:
                         self.apply_proxy()
                     if "jenkins" in changed_sections:
                         self.apply_jenkins_env()
+                    if "mobile" in changed_sections:
+                        self.apply_mobile_env()
                 return True
         except Exception:
             pass
@@ -1083,6 +1090,39 @@ class Config:
             os.environ["JENKINS_PASSWORD"] = password
         else:
             self._clear_jenkins_env()
+
+    @property
+    def mobile(self) -> Dict[str, Any]:
+        return self._config.get("mobile", {})
+
+    def _clear_mobile_env(self) -> None:
+        for var in set(self.MOBILE_ENV_VARS) | set(self._mobile_env_vars):
+            os.environ.pop(var, None)
+        self._mobile_env_vars = set()
+
+    def apply_mobile_env(self) -> None:
+        mobile_config = self.mobile
+        browserstack = (
+            mobile_config.get("browserstack")
+            if isinstance(mobile_config, dict) and isinstance(mobile_config.get("browserstack"), dict)
+            else {}
+        )
+        username = str(browserstack.get("username") or "").strip()
+        access_key = str(browserstack.get("access_key") or "").strip()
+        username_env = str(browserstack.get("username_env") or "BROWSERSTACK_USERNAME").strip()
+        access_key_env = str(browserstack.get("access_key_env") or "BROWSERSTACK_ACCESS_KEY").strip()
+
+        self._clear_mobile_env()
+        if not (isinstance(mobile_config, dict) and mobile_config.get("enabled") and isinstance(browserstack, dict)):
+            return
+        if username and username_env:
+            os.environ[username_env] = username
+            os.environ["BROWSERSTACK_USERNAME"] = username
+            self._mobile_env_vars.update({username_env, "BROWSERSTACK_USERNAME"})
+        if access_key and access_key_env:
+            os.environ[access_key_env] = access_key
+            os.environ["BROWSERSTACK_ACCESS_KEY"] = access_key
+            self._mobile_env_vars.update({access_key_env, "BROWSERSTACK_ACCESS_KEY"})
     
     @property
     def heartbeat(self) -> Dict[str, Any]:

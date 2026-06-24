@@ -651,6 +651,8 @@ def test_runtime_profile_apply_persists_mobile_config_and_encrypts_access_key(tm
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
     monkeypatch.setenv("EFP_CONFIG_KEY", "test-key")
+    monkeypatch.delenv("BROWSERSTACK_USERNAME", raising=False)
+    monkeypatch.delenv("BROWSERSTACK_ACCESS_KEY", raising=False)
 
     cfg = Config(str(config_path))
     updated = cfg.set_managed_overlay(
@@ -680,8 +682,56 @@ def test_runtime_profile_apply_persists_mobile_config_and_encrypts_access_key(tm
     effective = cfg.get_effective_config()
     assert effective["mobile"]["enabled"] is True
     assert effective["mobile"]["browserstack"]["access_key"] == "bs-access-key"
+    assert os.environ["BROWSERSTACK_USERNAME"] == "bs-user"
+    assert os.environ["BROWSERSTACK_ACCESS_KEY"] == "bs-access-key"
     assert "mobile" in updated
     assert cfg.get_managed_overlay_meta()["managed_sections"] == ["instruction_texts", "mobile"]
+
+
+def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    monkeypatch.setenv("EFP_CONFIG_KEY", "test-key")
+    for key in [
+        "BROWSERSTACK_USERNAME",
+        "BROWSERSTACK_ACCESS_KEY",
+        "CUSTOM_BS_USERNAME",
+        "CUSTOM_BS_ACCESS_KEY",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_mobile",
+        4,
+        {
+            "mobile": {
+                "enabled": True,
+                "default_provider": "browserstack",
+                "browserstack": {
+                    "username": "bs-user",
+                    "access_key": "bs-access-key",
+                    "username_env": "CUSTOM_BS_USERNAME",
+                    "access_key_env": "CUSTOM_BS_ACCESS_KEY",
+                },
+            }
+        },
+    )
+
+    assert os.environ["CUSTOM_BS_USERNAME"] == "bs-user"
+    assert os.environ["CUSTOM_BS_ACCESS_KEY"] == "bs-access-key"
+    assert os.environ["BROWSERSTACK_USERNAME"] == "bs-user"
+    assert os.environ["BROWSERSTACK_ACCESS_KEY"] == "bs-access-key"
+
+    cfg.set_managed_overlay("rp_mobile", 5, {"llm": {"provider": "openai"}})
+
+    for key in [
+        "BROWSERSTACK_USERNAME",
+        "BROWSERSTACK_ACCESS_KEY",
+        "CUSTOM_BS_USERNAME",
+        "CUSTOM_BS_ACCESS_KEY",
+    ]:
+        assert key not in os.environ
 
 
 def test_runtime_profile_clear_removes_managed_subtree_and_metadata(tmp_path):
