@@ -3,8 +3,13 @@ script discovers every `cmd/<tool>/main.go` in the adjacent, checked-out, or
 cloned `engineering-flow-platform-tools` repository and writes Linux amd64
 runtime binaries here by default.
 
-Current generated binaries include `jira`, `confluence`, and `browser`. Future
+Current generated binaries include `jira`, `confluence`, `browser`, and `mobile`. Future
 tools added under `cmd/<tool>` are prepared the same way.
+
+For private managed mobile sessions, CI may also stage the BrowserStack-provided
+`BrowserStackLocal` binary here by setting `BROWSERSTACK_LOCAL_SOURCE` or
+`BROWSERSTACK_LOCAL_BINARY` before running the prepare script. That binary is
+copied to `/usr/local/bin/BrowserStackLocal` by the runtime image build.
 
 The runtime image copies generated binaries into `/usr/local/bin` so agents can
 call them through the EFP `bash` built-in from the workspace. The final runtime

@@ -47,7 +47,8 @@ RUN apt-get update \
     && "$VIRTUAL_ENV/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/opt/venv/bin:/usr/local/bin:$PATH"
+ENV PATH="/opt/venv/bin:/usr/local/bin:$PATH" \
+    BROWSERSTACK_LOCAL_BINARY="/usr/local/bin/BrowserStackLocal"
 
 # Install Python dependencies into the virtual environment.
 COPY requirements.txt .
@@ -78,7 +79,10 @@ RUN set -eux; \
     && confluence schema page.create --json >/dev/null \
     && browser version --json >/dev/null \
     && browser commands --json >/dev/null \
-    && browser schema probe --json >/dev/null
+    && browser schema probe --json >/dev/null \
+    && mobile version --json >/dev/null \
+    && mobile commands --json >/dev/null \
+    && mobile schema run.start --json >/dev/null
 
 # Create the runtime workspace and external skills directories.
 RUN mkdir -p /app/skills /workspace

@@ -647,6 +647,43 @@ def test_runtime_profile_apply_encrypts_sensitive_fields_in_config_yaml(tmp_path
     assert cfg.jenkins.get("password") == "jenkins-secret"
 
 
+def test_runtime_profile_apply_persists_mobile_config_and_encrypts_access_key(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    monkeypatch.setenv("EFP_CONFIG_KEY", "test-key")
+
+    cfg = Config(str(config_path))
+    updated = cfg.set_managed_overlay(
+        "rp_mobile",
+        4,
+        {
+            "mobile": {
+                "enabled": True,
+                "default_provider": "browserstack",
+                "state_dir": "/workspace/.efp/mobile/runs",
+                "artifacts_dir": "/workspace/.efp/mobile/artifacts",
+                "defaults": {"platform": "android", "network_mode": "private-external"},
+                "browserstack": {
+                    "username": "bs-user",
+                    "access_key": "bs-access-key",
+                    "local": {"mode": "external", "binary": "/usr/local/bin/BrowserStackLocal"},
+                },
+            }
+        },
+    )
+
+    raw_content = config_path.read_text(encoding="utf-8")
+    assert "ENC:" in raw_content
+    assert "bs-access-key" not in raw_content
+
+    cfg.load()
+    effective = cfg.get_effective_config()
+    assert effective["mobile"]["enabled"] is True
+    assert effective["mobile"]["browserstack"]["access_key"] == "bs-access-key"
+    assert "mobile" in updated
+    assert cfg.get_managed_overlay_meta()["managed_sections"] == ["instruction_texts", "mobile"]
+
+
 def test_runtime_profile_clear_removes_managed_subtree_and_metadata(tmp_path):
     config_path = tmp_path / "config.yaml"
     runtime_profile_path = tmp_path / "runtime_profile.yaml"
@@ -1577,7 +1614,7 @@ def test_runtime_profile_external_cli_instructions_are_injected(tmp_path, monkey
     instructions = cfg.get_effective_config()["instruction_texts"]
     joined = "\n".join(instructions)
     assert "Use bash" in joined
-    assert "jira, confluence, gh, aws, jenkins, and git" in joined
+    assert "jira, confluence, gh, aws, jenkins, mobile, and git" in joined
     assert "always pass --json" in joined
     assert "commands/schema/help llm" in joined
     assert "--dry-run" in joined
