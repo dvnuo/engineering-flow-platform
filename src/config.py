@@ -95,20 +95,20 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
 RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
     (
         "Use bash for external CLI tools configured by the runtime profile: "
-        "jira, confluence, gh, aws, jenkins, mobile, and git."
+        "jira, confluence, gh, aws, jenkins, mobile-auto, and git."
     ),
     (
-        "For jira, confluence, jenkins, and mobile, always pass --json. Before complex commands, "
+        "For jira, confluence, jenkins, and mobile-auto, always pass --json. Before complex commands, "
         "inspect commands/schema/help llm; prefer --dry-run for writes, and use "
         "--yes only when a destructive action was explicitly confirmed."
     ),
     (
         "Use gh for GitHub issues, pull requests, and api calls; use aws for AWS operations; "
-        "use jenkins for Jenkins controller operations; use mobile for BrowserStack/Appium device automation; "
+        "use jenkins for Jenkins controller operations; use mobile-auto for BrowserStack/Appium device automation; "
         "use git for clone, fetch, push, and status."
     ),
     (
-        "For mobile automation, start with `mobile doctor --json` and `mobile auth test --json`. "
+        "For mobile automation, start with `mobile-auto doctor --json` and `mobile-auto auth test --json`. "
         "Use `private-external` with an existing BrowserStackLocal identifier, or `private-managed` only when "
         "the runtime image provides `/usr/local/bin/BrowserStackLocal`."
     ),
@@ -118,7 +118,7 @@ RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
     ),
     (
         "Credentials were applied by the runtime profile through real CLIs or environment variables; "
-        "if jira, confluence, jenkins, or mobile returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
+        "if jira, confluence, jenkins, or mobile-auto returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
         "report a runtime profile configuration problem."
     ),
 ]
@@ -204,7 +204,7 @@ def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, 
         _has_atlassian_profile_instances(overlay.get("jira"))
         or _has_atlassian_profile_instances(overlay.get("confluence"))
         or _has_jenkins_profile_credentials(overlay.get("jenkins"))
-        or _has_mobile_profile_config(overlay.get("mobile"))
+        or _has_mobile_profile_config(overlay.get("mobile-auto"))
         or _has_github_profile_token(overlay.get("github"))
         or _has_aws_profile_config(overlay.get("aws"))
         or _has_git_profile_user(overlay.get("git"))
@@ -310,7 +310,7 @@ class Config:
         "github",
         "aws",
         "jenkins",
-        "mobile",
+        "mobile-auto",
         "git",
         "debug",
         *PORTAL_MANAGED_RUNTIME_FIELDS,
@@ -375,7 +375,7 @@ class Config:
             "username": True,
             "password": True,
         },
-        "mobile": {
+        "mobile-auto": {
             "enabled": True,
             "default_provider": True,
             "state_dir": True,
@@ -867,7 +867,7 @@ class Config:
                         self.apply_proxy()
                     if "jenkins" in changed_sections:
                         self.apply_jenkins_env()
-                    if "mobile" in changed_sections:
+                    if "mobile-auto" in changed_sections:
                         self.apply_mobile_env()
                 return True
         except Exception:
@@ -1093,7 +1093,7 @@ class Config:
 
     @property
     def mobile(self) -> Dict[str, Any]:
-        return self._config.get("mobile", {})
+        return self._config.get("mobile-auto", {})
 
     def _clear_mobile_env(self) -> None:
         for var in set(self.MOBILE_ENV_VARS) | set(self._mobile_env_vars):

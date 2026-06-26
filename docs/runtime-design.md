@@ -77,7 +77,7 @@ The runtime image can also provide prebuilt `engineering-flow-platform-tools`
 CLI binaries on `PATH` under `/usr/local/bin`. `scripts/prepare-runtime-tools.sh`
 discovers every `cmd/<tool>/main.go` from that repository and writes generated
 binaries to `runtime-tools/` for Docker/CI to copy into the image. Current tools
-include `jira`, `confluence`, `browser`, and `mobile`; future `cmd/<tool>` binaries should
+include `jira`, `confluence`, `browser`, and `mobile-auto`; future `cmd/<tool>` binaries should
 enter the image the same way. Agents reach these CLIs by invoking the model-facing
 `bash` built-in in the workspace-full-access workspace. They should inspect
 `<tool> commands --json` and `<tool> schema <command> --json`, prefer JSON

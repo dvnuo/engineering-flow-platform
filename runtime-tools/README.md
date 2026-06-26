@@ -3,7 +3,7 @@ script discovers every `cmd/<tool>/main.go` in the adjacent, checked-out, or
 cloned `engineering-flow-platform-tools` repository and writes Linux amd64
 runtime binaries here by default.
 
-Current generated binaries include `jira`, `confluence`, `browser`, and `mobile`. Future
+Current generated binaries include `jira`, `confluence`, `browser`, and `mobile-auto`. Future
 tools added under `cmd/<tool>` are prepared the same way.
 
 For private managed mobile sessions, CI may also stage the BrowserStack-provided

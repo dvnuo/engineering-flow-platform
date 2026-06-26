@@ -64,9 +64,9 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
         "browser version --json",
         "browser commands --json",
         "browser schema probe --json",
-        "mobile version --json",
-        "mobile commands --json",
-        "mobile schema run.start --json",
+        "mobile-auto version --json",
+        "mobile-auto commands --json",
+        "mobile-auto schema run.start --json",
     ]:
         assert command in text
 
@@ -86,7 +86,7 @@ def test_prepare_runtime_tools_script_discovers_all_cmd_tools(tmp_path):
     script_path.chmod(script_path.stat().st_mode | stat.S_IXUSR)
 
     tools_repo = tmp_path / "engineering-flow-platform-tools"
-    for tool_name in ["jira", "confluence", "browser", "mobile"]:
+    for tool_name in ["jira", "confluence", "browser", "mobile-auto"]:
         command_dir = tools_repo / "cmd" / tool_name
         command_dir.mkdir(parents=True)
         (command_dir / "main.go").write_text("package main\nfunc main() {}\n", encoding="utf-8")
@@ -142,10 +142,10 @@ printf '#!/usr/bin/env bash\\necho "%s"\\n' "$tool" > "$out"
         text=True,
     )
 
-    assert "Discovered runtime tools: browser confluence jira mobile" in result.stderr
-    assert "Built runtime tools: browser confluence jira mobile" in result.stderr
+    assert "Discovered runtime tools: browser confluence jira mobile-auto" in result.stderr
+    assert "Built runtime tools: browser confluence jira mobile-auto" in result.stderr
     assert (runtime_tools / "README.md").read_text(encoding="utf-8") == "kept\n"
-    for tool_name in ["jira", "confluence", "browser", "mobile"]:
+    for tool_name in ["jira", "confluence", "browser", "mobile-auto"]:
         tool_path = runtime_tools / tool_name
         assert tool_path.exists()
         assert tool_path.stat().st_mode & 0o111
@@ -153,7 +153,7 @@ printf '#!/usr/bin/env bash\\necho "%s"\\n' "$tool" > "$out"
         "browser linux amd64 0",
         "confluence linux amd64 0",
         "jira linux amd64 0",
-        "mobile linux amd64 0",
+        "mobile-auto linux amd64 0",
     ]
 
 
@@ -182,7 +182,7 @@ def test_runtime_tools_gitignore_and_readme_cover_dynamic_binaries():
     assert "jira" in readme
     assert "confluence" in readme
     assert "browser" in readme
-    assert "mobile" in readme
+    assert "mobile-auto" in readme
     assert "BrowserStackLocal" in readme
 
 

@@ -659,11 +659,11 @@ def test_runtime_profile_apply_persists_mobile_config_and_encrypts_access_key(tm
         "rp_mobile",
         4,
         {
-            "mobile": {
+            "mobile-auto": {
                 "enabled": True,
                 "default_provider": "browserstack",
-                "state_dir": "/workspace/.efp/mobile/runs",
-                "artifacts_dir": "/workspace/.efp/mobile/artifacts",
+                "state_dir": "/workspace/.efp/mobile-auto/runs",
+                "artifacts_dir": "/workspace/.efp/mobile-auto/artifacts",
                 "defaults": {"platform": "android", "network_mode": "private-external"},
                 "browserstack": {
                     "username": "bs-user",
@@ -680,12 +680,12 @@ def test_runtime_profile_apply_persists_mobile_config_and_encrypts_access_key(tm
 
     cfg.load()
     effective = cfg.get_effective_config()
-    assert effective["mobile"]["enabled"] is True
-    assert effective["mobile"]["browserstack"]["access_key"] == "bs-access-key"
+    assert effective["mobile-auto"]["enabled"] is True
+    assert effective["mobile-auto"]["browserstack"]["access_key"] == "bs-access-key"
     assert os.environ["BROWSERSTACK_USERNAME"] == "bs-user"
     assert os.environ["BROWSERSTACK_ACCESS_KEY"] == "bs-access-key"
-    assert "mobile" in updated
-    assert cfg.get_managed_overlay_meta()["managed_sections"] == ["instruction_texts", "mobile"]
+    assert "mobile-auto" in updated
+    assert cfg.get_managed_overlay_meta()["managed_sections"] == ["instruction_texts", "mobile-auto"]
 
 
 def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(tmp_path, monkeypatch):
@@ -705,7 +705,7 @@ def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(t
         "rp_mobile",
         4,
         {
-            "mobile": {
+            "mobile-auto": {
                 "enabled": True,
                 "default_provider": "browserstack",
                 "browserstack": {
@@ -1664,7 +1664,7 @@ def test_runtime_profile_external_cli_instructions_are_injected(tmp_path, monkey
     instructions = cfg.get_effective_config()["instruction_texts"]
     joined = "\n".join(instructions)
     assert "Use bash" in joined
-    assert "jira, confluence, gh, aws, jenkins, mobile, and git" in joined
+    assert "jira, confluence, gh, aws, jenkins, mobile-auto, and git" in joined
     assert "always pass --json" in joined
     assert "commands/schema/help llm" in joined
     assert "--dry-run" in joined
