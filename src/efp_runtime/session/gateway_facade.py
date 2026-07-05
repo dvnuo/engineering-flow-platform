@@ -319,6 +319,43 @@ class RuntimeSessionManager:
             },
         )
 
+    async def mark_interrupted_running_sessions(self, *, reason: str = "runtime_restarted") -> int:
+        """Mark sessions still flagged ``running`` as interrupted.
+
+        Chat runs never survive a process restart, but ``mark_runtime_running``
+        persists ``running`` into session metadata. Without this sweep the chat
+        run status fallback keeps reporting a phantom running run forever and
+        reconnect flows poll indefinitely. Call once on gateway startup.
+        """
+        interrupted_count = 0
+        for session in self.store.list_sessions():
+            metadata = session.metadata if isinstance(session.metadata, dict) else {}
+            runtime_status = str(metadata.get("last_runtime_status") or "").strip().lower()
+            # Only "running" means a dead in-flight run. Blocked runs (for
+            # example permission/question requested) keep a stale
+            # latest_event_state of "running" but ARE resumable across
+            # restarts from persisted session state — never expire those.
+            if runtime_status != "running":
+                continue
+            if (
+                metadata.get("pending_permission_request") is not None
+                or metadata.get("pending_question_request") is not None
+            ):
+                continue
+            await self.merge_metadata(
+                session.session_id,
+                {
+                    "last_runtime_status": "interrupted",
+                    "last_runtime_updated_at": _now_iso(),
+                    "latest_event_type": "chat.failed",
+                    "latest_event_state": "error",
+                    "completion_state": "error",
+                    "last_interrupted_reason": reason,
+                },
+            )
+            interrupted_count += 1
+        return interrupted_count
+
     async def get_context_state(self, session_id: str) -> Optional[dict[str, Any]]:
         session = await self.get_session(session_id)
         context_state = session.get("metadata", {}).get("context_state")

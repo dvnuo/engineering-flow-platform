@@ -812,6 +812,36 @@ def _sse_event_bytes(event_name: str, payload: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _chat_sse_keepalive_interval_seconds() -> float:
+    """Idle interval between SSE keepalive comments on the chat stream.
+
+    Long tool executions produce no runtime events; without periodic bytes,
+    intermediaries with idle read timeouts (for example ingress-nginx's
+    default 60s proxy-read-timeout) silently kill the stream mid-run.
+    """
+    raw = str(os.getenv("EFP_CHAT_SSE_KEEPALIVE_SECONDS", "")).strip()
+    try:
+        value = float(raw) if raw else 15.0
+    except (TypeError, ValueError):
+        return 15.0
+    return max(1.0, value)
+
+
+async def _try_write_sse_keepalive(
+    response: web.StreamResponse,
+    *,
+    request_id: Optional[str] = None,
+) -> bool:
+    """Write an SSE comment line; SSE parsers ignore lines starting with ':'."""
+    try:
+        await response.write(b": keepalive\n\n")
+        return True
+    except (ConnectionResetError, RuntimeError):
+        if request_id:
+            chat_run_registry.mark_detached(request_id)
+        return False
+
+
 async def _try_write_sse_event(
     response: web.StreamResponse,
     event_name: str,
@@ -1159,6 +1189,24 @@ async def api_chat(request: web.Request) -> web.Response:
             request_id=request_id,
             session_id=session_id,
         )
+        if client_request_id:
+            # Idempotency guard: stream fallbacks may re-submit the same
+            # request_id after a transport break while the original run is
+            # still executing detached. Never execute the same request twice.
+            existing_run = chat_run_registry.get(client_request_id)
+            if existing_run is not None:
+                if existing_run.terminal and isinstance(existing_run.final_payload, dict):
+                    return web.json_response(existing_run.final_payload)
+                return web.json_response(
+                    {
+                        "error": "duplicate_chat_request_id",
+                        "message": "A chat run with this request_id already exists; reconnect to it instead of re-submitting.",
+                        "session_id": existing_run.session_id,
+                        "request_id": client_request_id,
+                        "state": existing_run.state,
+                    },
+                    status=409,
+                )
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
@@ -1671,6 +1719,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         )
         chat_run_registry.attach_task(request_id, run_task)
 
+        keepalive_interval = _chat_sse_keepalive_interval_seconds()
+        last_sse_write_monotonic = time.monotonic()
         while not run_task.done() or not event_queue.empty():
             try:
                 event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
@@ -1688,7 +1738,17 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                             event_payload,
                             request_id=request_id,
                         )
+                        last_sse_write_monotonic = time.monotonic()
             except asyncio.TimeoutError:
+                if (
+                    client_connected
+                    and time.monotonic() - last_sse_write_monotonic >= keepalive_interval
+                ):
+                    client_connected = await _try_write_sse_keepalive(
+                        response,
+                        request_id=request_id,
+                    )
+                    last_sse_write_monotonic = time.monotonic()
                 continue
 
         result = await run_task
@@ -2977,6 +3037,26 @@ async def _resume_runtime_tasks_on_startup(_app: web.Application) -> None:
     await resume_persisted_runtime_tasks()
 
 
+async def _sweep_interrupted_chat_sessions_on_startup(_app: web.Application) -> None:
+    """Chat runs do not survive restarts; expire their persisted running state.
+
+    Without this, the run-status fallback in ``_chat_run_status_from_session``
+    keeps reporting a phantom ``running`` run after a pod restart and Portal
+    reconnect flows poll forever.
+    """
+    try:
+        interrupted = await session_manager.mark_interrupted_running_sessions(
+            reason="runtime_restarted",
+        )
+        if interrupted:
+            logger.info(
+                "Marked %d interrupted running chat session(s) after restart",
+                interrupted,
+            )
+    except Exception:
+        logger.warning("Startup sweep of interrupted chat sessions failed", exc_info=True)
+
+
 def _parse_bool_query(value: Optional[str]) -> Optional[bool]:
     if value is None:
         return None
@@ -3345,6 +3425,8 @@ def setup_runtime_api_routes(app: web.Application):
 
     if not any(handler is _resume_runtime_tasks_on_startup for handler in app.on_startup):
         app.on_startup.append(_resume_runtime_tasks_on_startup)
+    if not any(handler is _sweep_interrupted_chat_sessions_on_startup for handler in app.on_startup):
+        app.on_startup.append(_sweep_interrupted_chat_sessions_on_startup)
 
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)

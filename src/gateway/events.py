@@ -17,7 +17,9 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
     GET /api/events
     Connects to the event bus and streams agent events to the client.
     """
-    ws = web.WebSocketResponse()
+    # Server-side ping keeps idle event streams alive through intermediaries
+    # with read timeouts (parity with the opencode adapter's event socket).
+    ws = web.WebSocketResponse(heartbeat=30)
     await ws.prepare(request)
 
     # Create a bounded queue for this connection; the bus drops the oldest
