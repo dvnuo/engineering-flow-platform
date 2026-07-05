@@ -19,9 +19,10 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
     """
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-    
-    # Create a queue for this connection
-    queue = asyncio.Queue()
+
+    # Create a bounded queue for this connection; the bus drops the oldest
+    # event when a viewer stops draining (e.g. half-open connection).
+    queue = asyncio.Queue(maxsize=200)
 
     query = request.rel_url.query
     filter_keys = ("session_id", "task_id", "group_id", "coordination_run_id", "agent_id", "request_id")

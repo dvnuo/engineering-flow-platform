@@ -134,6 +134,23 @@ async def test_event_bus_request_id_filter_does_not_match_parent_request_id():
 
 
 @pytest.mark.asyncio
+async def test_event_bus_drops_oldest_event_when_listener_queue_is_full():
+    bus = EventBus()
+    queue = asyncio.Queue(maxsize=2)
+    await bus.add_listener(queue)
+
+    await bus.emit("task.progress", {"session_id": "s1", "step": 1})
+    await bus.emit("task.progress", {"session_id": "s1", "step": 2})
+    await bus.emit("task.progress", {"session_id": "s1", "step": 3})
+
+    first = json.loads(queue.get_nowait())
+    second = json.loads(queue.get_nowait())
+    assert first["data"]["step"] == 2
+    assert second["data"]["step"] == 3
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_event_bus_replay_returns_recent_matching_session_and_request_events():
     bus = EventBus()
 

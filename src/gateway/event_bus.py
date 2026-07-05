@@ -110,10 +110,20 @@ class EventBus:
         for listener in listeners:
             if not self._event_matches_filters(event_type, data, listener.filters):
                 continue
-            try:
-                listener.queue.put_nowait(event)
-            except Exception as e:
-                logger.error(f"Error sending event to listener: {e}")
+            self._offer(listener.queue, event)
+
+    @staticmethod
+    def _offer(queue: asyncio.Queue, event: str) -> None:
+        """Enqueue without blocking; drop the oldest event when the viewer is not draining."""
+        try:
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            queue.put_nowait(event)
+        except Exception as e:
+            logger.error(f"Error sending event to listener: {e}")
 
     def emit_sync(self, event_type: str, data: Dict[str, Any]):
         """Synchronous emit for use in callbacks.
@@ -131,11 +141,7 @@ class EventBus:
         for listener in listeners:
             if not self._event_matches_filters(event_type, data, listener.filters):
                 continue
-            try:
-                listener.queue.put_nowait(event)
-                logger.info("[EventBus] Event sent to listener")
-            except Exception as e:
-                logger.error(f"[EventBus] Error: {e}")
+            self._offer(listener.queue, event)
 
     async def replay_events(
         self,

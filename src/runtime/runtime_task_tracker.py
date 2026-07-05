@@ -9,7 +9,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 _TASK_TERMINAL_STATUSES = {"success", "error", "blocked", "cancelled", "stale"}
@@ -81,6 +81,10 @@ class RuntimeTaskRecord:
     completion_source: Optional[str] = None
     cancel_requested: bool = False
     background_task: Optional[asyncio.Task[Any]] = None
+    # True when the in-memory payload was compacted after the full terminal
+    # payload was persisted; guards the persisted full payload from being
+    # overwritten by the compacted copy.
+    payload_compacted: bool = False
 
 
 class RuntimeTaskTracker:
@@ -102,6 +106,7 @@ class RuntimeTaskTracker:
         self._next_admitted_seq = 1
         self._storage_dir: Optional[Path] = None
         self._max_persisted_record_bytes = _coerce_positive_int(max_persisted_record_bytes)
+        self._compact_terminal_payload: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
         self.configure_storage(storage_dir)
 
     @property
@@ -116,6 +121,43 @@ class RuntimeTaskTracker:
 
     def configure_limits(self, *, max_persisted_record_bytes: int | None = None) -> None:
         self._max_persisted_record_bytes = _coerce_positive_int(max_persisted_record_bytes)
+
+    def configure_compaction(
+        self,
+        compact_terminal_payload: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]],
+    ) -> None:
+        """Install a compactor applied to in-memory terminal payloads.
+
+        Only active when persistence is configured: the full payload is written
+        to disk first and stays available via ``read_persisted_payload``, so
+        memory does not need to retain full event streams for up to
+        ``max_records`` terminal tasks.
+        """
+        self._compact_terminal_payload = compact_terminal_payload
+
+    def _compact_record_payload_in_memory(self, record: RuntimeTaskRecord) -> None:
+        if self._compact_terminal_payload is None or self._storage_dir is None:
+            return
+        try:
+            compacted = self._compact_terminal_payload(dict(record.payload))
+        except Exception:
+            return
+        if isinstance(compacted, dict):
+            record.payload = compacted
+            record.payload_compacted = True
+
+    def read_persisted_payload(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Return the full persisted payload for a task, if available on disk."""
+        if self._storage_dir is None:
+            return None
+        try:
+            raw = json.loads(self._record_path(task_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        payload = raw.get("payload") if isinstance(raw, dict) else None
+        if not isinstance(payload, dict) or payload.get("payload_omitted_from_persistence"):
+            return None
+        return payload
 
     def create_pending(
         self,
@@ -239,6 +281,7 @@ class RuntimeTaskTracker:
             record.completion_source = completion_source
         _apply_observation_from_payload(record, payload)
         self._persist_record(record)
+        self._compact_record_payload_in_memory(record)
         self.prune()
         return record
 
@@ -275,10 +318,12 @@ class RuntimeTaskTracker:
         record.finished_at = _utc_now_iso()
         record.error_message = reason
         record.payload = dict(payload or {"ok": False, "task_id": task_id, "execution_type": "task", "request_id": record.request_id, "status": "cancelled", "error": reason})
+        record.payload_compacted = False
         record.cancel_requested = True
         record.active_attempt_id = None
         record.completion_source = "cancel"
         self._persist_record(record)
+        self._compact_record_payload_in_memory(record)
         return record
 
     def mark_stale(self, task_id: str, *, reason: str = "Task stale", payload: Optional[Dict[str, Any]] = None) -> Optional[RuntimeTaskRecord]:
@@ -368,6 +413,7 @@ class RuntimeTaskTracker:
         record.finished_at = None
         record.error_message = None
         record.payload = {}
+        record.payload_compacted = False
         record.active_attempt_id = None
         record.background_task = None
         record.cancel_requested = False
@@ -468,6 +514,8 @@ class RuntimeTaskTracker:
             existing = self._records.get(record.task_id)
             if existing is not None and existing.background_task is not None and not existing.background_task.done():
                 continue
+            if record.status in _TASK_TERMINAL_STATUSES:
+                self._compact_record_payload_in_memory(record)
             self._records[record.task_id] = record
             self._records.move_to_end(record.task_id)
         self.prune()
@@ -497,6 +545,10 @@ class RuntimeTaskTracker:
 
     def _persist_record(self, record: RuntimeTaskRecord) -> None:
         if self._storage_dir is None:
+            return
+        if record.payload_compacted:
+            # The persisted file still holds the full terminal payload; do not
+            # overwrite it with the compacted in-memory copy.
             return
         try:
             self._storage_dir.mkdir(parents=True, exist_ok=True)
