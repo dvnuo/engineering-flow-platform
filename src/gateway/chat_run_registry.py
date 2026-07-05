@@ -4,15 +4,47 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 
 TERMINAL_STATES = {"completed", "failed", "cancelled"}
+RETAINED_EVENT_LIST_KEYS = ("events", "runtime_events", "thinking_events")
+RETAINED_EVENT_TAIL_ITEMS = 100
+DEFAULT_STALE_RUNNING_SECONDS = 6 * 3600
 
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    """Parse an ISO timestamp ('Z' or offset suffix); None when unparseable."""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def compact_final_payload(payload: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Drop full event streams from a retained terminal payload.
+
+    Live viewers already received the complete stream over SSE. The registry
+    only serves late reconnects, and the chat UI merges at most the last 100
+    events from a final payload, so retaining the full per-delta event list
+    for up to ``max_records`` runs only accumulates memory.
+    """
+    compact = dict(payload or {})
+    for key in RETAINED_EVENT_LIST_KEYS:
+        value = compact.get(key)
+        if isinstance(value, list) and len(value) > RETAINED_EVENT_TAIL_ITEMS:
+            compact[key] = value[-RETAINED_EVENT_TAIL_ITEMS:]
+            compact[f"{key}_count"] = len(value)
+            compact[f"{key}_truncated"] = True
+    return compact
 
 
 @dataclass
@@ -55,9 +87,15 @@ class ChatRunRecord:
 
 
 class ChatRunRegistry:
-    def __init__(self, *, max_records: int = 512) -> None:
+    def __init__(
+        self,
+        *,
+        max_records: int = 512,
+        stale_running_seconds: float = DEFAULT_STALE_RUNNING_SECONDS,
+    ) -> None:
         self._records: Dict[str, ChatRunRecord] = {}
         self._max_records = max_records
+        self._stale_running_seconds = max(0.0, float(stale_running_seconds))
 
     def start(self, *, session_id: str, request_id: str, engine: str = "native") -> ChatRunRecord:
         existing = self.get(request_id, session_id=session_id)
@@ -65,8 +103,36 @@ class ChatRunRegistry:
             return existing
         record = ChatRunRecord(request_id=request_id, session_id=session_id, engine=engine)
         self._records[request_id] = record
+        self._fail_stale_running_records()
         self._prune_terminal_records()
         return record
+
+    def _fail_stale_running_records(self) -> None:
+        """Mark long-inactive non-terminal records failed so they become prunable.
+
+        A record left in ``running`` this long means the producing run died
+        before ``complete()``/``fail()`` (for example the request handler was
+        cancelled by a client disconnect); otherwise ``record_event`` would
+        have refreshed ``updated_at``.
+        """
+        if self._stale_running_seconds <= 0:
+            return
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=self._stale_running_seconds)
+        for record in self._records.values():
+            if record.terminal:
+                continue
+            updated_at = _parse_iso_timestamp(record.updated_at)
+            if updated_at is None or updated_at >= cutoff:
+                continue
+            record.state = "failed"
+            record.error_payload = {
+                "error": "chat_run_stale",
+                "detail": "No run activity before the stale timeout; a terminal outcome was never recorded.",
+                "session_id": record.session_id,
+                "request_id": record.request_id,
+            }
+            record.updated_at = utc_now_iso()
+            record.task = None
 
     def _prune_terminal_records(self) -> None:
         if len(self._records) <= self._max_records:
@@ -117,8 +183,9 @@ class ChatRunRegistry:
         if record is None:
             return
         record.state = "completed"
-        record.final_payload = dict(final_payload or {})
+        record.final_payload = compact_final_payload(final_payload)
         record.updated_at = utc_now_iso()
+        record.task = None
 
     def fail(self, request_id: str, error_payload: Dict[str, Any]) -> None:
         record = self.get(request_id)
@@ -127,8 +194,9 @@ class ChatRunRegistry:
         if record.state == "cancelled":
             return
         record.state = "failed"
-        record.error_payload = dict(error_payload or {})
+        record.error_payload = compact_final_payload(error_payload)
         record.updated_at = utc_now_iso()
+        record.task = None
 
     def cancel(self, request_id: str) -> bool:
         record = self.get(request_id)
@@ -136,8 +204,10 @@ class ChatRunRegistry:
             return False
         record.state = "cancelled"
         record.updated_at = utc_now_iso()
-        if record.task is not None and not record.task.done():
-            record.task.cancel()
+        task = record.task
+        record.task = None
+        if task is not None and not task.done():
+            task.cancel()
         return True
 
 

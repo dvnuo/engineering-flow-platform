@@ -157,8 +157,12 @@ def _compact_runtime_task_status_payload(payload: Dict[str, Any]) -> Dict[str, A
     return compact
 
 
-def _runtime_task_payload_with_observability(record: Any) -> Dict[str, Any]:
-    payload = dict(record.payload)
+def _runtime_task_payload_with_observability(
+    record: Any,
+    *,
+    payload_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = dict(payload_override if isinstance(payload_override, dict) else record.payload)
     payload["accepted_at"] = record.accepted_at
     payload["started_at"] = record.started_at
     payload["finished_at"] = record.finished_at
@@ -1451,6 +1455,42 @@ async def api_chat(request: web.Request) -> web.Response:
             clear_log_context()
 
 
+def _finalize_chat_run_record(task: asyncio.Task, *, request_id: str, session_id: str) -> None:
+    """Record a terminal registry outcome for a chat run whose handler died.
+
+    Without this, a record left in ``running`` is never prunable and its
+    payload/task references stay in memory until process restart.
+    """
+    record = chat_run_registry.get(request_id)
+    if record is None or record.terminal:
+        return
+    if task.cancelled():
+        chat_run_registry.fail(
+            request_id,
+            {"error": "chat_run_cancelled", "session_id": session_id, "request_id": request_id},
+        )
+        return
+    exc = task.exception()
+    if exc is not None:
+        chat_run_registry.fail(
+            request_id,
+            {
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "session_id": session_id,
+                "request_id": request_id,
+            },
+        )
+        return
+    result_value = task.result()
+    outcome = build_runtime_response_payload(
+        result_value if isinstance(result_value, dict) else None,
+        session_id,
+    )
+    outcome.setdefault("request_id", request_id)
+    chat_run_registry.complete(request_id, outcome)
+
+
 async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     """Handle streaming chat API requests (Server-Sent Events).
 
@@ -1730,6 +1770,29 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     except ValueError as e:
         response = web.json_response({'error': str(e)}, status=400)
         return response
+    except asyncio.CancelledError:
+        # Client disconnected: the run continues detached for refresh recovery,
+        # but this handler can no longer record the terminal outcome inline.
+        # Defer it to the run task so the registry record cannot stay
+        # "running" (and therefore unprunable) forever.
+        if request_id and session_id and run_task is not None:
+            finalize_session_id = session_id
+            finalize_request_id = request_id
+            if run_task.done():
+                _finalize_chat_run_record(
+                    run_task,
+                    request_id=finalize_request_id,
+                    session_id=finalize_session_id,
+                )
+            else:
+                run_task.add_done_callback(
+                    lambda task: _finalize_chat_run_record(
+                        task,
+                        request_id=finalize_request_id,
+                        session_id=finalize_session_id,
+                    )
+                )
+        raise
     except web.HTTPException:
         raise
     except Exception as e:
@@ -2565,8 +2628,11 @@ async def api_task_status_full(request: web.Request) -> web.Response:
         if record is None:
             return web.json_response({"error": "Task not found"}, status=404)
         filename = _safe_task_result_filename(task_id)
+        # The in-memory terminal payload may be compacted; the persisted record
+        # keeps the full payload for this download endpoint.
+        persisted_payload = runtime_task_tracker.read_persisted_payload(task_id)
         return web.json_response(
-            _runtime_task_payload_with_observability(record),
+            _runtime_task_payload_with_observability(record, payload_override=persisted_payload),
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     finally:
@@ -2849,6 +2915,7 @@ def _runtime_task_persistence_limits() -> Dict[str, int]:
 
 
 async def resume_persisted_runtime_tasks() -> int:
+    runtime_task_tracker.configure_compaction(_compact_runtime_task_status_payload)
     storage_dir = _runtime_task_persistence_storage_dir()
     if storage_dir is None:
         runtime_task_tracker.configure_storage(None)
