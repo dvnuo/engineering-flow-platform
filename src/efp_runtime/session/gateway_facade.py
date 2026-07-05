@@ -331,8 +331,16 @@ class RuntimeSessionManager:
         for session in self.store.list_sessions():
             metadata = session.metadata if isinstance(session.metadata, dict) else {}
             runtime_status = str(metadata.get("last_runtime_status") or "").strip().lower()
-            event_state = str(metadata.get("latest_event_state") or "").strip().lower()
-            if runtime_status != "running" and event_state != "running":
+            # Only "running" means a dead in-flight run. Blocked runs (for
+            # example permission/question requested) keep a stale
+            # latest_event_state of "running" but ARE resumable across
+            # restarts from persisted session state — never expire those.
+            if runtime_status != "running":
+                continue
+            if (
+                metadata.get("pending_permission_request") is not None
+                or metadata.get("pending_question_request") is not None
+            ):
                 continue
             await self.merge_metadata(
                 session.session_id,

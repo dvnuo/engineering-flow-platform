@@ -128,6 +128,27 @@ async def test_mark_interrupted_running_sessions_expires_stale_running_state(tmp
 
     manager.store.create_session(session_id="s-plain")
 
+    # Blocked runs waiting for a user response keep latest_event_state
+    # "running" but are resumable across restarts; they must not be expired.
+    manager.store.create_session(session_id="s-blocked-permission")
+    await manager.mark_runtime_running("s-blocked-permission", request_id="req-blocked")
+    await manager.merge_metadata(
+        "s-blocked-permission",
+        {
+            "last_runtime_status": "permission_requested",
+            "pending_permission_request": {"tool_name": "bash", "call_id": "call-1"},
+        },
+    )
+
+    # Defensive: even an inconsistent "running" status with a pending user
+    # request must not be expired (responding to it resumes the run).
+    manager.store.create_session(session_id="s-running-with-question")
+    await manager.mark_runtime_running("s-running-with-question", request_id="req-question")
+    await manager.merge_metadata(
+        "s-running-with-question",
+        {"pending_question_request": {"question": "Proceed?", "call_id": "call-2"}},
+    )
+
     interrupted = await manager.mark_interrupted_running_sessions(reason="runtime_restarted")
     assert interrupted == 1
 
@@ -140,6 +161,17 @@ async def test_mark_interrupted_running_sessions_expires_stale_running_state(tmp
 
     completed_session = await manager.get_session("s-completed")
     assert completed_session["metadata"]["last_runtime_status"] == "success"
+
+    blocked_session = await manager.get_session("s-blocked-permission")
+    blocked_metadata = blocked_session["metadata"]
+    assert blocked_metadata["last_runtime_status"] == "permission_requested"
+    assert blocked_metadata["pending_permission_request"]["call_id"] == "call-1"
+    assert blocked_metadata.get("last_interrupted_reason") is None
+
+    question_session = await manager.get_session("s-running-with-question")
+    question_metadata = question_session["metadata"]
+    assert question_metadata["last_runtime_status"] == "running"
+    assert question_metadata.get("last_interrupted_reason") is None
 
     # Idempotent: second sweep finds nothing to mark.
     assert await manager.mark_interrupted_running_sessions() == 0
