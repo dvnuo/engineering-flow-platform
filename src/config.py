@@ -95,21 +95,30 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
 RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
     (
         "Use bash for external CLI tools configured by the runtime profile: "
-        "jira, confluence, gh, aws, jenkins, and git."
+        "jira, confluence, gh, aws, jenkins, mobile-auto, and git."
     ),
     (
-        "For jira, confluence, and jenkins, always pass --json. Before complex commands, "
+        "For jira, confluence, jenkins, and mobile-auto, always pass --json. Before complex commands, "
         "inspect commands/schema/help llm; prefer --dry-run for writes, and use "
         "--yes only when a destructive action was explicitly confirmed."
     ),
-    "Use gh for GitHub issues, pull requests, and api calls; use aws for AWS operations; use jenkins for Jenkins controller operations; use git for clone, fetch, push, and status.",
+    (
+        "Use gh for GitHub issues, pull requests, and api calls; use aws for AWS operations; "
+        "use jenkins for Jenkins controller operations; use mobile-auto for BrowserStack/Appium device automation; "
+        "use git for clone, fetch, push, and status."
+    ),
+    (
+        "For mobile automation, start with `mobile-auto doctor --json` and `mobile-auto auth test --json`. "
+        "Use `private-external` with an existing BrowserStackLocal identifier, or `private-managed` only when "
+        "the runtime image provides `/usr/local/bin/BrowserStackLocal`."
+    ),
     (
         "Jenkins runtime profile credentials are available as EFP_JENKINS_USERNAME and EFP_JENKINS_PASSWORD. "
         "When the user provides a Jenkins controller URL or pipeline/job, configure or log in to that controller at that time and pass the password through stdin."
     ),
     (
         "Credentials were applied by the runtime profile through real CLIs or environment variables; "
-        "if jira, confluence, or jenkins returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
+        "if jira, confluence, jenkins, or mobile-auto returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
         "report a runtime profile configuration problem."
     ),
 ]
@@ -195,6 +204,7 @@ def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, 
         _has_atlassian_profile_instances(overlay.get("jira"))
         or _has_atlassian_profile_instances(overlay.get("confluence"))
         or _has_jenkins_profile_credentials(overlay.get("jenkins"))
+        or _has_mobile_profile_config(overlay.get("mobile-auto"))
         or _has_github_profile_token(overlay.get("github"))
         or _has_aws_profile_config(overlay.get("aws"))
         or _has_git_profile_user(overlay.get("git"))
@@ -238,6 +248,19 @@ def _has_jenkins_profile_credentials(section: Any) -> bool:
     return bool(username and password)
 
 
+def _has_mobile_profile_config(section: Any) -> bool:
+    if not isinstance(section, dict) or section.get("enabled") is False:
+        return False
+    browserstack = section.get("browserstack")
+    if not isinstance(browserstack, dict):
+        return False
+    return bool(
+        str(browserstack.get("username") or browserstack.get("username_env") or "").strip()
+        or str(browserstack.get("access_key") or browserstack.get("access_key_env") or "").strip()
+        or str(browserstack.get("api_base_url") or browserstack.get("appium_base_url") or "").strip()
+    )
+
+
 def _has_git_profile_user(section: Any) -> bool:
     user = section.get("user") if isinstance(section, dict) else None
     if not isinstance(user, dict):
@@ -273,6 +296,10 @@ class Config:
         "JENKINS_USERNAME",
         "JENKINS_PASSWORD",
     )
+    MOBILE_ENV_VARS = (
+        "BROWSERSTACK_USERNAME",
+        "BROWSERSTACK_ACCESS_KEY",
+    )
 
     PROJECT_EXAMPLE = Path(__file__).parent.parent / 'config.yaml.example'
     MANAGED_OVERLAY_SECTIONS = {
@@ -283,6 +310,7 @@ class Config:
         "github",
         "aws",
         "jenkins",
+        "mobile-auto",
         "git",
         "debug",
         *PORTAL_MANAGED_RUNTIME_FIELDS,
@@ -347,6 +375,33 @@ class Config:
             "username": True,
             "password": True,
         },
+        "mobile-auto": {
+            "enabled": True,
+            "default_provider": True,
+            "state_dir": True,
+            "artifacts_dir": True,
+            "retention_hours": True,
+            "defaults": {
+                "platform": True,
+                "network_mode": True,
+                "idle_timeout_seconds": True,
+                "new_command_timeout_seconds": True,
+                "interactive_debugging": True,
+                "video": True,
+            },
+            "browserstack": {
+                "api_base_url": True,
+                "appium_base_url": True,
+                "username_env": True,
+                "access_key_env": True,
+                "username": True,
+                "access_key": True,
+                "verify_ssl": True,
+                "ca_cert": True,
+                "http_proxy": True,
+                "local": True,
+            },
+        },
         "git": {
             "user": {
                 "name": True,
@@ -373,6 +428,7 @@ class Config:
             "revision": None,
         }
         self._managed_sections: List[str] = []
+        self._mobile_env_vars: set[str] = set()
         self._external_config_status: Dict[str, Any] = {
             "success": True,
             "error": None,
@@ -740,7 +796,7 @@ class Config:
                 "Ensure EFP_CONFIG_KEY is correct and the configuration file contains valid encrypted values."
             ) from e
     
-    SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "access_token", "secret"}
+    SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "access_token", "access_key", "secret"}
     
     def _encrypt_sensitive_fields(self, obj: Any, path: tuple[str, ...] = ()) -> None:
         """Recursively encrypt sensitive fields in config."""
@@ -811,6 +867,8 @@ class Config:
                         self.apply_proxy()
                     if "jenkins" in changed_sections:
                         self.apply_jenkins_env()
+                    if "mobile-auto" in changed_sections:
+                        self.apply_mobile_env()
                 return True
         except Exception:
             pass
@@ -1032,6 +1090,39 @@ class Config:
             os.environ["JENKINS_PASSWORD"] = password
         else:
             self._clear_jenkins_env()
+
+    @property
+    def mobile(self) -> Dict[str, Any]:
+        return self._config.get("mobile-auto", {})
+
+    def _clear_mobile_env(self) -> None:
+        for var in set(self.MOBILE_ENV_VARS) | set(self._mobile_env_vars):
+            os.environ.pop(var, None)
+        self._mobile_env_vars = set()
+
+    def apply_mobile_env(self) -> None:
+        mobile_config = self.mobile
+        browserstack = (
+            mobile_config.get("browserstack")
+            if isinstance(mobile_config, dict) and isinstance(mobile_config.get("browserstack"), dict)
+            else {}
+        )
+        username = str(browserstack.get("username") or "").strip()
+        access_key = str(browserstack.get("access_key") or "").strip()
+        username_env = str(browserstack.get("username_env") or "BROWSERSTACK_USERNAME").strip()
+        access_key_env = str(browserstack.get("access_key_env") or "BROWSERSTACK_ACCESS_KEY").strip()
+
+        self._clear_mobile_env()
+        if not (isinstance(mobile_config, dict) and mobile_config.get("enabled") and isinstance(browserstack, dict)):
+            return
+        if username and username_env:
+            os.environ[username_env] = username
+            os.environ["BROWSERSTACK_USERNAME"] = username
+            self._mobile_env_vars.update({username_env, "BROWSERSTACK_USERNAME"})
+        if access_key and access_key_env:
+            os.environ[access_key_env] = access_key
+            os.environ["BROWSERSTACK_ACCESS_KEY"] = access_key
+            self._mobile_env_vars.update({access_key_env, "BROWSERSTACK_ACCESS_KEY"})
     
     @property
     def heartbeat(self) -> Dict[str, Any]:

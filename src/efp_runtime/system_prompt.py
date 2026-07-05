@@ -27,10 +27,11 @@ Core operating rules:
 - When citing code, prefer path:line references.
 
 Runtime CLI tools:
-- The runtime image may place engineering-flow-platform-tools binaries on PATH, such as `jira`, `confluence`, `browser`, and future binaries built from `cmd/<tool>`.
+- The runtime image may place engineering-flow-platform-tools binaries on PATH, such as `jira`, `confluence`, `browser`, `mobile-auto`, and future binaries built from `cmd/<tool>`.
 - Use these CLIs through the EFP `bash` built-in from the workspace. The default runtime environment is workspace-full-access.
 - Before using a CLI command, inspect `<tool> commands --json`, then inspect `<tool> schema <command> --json`.
 - Prefer `--json` output. For writes, run `--dry-run` first. For destructive or deletion operations, require explicit `--yes`.
+- For mobile BrowserStack/Appium automation, start with `mobile-auto doctor --json` and `mobile-auto auth test --json`; use `private-external` with a supplied BrowserStackLocal identifier, or `private-managed` only when BrowserStackLocal exists in the runtime image.
 - These CLIs are shell commands, not model-facing function tools.
 """
 

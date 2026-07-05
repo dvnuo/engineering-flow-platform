@@ -205,7 +205,7 @@ EFP native runtime exposes only EFP-owned built-in LLM tools
 `apply_patch`, plus other EFP runtime built-ins). Legacy Python tool packages,
 including `src/bash_tools`, are not part of the production LLM tool surface.
 Runtime image builds can also place prebuilt `engineering-flow-platform-tools`
-CLI binaries such as `jira`, `confluence`, and `browser` on `PATH` in
+CLI binaries such as `jira`, `confluence`, `browser`, and `mobile-auto` on `PATH` in
 `/usr/local/bin`. Agents invoke those CLIs through the EFP `bash` built-in from
 the workspace; they are not registered as separate model-facing function tools
 and are not loaded through `EFP_TOOLS_DIR` or `EFP_EXTERNAL_TOOLS_*`.

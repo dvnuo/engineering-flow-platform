@@ -9,6 +9,7 @@ TOOLS_REPO_DIR=""
 TARGET_GOOS="${GOOS:-linux}"
 TARGET_GOARCH="${GOARCH:-amd64}"
 TARGET_CGO_ENABLED="${CGO_ENABLED:-0}"
+BROWSERSTACK_LOCAL_SOURCE="${BROWSERSTACK_LOCAL_SOURCE:-${BROWSERSTACK_LOCAL_BINARY:-}}"
 
 log() {
   printf '[prepare-runtime-tools] %s\n' "$*" >&2
@@ -51,6 +52,20 @@ resolve_tools_repo_dir() {
   TOOLS_REPO_DIR="$TEMP_DIR/engineering-flow-platform-tools"
 }
 
+stage_browserstack_local() {
+  local source="$BROWSERSTACK_LOCAL_SOURCE"
+  if [[ -z "$source" ]]; then
+    log "BrowserStackLocal source not set; private-managed mobile runs require staging runtime-tools/BrowserStackLocal separately"
+    return
+  fi
+  if [[ "$source" != /* ]]; then
+    source="$ROOT/$source"
+  fi
+  [[ -f "$source" ]] || die "BrowserStackLocal source does not exist: $source"
+  install -m 0755 "$source" "$OUTPUT_DIR/BrowserStackLocal"
+  log "Staged BrowserStackLocal binary from $source"
+}
+
 command -v go >/dev/null 2>&1 || die "go is required to build runtime tools"
 mkdir -p "$OUTPUT_DIR"
 
@@ -89,5 +104,6 @@ for tool_name in "${tool_names[@]}"; do
 done
 
 chmod 0755 "${built_outputs[@]}"
+stage_browserstack_local
 log "Built runtime tools: ${tool_names[*]}"
 log "Prepared runtime tool binaries in $OUTPUT_DIR"
