@@ -1199,7 +1199,7 @@ async def api_chat(request: web.Request) -> web.Response:
                     return web.json_response(existing_run.final_payload)
                 return web.json_response(
                     {
-                        "error": "chat_run_already_active",
+                        "error": "duplicate_chat_request_id",
                         "message": "A chat run with this request_id already exists; reconnect to it instead of re-submitting.",
                         "session_id": existing_run.session_id,
                         "request_id": client_request_id,

@@ -185,7 +185,7 @@ async def test_api_chat_conflicts_on_active_duplicate_request_id(monkeypatch):
         runtime_api.chat_run_registry._records.pop(request_id, None)
 
     assert response.status == 409
-    assert b"chat_run_already_active" in response.body
+    assert b"duplicate_chat_request_id" in response.body
 
 
 @pytest.mark.asyncio
