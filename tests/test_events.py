@@ -10,9 +10,10 @@ events = load_module_from_repo_path("src.gateway.events", "src/gateway/events.py
 
 
 class _FakeWS:
-    def __init__(self):
+    def __init__(self, heartbeat=None):
         self.closed = False
         self.sent = []
+        self.heartbeat = heartbeat
 
     async def prepare(self, request):
         return self
