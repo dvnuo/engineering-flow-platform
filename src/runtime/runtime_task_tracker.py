@@ -280,8 +280,11 @@ class RuntimeTaskTracker:
         if completion_source:
             record.completion_source = completion_source
         _apply_observation_from_payload(record, payload)
-        self._persist_record(record)
-        self._compact_record_payload_in_memory(record)
+        # Compact the in-memory copy only when disk holds the full payload;
+        # otherwise (size limit, write failure) memory keeps the only full
+        # copy so /api/tasks/{id}/full stays lossless while the process lives.
+        if self._persist_record(record):
+            self._compact_record_payload_in_memory(record)
         self.prune()
         return record
 
@@ -322,8 +325,8 @@ class RuntimeTaskTracker:
         record.cancel_requested = True
         record.active_attempt_id = None
         record.completion_source = "cancel"
-        self._persist_record(record)
-        self._compact_record_payload_in_memory(record)
+        if self._persist_record(record):
+            self._compact_record_payload_in_memory(record)
         return record
 
     def mark_stale(self, task_id: str, *, reason: str = "Task stale", payload: Optional[Dict[str, Any]] = None) -> Optional[RuntimeTaskRecord]:
@@ -543,34 +546,41 @@ class RuntimeTaskTracker:
                 except OSError:
                     pass
 
-    def _persist_record(self, record: RuntimeTaskRecord) -> None:
+    def _persist_record(self, record: RuntimeTaskRecord) -> bool:
+        """Persist the record; return True only when the full payload was written.
+
+        Callers use the return value to decide whether the in-memory payload
+        may be compacted: when persistence omitted or dropped the payload
+        (size limit, write failure), memory holds the only full copy.
+        """
         if self._storage_dir is None:
-            return
+            return False
         if record.payload_compacted:
             # The persisted file still holds the full terminal payload; do not
             # overwrite it with the compacted in-memory copy.
-            return
+            return False
         try:
             self._storage_dir.mkdir(parents=True, exist_ok=True)
             path = self._record_path(record.task_id)
             tmp_path = path.with_suffix(path.suffix + ".tmp")
-            encoded = self._encode_record_for_persistence(record)
+            encoded, full_payload_included = self._encode_record_for_persistence(record)
             if encoded is None:
                 tmp_path.unlink(missing_ok=True)
                 if record.status in _TASK_TERMINAL_STATUSES:
                     self._delete_record_file(record.task_id)
-                return
+                return False
             tmp_path.write_text(encoded, encoding="utf-8")
             tmp_path.replace(path)
+            return full_payload_included
         except (OSError, TypeError, ValueError):
-            return
+            return False
 
-    def _encode_record_for_persistence(self, record: RuntimeTaskRecord) -> str | None:
+    def _encode_record_for_persistence(self, record: RuntimeTaskRecord) -> tuple[str | None, bool]:
         record_payload = _record_to_json(record)
         encoded = _json_dumps_compact(record_payload)
         max_bytes = self._max_persisted_record_bytes
         if max_bytes is None or len(encoded.encode("utf-8")) <= max_bytes:
-            return encoded
+            return encoded, True
         record_payload["payload"] = {
             "ok": record.status == "success",
             "status": record.status,
@@ -579,12 +589,12 @@ class RuntimeTaskTracker:
         }
         encoded = _json_dumps_compact(record_payload)
         if len(encoded.encode("utf-8")) <= max_bytes:
-            return encoded
+            return encoded, False
         minimal_record_payload = _minimal_record_for_persistence(record)
         encoded = _json_dumps_compact(minimal_record_payload)
         if len(encoded.encode("utf-8")) <= max_bytes:
-            return encoded
-        return None
+            return encoded, False
+        return None, False
 
     def _delete_record_file(self, task_id: str) -> None:
         if self._storage_dir is None:

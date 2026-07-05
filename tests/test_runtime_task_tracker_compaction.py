@@ -95,6 +95,22 @@ def test_load_persisted_records_compacts_terminal_payloads_in_memory(tmp_path):
     assert len(reader.read_persisted_payload("t1")["runtime_events"]) == 50
 
 
+def test_oversized_payload_keeps_full_copy_in_memory(tmp_path):
+    tracker = RuntimeTaskTracker(storage_dir=tmp_path, max_persisted_record_bytes=500)
+    tracker.configure_compaction(_compact)
+    _create_pending(tracker)
+    tracker.mark_running("t1")
+
+    tracker.mark_terminal("t1", status="success", payload=_terminal_payload())
+
+    record = tracker.get("t1")
+    # Persistence omitted the payload (size limit), so memory holds the only
+    # full copy and must not be compacted.
+    assert record.payload_compacted is False
+    assert len(record.payload["runtime_events"]) == 50
+    assert tracker.read_persisted_payload("t1") is None
+
+
 def test_force_cancel_after_compaction_persists_new_terminal_payload(tmp_path):
     tracker = RuntimeTaskTracker(storage_dir=tmp_path)
     tracker.configure_compaction(_compact)

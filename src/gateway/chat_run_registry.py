@@ -18,6 +18,17 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    """Parse an ISO timestamp ('Z' or offset suffix); None when unparseable."""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def compact_final_payload(payload: Dict[str, Any] | None) -> Dict[str, Any]:
     """Drop full event streams from a retained terminal payload.
 
@@ -106,11 +117,12 @@ class ChatRunRegistry:
         """
         if self._stale_running_seconds <= 0:
             return
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(seconds=self._stale_running_seconds)
-        ).isoformat().replace("+00:00", "Z")
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=self._stale_running_seconds)
         for record in self._records.values():
-            if record.terminal or record.updated_at >= cutoff:
+            if record.terminal:
+                continue
+            updated_at = _parse_iso_timestamp(record.updated_at)
+            if updated_at is None or updated_at >= cutoff:
                 continue
             record.state = "failed"
             record.error_payload = {
