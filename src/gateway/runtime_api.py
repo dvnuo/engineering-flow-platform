@@ -1193,7 +1193,11 @@ async def api_chat(request: web.Request) -> web.Response:
             # Idempotency guard: stream fallbacks may re-submit the same
             # request_id after a transport break while the original run is
             # still executing detached. Never execute the same request twice.
-            existing_run = chat_run_registry.get(client_request_id)
+            # Scope by the client-provided session id (the resolved session id
+            # generates fresh defaults) so a request_id reused across sessions
+            # can never replay another session's payload.
+            raw_session_id = str(data.get("session_id") or "").strip()
+            existing_run = chat_run_registry.get(client_request_id, session_id=raw_session_id or None)
             if existing_run is not None:
                 if existing_run.terminal and isinstance(existing_run.final_payload, dict):
                     return web.json_response(existing_run.final_payload)
@@ -1307,6 +1311,9 @@ async def api_chat(request: web.Request) -> web.Response:
         # Run EFP runtime; session_manager remains the gateway-side history mirror.
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         set_log_context(agent_id=runtime_agent_id)
+        # Register the run so the request_id idempotency guard covers
+        # non-stream retries and /api/chat/runs/{id} can report this run.
+        chat_run_registry.start(session_id=session_id, request_id=request_id, engine="native")
         await session_manager.mark_runtime_running(session_id, request_id=request_id)
         if runtime_agent_id and session_id:
             try:
@@ -1369,8 +1376,10 @@ async def api_chat(request: web.Request) -> web.Response:
             result if isinstance(result, dict) else None,
             session_id,
         )
+        response_data.setdefault("request_id", request_id)
+        chat_run_registry.complete(request_id, response_data)
         usage = response_data.get("usage", {}) or {}
-        
+
         # Record usage if available
         if usage:
             provider = global_config.llm.get('provider') or 'github_copilot'
@@ -1439,6 +1448,15 @@ async def api_chat(request: web.Request) -> web.Response:
         return web.json_response({'error': 'Invalid JSON'}, status=400)
     except ValueError as e:
         return web.json_response({'error': str(e)}, status=400)
+    except asyncio.CancelledError:
+        # Non-stream execution is inline: handler cancellation kills the run,
+        # so the registry record must not stay "running".
+        if request_id:
+            chat_run_registry.fail(
+                request_id,
+                {"error": "chat_run_cancelled", "session_id": session_id, "request_id": request_id},
+            )
+        raise
     except web.HTTPException:
         raise
     except Exception as e:
@@ -1494,6 +1512,7 @@ async def api_chat(request: web.Request) -> web.Response:
             error_response['session_id'] = session_id
         if request_id:
             error_response['request_id'] = request_id
+            chat_run_registry.fail(request_id, error_response)
         return web.json_response(error_response, status=status_code)
     finally:
         try:

@@ -201,6 +201,79 @@ async def test_chat_run_status_reports_interrupted_session_as_terminal(monkeypat
     assert payload["terminal"] is True
 
 
+def _patch_nonstream_harness(monkeypatch, fake_run, tmp_path):
+    monkeypatch.setattr(runtime_api, "_run_chat_via_execution_bus", fake_run)
+    monkeypatch.setattr(runtime_api, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(
+        runtime_api.global_config,
+        "_config",
+        {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}},
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
+    monkeypatch.setattr(runtime_api.session_manager, "mark_runtime_running", lambda *_a, **_k: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "save_session", lambda **_k: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(runtime_api.runtime_session_artifacts, "storage_dir", str(tmp_path), raising=False)
+
+
+@pytest.mark.asyncio
+async def test_api_chat_registers_run_and_replays_completed_duplicate(monkeypatch, tmp_path):
+    request_id = "portal-chat-full-idem-1"
+    session_id = "s-chat-full-idem"
+    runtime_api.chat_run_registry._records.pop(request_id, None)
+    calls = []
+
+    async def _fake_run(**kwargs):
+        calls.append(kwargs)
+        return {"response": "fresh answer", "usage": {}}
+
+    _patch_nonstream_harness(monkeypatch, _fake_run, tmp_path)
+    payload = {"message": "hello", "session_id": session_id, "client_request_id": request_id}
+    try:
+        first = await runtime_api.api_chat(_PortalRequest(dict(payload)))
+        record = runtime_api.chat_run_registry.get(request_id)
+        assert record is not None
+        assert record.state == "completed"
+        second = await runtime_api.api_chat(_PortalRequest(dict(payload)))
+    finally:
+        runtime_api.chat_run_registry._records.pop(request_id, None)
+
+    assert first.status == 200
+    assert second.status == 200
+    # The duplicate is replayed from the registry, never executed again.
+    assert len(calls) == 1
+    assert b"fresh answer" in second.body
+
+
+@pytest.mark.asyncio
+async def test_api_chat_duplicate_request_id_in_other_session_executes_fresh(monkeypatch, tmp_path):
+    request_id = "portal-chat-cross-session-1"
+    runtime_api.chat_run_registry._records.pop(request_id, None)
+    runtime_api.chat_run_registry.start(session_id="s-other", request_id=request_id)
+    runtime_api.chat_run_registry.complete(
+        request_id,
+        {"response": "other session answer", "session_id": "s-other", "request_id": request_id},
+    )
+
+    async def _fake_run(**kwargs):
+        return {"response": "fresh in this session", "usage": {}}
+
+    _patch_nonstream_harness(monkeypatch, _fake_run, tmp_path)
+    try:
+        resp = await runtime_api.api_chat(
+            _PortalRequest({"message": "hi", "session_id": "s-mine", "client_request_id": request_id})
+        )
+    finally:
+        runtime_api.chat_run_registry._records.pop(request_id, None)
+
+    # A request_id reused in a different session is a different logical
+    # request: it must execute fresh, never replay another session's payload.
+    assert resp.status == 200
+    assert b"other session answer" not in resp.body
+    assert b"fresh in this session" in resp.body
+
+
 @pytest.mark.asyncio
 async def test_api_chat_conflicts_on_active_duplicate_request_id(monkeypatch):
     request_id = "portal-chat-dedupe-req-1"
