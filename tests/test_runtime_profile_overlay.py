@@ -653,6 +653,7 @@ def test_runtime_profile_apply_persists_mobile_config_and_encrypts_access_key(tm
     monkeypatch.setenv("EFP_CONFIG_KEY", "test-key")
     monkeypatch.delenv("BROWSERSTACK_USERNAME", raising=False)
     monkeypatch.delenv("BROWSERSTACK_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BROWSERSTACK_LOCAL_BINARY", raising=False)
 
     cfg = Config(str(config_path))
     updated = cfg.set_managed_overlay(
@@ -684,8 +685,57 @@ def test_runtime_profile_apply_persists_mobile_config_and_encrypts_access_key(tm
     assert effective["mobile-auto"]["browserstack"]["access_key"] == "bs-access-key"
     assert os.environ["BROWSERSTACK_USERNAME"] == "bs-user"
     assert os.environ["BROWSERSTACK_ACCESS_KEY"] == "bs-access-key"
+    # An explicit profile local.binary is exposed verbatim for the mobile-auto CLI.
+    assert os.environ["BROWSERSTACK_LOCAL_BINARY"] == "/usr/local/bin/BrowserStackLocal"
     assert "mobile-auto" in updated
     assert cfg.get_managed_overlay_meta()["managed_sections"] == ["instruction_texts", "mobile-auto"]
+
+
+def test_apply_mobile_env_sets_local_binary_from_default_or_leaves_path_fallback(monkeypatch):
+    monkeypatch.delenv("BROWSERSTACK_LOCAL_BINARY", raising=False)
+    cfg = Config.__new__(Config)
+    cfg._config = {}
+    cfg._mobile_env_vars = set()
+    enabled_bs = {
+        "mobile-auto": {
+            "enabled": True,
+            "browserstack": {"username": "u", "access_key": "k"},
+        }
+    }
+
+    # No explicit local.binary, bundled default present -> default is exposed.
+    monkeypatch.setattr(
+        "src.config.os.path.exists",
+        lambda p: p == Config.DEFAULT_BROWSERSTACK_LOCAL_BINARY_PATH,
+    )
+    cfg._config = enabled_bs
+    cfg.apply_mobile_env()
+    assert os.environ["BROWSERSTACK_LOCAL_BINARY"] == Config.DEFAULT_BROWSERSTACK_LOCAL_BINARY_PATH
+
+    # Bundled default missing -> env is left unset so mobile-auto's PATH lookup
+    # of "BrowserStackLocal" stays in effect instead of pinning a phantom path.
+    monkeypatch.setattr("src.config.os.path.exists", lambda p: False)
+    cfg.apply_mobile_env()
+    assert "BROWSERSTACK_LOCAL_BINARY" not in os.environ
+
+    # Explicit profile path is honored even when it does not exist on disk.
+    cfg._config = {
+        "mobile-auto": {
+            "enabled": True,
+            "browserstack": {
+                "username": "u",
+                "access_key": "k",
+                "local": {"binary": "/opt/custom/BrowserStackLocal"},
+            },
+        }
+    }
+    cfg.apply_mobile_env()
+    assert os.environ["BROWSERSTACK_LOCAL_BINARY"] == "/opt/custom/BrowserStackLocal"
+
+    # Disabling mobile-auto clears the managed binary env var.
+    cfg._config = {"mobile-auto": {"enabled": False}}
+    cfg.apply_mobile_env()
+    assert "BROWSERSTACK_LOCAL_BINARY" not in os.environ
 
 
 def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(tmp_path, monkeypatch):
@@ -695,6 +745,7 @@ def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(t
     for key in [
         "BROWSERSTACK_USERNAME",
         "BROWSERSTACK_ACCESS_KEY",
+        "BROWSERSTACK_LOCAL_BINARY",
         "CUSTOM_BS_USERNAME",
         "CUSTOM_BS_ACCESS_KEY",
     ]:
@@ -728,6 +779,7 @@ def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(t
     for key in [
         "BROWSERSTACK_USERNAME",
         "BROWSERSTACK_ACCESS_KEY",
+        "BROWSERSTACK_LOCAL_BINARY",
         "CUSTOM_BS_USERNAME",
         "CUSTOM_BS_ACCESS_KEY",
     ]:
