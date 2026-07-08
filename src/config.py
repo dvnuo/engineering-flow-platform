@@ -300,6 +300,11 @@ class Config:
         "BROWSERSTACK_USERNAME",
         "BROWSERSTACK_ACCESS_KEY",
     )
+    # Where the runtime image installs the BrowserStack Local binary (matches
+    # the opencode runtime's bundled path). Used as the default so mobile-auto
+    # resolves BROWSERSTACK_LOCAL_BINARY directly instead of relying on a bare
+    # PATH lookup of "BrowserStackLocal".
+    DEFAULT_BROWSERSTACK_LOCAL_BINARY_PATH = "/usr/local/bin/BrowserStackLocal"
 
     PROJECT_EXAMPLE = Path(__file__).parent.parent / 'config.yaml.example'
     MANAGED_OVERLAY_SECTIONS = {
@@ -1123,6 +1128,21 @@ class Config:
             os.environ[access_key_env] = access_key
             os.environ["BROWSERSTACK_ACCESS_KEY"] = access_key
             self._mobile_env_vars.update({access_key_env, "BROWSERSTACK_ACCESS_KEY"})
+
+        # Expose the BrowserStack Local binary path so the mobile-auto CLI
+        # resolves it directly (parity with the opencode runtime, which sets
+        # BROWSERSTACK_LOCAL_BINARY from the bundled path). Honor an explicit
+        # profile-configured path unconditionally; otherwise fall back to the
+        # bundled default only when it actually exists, so a missing binary
+        # leaves mobile-auto's PATH lookup of "BrowserStackLocal" intact
+        # instead of pinning BROWSERSTACK_LOCAL_BINARY at a phantom path.
+        local = browserstack.get("local") if isinstance(browserstack.get("local"), dict) else {}
+        binary_path = str(local.get("binary") or "").strip() if isinstance(local, dict) else ""
+        if not binary_path and os.path.exists(self.DEFAULT_BROWSERSTACK_LOCAL_BINARY_PATH):
+            binary_path = self.DEFAULT_BROWSERSTACK_LOCAL_BINARY_PATH
+        if binary_path:
+            os.environ["BROWSERSTACK_LOCAL_BINARY"] = binary_path
+            self._mobile_env_vars.add("BROWSERSTACK_LOCAL_BINARY")
     
     @property
     def heartbeat(self) -> Dict[str, Any]:
