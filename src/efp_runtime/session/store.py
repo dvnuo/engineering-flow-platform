@@ -74,6 +74,14 @@ class InMemorySessionStore:
             )
             return deepcopy(sessions)
 
+    def list_session_summaries(self) -> list:
+        # Parity with FileSessionStore so the gateway facade works against
+        # either backend. In-memory sessions are cheap, so no caching is needed.
+        from .file_store import build_session_summary
+
+        with self._lock:
+            return [build_session_summary(session) for session in self._sessions.values()]
+
     def delete_session(self, session_id: str) -> bool:
         with self._lock:
             if session_id not in self._sessions:

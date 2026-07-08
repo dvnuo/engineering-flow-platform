@@ -132,6 +132,22 @@ def test_resolve_runtime_session_id_avoids_same_second_collisions_without_client
     assert runtime_api._resolve_runtime_session_id({"session_id": ""}).startswith("runtime_api_")
 
 
+def _fake_summary(session_id):
+    from src.efp_runtime.session.file_store import SessionSummary
+
+    return SessionSummary(
+        session_id=session_id,
+        title=session_id,
+        custom_name=None,
+        created_at="2026-06-21T00:00:00Z",
+        updated_at="2026-06-21T00:00:00Z",
+        message_count=1,
+        user_message_count=1,
+        first_user_preview=f"hello from {session_id}",
+        last_preview=f"hello from {session_id}",
+    )
+
+
 @pytest.mark.asyncio
 async def test_api_sessions_hides_task_sessions_by_default(monkeypatch):
     from src.gateway import runtime_api
@@ -142,20 +158,13 @@ async def test_api_sessions_hides_task_sessions_by_default(monkeypatch):
         async def initialize(self):
             raise AssertionError("already initialized")
 
-        async def list_sessions(self):
+        async def list_session_summaries(self):
             return [
-                "agent-task-task-1",
-                "generic-task-task-2",
-                "delegation-rule-1-event-1",
-                "s-human",
+                _fake_summary("agent-task-task-1"),
+                _fake_summary("generic-task-task-2"),
+                _fake_summary("delegation-rule-1-event-1"),
+                _fake_summary("s-human"),
             ]
-
-        async def get_session_info(self, session_id):
-            return {
-                "title": session_id,
-                "history": [{"role": "user", "content": f"hello from {session_id}"}],
-                "updated_at": "2026-06-21T00:00:00Z",
-            }
 
     monkeypatch.setattr(runtime_api, "session_manager", _FakeSessionManager())
 
@@ -175,15 +184,8 @@ async def test_api_sessions_can_include_task_sessions_for_debug(monkeypatch):
         async def initialize(self):
             raise AssertionError("already initialized")
 
-        async def list_sessions(self):
-            return ["agent-task-task-1", "s-human"]
-
-        async def get_session_info(self, session_id):
-            return {
-                "title": session_id,
-                "history": [{"role": "user", "content": f"hello from {session_id}"}],
-                "updated_at": "2026-06-21T00:00:00Z",
-            }
+        async def list_session_summaries(self):
+            return [_fake_summary("agent-task-task-1"), _fake_summary("s-human")]
 
     monkeypatch.setattr(runtime_api, "session_manager", _FakeSessionManager())
 
