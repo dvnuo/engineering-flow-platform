@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from copy import deepcopy
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import tempfile
 from threading import RLock
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 from ..types import new_id
 from .checkpoint import SessionCheckpoint
@@ -22,6 +24,125 @@ from .serialization import (
     session_to_dict,
 )
 from .todo import FileSessionTodoStore
+
+
+# Cache sizing. These bound the extra memory the store may hold on top of what
+# a request already needs; both are intentionally small so the cache can never
+# become the leak it is meant to prevent.
+_DEFAULT_PARSE_CACHE_MAX = 24
+_DEFAULT_PARSE_CACHE_MAX_BYTES = 8 * 1024 * 1024  # do not retain giant sessions
+_DEFAULT_SUMMARY_CACHE_MAX = 4096
+_SUMMARY_PREVIEW_CHARS = 256
+_SUMMARY_SCAN_CAP = 320  # stop deriving preview text once we have enough
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    """Lightweight session header used by list endpoints.
+
+    Deriving these instead of loading + deepcopying full sessions is what keeps
+    ``GET /api/sessions`` from re-parsing every session file (with all inlined
+    tool output) on every poll.
+    """
+
+    session_id: str
+    title: Optional[str]
+    custom_name: Optional[str]
+    created_at: str
+    updated_at: str
+    message_count: int
+    user_message_count: int
+    first_user_preview: str
+    last_preview: str
+
+
+# malloc_trim(0) hands freed arenas back to the OS after a large parse burst.
+# CPython's allocator otherwise keeps them mapped, which is exactly why RSS
+# stayed high and did not reclaim. Best-effort: a no-op off glibc.
+_MALLOC_TRIM: Any = None
+
+
+def _release_allocator_memory() -> None:
+    global _MALLOC_TRIM
+    if _MALLOC_TRIM is False:
+        return
+    try:
+        if _MALLOC_TRIM is None:
+            import ctypes
+            import ctypes.util
+
+            lib_name = ctypes.util.find_library("c") or "libc.so.6"
+            libc = ctypes.CDLL(lib_name)
+            _MALLOC_TRIM = getattr(libc, "malloc_trim", False) or False
+        if _MALLOC_TRIM:
+            _MALLOC_TRIM(0)
+    except Exception:
+        _MALLOC_TRIM = False
+
+
+def _summary_preview_text(message: Message) -> str:
+    """Preview string for a message, mirroring gateway legacy ``content``.
+
+    Kept byte-for-byte consistent with ``_message_content`` in gateway_facade
+    for the leading characters, but stops early so a multi-MB tool result is
+    never fully materialised just to render a 50-char preview.
+    """
+    chunks: List[str] = []
+    total = 0
+    for part in message.parts:
+        piece: Optional[str] = None
+        if part.type is MessagePartType.TEXT and part.text:
+            piece = part.text
+        elif part.type is MessagePartType.REASONING and part.reasoning and not chunks:
+            piece = part.reasoning
+        elif part.type is MessagePartType.TOOL_RESULT and part.tool_result is not None:
+            piece = part.tool_result.content
+        elif part.type is MessagePartType.COMPACTION and part.compaction is not None:
+            piece = part.compaction.summary
+        elif part.type is MessagePartType.ERROR and part.text:
+            piece = part.text
+        if piece is None:
+            continue
+        # Slice each piece so a multi-MB tool result is never fully copied for a
+        # preview. The kept prefix (>= the final 256-char cut) is unchanged.
+        chunks.append(piece[:_SUMMARY_SCAN_CAP])
+        total += min(len(piece), _SUMMARY_SCAN_CAP)
+        if total >= _SUMMARY_SCAN_CAP:
+            break
+    return "\n".join(chunk for chunk in chunks if chunk is not None)
+
+
+def _truncate_preview(value: str, limit: int = _SUMMARY_PREVIEW_CHARS) -> str:
+    return value if len(value) <= limit else value[:limit]
+
+
+def build_session_summary(session: Session) -> SessionSummary:
+    user_count = 0
+    first_user_preview = ""
+    for message in session.messages:
+        if message.role is MessageRole.USER:
+            user_count += 1
+            if not first_user_preview:
+                first_user_preview = _truncate_preview(_summary_preview_text(message))
+    last_preview = ""
+    for message in reversed(session.messages):
+        if message.role in (MessageRole.USER, MessageRole.ASSISTANT):
+            last_preview = _truncate_preview(_summary_preview_text(message))
+            break
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    custom_name = metadata.get("custom_session_name")
+    custom_name = custom_name.strip() if isinstance(custom_name, str) and custom_name.strip() else None
+    return SessionSummary(
+        session_id=session.session_id,
+        title=session.title,
+        custom_name=custom_name,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        message_count=len(session.messages),
+        user_message_count=user_count,
+        first_user_preview=first_user_preview,
+        last_preview=last_preview,
+    )
 
 
 class FileSessionStore:
@@ -40,6 +161,14 @@ class FileSessionStore:
         self.todos_dir = todos_dir.resolve()
         self._todo_store = FileSessionTodoStore(self.todos_dir)
         self._lock = RLock()
+        # mtime+size validated caches. Reads that hit an unchanged file skip the
+        # json.load + session_from_dict cost entirely; the summary cache lets the
+        # list endpoint answer without touching full session bodies at all.
+        self._parse_cache: "OrderedDict[str, Tuple[int, int, Session]]" = OrderedDict()
+        self._summary_cache: "OrderedDict[str, Tuple[int, int, SessionSummary]]" = OrderedDict()
+        self._parse_cache_max = _DEFAULT_PARSE_CACHE_MAX
+        self._parse_cache_max_bytes = _DEFAULT_PARSE_CACHE_MAX_BYTES
+        self._summary_cache_max = _DEFAULT_SUMMARY_CACHE_MAX
 
     def create_session(
         self,
@@ -73,7 +202,7 @@ class FileSessionStore:
         replace_metadata: bool = False,
     ) -> Session:
         with self._lock:
-            session = self._read_session_locked(session_id)
+            session = self._read_session_locked_mutable(session_id)
             if title is not None:
                 session.title = title
             if replace_metadata:
@@ -100,7 +229,7 @@ class FileSessionStore:
         completed_at: Optional[str] = None,
     ) -> Message:
         with self._lock:
-            session = self._read_session_locked(session_id)
+            session = self._read_session_locked_mutable(session_id)
             message = Message(
                 role=role,
                 session_id=session.session_id,
@@ -120,7 +249,7 @@ class FileSessionStore:
 
     def append_part(self, session_id: str, message_id: str, part: MessagePart) -> MessagePart:
         with self._lock:
-            session = self._read_session_locked(session_id)
+            session = self._read_session_locked_mutable(session_id)
             message = self._require_message(session, message_id)
             stored_part = self._append_part_locked(session, message, part)
             session.touch()
@@ -133,7 +262,7 @@ class FileSessionStore:
 
     def replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
         with self._lock:
-            session = self._read_session_locked(session_id)
+            session = self._read_session_locked_mutable(session_id)
             session.messages = [deepcopy(message) for message in messages]
             self._rebind_session(session)
             session.touch()
@@ -165,16 +294,61 @@ class FileSessionStore:
         with self._lock:
             sessions = []
             for path in sorted(self.sessions_dir.glob("*.json")):
-                sessions.append(self._read_session_file_locked(path))
+                # Full-list scans must not evict the hot single-session entries
+                # from the small parse LRU, so they read without storing.
+                sessions.append(self._read_session_file_locked(path, cache_store=False))
             return deepcopy(sessions)
+
+    def list_session_summaries(self) -> List[SessionSummary]:
+        """Return lightweight headers for every session without loading bodies.
+
+        Unchanged files are answered straight from the summary cache (a stat
+        call, no parse); only a file whose mtime/size changed is re-read. This
+        is the replacement for ``list_sessions()`` on the list endpoint, which
+        otherwise parsed and deepcopied every session (including inlined tool
+        output) on every poll.
+        """
+        with self._lock:
+            summaries: List[SessionSummary] = []
+            parsed_any = False
+            for path in sorted(self.sessions_dir.glob("*.json")):
+                key = str(path)
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                cached = self._summary_cache.get(key)
+                if (
+                    cached is not None
+                    and cached[0] == stat.st_mtime_ns
+                    and cached[1] == stat.st_size
+                ):
+                    self._summary_cache.move_to_end(key)
+                    summaries.append(cached[2])
+                    continue
+                try:
+                    session = self._read_session_file_locked(path, cache_store=False)
+                except Exception:
+                    # A corrupt or half-written file must not break listing.
+                    continue
+                summary = build_session_summary(session)
+                self._summary_cache_put(key, stat.st_mtime_ns, stat.st_size, summary)
+                summaries.append(summary)
+                parsed_any = True
+            if parsed_any:
+                _release_allocator_memory()
+            return summaries
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock:
             path = self._session_path(session_id)
             if not path.exists():
+                self._evict_caches(session_id)
                 return False
             path.unlink()
+            self._evict_caches(session_id)
             self._todo_store.clear(session_id)
+            _release_allocator_memory()
             return True
 
     def fork_session(
@@ -287,7 +461,21 @@ class FileSessionStore:
             raise KeyError(f"unknown session: {session_id}")
         return self._read_session_file_locked(path)
 
-    def _read_session_file_locked(self, path: Path) -> Session:
+    def _read_session_file_locked(self, path: Path, *, cache_store: bool = True) -> Session:
+        # The returned Session may be a shared cache object. Every public read
+        # method deepcopies before returning it, and mutators go through
+        # ``_read_session_locked_mutable`` (which deepcopies), so callers never
+        # observe or corrupt a cached instance.
+        key = str(path)
+        try:
+            stat = path.stat()
+        except OSError:
+            stat = None
+        if stat is not None:
+            cached = self._parse_cache.get(key)
+            if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+                self._parse_cache.move_to_end(key)
+                return cached[2]
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         session = session_from_dict(payload)
@@ -296,7 +484,49 @@ class FileSessionStore:
             raise ValueError(
                 f"session file/name mismatch: expected {expected_path.name}, got {path.name}"
             )
+        if cache_store and stat is not None:
+            self._parse_cache_put(key, stat.st_mtime_ns, stat.st_size, session)
         return session
+
+    def _read_session_locked_mutable(self, session_id: str) -> Session:
+        """Private, mutable copy for read-modify-write callers."""
+        return deepcopy(self._read_session_locked(session_id))
+
+    def _parse_cache_put(self, key: str, mtime_ns: int, size: int, session: Session) -> None:
+        if size > self._parse_cache_max_bytes:
+            # Never retain oversized sessions; the summary cache still covers
+            # the list path, and re-parsing one giant session on demand is far
+            # cheaper than pinning it in memory.
+            self._parse_cache.pop(key, None)
+            return
+        self._parse_cache[key] = (mtime_ns, size, session)
+        self._parse_cache.move_to_end(key)
+        while len(self._parse_cache) > self._parse_cache_max:
+            self._parse_cache.popitem(last=False)
+
+    def _summary_cache_put(self, key: str, mtime_ns: int, size: int, summary: SessionSummary) -> None:
+        self._summary_cache[key] = (mtime_ns, size, summary)
+        self._summary_cache.move_to_end(key)
+        while len(self._summary_cache) > self._summary_cache_max:
+            self._summary_cache.popitem(last=False)
+
+    def _refresh_caches_after_write(self, path: Path, session: Session) -> None:
+        key = str(path)
+        try:
+            stat = path.stat()
+        except OSError:
+            self._parse_cache.pop(key, None)
+            self._summary_cache.pop(key, None)
+            return
+        self._parse_cache_put(key, stat.st_mtime_ns, stat.st_size, session)
+        self._summary_cache_put(
+            key, stat.st_mtime_ns, stat.st_size, build_session_summary(session)
+        )
+
+    def _evict_caches(self, session_id: str) -> None:
+        key = str(self._session_path(session_id))
+        self._parse_cache.pop(key, None)
+        self._summary_cache.pop(key, None)
 
     def _write_session_locked(self, session: Session) -> None:
         path = self._session_path(session.session_id)
@@ -318,6 +548,10 @@ class FileSessionStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_name, path)
+            # Serve the just-written state from cache instead of re-parsing it
+            # on the next read. Callers do not mutate ``session`` after the
+            # write returns, so caching the reference is safe.
+            self._refresh_caches_after_write(path, session)
         finally:
             if tmp_name is not None:
                 tmp_path = Path(tmp_name)

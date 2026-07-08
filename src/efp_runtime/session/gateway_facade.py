@@ -14,7 +14,7 @@ import uuid
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from ..types import ToolCall, ToolResult
-from .file_store import FileSessionStore
+from .file_store import FileSessionStore, SessionSummary
 from .models import (
     CompactionPart,
     Message,
@@ -155,11 +155,30 @@ class RuntimeSessionManager:
         )
         return [session.session_id for session in sessions]
 
+    async def list_session_summaries(self) -> list[SessionSummary]:
+        """Ordered lightweight session headers for the list endpoint.
+
+        The store read (and any cold re-parse) runs in a worker thread so the
+        CPU-bound work never blocks the event loop, keeping SSE/WebSocket
+        streams responsive even with many large sessions on disk.
+        """
+        loop = asyncio.get_running_loop()
+        summaries = await loop.run_in_executor(None, self.store.list_session_summaries)
+        summaries.sort(key=lambda summary: (summary.updated_at, summary.session_id), reverse=True)
+        return summaries
+
     async def get_session(self, session_id: str) -> dict[str, Any]:
         session = self._ensure_session(session_id)
         return self._session_to_legacy(session)
 
     async def get_existing_session(self, session_id: str) -> Optional[dict[str, Any]]:
+        # Offloaded: parsing a large session body and building its legacy view
+        # are CPU-bound; running them in a thread keeps the loop responsive for
+        # the sessions the UI polls while a run streams.
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._load_existing_session, session_id)
+
+    def _load_existing_session(self, session_id: str) -> Optional[dict[str, Any]]:
         try:
             return self._session_to_legacy(self.store.get_session(session_id))
         except KeyError:

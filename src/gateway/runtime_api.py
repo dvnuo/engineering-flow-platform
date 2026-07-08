@@ -3143,60 +3143,64 @@ async def api_sessions(request: web.Request) -> web.Response:
     """
     import time
     start_time = time.time()
-    logger.info("[api_sessions] Request start")
     try:
         # Initialize session manager if needed
         if not session_manager._initialized:
-            logger.info("[api_sessions] Initializing session manager")
             await session_manager.initialize()
-        
+
         limit = int(request.query.get('limit', 10))
         include_task_sessions = _request_includes_task_sessions(request)
-        session_ids = await session_manager.list_sessions()
-        logger.info(f"[api_sessions] Found {len(session_ids)} sessions: {session_ids[:5]}")
-        
+        # Lightweight, already-ordered headers built in a worker thread. No full
+        # session bodies are loaded or deepcopied here, so this stays cheap and
+        # off the event loop even with many large sessions on disk.
+        summaries = await session_manager.list_session_summaries()
+
         # Format sessions with details, filter out empty sessions
         detailed_sessions = []
-        for session_id in session_ids:
-            if not include_task_sessions and _runtime_session_id_is_task_session(session_id):
-                logger.info(f"[api_sessions] Skipping task session: {session_id}")
+        for summary in summaries:
+            if not include_task_sessions and _runtime_session_id_is_task_session(summary.session_id):
                 continue
-            # Get session info
-            session_info = await session_manager.get_session_info(session_id)
-            
-            if not session_info:
-                logger.warning(f"[api_sessions] No info for session: {session_id}")
-                continue
-            
-            history = session_info.get('history', [])
-            
+
             # Skip empty sessions (no user messages)
-            user_messages = [msg for msg in history if msg.get('role') == 'user']
-            if not user_messages:
-                logger.info(f"[api_sessions] Skipping empty session: {session_id}")
+            if summary.user_message_count <= 0:
                 continue
-            
-            session_name = resolve_session_display_name(session_info)
-            
-            # Get last message preview
-            last_message = ''
-            for msg in reversed(history):
-                if msg.get('role') in ('user', 'assistant'):
-                    last_message = truncate(msg.get('content', '') or '', 50)
-                    break
-            
+
+            # Reuse the exact display-name precedence (custom name -> title ->
+            # first user message) via a minimal session_info projection so the
+            # rendered name is byte-for-byte identical to the full-load path.
+            session_info_like = {
+                "metadata": (
+                    {"custom_session_name": summary.custom_name}
+                    if summary.custom_name
+                    else {}
+                ),
+                "title": summary.title,
+                "history": (
+                    [{"role": "user", "content": summary.first_user_preview}]
+                    if summary.user_message_count
+                    else []
+                ),
+            }
+            session_name = resolve_session_display_name(session_info_like)
+
+            last_message = truncate(summary.last_preview or '', 50)
+
             detailed_sessions.append({
-                'session_id': session_id,
+                'session_id': summary.session_id,
                 'name': session_name,
                 'last_message': last_message,
-                'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
-                'message_count': len(user_messages),
+                'updated_at': summary.updated_at or datetime.utcnow().isoformat(),
+                'message_count': summary.user_message_count,
             })
-            logger.info(f"[api_sessions] Added session: {session_id} -> name='{session_name}'")
             if len(detailed_sessions) >= limit:
                 break
-        
-        logger.info(f"[api_sessions] Returning {len(detailed_sessions)} sessions")
+
+        logger.info(
+            "[api_sessions] Returning %d sessions from %d headers in %.1fms",
+            len(detailed_sessions),
+            len(summaries),
+            (time.time() - start_time) * 1000.0,
+        )
         return web.json_response({'sessions': detailed_sessions})
     except Exception as e:
         logger.error(f"[api_sessions] ERROR: {e}", exc_info=True)
