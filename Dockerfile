@@ -77,6 +77,9 @@ RUN set -eux; \
     && confluence version --json >/dev/null \
     && confluence commands --json >/dev/null \
     && confluence schema page.create --json >/dev/null \
+    && jenkins version --json >/dev/null \
+    && jenkins commands --json >/dev/null \
+    && jenkins schema build.test-report --json >/dev/null \
     && browser version --json >/dev/null \
     && browser commands --json >/dev/null \
     && browser schema probe --json >/dev/null \
