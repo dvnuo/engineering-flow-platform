@@ -40,6 +40,24 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT_AGENTS_SECTION = "agents"
 SYSTEM_PROMPT_AGENTS_FILENAME = "AGENTS.md"
 
+# Upload sizing. EFP_MAX_UPLOAD_MB is the user-facing per-file cap the Portal
+# enforces and reports; the runtime allows that plus headroom for multipart /
+# transport overhead so it is never the gate for a file the Portal accepted.
+DEFAULT_MAX_UPLOAD_MB = 25
+UPLOAD_TRANSPORT_HEADROOM_MB = 5
+
+
+def resolve_upload_client_max_size() -> int:
+    """aiohttp ``client_max_size`` (bytes) for request bodies incl. uploads."""
+    raw = os.getenv("EFP_MAX_UPLOAD_MB", str(DEFAULT_MAX_UPLOAD_MB))
+    try:
+        mb = int(str(raw).strip())
+    except (TypeError, ValueError):
+        mb = DEFAULT_MAX_UPLOAD_MB
+    if mb <= 0:
+        mb = DEFAULT_MAX_UPLOAD_MB
+    return (mb + UPLOAD_TRANSPORT_HEADROOM_MB) * 1024 * 1024
+
 
 def _runtime_workspace_root() -> Path:
     """Canonical runtime workspace root."""
@@ -199,7 +217,7 @@ class Gateway:
         self.jira_enabled = config.jira.get("enabled", False)
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
-        self.app = web.Application()
+        self.app = web.Application(client_max_size=resolve_upload_client_max_size())
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
 
