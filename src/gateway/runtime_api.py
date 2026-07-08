@@ -43,6 +43,7 @@ from src.gateway.chat_payloads import (
 from src.gateway.chat_run_registry import chat_run_registry
 from src.gateway.runtime_chat import (
     RuntimeChatError,
+    resume_runtime_chat,
     run_runtime_chat,
 )
 from src.gateway.runtime_event_projection import (
@@ -3376,6 +3377,239 @@ async def api_delete_session(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+async def api_delete_conversation_from(request: web.Request) -> web.Response:
+    """Delete a message and every message after it (truncate the conversation).
+
+    POST /api/sessions/{session_id}/messages/{message_id}/delete-from-here
+
+    Used by the chat UI "Retry" action: it removes the target message onward,
+    then re-sends the original user text as a fresh chat turn.
+    """
+    message_id = request.match_info.get('message_id')
+    try:
+        session_id = request.match_info.get('session_id')
+        if not session_id or not message_id:
+            return web.json_response(
+                {'error': 'Missing session_id or message_id', 'user_message_id': message_id},
+                status=400,
+            )
+        if not session_manager._initialized:
+            await session_manager.initialize()
+
+        history = await session_manager.get_history(session_id)
+        if not any(msg.get('id') == message_id for msg in history):
+            return web.json_response(
+                {'error': 'Message not found', 'user_message_id': message_id},
+                status=404,
+            )
+
+        deleted_count = await session_manager.delete_messages_from(
+            session_id,
+            message_id,
+            wait_for_save=True,
+        )
+        return web.json_response({'success': True, 'deleted_count': deleted_count})
+    except Exception as e:
+        logger.error(f"[api_delete_conversation_from] ERROR: {e}", exc_info=True)
+        return web.json_response({'error': str(e), 'user_message_id': message_id}, status=500)
+
+
+async def api_edit_message(request: web.Request) -> web.Response:
+    """Edit a message in place and delete every message after it (synchronous).
+
+    POST /api/sessions/{session_id}/messages/{message_id}/edit
+    Body: {"new_content": "edited message content"}
+
+    Kept for compatibility; the chat UI uses the async variant below.
+    """
+    try:
+        session_id = request.match_info.get('session_id')
+        message_id = request.match_info.get('message_id')
+        if not session_id or not message_id:
+            return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
+        if not session_manager._initialized:
+            await session_manager.initialize()
+
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, ContentTypeError):
+            return web.json_response({'error': 'Invalid JSON in request body'}, status=400)
+
+        new_content = data.get('new_content')
+        if new_content is None:
+            new_content = data.get('content')
+        if new_content is None:
+            return web.json_response({'error': "Missing 'new_content' in request body"}, status=400)
+        if not isinstance(new_content, str):
+            return web.json_response({'error': "'new_content' must be a string"}, status=400)
+
+        edited = await session_manager.edit_message(session_id, message_id, new_content)
+        if not edited:
+            return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
+
+        deleted_count = await session_manager.delete_messages_after(session_id, message_id)
+        history = await session_manager.get_history(session_id)
+        return web.json_response({'success': True, 'deleted_count': deleted_count, 'messages': history})
+    except Exception as e:
+        logger.error(f"[api_edit_message] ERROR: {e}", exc_info=True)
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def _run_edit_resend_in_background(
+    *,
+    session_id: str,
+    content: str,
+    request_id: str,
+    replacement_user_message_id: str,
+    agent_id: Optional[str],
+    agent_name: Optional[str],
+    model: Optional[str],
+    execution_metadata: Dict[str, Any],
+) -> None:
+    """Append the edited content as a fresh user turn and regenerate the reply.
+
+    Runs detached from the request so ``/edit/async`` can return 202 while the
+    runtime regenerates. The chat UI polls ``GET /api/sessions/{id}`` and finds
+    the new assistant message after the replacement user message.
+    """
+    try:
+        await session_manager.add_message(
+            session_id,
+            "user",
+            content,
+            wait_for_save=True,
+            extra={"id": replacement_user_message_id},
+        )
+        await resume_runtime_chat(
+            session_id=session_id,
+            request_path="/api/sessions/messages/edit/async",
+            execution_metadata=execution_metadata,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            request_id=request_id,
+            model=model,
+        )
+    except Exception as exc:
+        logger.error(
+            "[edit_async] regeneration failed | session_id=%s request_id=%s error=%s",
+            session_id,
+            request_id,
+            sanitize_exception_message(exc),
+            exc_info=True,
+        )
+        try:
+            await _persist_chat_failure_state(
+                agent_id=agent_id,
+                session_id=session_id,
+                request_id=request_id,
+                user_message=sanitize_exception_message(exc),
+                error_type=type(exc).__name__,
+                metadata=execution_metadata,
+            )
+        except Exception:
+            logger.warning("[edit_async] failed to persist regeneration failure", exc_info=True)
+
+
+async def api_edit_message_async(request: web.Request) -> web.Response:
+    """Edit a user message and regenerate the response in the background.
+
+    POST /api/sessions/{session_id}/messages/{message_id}/edit/async
+    Body: {"content": "edited text", "request_id": "...", "model": "optional"}
+
+    Truncates the conversation from the edited message (inclusive), then starts
+    a detached regeneration whose result the chat UI observes by polling the
+    session. Matches the opencode adapter contract.
+    """
+    message_id = request.match_info.get('message_id')
+    try:
+        session_id = request.match_info.get('session_id')
+        if not session_id or not message_id:
+            return web.json_response(
+                {'error': 'Missing session_id or message_id', 'user_message_id': message_id},
+                status=400,
+            )
+        if not session_manager._initialized:
+            await session_manager.initialize()
+
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, ContentTypeError):
+            return web.json_response({'error': 'Invalid JSON in request body'}, status=400)
+
+        content = ""
+        for key in ("content", "new_content", "message"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                content = value.strip()
+                break
+        if not content:
+            return web.json_response({'error': "Missing 'content' in request body"}, status=400)
+
+        history = await session_manager.get_history(session_id)
+        target = next((msg for msg in history if msg.get('id') == message_id), None)
+        if target is None:
+            return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
+        if str(target.get('role') or '').lower() != 'user':
+            return web.json_response(
+                {'error': 'Only user messages can be edited', 'user_message_id': message_id},
+                status=400,
+            )
+
+        client_request_id = _extract_trusted_client_request_id(request, data)
+        request_id = client_request_id or str(data.get('request_id') or '').strip() or f"edit-{uuid.uuid4()}"
+        model_override = _extract_trusted_model_override(request, data)
+        model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
+        runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
+        execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        replacement_user_message_id = f"msg-{uuid.uuid4().hex}"
+
+        # Truncate from the edited message (inclusive); the edited text is
+        # re-sent as a fresh user turn by the background regeneration.
+        await session_manager.delete_messages_from(session_id, message_id, wait_for_save=True)
+        truncated_history = await session_manager.get_history(session_id)
+
+        asyncio.create_task(
+            _run_edit_resend_in_background(
+                session_id=session_id,
+                content=content,
+                request_id=request_id,
+                replacement_user_message_id=replacement_user_message_id,
+                agent_id=runtime_agent_id,
+                agent_name=runtime_agent_name,
+                model=model,
+                execution_metadata=execution_metadata,
+            )
+        )
+
+        return web.json_response(
+            {
+                'success': True,
+                'accepted': True,
+                'async': True,
+                'completion_state': 'pending',
+                'session_id': session_id,
+                'message_id': message_id,
+                'replacement_user_message_id': replacement_user_message_id,
+                'assistant_message_id': '',
+                'request_id': request_id,
+                'response': '',
+                'messages': truncated_history,
+                'metadata': {
+                    'edit': True,
+                    'edited_message_id': message_id,
+                    'replacement_user_message_id': replacement_user_message_id,
+                    'source': 'message_edit_async',
+                    'edit_async': True,
+                    'background_started': True,
+                },
+            },
+            status=202,
+        )
+    except Exception as e:
+        logger.error(f"[api_edit_message_async] ERROR: {e}", exc_info=True)
+        return web.json_response({'error': str(e), 'user_message_id': message_id}, status=500)
+
+
 async def api_apply_runtime_profile(request: web.Request) -> web.Response:
     """Apply managed runtime-profile snapshot from trusted Portal control-plane request."""
     if not _is_trusted_portal_request(request):
@@ -3463,6 +3697,9 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/rename', api_rename_session)
     app.router.add_delete('/api/sessions/{session_id}', api_delete_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
+    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit', api_edit_message)
+    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit/async', api_edit_message_async)
+    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/internal/runtime-profile/apply', api_apply_runtime_profile)
     app.router.add_get('/api/skills', api_skills)
