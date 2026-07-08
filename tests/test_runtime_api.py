@@ -5064,3 +5064,151 @@ async def test_run_task_execution_cancelled_during_started_event_marks_cancelled
     assert record.finished_at is not None
     assert (record.payload or {}).get("status") == "cancelled"
     assert "task.failed" not in emitted
+
+
+class _MessageEndpointRequest:
+    """Minimal aiohttp-style request for the message edit/delete handlers."""
+
+    def __init__(self, session_id, message_id, body=None, headers=None):
+        self.match_info = {"session_id": session_id, "message_id": message_id}
+        self.app = {}
+        self.headers = headers or {"X-Portal-Author-Source": "portal"}
+        self._body = body if body is not None else {}
+
+    async def json(self):
+        return self._body
+
+
+def _patch_message_endpoint_common(monkeypatch):
+    from src.gateway import runtime_api
+
+    monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
+    monkeypatch.setattr(
+        runtime_api.global_config,
+        "_config",
+        {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}},
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_api, "_resolve_runtime_agent_identity", lambda _request: ("agent-1", "Agent One"))
+    return runtime_api
+
+
+@pytest.mark.asyncio
+async def test_api_delete_conversation_from_truncates_and_returns_count(monkeypatch):
+    runtime_api = _patch_message_endpoint_common(monkeypatch)
+    deleted = {}
+
+    async def _fake_get_history(_session_id):
+        return [{"id": "m1", "role": "user", "content": "a"}, {"id": "m2", "role": "assistant", "content": "b"}]
+
+    async def _fake_delete_from(session_id, message_id, wait_for_save=False):
+        deleted["args"] = (session_id, message_id, wait_for_save)
+        return 1
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_history", _fake_get_history)
+    monkeypatch.setattr(runtime_api.session_manager, "delete_messages_from", _fake_delete_from)
+
+    resp = await runtime_api.api_delete_conversation_from(_MessageEndpointRequest("s1", "m2"))
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["success"] is True
+    assert payload["deleted_count"] == 1
+    assert deleted["args"] == ("s1", "m2", True)
+
+
+@pytest.mark.asyncio
+async def test_api_delete_conversation_from_404_when_message_missing(monkeypatch):
+    runtime_api = _patch_message_endpoint_common(monkeypatch)
+
+    async def _fake_get_history(_session_id):
+        return [{"id": "m1", "role": "user", "content": "a"}]
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_history", _fake_get_history)
+
+    resp = await runtime_api.api_delete_conversation_from(_MessageEndpointRequest("s1", "missing"))
+    assert resp.status == 404
+    assert json.loads(resp.text)["user_message_id"] == "missing"
+
+
+@pytest.mark.asyncio
+async def test_api_edit_message_async_truncates_and_starts_regeneration(monkeypatch):
+    runtime_api = _patch_message_endpoint_common(monkeypatch)
+    calls = {}
+
+    async def _fake_get_history(_session_id):
+        return [{"id": "u1", "role": "user", "content": "old"}, {"id": "a1", "role": "assistant", "content": "reply"}]
+
+    async def _fake_delete_from(session_id, message_id, wait_for_save=False):
+        calls["delete"] = (session_id, message_id)
+        return 2
+
+    async def _fake_background(**kwargs):
+        calls["background"] = kwargs
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_history", _fake_get_history)
+    monkeypatch.setattr(runtime_api.session_manager, "delete_messages_from", _fake_delete_from)
+    monkeypatch.setattr(runtime_api, "_run_edit_resend_in_background", _fake_background)
+
+    resp = await runtime_api.api_edit_message_async(
+        _MessageEndpointRequest("s1", "u1", body={"content": "edited text", "request_id": "req-edit-1"})
+    )
+    await asyncio.sleep(0)  # let the scheduled background task run
+
+    assert resp.status == 202
+    payload = json.loads(resp.text)
+    assert payload["success"] is True
+    assert payload["accepted"] is True
+    assert payload["session_id"] == "s1"
+    assert payload["message_id"] == "u1"
+    assert payload["request_id"] == "req-edit-1"
+    assert payload["replacement_user_message_id"]
+    assert payload["metadata"]["edit"] is True
+    assert calls["delete"] == ("s1", "u1")
+    assert calls["background"]["content"] == "edited text"
+    assert calls["background"]["request_id"] == "req-edit-1"
+    assert calls["background"]["replacement_user_message_id"] == payload["replacement_user_message_id"]
+
+
+@pytest.mark.asyncio
+async def test_api_edit_message_async_404_when_message_missing(monkeypatch):
+    runtime_api = _patch_message_endpoint_common(monkeypatch)
+
+    async def _fake_get_history(_session_id):
+        return [{"id": "u1", "role": "user", "content": "old"}]
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_history", _fake_get_history)
+
+    resp = await runtime_api.api_edit_message_async(
+        _MessageEndpointRequest("s1", "missing", body={"content": "x"})
+    )
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_api_edit_message_async_rejects_non_user_message(monkeypatch):
+    runtime_api = _patch_message_endpoint_common(monkeypatch)
+
+    async def _fake_get_history(_session_id):
+        return [{"id": "a1", "role": "assistant", "content": "reply"}]
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_history", _fake_get_history)
+
+    resp = await runtime_api.api_edit_message_async(
+        _MessageEndpointRequest("s1", "a1", body={"content": "x"})
+    )
+    assert resp.status == 400
+
+
+def test_setup_runtime_api_routes_registers_message_endpoints():
+    from aiohttp import web
+    from src.gateway.runtime_api import setup_runtime_api_routes
+
+    app = web.Application()
+    setup_runtime_api_routes(app)
+    routes = {
+        (route.method, route.resource.canonical)
+        for route in app.router.routes()
+    }
+    assert ("POST", "/api/sessions/{session_id}/messages/{message_id}/edit") in routes
+    assert ("POST", "/api/sessions/{session_id}/messages/{message_id}/edit/async") in routes
+    assert ("POST", "/api/sessions/{session_id}/messages/{message_id}/delete-from-here") in routes
