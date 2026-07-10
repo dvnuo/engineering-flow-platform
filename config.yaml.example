@@ -2,16 +2,13 @@
 # COPY THIS FILE TO config.yaml AND FILL IN YOUR VALUES!
 
 # ============================================
-# Encryption Configuration (OPTIONAL)
+# Portal-Managed Configuration
 # ============================================
-# Sensitive fields (api_key, password, token) can be encrypted in config.yaml.
-# Set the encryption key via environment variable: EFP_CONFIG_KEY
-# Values will be stored as ENC:base64... and automatically decrypted at runtime.
-#
-# Example:
-#   EFP_CONFIG_KEY=my-secret-key python main.py
-#
-# When enabled, writing sensitive fields will automatically encrypt them.
+# This file is the read-only base configuration. On Kubernetes, Portal-managed
+# runtime-profile values (credentials, tool settings, runtime fields) arrive
+# via the EFP_PROFILE_CONFIG environment variable at pod start and are merged
+# in memory; this file is never rewritten. Encrypted ENC: values and
+# EFP_CONFIG_KEY are no longer supported.
 
 # ============================================
 # LLM Configuration (REQUIRED)

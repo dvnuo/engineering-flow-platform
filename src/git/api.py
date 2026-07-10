@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-from src.config import config, service_reload_manager
+from src.config import config
 from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
 
 logger = logging.getLogger(__name__)
@@ -254,12 +254,4 @@ def setup_git_user_sync() -> bool:
     return True
 
 
-def reinit_git_config() -> None:
-    """Reload hook for git-related config updates."""
-    setup_git_user_sync()
-
-
-service_reload_manager.register("git", reinit_git_config)
-
-
-__all__ = ["GitClient", "setup_git_user", "setup_git_user_sync", "reinit_git_config"]
+__all__ = ["GitClient", "setup_git_user", "setup_git_user_sync"]

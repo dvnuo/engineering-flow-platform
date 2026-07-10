@@ -406,9 +406,9 @@ def _active_managed_overlay_runtime_config() -> Mapping[str, Any] | None:
         return None
     if not isinstance(effective_config, Mapping):
         return None
-    # set_managed_overlay persists Portal-managed fields directly into config.yaml.
-    # After a process restart the in-memory overlay metadata is empty, but those
-    # safe top-level runtime fields still need to drive RuntimeConfig.
+    # Portal-managed runtime fields arrive via the EFP_PROFILE_CONFIG env overlay
+    # merged into the effective config at boot; those safe top-level runtime
+    # fields still need to drive RuntimeConfig.
     if not any(field in effective_config for field in PORTAL_MANAGED_RUNTIME_FIELDS):
         return None
     return effective_config

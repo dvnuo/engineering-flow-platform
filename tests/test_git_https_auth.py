@@ -84,7 +84,6 @@ def test_git_module_public_surface_includes_expected_tools():
     assert callable(git_module.git_push)
     assert callable(git_module.git_clone)
     assert callable(git_module.setup_git_user_sync)
-    assert callable(git_module.reinit_git_config)
 
 
 def test_setup_git_user_sync_uses_profile_config(monkeypatch):

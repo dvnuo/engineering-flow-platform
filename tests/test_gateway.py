@@ -76,30 +76,10 @@ class TestGatewayInit:
 
         assert gateway_server._runtime_workspace_root() == Path("/workspace").resolve()
 
-    def test_gateway_bootstrap_runtime_profile_before_jira_derived_state(self, monkeypatch):
-        from src.gateway import server as gateway_server
-
-        state = {"jira_enabled": False}
-
-        class _FakeSection(dict):
-            def get(self, key, default=None):
-                if key == "enabled":
-                    return state["jira_enabled"]
-                return super().get(key, default)
-
-        class _FakeConfig:
-            jira = _FakeSection()
-            server = {"host": "0.0.0.0", "port": 8000}
-
-        def _bootstrap():
-            state["jira_enabled"] = True
-            return True
-
-        monkeypatch.setattr(gateway_server, "config", _FakeConfig())
-        monkeypatch.setattr(gateway_server, "bootstrap_runtime_profile_sync", _bootstrap)
-        monkeypatch.setattr(gateway_server, "setup_runtime_api_routes", lambda app: None)
-        gateway = gateway_server.Gateway()
-        assert gateway.jira_enabled is True
+    def test_gateway_does_not_reference_runtime_profile_http_bootstrap(self):
+        source = Path("src/gateway/server.py").read_text(encoding="utf-8")
+        assert "bootstrap_runtime_profile_sync" not in source
+        assert "runtime_profile_client" not in source
 
 
 class TestGatewayRoutes:
@@ -222,7 +202,6 @@ class TestGatewaySystemPromptContract:
                 return {"workspace": {"path": str(tmp_path)}}
 
         monkeypatch.setattr(gateway_server, "config", _FakeConfig())
-        monkeypatch.setattr(gateway_server, "bootstrap_runtime_profile_sync", lambda: True)
         monkeypatch.setattr(gateway_server, "setup_runtime_api_routes", lambda app: None)
 
         client = TestClient(TestServer(gateway_server.Gateway().app))

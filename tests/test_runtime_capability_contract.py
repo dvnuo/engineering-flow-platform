@@ -45,7 +45,7 @@ def test_runtime_gateway_routes_include_t13_native_contract():
         ("GET", "/api/events"),
         ("POST", "/api/chat"), ("POST", "/api/chat/stream"), ("POST", "/api/tasks/execute"),
         ("POST", "/api/tasks/{task_id}/cancel"),
-        ("GET", "/api/tasks/{task_id}"), ("GET", "/api/capabilities"), ("POST", "/api/internal/runtime-profile/apply"),
+        ("GET", "/api/tasks/{task_id}"), ("GET", "/api/capabilities"), ("GET", "/ready"),
         ("GET", "/api/skills"), ("GET", "/api/usage"), ("GET", "/api/sessions"),
     }
     assert required.issubset(got)

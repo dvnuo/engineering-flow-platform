@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import logging
 import math
 import os
-import time
-import copy
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
@@ -134,67 +134,6 @@ def _first_atlassian_instance_url(value: Dict[str, Any]) -> str:
         if text:
             return text.rstrip("/")
     return ""
-
-
-class ServiceReloadManager:
-    """Manager for services that need to be reinitialized when config changes."""
-    
-    def __init__(self):
-        self._services: Dict[str, Callable[[], None]] = {}
-    
-    def register(self, name: str, reinit_func: Callable[[], None]) -> None:
-        """Register a service for reinitialization on config change.
-        
-        Args:
-            name: Service name (e.g., 'llm', 'jira', 'confluence')
-            reinit_func: Function to call to reinitialize the service
-        """
-        self._services[name] = reinit_func
-        logger.debug(f"Registered service for config reload: {name}")
-    
-    def unregister(self, name: str) -> None:
-        """Unregister a service."""
-        if name in self._services:
-            del self._services[name]
-    
-    def reload_all(self, changed_sections: List[str]) -> Dict[str, bool]:
-        """Reload all registered services that match changed config sections.
-        
-        Args:
-            changed_sections: List of config sections that changed (e.g., ['llm', 'jira'])
-        
-        Returns:
-            Dict mapping service names to reload success status
-        """
-        results = {}
-        
-        # Map config sections to services
-        section_to_services = {
-            'llm': ['llm'],
-            'jira': ['jira'],
-            'confluence': ['confluence'],
-            'github': ['github'],
-            'git': ['git'],
-            'session': ['session'],
-        }
-        
-        for section in changed_sections:
-            services = section_to_services.get(section, [])
-            for service_name in services:
-                if service_name in self._services:
-                    try:
-                        logger.info(f"Reloading service: {service_name}")
-                        self._services[service_name]()
-                        results[service_name] = True
-                    except Exception as e:
-                        logger.error(f"Failed to reload service {service_name}: {e}")
-                        results[service_name] = False
-        
-        return results
-
-
-# Global service reload manager
-service_reload_manager = ServiceReloadManager()
 
 
 def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, Any]) -> bool:
@@ -324,8 +263,8 @@ class Config:
         **{field: True for field in sorted(PORTAL_MANAGED_RUNTIME_FIELDS)},
         # Keep hidden/deprecated Portal LLM fields in this field tree.
         # Portal may stop rendering temperature/tools/response_flow controls, but
-        # set_managed_overlay() must still prune older Portal-managed values from
-        # config.yaml when a newer sparse overlay omits them.
+        # the EFP_PROFILE_CONFIG overlay filter must still accept older
+        # Portal-managed values so they merge into the effective config.
         "llm": {
             "provider": True,
             "model": True,
@@ -425,9 +364,11 @@ class Config:
             self.config_path = self._find_config()
         else:
             self.config_path = Path(config_path)
-        self.runtime_profile_path = _home_path() / ".efp" / "runtime_profile.yaml"
         self._config: Dict[str, Any] = {}
         self._base_config: Dict[str, Any] = {}
+        self._env_overlay: Dict[str, Any] = {}
+        self._profile_env_present: bool = False
+        self._profile_load_error: Optional[str] = None
         self._managed_overlay_meta: Dict[str, Any] = {
             "runtime_profile_id": None,
             "revision": None,
@@ -439,7 +380,6 @@ class Config:
             "error": None,
             "operation": None,
         }
-        self._last_modified: float = 0
         self._yaml = _yaml  # Use module-level instance
         self.load()
 
@@ -460,32 +400,68 @@ class Config:
         return target
 
     def load(self) -> None:
-        """Load configuration from config.yaml and clean up legacy sidecar state."""
+        """Load the read-only base config.yaml and overlay EFP_PROFILE_CONFIG.
+
+        The base config ships with the image and is never rewritten. Portal-managed
+        runtime-profile fields arrive as a JSON payload in the EFP_PROFILE_CONFIG
+        environment variable (rendered into the pod from a per-profile Secret) and
+        are merged in memory only. Absent env var means dev mode (base config only).
+        """
         self._base_config = self._load_yaml_document(self.config_path)
-        self._last_modified = self.config_path.stat().st_mtime if self.config_path.exists() else 0
-        
-        # Decrypt sensitive fields
-        self._decrypt_sensitive_fields(self._base_config)
-        self._cleanup_legacy_runtime_profile_file()
+        self._warn_on_encrypted_values(self._base_config)
+        self._parse_profile_env()
         self._rebuild_effective_config()
 
-    def _cleanup_legacy_runtime_profile_file(self) -> None:
-        """Delete legacy runtime_profile.yaml sidecar if it exists.
+    def _warn_on_encrypted_values(self, obj: Any, path: str = "") -> None:
+        """Warn about legacy ENC: values; encrypted config is no longer supported."""
+        if self._is_mapping(obj):
+            for key, value in obj.items():
+                child = f"{path}.{key}" if path else str(key)
+                if isinstance(value, str) and value.startswith("ENC:"):
+                    logger.warning(
+                        "Config value %s starts with 'ENC:'. Encrypted config values are no "
+                        "longer supported; the value will be used as-is. Portal-managed "
+                        "credentials now arrive via the EFP_PROFILE_CONFIG environment payload.",
+                        child,
+                    )
+                else:
+                    self._warn_on_encrypted_values(value, child)
+        elif self._is_sequence(obj):
+            for item in obj:
+                self._warn_on_encrypted_values(item, path)
 
-        NOTE: runtime_profile.yaml is no longer an active runtime configuration
-        input. Portal bootstrap remains the source of truth for managed fields.
-        """
-        if not self.runtime_profile_path.exists():
+    def _parse_profile_env(self) -> None:
+        """Parse the EFP_PROFILE_CONFIG apply-payload into the managed overlay."""
+        self._env_overlay = {}
+        self._profile_env_present = False
+        self._profile_load_error = None
+        self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
+        self._managed_sections = []
+
+        raw = os.environ.get("EFP_PROFILE_CONFIG")
+        if raw is None:
             return
+        self._profile_env_present = True
+
         try:
-            self.runtime_profile_path.unlink()
-            logger.info("Removed legacy runtime profile sidecar: %s", self.runtime_profile_path)
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("payload must be a JSON object")
         except Exception as exc:
-            logger.warning(
-                "Failed to remove legacy runtime profile sidecar %s: %s",
-                self.runtime_profile_path,
-                exc,
-            )
+            self._profile_load_error = f"Invalid EFP_PROFILE_CONFIG payload: {exc}"
+            logger.error(self._profile_load_error)
+            return
+
+        overlay_config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+        overlay = self._filter_managed_overlay_sections(overlay_config)
+        if _should_inject_runtime_profile_external_cli_instructions(overlay):
+            overlay["instruction_texts"] = list(RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS)
+        self._env_overlay = overlay
+        self._managed_overlay_meta = {
+            "runtime_profile_id": payload.get("runtime_profile_id"),
+            "revision": payload.get("revision"),
+        }
+        self._managed_sections = sorted(overlay.keys())
 
     def _load_yaml_document(self, path: Path) -> Dict[str, Any]:
         if not path.exists():
@@ -493,11 +469,6 @@ class Config:
         with open(path, "r", encoding="utf-8") as f:
             document = self._yaml.load(f) or CommentedMap()
         return document if isinstance(document, dict) else CommentedMap()
-
-    def _write_yaml_document(self, path: Path, document: Dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            self._yaml.dump(document, f)
 
     def _deep_merge(self, base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
         result = copy.deepcopy(base)
@@ -511,23 +482,6 @@ class Config:
             else:
                 base[key] = copy.deepcopy(value)
         return base
-
-    def _prune_by_field_tree(self, target: Dict[str, Any], field_tree: Dict[str, Any]) -> None:
-        if not self._is_mapping(target) or not self._is_mapping(field_tree):
-            return
-        for key, subtree in field_tree.items():
-            if key not in target:
-                continue
-            if subtree is True:
-                del target[key]
-                continue
-            current_value = target.get(key)
-            if self._is_mapping(current_value):
-                self._prune_by_field_tree(current_value, subtree)
-                if not current_value:
-                    del target[key]
-            else:
-                del target[key]
 
     def _filter_by_field_tree(self, source: Dict[str, Any], field_tree: Dict[str, Any]) -> Dict[str, Any]:
         filtered: Dict[str, Any] = {}
@@ -556,26 +510,11 @@ class Config:
         return self._filter_by_field_tree(filtered, self.PORTAL_MANAGED_FIELD_TREE)
 
     def _rebuild_effective_config(self) -> None:
-        self._config = copy.deepcopy(self._base_config)
+        self._config = self._deep_merge(self._base_config, self._env_overlay)
         llm_cfg = self._config.get("llm")
         if isinstance(llm_cfg, dict):
             llm_cfg.setdefault("reasoning_effort", "high")
             llm_cfg.setdefault("reasoning_replay", False)
-
-    def load_managed_overlay(self) -> Dict[str, Any]:
-        """Legacy compatibility no-op.
-
-        Runtime no longer loads any overlay sidecar file. Managed runtime-profile
-        fields are applied directly into config.yaml via set_managed_overlay().
-        """
-        self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
-        self._managed_sections = []
-        return {}
-
-    def _persist_runtime_config(self, config_document: Dict[str, Any]) -> None:
-        encrypted = copy.deepcopy(config_document)
-        self._encrypt_sensitive_fields(encrypted)
-        self._write_yaml_document(self.config_path, encrypted)
 
     def _set_external_config_status(
         self,
@@ -588,108 +527,6 @@ class Config:
             "error": error if error else None,
             "operation": operation if operation in {"apply", "clear"} else None,
         }
-
-    def _external_config_exc_info(self, error: str, exc: BaseException):
-        return (RuntimeError, RuntimeError(error), exc.__traceback__)
-
-    def set_managed_overlay(
-        self,
-        runtime_profile_id: Optional[str],
-        revision: Optional[int],
-        overlay_config: Dict[str, Any],
-    ) -> List[str]:
-        """Apply Portal-managed snapshot into config.yaml and reload."""
-        previous_sections = set(self._managed_sections)
-        filtered_overlay = self._filter_managed_overlay_sections(overlay_config or {})
-        external_cli_overlay = copy.deepcopy(filtered_overlay)
-        if _should_inject_runtime_profile_external_cli_instructions(external_cli_overlay):
-            external_cli_overlay["instruction_texts"] = list(RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS)
-        persisted_overlay = copy.deepcopy(external_cli_overlay)
-        persisted_overlay.pop("jira", None)
-        persisted_overlay.pop("confluence", None)
-        new_sections = set(external_cli_overlay.keys())
-
-        config_document = self._load_yaml_document(self.config_path)
-        self._decrypt_sensitive_fields(config_document)
-        self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
-        self._deep_merge_into(config_document, persisted_overlay)
-        self._persist_runtime_config(config_document)
-
-        from src.external_cli.profile_config import (
-            apply_runtime_profile_external_config,
-            redact_runtime_profile_external_config_error,
-        )
-
-        try:
-            apply_runtime_profile_external_config(external_cli_overlay, config_path=self.config_path)
-        except Exception as exc:
-            error = redact_runtime_profile_external_config_error(exc, external_cli_overlay)
-            self._set_external_config_status("apply", False, error)
-            logger.warning(
-                "Runtime profile external CLI config apply failed: %s",
-                error,
-                exc_info=self._external_config_exc_info(error, exc),
-            )
-        else:
-            self._set_external_config_status("apply", True)
-
-        self._managed_overlay_meta = {
-            "runtime_profile_id": runtime_profile_id,
-            "revision": revision,
-        }
-        self._managed_sections = sorted(new_sections)
-        self._cleanup_legacy_runtime_profile_file()
-
-        # Use union so section removals (e.g. proxy removed from overlay) still
-        # trigger reload/apply side effects for the removed section.
-        changed_sections = sorted(previous_sections | new_sections)
-        self.reload(changed_sections=changed_sections)
-        if "proxy" in changed_sections:
-            if (
-                "proxy" in previous_sections
-                and "proxy" not in new_sections
-                and "proxy" not in self._config
-            ):
-                self._clear_proxy_env()
-            else:
-                self.apply_proxy()
-        return changed_sections
-
-    def clear_managed_overlay(self) -> None:
-        """Remove all Portal-managed fields from config.yaml and reload."""
-        previous_sections = sorted(self._managed_sections)
-        config_document = self._load_yaml_document(self.config_path)
-        self._decrypt_sensitive_fields(config_document)
-        self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
-        self._persist_runtime_config(config_document)
-
-        from src.external_cli.profile_config import (
-            clear_runtime_profile_external_config,
-            redact_runtime_profile_external_config_error,
-        )
-
-        try:
-            clear_runtime_profile_external_config(config_path=self.config_path)
-        except Exception as exc:
-            error = redact_runtime_profile_external_config_error(exc)
-            self._set_external_config_status("clear", False, error)
-            logger.warning(
-                "Runtime profile external CLI config clear failed: %s",
-                error,
-                exc_info=self._external_config_exc_info(error, exc),
-            )
-        else:
-            self._set_external_config_status("clear", True)
-
-        self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
-        self._managed_sections = []
-        self._cleanup_legacy_runtime_profile_file()
-        self.reload(changed_sections=previous_sections)
-        if "proxy" in previous_sections:
-            if "proxy" in self._config:
-                self.apply_proxy()
-            else:
-                self._clear_proxy_env()
 
     def get_effective_config(self) -> Dict[str, Any]:
         return copy.deepcopy(self._config)
@@ -708,29 +545,6 @@ class Config:
             "operation": self._external_config_status.get("operation"),
         }
 
-    def save_partial_sections(self, updates: Dict[str, Any], sections: List[str]) -> List[str]:
-        """Persist partial section updates into config.yaml preserving YAML structure."""
-        config_document = self._load_yaml_document(self.config_path)
-        self._decrypt_sensitive_fields(config_document)
-        updated_sections: List[str] = []
-
-        for section in sections:
-            if section not in updates:
-                continue
-            if (
-                section in config_document
-                and self._is_mapping(config_document.get(section))
-                and self._is_mapping(updates[section])
-            ):
-                self._deep_merge_into(config_document[section], updates[section])
-            else:
-                config_document[section] = copy.deepcopy(updates[section])
-            updated_sections.append(section)
-
-        self._persist_runtime_config(config_document)
-        self.reload(changed_sections=updated_sections)
-        return updated_sections
-    
     def _is_mapping(self, obj: Any) -> bool:
         """Check if obj is a mapping (dict or CommentedMap)."""
         from collections.abc import Mapping
@@ -743,150 +557,13 @@ class Config:
             obj, (str, bytes, bytearray, memoryview)
         )
     
-    def _get_encryption_key(self) -> Optional[str]:
-        """Get encryption key from environment variable."""
-        import os
-        return os.environ.get("EFP_CONFIG_KEY")
-    
-    def _encrypt_value(self, value: str) -> str:
-        """Encrypt a value using Fernet (AES-CBC + HMAC)."""
-        import base64
-        import hashlib
-        from cryptography.fernet import Fernet
-        
-        key = self._get_encryption_key()
-        if not key:
-            return value
-        
-        # Generate key from the configured key (must be 32 bytes for Fernet)
-        key_bytes = hashlib.sha256(key.encode()).digest()
-        f = Fernet(base64.urlsafe_b64encode(key_bytes))
-        
-        # Fernet.encrypt returns urlsafe-base64 directly, no extra wrap needed
-        encrypted = f.encrypt(value.encode())
-        return f"ENC:{encrypted.decode()}"
-    
-    def _decrypt_value(self, value: str) -> str:
-        """Decrypt a value using Fernet (AES-CBC + HMAC)."""
-        import logging
-        import base64
-        from cryptography.fernet import Fernet
-        
-        if not value.startswith("ENC:"):
-            return value
-        
-        key = self._get_encryption_key()
-        if not key:
-            # Fail fast: encrypted config values require EFP_CONFIG_KEY
-            raise RuntimeError(
-                "Found ENC: value in configuration but EFP_CONFIG_KEY is not set. "
-                "Set EFP_CONFIG_KEY to the correct encryption key before starting the application."
-            )
-        
-        try:
-            import hashlib
-            key_bytes = hashlib.sha256(key.encode()).digest()
-            f = Fernet(base64.urlsafe_b64encode(key_bytes))
-            
-            # Fernet returns base64-encoded token, just remove prefix and decode
-            decrypted = f.decrypt(value[4:].encode())
-            return decrypted.decode()
-        except Exception as e:
-            logging.getLogger(__name__).error(
-                f"Failed to decrypt config value. Check EFP_CONFIG_KEY and configuration file: {e}",
-                exc_info=True,
-            )
-            raise RuntimeError(
-                "Failed to decrypt an encrypted configuration value. "
-                "Ensure EFP_CONFIG_KEY is correct and the configuration file contains valid encrypted values."
-            ) from e
-    
-    SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "access_token", "access_key", "secret"}
-    
-    def _encrypt_sensitive_fields(self, obj: Any, path: tuple[str, ...] = ()) -> None:
-        """Recursively encrypt sensitive fields in config."""
-        if self._is_mapping(obj):
-            for key, value in obj.items():
-                child_path = (*path, str(key))
-                if path == ("aws",) and key == "password":
-                    continue
-                # Skip encryption for env var placeholders or already encrypted values
-                if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value and not value.startswith("ENC:") and not value.startswith("${"):
-                    obj[key] = self._encrypt_value(value)
-                elif self._is_mapping(value) or self._is_sequence(value):
-                    self._encrypt_sensitive_fields(value, child_path)
-        elif self._is_sequence(obj):
-            for item in obj:
-                if self._is_mapping(item) or self._is_sequence(item):
-                    self._encrypt_sensitive_fields(item, path)
-    
-    def _decrypt_sensitive_fields(self, obj: Any) -> None:
-        """Recursively decrypt sensitive fields in config."""
-        if self._is_mapping(obj):
-            for key, value in obj.items():
-                if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value.startswith("ENC:"):
-                    obj[key] = self._decrypt_value(value)
-                elif self._is_mapping(value) or self._is_sequence(value):
-                    self._decrypt_sensitive_fields(value)
-        elif self._is_sequence(obj):
-            for item in obj:
-                if self._is_mapping(item) or self._is_sequence(item):
-                    self._decrypt_sensitive_fields(item)
-    
     @property
     def config_source(self) -> str:
         """Return the path to the loaded config file."""
         return str(self.config_path)
 
-    def reload(self, changed_sections: Optional[List[str]] = None) -> bool:
-        """Reload configuration from file and optionally notify services.
-        
-        Args:
-            changed_sections: Optional list of config sections that changed.
-                             If provided, registered services will be reinitialized.
-        
-        Returns:
-            True if config was reloaded, False otherwise.
-        """
-        if not self.config_path.exists():
-            return False
-        
-        try:
-            current_mtime = self.config_path.stat().st_mtime
-            # Force reload if changed_sections is provided (user explicitly saved config)
-            # Otherwise only reload if file was modified
-            if (
-                changed_sections
-                or current_mtime > self._last_modified
-            ):
-                self.load()
-                # Notify registered services if sections are specified
-                if changed_sections:
-                    results = service_reload_manager.reload_all(changed_sections)
-                    for service, success in results.items():
-                        if success:
-                            logger.info(f"Service reloaded: {service}")
-                        else:
-                            logger.warning(f"Service reload failed: {service}")
-                    if "proxy" in changed_sections:
-                        self.apply_proxy()
-                    if "jenkins" in changed_sections:
-                        self.apply_jenkins_env()
-                    if "mobile-auto" in changed_sections:
-                        self.apply_mobile_env()
-                return True
-        except Exception:
-            pass
-        return False
-
     def get(self, key: str, default: Any = None) -> Any:
-        """Get a configuration value by key (supports dot notation).
-        
-        Automatically reloads config if file has been modified.
-        """
-        # Auto-reload if file has been modified
-        self.reload()
-        
+        """Get a configuration value by key (supports dot notation)."""
         keys = key.split(".")
         value = self._config
         for k in keys:
@@ -1303,3 +980,94 @@ def resolve_output_boundary(model: Optional[str] = None) -> Dict[str, int | str]
 
 # Global config instance
 config = Config()
+
+
+# Boot-time profile projection state consumed by GET /ready. The gateway stays
+# unready (503) until bootstrap_profile_boot() has completed successfully.
+_profile_boot_state: Dict[str, Any] = {
+    "completed": False,
+    "ready": False,
+    "error": None,
+}
+
+
+def get_profile_boot_state() -> Dict[str, Any]:
+    return dict(_profile_boot_state)
+
+
+def _set_profile_boot_state(*, completed: bool, ready: bool, error: Optional[str]) -> None:
+    _profile_boot_state["completed"] = completed
+    _profile_boot_state["ready"] = ready
+    _profile_boot_state["error"] = error
+
+
+def bootstrap_profile_boot() -> bool:
+    """Project the EFP_PROFILE_CONFIG overlay exactly once at process boot.
+
+    Runs from main.py after Config construction and before importing
+    src.gateway.server (Gateway() executes at import). Steps:
+
+    1. Project gh/aws/git external CLI config from the overlay via real CLIs.
+       Jira/Confluence/Jenkins/mobile-auto/visual reach the Go CLIs through
+       EFP_CONFIG_JSON only.
+    2. Export EFP_CONFIG_JSON (tools RootConfig-shaped subset of the effective
+       config) for every CLI child process.
+    3. Apply proxy / jenkins / mobile env exactly once.
+    4. Scrub EFP_PROFILE_CONFIG from os.environ so no child process can see the
+       full profile blob.
+    5. Record success/failure for GET /ready.
+
+    A projection failure keeps the process alive (liveness /health stays ok) but
+    leaves /ready at 503 so the pod never becomes ready with a broken profile.
+    """
+    error: Optional[str] = config._profile_load_error
+    profile_env_present = config._profile_env_present
+
+    if error is None and profile_env_present:
+        from src.external_cli.profile_config import (
+            apply_runtime_profile_external_config,
+            redact_runtime_profile_external_config_error,
+        )
+
+        try:
+            apply_runtime_profile_external_config(config._env_overlay, config_path=config.config_path)
+        except Exception as exc:
+            error = redact_runtime_profile_external_config_error(exc, config._env_overlay)
+            logger.warning(
+                "Runtime profile external CLI config apply failed: %s",
+                error,
+                exc_info=(RuntimeError, RuntimeError(error), exc.__traceback__),
+            )
+
+    if profile_env_present:
+        try:
+            from src.external_cli.profile_config import build_tools_config_json
+
+            os.environ["EFP_CONFIG_JSON"] = json.dumps(
+                build_tools_config_json(config.get_effective_config())
+            )
+        except Exception as exc:
+            if error is None:
+                error = f"Failed to build EFP_CONFIG_JSON: {exc}"
+            logger.warning("Failed to build EFP_CONFIG_JSON", exc_info=True)
+
+    config.apply_proxy()
+    config.apply_jenkins_env()
+    config.apply_mobile_env()
+
+    # Scrub the full profile blob AFTER the external CLI projection took its
+    # os.environ.copy() snapshot; children must never inherit it.
+    os.environ.pop("EFP_PROFILE_CONFIG", None)
+
+    success = error is None
+    if profile_env_present:
+        config._set_external_config_status("apply", success, error)
+    _set_profile_boot_state(completed=True, ready=success, error=error)
+    if success:
+        logger.info(
+            "Runtime profile boot projection completed: profile_id=%s revision=%s sections=%s",
+            config._managed_overlay_meta.get("runtime_profile_id"),
+            config._managed_overlay_meta.get("revision"),
+            config.get_managed_overlay_meta().get("managed_sections"),
+        )
+    return success

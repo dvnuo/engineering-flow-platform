@@ -40,12 +40,6 @@ def load_runtime_api_lightweight():
         def get_external_config_status(self):
             return {"success": True, "error": None, "operation": None}
 
-        def set_managed_overlay(self, *_args, **_kwargs):
-            return []
-
-        def clear_managed_overlay(self):
-            return None
-
     cfg = _Cfg()
 
     async def _noop_async(*_args, **_kwargs):

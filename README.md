@@ -59,9 +59,6 @@ python main.py
 # Custom port (edit config.yaml)
 # server:
 #   port: 8001
-
-# With encrypted config
-EFP_CONFIG_KEY="your-secret-passphrase" python main.py
 ```
 
 The native runtime is API-only. Check health and call chat endpoints directly:
@@ -150,18 +147,22 @@ github:
 
 `github.api_token` is used by both GitHub REST API tools and Git clone/push/pull over HTTPS.
 
-### Encryption
+### Portal-Managed Runtime Profiles
 
-Sensitive values can be encrypted:
+On Kubernetes, Portal-managed runtime-profile configuration is injected as pod
+environment variables rendered from a per-profile Secret and applied once at
+boot (no hot apply; config changes require a Portal-triggered restart):
 
-```bash
-# Set encryption key via environment
-export EFP_CONFIG_KEY="your-32-byte-key"
+- `EFP_PROFILE_CONFIG` — full profile apply-payload JSON, merged in memory over
+  the read-only base `config.yaml` and scrubbed from the process environment
+  after projection.
+- `EFP_PROFILE_REVISION` / `EFP_PROFILE_ID` — profile revision and id.
+- `EFP_CONFIG_JSON` — exported by the runtime for CLI child processes
+  (`jira`, `confluence`, `jenkins`, `aws-auth`, `mobile-auto`, `visual`).
 
-# Use encrypted values in config
-llm:
-  api_key: "ENC:base64encryptedvalue..."
-```
+`GET /ready` reports readiness only after the boot projection succeeded. In
+local development (no `EFP_PROFILE_CONFIG`), the runtime uses `config.yaml`
+as-is. See `docs/runtime_contract.md` for the full contract.
 
 ---
 
@@ -276,7 +277,7 @@ Additional runtime contracts:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/config/reload` | POST | Reload runtime config |
+| `/ready` | GET | Readiness (200 after boot profile projection) |
 | `/api/git-info` | GET | Git repository info |
 
 ---

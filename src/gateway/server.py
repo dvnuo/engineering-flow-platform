@@ -22,7 +22,6 @@ from src.config import config
 from src.workspace_defaults import resolve_runtime_workspace
 from src.external_cli import jira as jira_cli
 from src.gateway.runtime_chat import run_runtime_chat
-from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.efp_runtime.session.gateway_facade import (
     JIRA_SESSION_PREFIX,
     runtime_session_manager as session_manager,
@@ -213,7 +212,6 @@ class Gateway:
     """Simple HTTP/WebSocket gateway for Engineering Flow Platform."""
 
     def __init__(self):
-        bootstrap_runtime_profile_sync()
         self.jira_enabled = config.jira.get("enabled", False)
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
@@ -224,10 +222,10 @@ class Gateway:
         # Register routes (only for webhook mode or API endpoints)
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/actuator/health", self.handle_health)
+        self.app.router.add_get("/ready", self.handle_ready)
         self.app.router.add_get("/api/git-info", self.handle_git_info)
         self.app.router.add_get("/api/skill-git-info", self.handle_skill_git_info)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
-        self.app.router.add_post("/api/config/reload", self.handle_config_reload)
         self.app.router.add_get("/api/queue/status", self.handle_queue_status)
 
         # System prompt config routes
@@ -257,8 +255,34 @@ class Gateway:
             logger.info("Runtime event routes are unavailable")
 
     async def handle_health(self, request: Request) -> web.Response:
-        """Health check endpoint."""
+        """Health check endpoint (liveness; always ok)."""
         return web.json_response({"status": "ok", "service": "engineering-flow-platform"})
+
+    async def handle_ready(self, request: Request) -> web.Response:
+        """Readiness endpoint gated on the boot-time profile projection.
+
+        Returns 200 only after bootstrap_profile_boot() completed successfully;
+        503 otherwise so the pod stays unready when the profile is broken.
+        """
+        from src.config import config as runtime_config, get_profile_boot_state
+
+        boot_state = get_profile_boot_state()
+        external_status = runtime_config.get_external_config_status()
+        if boot_state.get("completed") and boot_state.get("ready") and external_status.get("success"):
+            meta = runtime_config.get_managed_overlay_meta()
+            return web.json_response(
+                {
+                    "ready": True,
+                    "runtime_profile_id": meta.get("runtime_profile_id"),
+                    "revision": meta.get("revision"),
+                }
+            )
+        error = (
+            boot_state.get("error")
+            or external_status.get("error")
+            or "runtime profile boot projection has not completed"
+        )
+        return web.json_response({"ready": False, "error": error}, status=503)
 
     async def handle_git_info(self, request: Request) -> web.Response:
         """Get git commit info."""
@@ -506,23 +530,6 @@ class Gateway:
             }
         )
 
-
-    async def handle_config_reload(self, request: Request) -> web.Response:
-        """Reload configuration from config.yaml.
-
-        POST /api/config/reload
-        Returns: {"status": "ok", "reloaded": true|false}
-        """
-        from src.config import config as runtime_config
-
-        reloaded = runtime_config.reload()
-        return web.json_response(
-            {
-                "status": "ok",
-                "reloaded": reloaded,
-                "message": "Configuration reloaded" if reloaded else "No changes detected",
-            }
-        )
 
     async def handle_queue_status(self, request: Request) -> web.Response:
         """Get execution queue status.
