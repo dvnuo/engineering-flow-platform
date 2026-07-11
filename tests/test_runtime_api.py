@@ -40,7 +40,7 @@ class TestRuntimeApiRoutes:
         assert '/api/sessions/{session_id}/rename' in routes
         assert '/api/sessions/{session_id}' in routes
         assert '/api/usage' in routes
-        assert '/api/internal/runtime-profile/apply' in routes
+        assert '/api/internal/runtime-profile/apply' not in routes
         assert '/api/server-files' in routes
         assert '/api/server-files/read' in routes
         assert '/api/server-files/content' in routes

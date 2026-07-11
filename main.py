@@ -21,11 +21,13 @@ if str(project_root) not in sys.path:
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from src.config import config
+from src.config import bootstrap_profile_boot, config
 from src.workspace_defaults import resolve_runtime_workspace
 
-# Apply proxy settings early (before any HTTP clients are created)
-config.apply_proxy()
+# Project the EFP_PROFILE_CONFIG overlay exactly once: external CLI projection,
+# EFP_CONFIG_JSON export, proxy/jenkins/mobile env, then scrub the profile blob.
+# Must run before importing src.gateway.server (Gateway() executes at import).
+bootstrap_profile_boot()
 
 from src.efp_runtime.session.gateway_facade import runtime_session_manager
 from src.gateway.server import gateway

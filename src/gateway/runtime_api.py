@@ -1041,10 +1041,6 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
 
     app = getattr(request, "app", {}) or {}
 
-    try:
-        global_config.reload()
-    except Exception:
-        pass
     config_data = getattr(global_config, "_config", {}) or {}
 
     def _cfg(path: str) -> str:
@@ -3614,46 +3610,6 @@ async def api_edit_message_async(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e), 'user_message_id': message_id}, status=500)
 
 
-async def api_apply_runtime_profile(request: web.Request) -> web.Response:
-    """Apply managed runtime-profile snapshot from trusted Portal control-plane request."""
-    if not _is_trusted_portal_request(request):
-        return web.json_response({"error": "Forbidden"}, status=403)
-
-    try:
-        data = await request.json()
-        runtime_profile_id = data.get("runtime_profile_id")
-        revision = data.get("revision")
-        overlay_config = data.get("config") if isinstance(data.get("config"), dict) else {}
-
-        if runtime_profile_id is None and revision is None and not overlay_config:
-            global_config.clear_managed_overlay()
-            return web.json_response(
-                {
-                    "success": True,
-                    "runtime_profile_id": None,
-                    "revision": None,
-                    "updated_sections": [],
-                    "cleared": True,
-                    "external_config_status": global_config.get_external_config_status(),
-                }
-            )
-
-        updated_sections = global_config.set_managed_overlay(runtime_profile_id, revision, overlay_config)
-        return web.json_response(
-            {
-                "success": True,
-                "runtime_profile_id": runtime_profile_id,
-                "revision": revision,
-                "updated_sections": updated_sections,
-                "cleared": False,
-                "external_config_status": global_config.get_external_config_status(),
-            }
-        )
-    except Exception as e:
-        logger.error("Error applying runtime profile config: %s", e, exc_info=True)
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-
 async def api_skills(request: web.Request) -> web.Response:
     """Get list of available skills.
     
@@ -3705,7 +3661,6 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit/async', api_edit_message_async)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/usage', api_usage)
-    app.router.add_post('/api/internal/runtime-profile/apply', api_apply_runtime_profile)
     app.router.add_get('/api/skills', api_skills)
     setup_server_files_routes(app)
 

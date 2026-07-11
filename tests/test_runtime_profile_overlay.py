@@ -1,8 +1,6 @@
 import hashlib
 import json
 import os
-import subprocess
-from pathlib import Path
 
 import pytest
 from ruamel.yaml import YAML
@@ -51,10 +49,6 @@ class _CliRecorder:
 
 def _command_calls(recorder, prefix):
     return [call for call in recorder.calls if call["args"][: len(prefix)] == prefix]
-
-
-def _command_indices(recorder, prefix):
-    return [index for index, call in enumerate(recorder.calls) if call["args"][: len(prefix)] == prefix]
 
 
 RUNTIME_OVERLAY_FIELDS = {
@@ -134,34 +128,57 @@ def _write_base_config(path):
     )
 
 
-def _read_yaml(path):
-    return YAML().load(path.read_text(encoding="utf-8")) or {}
+def _profile_payload(config, *, profile_id="rp_1", revision=3, runtime_type="native", name="profile"):
+    return json.dumps(
+        {
+            "runtime_profile_id": profile_id,
+            "name": name,
+            "revision": revision,
+            "runtime_type": runtime_type,
+            "config": config,
+        }
+    )
 
 
-def test_runtime_profile_apply_writes_config_yaml_without_sidecar(tmp_path):
+def _env_config(tmp_path, monkeypatch, overlay_config=None, **payload_kwargs):
     config_path = tmp_path / "config.yaml"
-    runtime_profile_path = tmp_path / "runtime_profile.yaml"
-    _write_base_config(config_path)
+    if not config_path.exists():
+        _write_base_config(config_path)
+    if overlay_config is None:
+        monkeypatch.delenv("EFP_PROFILE_CONFIG", raising=False)
+    else:
+        monkeypatch.setenv(
+            "EFP_PROFILE_CONFIG", _profile_payload(overlay_config, **payload_kwargs)
+        )
+    return Config(str(config_path))
 
-    cfg = Config(str(config_path))
-    cfg.runtime_profile_path = runtime_profile_path
-    updated = cfg.set_managed_overlay(
-        "rp_1",
-        3,
+
+# ---------------------------------------------------------------------------
+# EFP_PROFILE_CONFIG env overlay: merge, filtering, metadata
+# ---------------------------------------------------------------------------
+
+
+def test_env_overlay_merges_whitelisted_sections_and_keeps_base_read_only(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    original_text = config_path.read_text(encoding="utf-8")
+
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
         {
             "llm": {"provider": "anthropic"},
             "jira": {"enabled": True},
             "unknown": {"x": 1},
         },
     )
-    assert updated == ["jira", "llm"]
-    assert not runtime_profile_path.exists()
 
-    cfg.load()
     effective = cfg.get_effective_config()
     assert effective["llm"]["provider"] == "anthropic"
-    assert effective["llm"].get("model") is None
-    assert "jira" not in effective
+    # Deep merge: unmanaged base llm fields survive the overlay.
+    assert effective["llm"]["model"] == "gpt-4o"
+    assert effective["llm"]["api_base"] == "https://api.local"
+    assert effective["jira"]["enabled"] is True
     assert "unknown" not in effective
 
     meta = cfg.get_managed_overlay_meta()
@@ -169,24 +186,175 @@ def test_runtime_profile_apply_writes_config_yaml_without_sidecar(tmp_path):
     assert meta["revision"] == 3
     assert meta["managed_sections"] == ["jira", "llm"]
 
+    # Base config.yaml is never rewritten.
+    assert config_path.read_text(encoding="utf-8") == original_text
 
-def test_runtime_profile_external_overlay_keeps_jenkins_credentials_in_config(tmp_path, monkeypatch):
+
+def test_env_overlay_absent_env_is_dev_mode(tmp_path, monkeypatch):
+    cfg = _env_config(tmp_path, monkeypatch, None)
+
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["provider"] == "openai"
+    assert cfg.get_managed_overlay_meta() == {
+        "runtime_profile_id": None,
+        "revision": None,
+        "managed_sections": [],
+    }
+    assert cfg._profile_env_present is False
+    assert cfg._profile_load_error is None
+
+
+def test_env_overlay_empty_config_is_valid_empty_profile(tmp_path, monkeypatch):
+    cfg = _env_config(tmp_path, monkeypatch, {}, profile_id=None, revision=None)
+
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["provider"] == "openai"
+    assert cfg._profile_env_present is True
+    assert cfg._profile_load_error is None
+    assert cfg.get_managed_overlay_meta() == {
+        "runtime_profile_id": None,
+        "revision": None,
+        "managed_sections": [],
+    }
+
+
+def test_env_overlay_invalid_json_records_load_error_without_crashing(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
-    for key in ("EFP_JENKINS_USERNAME", "EFP_JENKINS_PASSWORD", "JENKINS_USERNAME", "JENKINS_PASSWORD"):
-        monkeypatch.delenv(key, raising=False)
-    applied = []
-
-    monkeypatch.setattr(
-        profile_config_module,
-        "apply_runtime_profile_external_config",
-        lambda overlay, **_: applied.append(json.loads(json.dumps(overlay))),
-    )
+    monkeypatch.setenv("EFP_PROFILE_CONFIG", "{not json")
 
     cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_atlassian",
-        1,
+
+    assert cfg._profile_env_present is True
+    assert cfg._profile_load_error is not None
+    assert "Invalid EFP_PROFILE_CONFIG" in cfg._profile_load_error
+    # Base config remains usable.
+    assert cfg.get_effective_config()["llm"]["provider"] == "openai"
+
+
+def test_env_overlay_filters_unmanaged_nested_fields(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "llm": {
+                "provider": "openai",
+                "model": "gpt-5",
+                "api_base": "https://should-not-be-merged",
+            },
+            "github": {
+                "enabled": True,
+                "base_url": "https://github.example/api",
+                "unexpected_nested": {"x": 1},
+            },
+        },
+    )
+
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["provider"] == "openai"
+    assert effective["llm"]["model"] == "gpt-5"
+    assert effective["llm"]["api_base"] == "https://api.local"
+    assert effective["github"]["enabled"] is True
+    assert effective["github"]["base_url"] == "https://github.example/api"
+    assert "unexpected_nested" not in effective["github"]
+
+
+def test_env_overlay_applies_runtime_top_level_fields_and_filters_unknown(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write("workspace_root: /user/workspace\n")
+
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            **RUNTIME_OVERLAY_FIELDS,
+            "workspace_root": "/portal/workspace",
+            "default_provider_id": "openai",
+            "default_model": "gpt-other",
+            "compaction_preserve_recent_turns": 10,
+            "mcp_servers": {"filesystem": {}},
+        },
+        revision=4,
+    )
+
+    effective = cfg.get_effective_config()
+    for field, expected in RUNTIME_OVERLAY_FIELDS.items():
+        assert effective[field] == expected
+    assert effective["workspace_root"] == "/user/workspace"
+    assert "default_provider_id" not in effective
+    assert "default_model" not in effective
+    assert "compaction_preserve_recent_turns" not in effective
+    assert "mcp_servers" not in effective
+
+
+def test_env_overlay_allows_llm_response_flow_subtree(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "llm": {
+                "provider": "openai",
+                "response_flow": {
+                    "plan_policy": "explicit_or_complex",
+                    "staging_policy": "explicit_or_complex",
+                },
+            }
+        },
+    )
+
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["response_flow"]["plan_policy"] == "explicit_or_complex"
+
+
+def test_env_overlay_allows_proxy_no_proxy_fields(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "proxy": {
+                "enabled": True,
+                "url": "http://overlay.proxy.local:8080",
+                "no_proxy": "localhost,.svc",
+                "noProxy": "localhost,.camel",
+                "unexpected_nested": {"x": 1},
+            }
+        },
+    )
+
+    assert cfg.proxy["no_proxy"] == "localhost,.svc"
+    assert cfg.proxy["noProxy"] == "localhost,.camel"
+    assert "unexpected_nested" not in cfg.proxy
+
+
+def test_env_overlay_base_enc_value_logs_warning_and_is_left_as_is(tmp_path, monkeypatch, caplog):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "llm:\n"
+        "  provider: openai\n"
+        "  api_key: 'ENC:legacy-encrypted-value'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("EFP_PROFILE_CONFIG", raising=False)
+    caplog.set_level("WARNING")
+
+    cfg = Config(str(config_path))
+
+    assert cfg.llm["api_key"] == "ENC:legacy-encrypted-value"
+    assert "no longer supported" in caplog.text
+    assert "llm.api_key" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# External CLI instruction injection
+# ---------------------------------------------------------------------------
+
+
+def test_external_cli_instructions_are_injected_for_atlassian_config(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
         {
             "jira": {
                 "enabled": True,
@@ -194,222 +362,72 @@ def test_runtime_profile_external_overlay_keeps_jenkins_credentials_in_config(tm
                     {
                         "name": "jira-main",
                         "url": "https://jira.example.test",
-                        "username": "bot",
                         "token": "jira-token",
                     }
                 ],
-            },
-            "confluence": {
-                "enabled": True,
-                "instances": [
-                    {
-                        "name": "docs",
-                        "url": "https://conf.example.test/wiki",
-                        "username": "bot",
-                        "token": "conf-token",
-                    }
-                ],
-            },
-            "aws": {
-                "enabled": True,
-                "domain": "HBEU",
-                "username": "aws-user",
-                "password": "aws-password",
-            },
-            "jenkins": {
-                "enabled": True,
-                "username": "jenkins-user",
-                "password": "jenkins-password",
-            },
+            }
         },
     )
 
-    persisted = _read_yaml(config_path)
-    assert "jira" not in persisted
-    assert "confluence" not in persisted
-    assert persisted["aws"] == {
-        "enabled": True,
-        "domain": "HBEU",
-        "username": "aws-user",
-        "password": "aws-password",
-    }
-    assert persisted["jenkins"] == {
-        "enabled": True,
-        "username": "jenkins-user",
-        "password": "jenkins-password",
-    }
-    assert persisted["instruction_texts"]
-    assert "jira-token" not in config_path.read_text(encoding="utf-8")
-    assert "conf-token" not in config_path.read_text(encoding="utf-8")
-    assert "aws-password" in config_path.read_text(encoding="utf-8")
-    assert applied[0]["jira"]["instances"][0]["token"] == "jira-token"
-    assert applied[0]["confluence"]["instances"][0]["token"] == "conf-token"
-    assert applied[0]["aws"]["domain"] == "HBEU"
-    assert applied[0]["aws"]["password"] == "aws-password"
-    assert applied[0]["jenkins"]["password"] == "jenkins-password"
-    assert os.environ["EFP_JENKINS_USERNAME"] == "jenkins-user"
-    assert os.environ["EFP_JENKINS_PASSWORD"] == "jenkins-password"
-    assert os.environ["JENKINS_USERNAME"] == "jenkins-user"
-    assert os.environ["JENKINS_PASSWORD"] == "jenkins-password"
+    instructions = cfg.get_effective_config()["instruction_texts"]
+    joined = "\n".join(instructions)
+    assert "Use bash" in joined
+    assert "jira, confluence, gh, aws, jenkins, mobile-auto, and git" in joined
+    assert "always pass --json" in joined
+    assert "EFP_JENKINS_USERNAME" in joined
+    assert "EFP_JENKINS_PASSWORD" in joined
+    assert "git for clone, fetch, push, and status" in joined
+    assert "auth_failed" in joined
+    assert "include_default_system_prompt" not in cfg.get_effective_config()
     assert cfg.get_managed_overlay_meta()["managed_sections"] == [
-        "aws",
-        "confluence",
         "instruction_texts",
-        "jenkins",
         "jira",
     ]
 
 
-def test_runtime_profile_aws_external_config_runs_aws_auth_tool_and_clears_files(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("PATH", "/usr/local/bin")
-    for key in ("password", "AD_PASS"):
-        monkeypatch.delenv(key, raising=False)
-    recorder = _CliRecorder(record_env=True)
-    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
-
-    profile_config_module.apply_runtime_profile_external_config(
+def test_external_cli_instructions_require_real_atlassian_url(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
         {
-            "aws": {
+            "jira": {
                 "enabled": True,
-                "domain": "HBEU",
-                "username": "aws-user",
-                "password": "aws-password",
-            }
-        }
+                "instances": [{"name": "jira-main"}],
+            },
+            "confluence": {
+                "enabled": True,
+                "instances": [{"name": "docs", "baseUrl": " "}],
+            },
+        },
     )
 
-    aws_config = home / ".aws" / "config"
-    aws_credentials = home / ".aws" / "credentials"
-    assert not aws_config.exists()
-    assert not aws_credentials.exists()
-
-    auth_path = home / ".config" / "efp" / "runtime-profile-aws-adfs-auth.json"
-    helper_path = home / ".config" / "efp" / "aws-adfs-credential-process.py"
-    assert not auth_path.exists()
-    assert not helper_path.exists()
-
-    assume_call = next(call for call in recorder.calls if call["args"][0] == "aws-auth")
-    assume_args = assume_call["args"]
-    assert assume_args == [
-        "aws-auth",
-        "auth",
-        "login",
-        "--domain",
-        "HBEU",
-        "--username",
-        "aws-user",
-        "--password-stdin",
-        "--json",
-    ]
-    assert assume_call["input"] == "aws-password"
-    assert "aws-password" not in " ".join(assume_args)
-    assume_env = assume_call["env"]
-    assert "AD_PASS" not in assume_env
-    assert "password" not in assume_env
-    assert "/app/venv/bin" in assume_env["PATH"]
-
-    metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
-    metadata_text = metadata_path.read_text(encoding="utf-8")
-    assert "aws-password" not in metadata_text
-    metadata = json.loads(metadata_text)
-    assert metadata["aws"]["auth_type"] == "aws_auth_cli"
-
-    profile_config_module.clear_runtime_profile_external_config()
-    assert not aws_config.exists()
-    assert not aws_credentials.exists()
-    assert not auth_path.exists()
-    assert not helper_path.exists()
-    assert not metadata_path.exists()
-
-
-def test_runtime_profile_aws_auth_failure_redacts_password(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    captured = {}
-
-    def fail_aws_auth(args, input=None, text=False, capture_output=False, check=False, env=None):
-        captured["args"] = list(args)
-        captured["input"] = input
-        captured["env"] = dict(env or {})
-        return _FakeCompleted(returncode=1, stderr="login failed for aws-password")
-
-    monkeypatch.setattr(profile_config_module.subprocess, "run", fail_aws_auth)
-
-    with pytest.raises(RuntimeError) as exc:
-        profile_config_module.apply_runtime_profile_external_config(
-            {
-                "aws": {
-                    "enabled": True,
-                    "domain": "HBEU",
-                    "username": "aws-user",
-                    "password": "aws-password",
-                }
-            }
-        )
-
-    assert captured["args"] == [
-        "aws-auth",
-        "auth",
-        "login",
-        "--domain",
-        "HBEU",
-        "--username",
-        "aws-user",
-        "--password-stdin",
-        "--json",
-    ]
-    assert captured["input"] == "aws-password"
-    assert "AD_PASS" not in captured["env"]
-    assert "aws-password" not in str(exc.value)
-    assert "[REDACTED_SECRET]" in str(exc.value)
-    assert not (home / ".aws" / "config").exists()
-    assert not (home / ".aws" / "credentials").exists()
-
-
-def test_runtime_profile_apply_prunes_previous_portal_atlassian_entries(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "llm:\n"
-        "  provider: openai\n"
-        "jira:\n"
-        "  enabled: true\n"
-        "  instances:\n"
-        "    - name: jira-main\n"
-        "      url: https://jira.example.test\n"
-        "      username: bot\n"
-        "      token: jira-token\n"
-        "confluence:\n"
-        "  enabled: true\n"
-        "  instances:\n"
-        "    - name: docs\n"
-        "      url: https://conf.example.test/wiki\n"
-        "      username: bot\n"
-        "      token: conf-token\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        profile_config_module,
-        "apply_runtime_profile_external_config",
-        lambda overlay, **_: None,
-    )
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay("rp_prune", 2, {"llm": {"provider": "anthropic"}})
-
-    persisted = _read_yaml(config_path)
-    assert "jira" not in persisted
-    assert "confluence" not in persisted
-    raw_text = config_path.read_text(encoding="utf-8")
-    assert "jira-token" not in raw_text
-    assert "conf-token" not in raw_text
-    cfg.load()
     effective = cfg.get_effective_config()
-    assert "jira" not in effective
-    assert "confluence" not in effective
+    assert "instruction_texts" not in effective
+    assert cfg.get_managed_overlay_meta()["managed_sections"] == ["confluence", "jira"]
+
+
+def test_external_cli_instructions_preserve_portal_texts(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "instruction_texts": ["Portal supplied instructions."],
+            "github": {
+                "enabled": True,
+                "access_token": "gh-token",
+                "api_base_url": "https://github.example.test/api/v3",
+            },
+        },
+    )
+
+    assert cfg.get_effective_config()["instruction_texts"] == [
+        "Portal supplied instructions."
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Config instance normalization (unchanged consumer behavior)
+# ---------------------------------------------------------------------------
 
 
 def test_runtime_profile_config_instances_normalize_cli_native_and_drop_blank_urls():
@@ -453,242 +471,9 @@ def test_runtime_profile_config_instances_normalize_cli_native_and_drop_blank_ur
     assert confluence_instances[0]["url"] == "https://conf.example.test/wiki"
 
 
-def test_runtime_profile_apply_preserves_and_clears_runtime_top_level_fields(tmp_path):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-    with config_path.open("a", encoding="utf-8") as handle:
-        handle.write("workspace_root: /user/workspace\n")
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_runtime",
-        4,
-        {
-            **RUNTIME_OVERLAY_FIELDS,
-            "workspace_root": "/portal/workspace",
-            "default_provider_id": "openai",
-            "default_model": "gpt-other",
-            "compaction_preserve_recent_turns": 10,
-            "mcp_servers": {"filesystem": {}},
-        },
-    )
-
-    cfg.load()
-    effective = cfg.get_effective_config()
-    for field, expected in RUNTIME_OVERLAY_FIELDS.items():
-        assert effective[field] == expected
-    assert effective["workspace_root"] == "/user/workspace"
-    assert "default_provider_id" not in effective
-    assert "default_model" not in effective
-    assert "compaction_preserve_recent_turns" not in effective
-    assert "mcp_servers" not in effective
-
-    cfg.clear_managed_overlay()
-    cfg.load()
-    cleared = cfg.get_effective_config()
-    for field in RUNTIME_OVERLAY_FIELDS:
-        assert field not in cleared
-    assert cleared["workspace_root"] == "/user/workspace"
-
-
-def test_runtime_profile_apply_preserves_unmanaged_llm_subtree(tmp_path):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_tools",
-        1,
-        {"llm": {"provider": "openai", "model": "gpt-4.1", "tools": ["git_clone", "jira_*"]}},
-    )
-
-    cfg.load()
-    effective = cfg.get_effective_config()
-    assert effective["llm"]["provider"] == "openai"
-    assert effective["llm"]["model"] == "gpt-4.1"
-    assert effective["llm"]["tools"] == ["git_clone", "jira_*"]
-    assert effective["llm"]["api_base"] == "https://api.local"
-    assert effective["llm"]["max_retries"] == 3
-
-
-def test_runtime_profile_apply_filters_unmanaged_nested_fields_from_snapshot(tmp_path):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_filter",
-        9,
-        {
-            "llm": {
-                "provider": "openai",
-                "model": "gpt-5",
-                "api_base": "https://should-not-be-written",
-            },
-            "github": {
-                "enabled": True,
-                "base_url": "https://github.example/api",
-                "unexpected_nested": {"x": 1},
-            },
-        },
-    )
-
-    cfg.load()
-    effective = cfg.get_effective_config()
-    assert effective["llm"]["provider"] == "openai"
-    assert effective["llm"]["model"] == "gpt-5"
-    assert effective["llm"]["api_base"] == "https://api.local"
-    assert effective["github"]["enabled"] is True
-    assert effective["github"]["base_url"] == "https://github.example/api"
-    assert "unexpected_nested" not in effective["github"]
-
-
-def test_runtime_profile_apply_prunes_stale_managed_proxy_fields(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-    for key in [
-        "http_proxy",
-        "https_proxy",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "all_proxy",
-        "ALL_PROXY",
-        "no_proxy",
-        "NO_PROXY",
-    ]:
-        monkeypatch.delenv(key, raising=False)
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_proxy",
-        1,
-        {"proxy": {"enabled": True, "url": "http://overlay.proxy.local:8080", "password": "secret"}},
-    )
-    assert os.environ["http_proxy"] == "http://overlay.proxy.local:8080"
-    assert os.environ["all_proxy"] == "http://overlay.proxy.local:8080"
-    assert os.environ["ALL_PROXY"] == "http://overlay.proxy.local:8080"
-
-    cfg.set_managed_overlay("rp_proxy", 2, {"llm": {"provider": "openai"}})
-    cfg.load()
-    assert cfg.proxy.get("enabled") is None
-    assert cfg.proxy.get("url") is None
-    assert cfg.proxy.get("password") is None
-    for key in [
-        "http_proxy",
-        "https_proxy",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "all_proxy",
-        "ALL_PROXY",
-        "no_proxy",
-        "NO_PROXY",
-    ]:
-        assert key not in os.environ
-
-
-def test_runtime_profile_apply_allows_proxy_no_proxy_fields(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-    for key in [
-        "http_proxy",
-        "https_proxy",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "all_proxy",
-        "ALL_PROXY",
-        "no_proxy",
-        "NO_PROXY",
-    ]:
-        monkeypatch.delenv(key, raising=False)
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_proxy_no_proxy",
-        1,
-        {
-            "proxy": {
-                "enabled": True,
-                "url": "http://overlay.proxy.local:8080",
-                "no_proxy": "localhost,.svc",
-                "noProxy": "localhost,.camel",
-                "unexpected_nested": {"x": 1},
-            }
-        },
-    )
-
-    cfg.load()
-    assert cfg.proxy["no_proxy"] == "localhost,.svc"
-    assert cfg.proxy["noProxy"] == "localhost,.camel"
-    assert "unexpected_nested" not in cfg.proxy
-
-
-def test_runtime_profile_apply_encrypts_sensitive_fields_in_config_yaml(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-    monkeypatch.setenv("EFP_CONFIG_KEY", "test-key")
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_3",
-        7,
-        {
-            "proxy": {"enabled": True, "url": "http://proxy:8080", "password": "secret"},
-            "jenkins": {"enabled": True, "username": "build", "password": "jenkins-secret"},
-        },
-    )
-
-    raw_content = config_path.read_text(encoding="utf-8")
-    assert "ENC:" in raw_content
-    assert "secret" not in raw_content
-    assert "jenkins-secret" not in raw_content
-
-    cfg.load()
-    assert cfg.proxy.get("password") == "secret"
-    assert cfg.jenkins.get("password") == "jenkins-secret"
-
-
-def test_runtime_profile_apply_persists_mobile_config_and_encrypts_access_key(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-    monkeypatch.setenv("EFP_CONFIG_KEY", "test-key")
-    monkeypatch.delenv("BROWSERSTACK_USERNAME", raising=False)
-    monkeypatch.delenv("BROWSERSTACK_ACCESS_KEY", raising=False)
-    monkeypatch.delenv("BROWSERSTACK_LOCAL_BINARY", raising=False)
-
-    cfg = Config(str(config_path))
-    updated = cfg.set_managed_overlay(
-        "rp_mobile",
-        4,
-        {
-            "mobile-auto": {
-                "enabled": True,
-                "default_provider": "browserstack",
-                "state_dir": "/workspace/.efp/mobile-auto/runs",
-                "artifacts_dir": "/workspace/.efp/mobile-auto/artifacts",
-                "defaults": {"platform": "android", "network_mode": "private-external"},
-                "browserstack": {
-                    "username": "bs-user",
-                    "access_key": "bs-access-key",
-                    "local": {"mode": "external", "binary": "/usr/local/bin/BrowserStackLocal"},
-                },
-            }
-        },
-    )
-
-    raw_content = config_path.read_text(encoding="utf-8")
-    assert "ENC:" in raw_content
-    assert "bs-access-key" not in raw_content
-
-    cfg.load()
-    effective = cfg.get_effective_config()
-    assert effective["mobile-auto"]["enabled"] is True
-    assert effective["mobile-auto"]["browserstack"]["access_key"] == "bs-access-key"
-    assert os.environ["BROWSERSTACK_USERNAME"] == "bs-user"
-    assert os.environ["BROWSERSTACK_ACCESS_KEY"] == "bs-access-key"
-    # An explicit profile local.binary is exposed verbatim for the mobile-auto CLI.
-    assert os.environ["BROWSERSTACK_LOCAL_BINARY"] == "/usr/local/bin/BrowserStackLocal"
-    assert "mobile-auto" in updated
-    assert cfg.get_managed_overlay_meta()["managed_sections"] == ["instruction_texts", "mobile-auto"]
+# ---------------------------------------------------------------------------
+# apply_mobile_env (boot-time env export)
+# ---------------------------------------------------------------------------
 
 
 def test_apply_mobile_env_sets_local_binary_from_default_or_leaves_path_fallback(monkeypatch):
@@ -738,10 +523,7 @@ def test_apply_mobile_env_sets_local_binary_from_default_or_leaves_path_fallback
     assert "BROWSERSTACK_LOCAL_BINARY" not in os.environ
 
 
-def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-    monkeypatch.setenv("EFP_CONFIG_KEY", "test-key")
+def test_apply_mobile_env_supports_custom_env_names_from_overlay(tmp_path, monkeypatch):
     for key in [
         "BROWSERSTACK_USERNAME",
         "BROWSERSTACK_ACCESS_KEY",
@@ -751,10 +533,9 @@ def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(t
     ]:
         monkeypatch.delenv(key, raising=False)
 
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_mobile",
-        4,
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
         {
             "mobile-auto": {
                 "enabled": True,
@@ -768,174 +549,35 @@ def test_runtime_profile_mobile_env_supports_custom_names_and_clears_on_remove(t
             }
         },
     )
+    cfg.apply_mobile_env()
 
     assert os.environ["CUSTOM_BS_USERNAME"] == "bs-user"
     assert os.environ["CUSTOM_BS_ACCESS_KEY"] == "bs-access-key"
     assert os.environ["BROWSERSTACK_USERNAME"] == "bs-user"
     assert os.environ["BROWSERSTACK_ACCESS_KEY"] == "bs-access-key"
 
-    cfg.set_managed_overlay("rp_mobile", 5, {"llm": {"provider": "openai"}})
-
+    cfg._config = {}
+    cfg.apply_mobile_env()
     for key in [
         "BROWSERSTACK_USERNAME",
         "BROWSERSTACK_ACCESS_KEY",
-        "BROWSERSTACK_LOCAL_BINARY",
         "CUSTOM_BS_USERNAME",
         "CUSTOM_BS_ACCESS_KEY",
     ]:
         assert key not in os.environ
 
 
-def test_runtime_profile_clear_removes_managed_subtree_and_metadata(tmp_path):
-    config_path = tmp_path / "config.yaml"
-    runtime_profile_path = tmp_path / "runtime_profile.yaml"
-    _write_base_config(config_path)
-    runtime_profile_path.write_text("legacy: true\n", encoding="utf-8")
-
-    cfg = Config(str(config_path))
-    cfg.runtime_profile_path = runtime_profile_path
-    cfg.set_managed_overlay("rp_2", 1, {"jira": {"enabled": True}, "proxy": {"enabled": True, "url": "http://x"}})
-    cfg.clear_managed_overlay()
-
-    cfg.load()
-    meta = cfg.get_managed_overlay_meta()
-    assert meta == {"runtime_profile_id": None, "revision": None, "managed_sections": []}
-    assert cfg.jira.get("enabled") is None
-    assert "proxy" not in cfg.get_effective_config()
-    assert not runtime_profile_path.exists()
+# ---------------------------------------------------------------------------
+# External CLI projection (gh / aws / git only; no jira/confluence CLI writes)
+# ---------------------------------------------------------------------------
 
 
-def test_set_managed_overlay_external_cli_failure_is_non_fatal(tmp_path, monkeypatch, caplog):
-    config_path = tmp_path / "config.yaml"
-    runtime_profile_path = tmp_path / "runtime_profile.yaml"
-    _write_base_config(config_path)
-    for key in [
-        "http_proxy",
-        "https_proxy",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "all_proxy",
-        "ALL_PROXY",
-        "no_proxy",
-        "NO_PROXY",
-    ]:
-        monkeypatch.delenv(key, raising=False)
-    token = "gh-secret-token"
-    proxy_password = "proxy-url-secret"
-
-    def _fail_external_config(_overlay, **_):
-        raise RuntimeError(f"External CLI command failed: gh auth login stderr: {token} proxy {proxy_password}")
-
-    monkeypatch.setattr(
-        profile_config_module,
-        "apply_runtime_profile_external_config",
-        _fail_external_config,
-    )
-    caplog.set_level("WARNING")
-
-    cfg = Config(str(config_path))
-    cfg.runtime_profile_path = runtime_profile_path
-    updated = cfg.set_managed_overlay(
-        "rp_external_fail",
-        5,
-        {
-            "github": {
-                "enabled": True,
-                "access_token": token,
-            },
-            "proxy": {
-                "enabled": True,
-                "url": f"http://proxy-user:{proxy_password}@proxy.example.test:8080",
-            },
-        },
-    )
-
-    assert updated == ["github", "instruction_texts", "proxy"]
-    cfg.load()
-    assert cfg.get_effective_config()["github"]["access_token"] == token
-    assert cfg.get_managed_overlay_meta() == {
-        "runtime_profile_id": "rp_external_fail",
-        "revision": 5,
-        "managed_sections": ["github", "instruction_texts", "proxy"],
-    }
-    status = cfg.get_external_config_status()
-    assert status["operation"] == "apply"
-    assert status["success"] is False
-    assert "External CLI command failed" in status["error"]
-    assert token not in status["error"]
-    assert proxy_password not in status["error"]
-    assert "[REDACTED_SECRET]" in status["error"]
-    assert token not in caplog.text
-    assert proxy_password not in caplog.text
-    assert "Runtime profile external CLI config apply failed" in caplog.text
-    assert not runtime_profile_path.exists()
-
-
-def test_clear_managed_overlay_external_cli_failure_is_non_fatal(tmp_path, monkeypatch, caplog):
-    config_path = tmp_path / "config.yaml"
-    runtime_profile_path = tmp_path / "runtime_profile.yaml"
-    _write_base_config(config_path)
-
-    monkeypatch.setattr(
-        profile_config_module,
-        "apply_runtime_profile_external_config",
-        lambda _overlay, **_: None,
-    )
-    cfg = Config(str(config_path))
-    cfg.runtime_profile_path = runtime_profile_path
-    cfg.set_managed_overlay(
-        "rp_external_clear_fail",
-        6,
-        {"jira": {"enabled": True}},
-    )
-
-    monkeypatch.setattr(
-        profile_config_module,
-        "clear_runtime_profile_external_config",
-        lambda **_: (_ for _ in ()).throw(RuntimeError("External CLI command failed: jira instance remove")),
-    )
-    caplog.set_level("WARNING")
-
-    cfg.clear_managed_overlay()
-
-    cfg.load()
-    assert cfg.get_managed_overlay_meta() == {"runtime_profile_id": None, "revision": None, "managed_sections": []}
-    assert cfg.jira.get("enabled") is None
-    assert "proxy" not in cfg.get_effective_config()
-    status = cfg.get_external_config_status()
-    assert status == {
-        "success": False,
-        "error": "External CLI command failed: jira instance remove",
-        "operation": "clear",
-    }
-    assert "Runtime profile external CLI config clear failed" in caplog.text
-    assert not runtime_profile_path.exists()
-
-
-def test_runtime_profile_load_removes_legacy_sidecar_on_startup(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    home_efp_dir = tmp_path / ".efp"
-    home_efp_dir.mkdir(parents=True, exist_ok=True)
-
-    config_path = home_efp_dir / "config.yaml"
-    runtime_profile_path = home_efp_dir / "runtime_profile.yaml"
-    _write_base_config(config_path)
-    runtime_profile_path.write_text("llm:\n  provider: old\n", encoding="utf-8")
-
-    cfg = Config(str(config_path))
-
-    assert not runtime_profile_path.exists()
-    assert cfg.get_effective_config()["llm"]["provider"] == "openai"
-
-
-def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypatch):
+def test_external_config_apply_skips_atlassian_and_jenkins_clis(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("ATLASSIAN_CONFIG", raising=False)
     monkeypatch.delenv("GH_CONFIG_DIR", raising=False)
-    for key in ("EFP_JENKINS_USERNAME", "EFP_JENKINS_PASSWORD", "JENKINS_USERNAME", "JENKINS_PASSWORD"):
-        monkeypatch.delenv(key, raising=False)
     recorder = _CliRecorder()
     recorder.git_values = {
         "user.name": "Existing User",
@@ -943,13 +585,7 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
     }
     monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
 
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_external",
-        1,
+    profile_config_module.apply_runtime_profile_external_config(
         {
             "jira": {
                 "enabled": True,
@@ -959,11 +595,7 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
                         "url": "https://jira.example.test/",
                         "username": "bot",
                         "api_token": "jira-token",
-                        "project_key": "ENG",
-                        "api_version": "3",
-                        "verify_ssl": False,
-                    },
-                    {"name": "disabled", "url": "https://disabled.example.test", "enabled": False},
+                    }
                 ],
             },
             "confluence": {
@@ -973,7 +605,6 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
                         "name": "docs",
                         "url": "https://conf.example.test/",
                         "token": "conf-token",
-                        "space_key": "DOCS",
                     }
                 ],
             },
@@ -988,78 +619,13 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
                 "password": "jenkins-password",
             },
             "git": {"user": {"name": "Runtime Bot", "email": "runtime@example.test"}},
-        },
+        }
     )
 
-    jira_remove = _command_calls(recorder, ["jira", "--json", "instance", "remove"])
-    assert jira_remove == [
-        {
-            "args": ["jira", "--json", "instance", "remove", "jira-main", "--yes"],
-            "input": None,
-            "text": True,
-            "capture_output": True,
-            "check": False,
-        }
-    ]
-    jira_add = _command_calls(recorder, ["jira", "--json", "instance", "add"])
-    assert len(jira_add) == 1
-    assert _command_indices(recorder, ["jira", "--json", "instance", "remove"])[0] < _command_indices(
-        recorder,
-        ["jira", "--json", "instance", "add"],
-    )[0]
-    assert jira_add[0]["args"] == [
-        "jira",
-        "--json",
-        "instance",
-        "add",
-        "jira-main",
-        "--base-url",
-        "https://jira.example.test",
-        "--rest-path",
-        "/rest/api/3",
-        "--api-version",
-        "3",
-        "--default",
-        "--auth-type",
-        "basic_api_key",
-        "--username",
-        "bot",
-        "--api-key-stdin",
-    ]
-    assert jira_add[0]["input"] == "jira-token"
-
-    confluence_remove = _command_calls(recorder, ["confluence", "--json", "instance", "remove"])
-    assert confluence_remove == [
-        {
-            "args": ["confluence", "--json", "instance", "remove", "docs", "--yes"],
-            "input": None,
-            "text": True,
-            "capture_output": True,
-            "check": False,
-        }
-    ]
-    confluence_add = _command_calls(recorder, ["confluence", "--json", "instance", "add"])
-    assert len(confluence_add) == 1
-    assert _command_indices(recorder, ["confluence", "--json", "instance", "remove"])[0] < _command_indices(
-        recorder,
-        ["confluence", "--json", "instance", "add"],
-    )[0]
-    assert confluence_add[0]["args"] == [
-        "confluence",
-        "--json",
-        "instance",
-        "add",
-        "docs",
-        "--base-url",
-        "https://conf.example.test",
-        "--rest-path",
-        "/rest/api",
-        "--default",
-        "--auth-type",
-        "bearer_token",
-        "--token-stdin",
-    ]
-    assert confluence_add[0]["input"] == "conf-token"
+    # Jira/Confluence/Jenkins reach CLIs via EFP_CONFIG_JSON only, never CLI writes.
+    assert _command_calls(recorder, ["jira"]) == []
+    assert _command_calls(recorder, ["confluence"]) == []
+    assert _command_calls(recorder, ["jenkins"]) == []
 
     gh_login = _command_calls(recorder, ["gh", "auth", "login"])
     assert gh_login == [
@@ -1089,11 +655,6 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
             "check": False,
         }
     ]
-    assert _command_calls(recorder, ["jenkins"]) == []
-    assert os.environ["EFP_JENKINS_USERNAME"] == "jenkins-user"
-    assert os.environ["EFP_JENKINS_PASSWORD"] == "jenkins-password"
-    assert os.environ["JENKINS_USERNAME"] == "jenkins-user"
-    assert os.environ["JENKINS_PASSWORD"] == "jenkins-password"
     assert _command_calls(recorder, ["git", "config", "--global", "user.name"]) == [
         {
             "args": ["git", "config", "--global", "user.name", "Runtime Bot"],
@@ -1113,31 +674,15 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
         }
     ]
 
-    assert not (home / ".config" / "atlassian" / "config.json").exists()
-    assert not (home / ".config" / "gh" / "hosts.yml").exists()
-    assert not (home / ".config" / "efp" / "runtime-profile.gitconfig").exists()
-    assert not (home / ".gitconfig").exists()
-
     metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    if os.name != "nt":
-        assert metadata_path.stat().st_mode & 0o777 == 0o600
-    assert metadata == {
-        "version": 2,
-        "managed_by": "efp_runtime_profile",
-        "jira": {"instances": [{"name": "jira-main"}]},
-        "confluence": {"instances": [{"name": "docs"}]},
-        "gh": {"hosts": ["github.example.test"]},
-        "git": {
-            "managed": {
-                "user.name": "Runtime Bot",
-                "user.email": "runtime@example.test",
-            },
-            "previous": {
-                "user.name": "Existing User",
-                "user.email": "existing@example.test",
-            },
-        },
+    assert "jira" not in metadata
+    assert "confluence" not in metadata
+    assert "jenkins" not in metadata
+    assert metadata["gh"] == {"hosts": ["github.example.test"]}
+    assert metadata["git"]["managed"] == {
+        "user.name": "Runtime Bot",
+        "user.email": "runtime@example.test",
     }
 
     metadata_text = json.dumps(metadata)
@@ -1146,44 +691,7 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
         assert secret not in all_argv
         assert secret not in metadata_text
 
-    cfg.clear_managed_overlay()
-    assert _command_calls(recorder, ["jira", "--json", "instance", "remove"]) == [
-        {
-            "args": ["jira", "--json", "instance", "remove", "jira-main", "--yes"],
-            "input": None,
-            "text": True,
-            "capture_output": True,
-            "check": False,
-        },
-        {
-            "args": ["jira", "--json", "instance", "remove", "jira-main", "--yes"],
-            "input": None,
-            "text": True,
-            "capture_output": True,
-            "check": False,
-        },
-    ]
-    assert _command_calls(recorder, ["confluence", "--json", "instance", "remove"]) == [
-        {
-            "args": ["confluence", "--json", "instance", "remove", "docs", "--yes"],
-            "input": None,
-            "text": True,
-            "capture_output": True,
-            "check": False,
-        },
-        {
-            "args": ["confluence", "--json", "instance", "remove", "docs", "--yes"],
-            "input": None,
-            "text": True,
-            "capture_output": True,
-            "check": False,
-        },
-    ]
-    assert _command_calls(recorder, ["jenkins"]) == []
-    assert "EFP_JENKINS_USERNAME" not in os.environ
-    assert "EFP_JENKINS_PASSWORD" not in os.environ
-    assert "JENKINS_USERNAME" not in os.environ
-    assert "JENKINS_PASSWORD" not in os.environ
+    profile_config_module.clear_runtime_profile_external_config()
     assert _command_calls(recorder, ["gh", "auth", "logout"]) == [
         {
             "args": ["gh", "auth", "logout", "--hostname", "github.example.test"],
@@ -1200,17 +708,147 @@ def test_runtime_profile_apply_calls_external_clis_and_clear(tmp_path, monkeypat
         "capture_output": True,
         "check": False,
     }
-    assert _command_calls(recorder, ["git", "config", "--global", "user.email"])[-1] == {
-        "args": ["git", "config", "--global", "user.email", "existing@example.test"],
-        "input": None,
-        "text": True,
-        "capture_output": True,
-        "check": False,
-    }
     assert not metadata_path.exists()
 
 
-def test_managed_overlay_external_cli_env_uses_config_path_with_profile_proxy(tmp_path, monkeypatch):
+def test_external_config_apply_removes_previous_atlassian_metadata_instances(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    recorder = _CliRecorder()
+    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
+
+    # Metadata written by an older image that projected jira/confluence via CLIs.
+    metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "managed_by": "efp_runtime_profile",
+                "jira": {"instances": [{"name": "jira-main"}]},
+                "confluence": {"instances": [{"name": "docs"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profile_config_module.apply_runtime_profile_external_config({})
+
+    assert _command_calls(recorder, ["jira", "--json", "instance", "remove"]) == [
+        {
+            "args": ["jira", "--json", "instance", "remove", "jira-main", "--yes"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        }
+    ]
+    assert _command_calls(recorder, ["confluence", "--json", "instance", "remove"]) == [
+        {
+            "args": ["confluence", "--json", "instance", "remove", "docs", "--yes"],
+            "input": None,
+            "text": True,
+            "capture_output": True,
+            "check": False,
+        }
+    ]
+    assert not metadata_path.exists()
+
+
+def test_runtime_profile_aws_external_config_runs_aws_auth_tool_and_clears_files(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/local/bin")
+    for key in ("password", "AD_PASS"):
+        monkeypatch.delenv(key, raising=False)
+    recorder = _CliRecorder(record_env=True)
+    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
+
+    profile_config_module.apply_runtime_profile_external_config(
+        {
+            "aws": {
+                "enabled": True,
+                "domain": "HBEU",
+                "username": "aws-user",
+                "password": "aws-password",
+            }
+        }
+    )
+
+    aws_config = home / ".aws" / "config"
+    aws_credentials = home / ".aws" / "credentials"
+    assert not aws_config.exists()
+    assert not aws_credentials.exists()
+
+    assume_call = next(call for call in recorder.calls if call["args"][0] == "aws-auth")
+    assume_args = assume_call["args"]
+    assert assume_args == [
+        "aws-auth",
+        "auth",
+        "login",
+        "--domain",
+        "HBEU",
+        "--username",
+        "aws-user",
+        "--password-stdin",
+        "--json",
+    ]
+    assert assume_call["input"] == "aws-password"
+    assert "aws-password" not in " ".join(assume_args)
+    assume_env = assume_call["env"]
+    assert "AD_PASS" not in assume_env
+    assert "password" not in assume_env
+    assert "/app/venv/bin" in assume_env["PATH"]
+
+    metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
+    metadata_text = metadata_path.read_text(encoding="utf-8")
+    assert "aws-password" not in metadata_text
+    metadata = json.loads(metadata_text)
+    assert metadata["aws"]["auth_type"] == "aws_auth_cli"
+
+    profile_config_module.clear_runtime_profile_external_config()
+    assert not aws_config.exists()
+    assert not aws_credentials.exists()
+    assert not metadata_path.exists()
+
+
+def test_runtime_profile_aws_auth_failure_redacts_password(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    captured = {}
+
+    def fail_aws_auth(args, input=None, text=False, capture_output=False, check=False, env=None):
+        captured["args"] = list(args)
+        captured["input"] = input
+        captured["env"] = dict(env or {})
+        return _FakeCompleted(returncode=1, stderr="login failed for aws-password")
+
+    monkeypatch.setattr(profile_config_module.subprocess, "run", fail_aws_auth)
+
+    with pytest.raises(RuntimeError) as exc:
+        profile_config_module.apply_runtime_profile_external_config(
+            {
+                "aws": {
+                    "enabled": True,
+                    "domain": "HBEU",
+                    "username": "aws-user",
+                    "password": "aws-password",
+                }
+            }
+        )
+
+    assert captured["input"] == "aws-password"
+    assert "AD_PASS" not in captured["env"]
+    assert "aws-password" not in str(exc.value)
+    assert "[REDACTED_SECRET]" in str(exc.value)
+    assert not (home / ".aws" / "config").exists()
+    assert not (home / ".aws" / "credentials").exists()
+
+
+def test_external_config_apply_uses_config_path_and_profile_proxy_env(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     config_path = tmp_path / "config.yaml"
@@ -1231,10 +869,7 @@ def test_managed_overlay_external_cli_env_uses_config_path_with_profile_proxy(tm
     recorder = _CliRecorder(record_env=True)
     monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
 
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_external_env",
-        1,
+    profile_config_module.apply_runtime_profile_external_config(
         {
             "proxy": {
                 "enabled": True,
@@ -1243,101 +878,24 @@ def test_managed_overlay_external_cli_env_uses_config_path_with_profile_proxy(tm
                 "password": "proxy-password",
                 "no_proxy": "localhost,.svc",
             },
-            "jira": {
+            "github": {
                 "enabled": True,
-                "instances": [{"name": "jira-main", "url": "https://jira.example.test"}],
-            },
-            "confluence": {
-                "enabled": True,
-                "instances": [{"name": "docs", "url": "https://conf.example.test/wiki"}],
+                "access_token": "gh-token",
+                "api_base_url": "https://github.example.test/api/v3",
             },
         },
+        config_path=config_path,
     )
 
     expected_proxy = "http://proxy-user:proxy-password@proxy.example.test:8080"
-    atlassian_calls = [call for call in recorder.calls if call["args"][0] in {"jira", "confluence"}]
-    assert [call["args"][:4] for call in atlassian_calls] == [
-        ["jira", "--json", "instance", "remove"],
-        ["jira", "--json", "instance", "add"],
-        ["confluence", "--json", "instance", "remove"],
-        ["confluence", "--json", "instance", "add"],
-    ]
-    for call in atlassian_calls:
-        assert call["env"]["EFP_CONFIG"] == str(config_path)
-        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
-            assert call["env"][key] == expected_proxy
-        assert call["env"]["no_proxy"] == "localhost,.svc"
-        assert call["env"]["NO_PROXY"] == "localhost,.svc"
-
-    recorder.calls.clear()
-    monkeypatch.setenv("EFP_CONFIG", str(tmp_path / "wrong-clear-config.yaml"))
-    cfg.clear_managed_overlay()
-
-    remove_prefixes = (
-        ["jira", "--json", "instance", "remove"],
-        ["confluence", "--json", "instance", "remove"],
-    )
-    remove_calls = [call for call in recorder.calls if call["args"][:4] in remove_prefixes]
-    assert [call["args"][0] for call in remove_calls] == ["jira", "confluence"]
-    for call in remove_calls:
-        assert call["env"]["EFP_CONFIG"] == str(config_path)
-
-
-def test_runtime_profile_external_cli_reapply_removes_same_name_before_add(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    recorder = _CliRecorder()
-    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
-
-    profile = {
-        "jira": {
-            "enabled": True,
-            "instances": [
-                {"name": "jira-main", "uri": "https://jira.example.test", "token": "jira-token"},
-                {"name": "jira-empty"},
-            ],
-        },
-        "confluence": {
-            "enabled": True,
-            "instances": [
-                {"name": "docs", "baseUrl": "https://conf.example.test/wiki", "token": "conf-token"},
-                {"name": "docs-empty", "url": ""},
-            ],
-        },
-    }
-
-    profile_config_module.apply_runtime_profile_external_config(profile)
-    recorder.calls.clear()
-    profile_config_module.apply_runtime_profile_external_config(profile)
-
-    jira_remove = _command_calls(recorder, ["jira", "--json", "instance", "remove"])
-    jira_add = _command_calls(recorder, ["jira", "--json", "instance", "add"])
-    assert [call["args"][4] for call in jira_remove] == ["jira-main", "jira-main"]
-    assert len(jira_add) == 1
-    assert all(
-        index < _command_indices(recorder, ["jira", "--json", "instance", "add"])[0]
-        for index in _command_indices(recorder, ["jira", "--json", "instance", "remove"])
-    )
-
-    confluence_remove = _command_calls(recorder, ["confluence", "--json", "instance", "remove"])
-    confluence_add = _command_calls(recorder, ["confluence", "--json", "instance", "add"])
-    assert [call["args"][4] for call in confluence_remove] == ["docs", "docs"]
-    assert len(confluence_add) == 1
-    assert confluence_add[0]["args"][5:7] == ["--base-url", "https://conf.example.test/wiki"]
-    assert all(
-        index < _command_indices(recorder, ["confluence", "--json", "instance", "add"])[0]
-        for index in _command_indices(recorder, ["confluence", "--json", "instance", "remove"])
-    )
-
-    all_argv = json.dumps([call["args"] for call in recorder.calls])
-    assert "jira-empty" not in all_argv
-    assert "docs-empty" not in all_argv
-    metadata = json.loads(
-        (home / ".config" / "efp" / "runtime-profile-external-config.json").read_text(encoding="utf-8")
-    )
-    assert metadata["jira"]["instances"] == [{"name": "jira-main"}]
-    assert metadata["confluence"]["instances"] == [{"name": "docs"}]
+    gh_login = _command_calls(recorder, ["gh", "auth", "login"])
+    assert len(gh_login) == 1
+    call = gh_login[0]
+    assert call["env"]["EFP_CONFIG"] == str(config_path)
+    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        assert call["env"][key] == expected_proxy
+    assert call["env"]["no_proxy"] == "localhost,.svc"
+    assert call["env"]["NO_PROXY"] == "localhost,.svc"
 
 
 def test_runtime_profile_external_cli_inherits_docker_proxy_env_without_profile_proxy(tmp_path, monkeypatch):
@@ -1481,54 +1039,6 @@ def test_runtime_profile_clear_unsets_git_values_without_previous(tmp_path, monk
     assert not metadata_path.exists()
 
 
-def test_runtime_profile_atlassian_auth_inference_uses_stdin_flags(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    recorder = _CliRecorder()
-    monkeypatch.setattr(profile_config_module.subprocess, "run", recorder.run)
-
-    profile_config_module.apply_runtime_profile_external_config(
-        {
-            "jira": {
-                "enabled": True,
-                "instances": [
-                    {
-                        "name": "jira-password",
-                        "url": "https://jira-password.example.test",
-                        "username": "bot",
-                        "password": "jira-password-secret",
-                    },
-                    {
-                        "name": "jira-api-key-only",
-                        "url": "https://jira-api-key.example.test",
-                        "api_key": "jira-api-key-secret",
-                    },
-                ],
-            }
-        }
-    )
-
-    calls = _command_calls(recorder, ["jira", "--json", "instance", "add"])
-    assert len(calls) == 2
-    assert calls[0]["args"][-5:] == [
-        "--auth-type",
-        "basic_password",
-        "--username",
-        "bot",
-        "--password-stdin",
-    ]
-    assert calls[0]["input"] == "jira-password-secret"
-    assert calls[1]["args"][-3:] == ["--auth-type", "bearer_token", "--token-stdin"]
-    assert calls[1]["input"] == "jira-api-key-secret"
-
-    all_argv = json.dumps([call["args"] for call in recorder.calls])
-    metadata = (home / ".config" / "efp" / "runtime-profile-external-config.json").read_text(encoding="utf-8")
-    for secret in ("jira-password-secret", "jira-api-key-secret"):
-        assert secret not in all_argv
-        assert secret not in metadata
-
-
 def test_runtime_profile_clear_legacy_metadata_removes_generated_files(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
@@ -1571,13 +1081,13 @@ def test_runtime_profile_clear_legacy_metadata_removes_generated_files(tmp_path,
     metadata_path = home / ".config" / "efp" / "runtime-profile-external-config.json"
     metadata_path.write_text(
         json.dumps(
-                {
-                    "version": 1,
-                    "managed_by": "efp_runtime_profile",
-                    "atlassian": {
-                        "path": str(atlassian_path),
-                        "sha256": hashlib.sha256(atlassian_path.read_bytes()).hexdigest(),
-                    },
+            {
+                "version": 1,
+                "managed_by": "efp_runtime_profile",
+                "atlassian": {
+                    "path": str(atlassian_path),
+                    "sha256": hashlib.sha256(atlassian_path.read_bytes()).hexdigest(),
+                },
                 "gh": {
                     "path": str(hosts_path),
                     "hosts": {
@@ -1683,114 +1193,112 @@ def test_runtime_profile_external_cli_failure_redacts_profile_proxy_secrets(tmp_
     assert "[REDACTED_SECRET]" in error_text
 
 
-def test_runtime_profile_external_cli_instructions_are_injected(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-    applied = []
+# ---------------------------------------------------------------------------
+# EFP_CONFIG_JSON builder (tools RootConfig shape)
+# ---------------------------------------------------------------------------
 
-    monkeypatch.setattr(
-        profile_config_module,
-        "apply_runtime_profile_external_config",
-        lambda overlay, **_: applied.append(json.loads(json.dumps(overlay))),
-    )
 
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_instructions",
-        1,
-        {
-            "jira": {
-                "enabled": True,
-                "instances": [
-                    {
-                        "name": "jira-main",
-                        "url": "https://jira.example.test",
-                        "token": "jira-token",
-                    }
-                ],
-            }
+def test_build_tools_config_json_transforms_atlassian_and_copies_verbatim_sections():
+    effective = {
+        "version": 1,
+        "jira": {
+            "enabled": True,
+            "default_instance": "jira-main",
+            "instances": [
+                {
+                    "name": "jira-main",
+                    "url": "https://jira.example.test/",
+                    "username": "bot",
+                    "api_token": "jira-token",
+                    "api_version": "3",
+                },
+                {"name": "disabled", "url": "https://disabled.example.test", "enabled": False},
+                {"name": "no-url"},
+            ],
         },
-    )
-
-    cfg.load()
-    instructions = cfg.get_effective_config()["instruction_texts"]
-    joined = "\n".join(instructions)
-    assert "Use bash" in joined
-    assert "jira, confluence, gh, aws, jenkins, mobile-auto, and git" in joined
-    assert "always pass --json" in joined
-    assert "commands/schema/help llm" in joined
-    assert "--dry-run" in joined
-    assert "--yes" in joined
-    assert "gh for GitHub issues, pull requests, and api calls" in joined
-    assert "jenkins for Jenkins controller operations" in joined
-    assert "EFP_JENKINS_USERNAME" in joined
-    assert "EFP_JENKINS_PASSWORD" in joined
-    assert "git for clone, fetch, push, and status" in joined
-    assert "Credentials were applied by the runtime profile through real CLIs or environment variables" in joined
-    assert "auth_failed" in joined
-    assert "include_default_system_prompt" not in cfg.get_effective_config()
-    assert applied[0]["instruction_texts"] == instructions
-
-
-def test_runtime_profile_external_cli_instructions_require_real_atlassian_url(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-    applied = []
-
-    monkeypatch.setattr(
-        profile_config_module,
-        "apply_runtime_profile_external_config",
-        lambda overlay, **_: applied.append(json.loads(json.dumps(overlay))),
-    )
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_no_instructions",
-        1,
-        {
-            "jira": {
-                "enabled": True,
-                "instances": [{"name": "jira-main"}],
-            },
-            "confluence": {
-                "enabled": True,
-                "instances": [{"name": "docs", "baseUrl": " "}],
-            },
+        "confluence": {
+            "enabled": True,
+            "instances": [
+                {
+                    "name": "docs",
+                    "url": "https://conf.example.test/wiki",
+                    "token": "conf-token",
+                },
+                {
+                    "name": "docs-password",
+                    "baseUrl": "https://conf2.example.test",
+                    "username": "bot",
+                    "password": "conf-password",
+                },
+            ],
         },
-    )
+        "jenkins": {"enabled": True, "username": "jenkins-user", "password": "jenkins-password"},
+        "aws": {"enabled": True, "domain": "HBEU", "username": "aws-user", "password": "aws-password"},
+        "mobile-auto": {
+            "enabled": True,
+            "default_provider": "browserstack",
+            "browserstack": {"username": "bs-user", "access_key": "bs-key"},
+        },
+        "llm": {"provider": "github_copilot"},
+        "session": {"timeout_minutes": 30},
+    }
 
-    cfg.load()
-    effective = cfg.get_effective_config()
-    assert "instruction_texts" not in effective
-    assert "jira" not in effective
-    assert "confluence" not in effective
-    assert "instruction_texts" not in applied[0]
-    assert cfg.get_managed_overlay_meta()["managed_sections"] == ["confluence", "jira"]
+    root = profile_config_module.build_tools_config_json(effective)
 
+    assert set(root.keys()) == {"version", "jira", "confluence", "jenkins", "aws", "mobile-auto"}
+    assert root["version"] == 1
 
-def test_runtime_profile_external_cli_instructions_preserve_portal_texts(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-
-    monkeypatch.setattr(
-        profile_config_module,
-        "apply_runtime_profile_external_config",
-        lambda overlay, **_: None,
-    )
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp_portal_instructions",
-        1,
+    assert root["jira"]["default_instance"] == "jira-main"
+    assert root["jira"]["instances"] == [
         {
-            "instruction_texts": ["Portal supplied instructions."],
-            "github": {
-                "enabled": True,
-                "access_token": "gh-token",
-                "api_base_url": "https://github.example.test/api/v3",
+            "name": "jira-main",
+            "base_url": "https://jira.example.test",
+            "rest_path": "/rest/api/3",
+            "api_version": "3",
+            "auth": {
+                "type": "basic_api_key",
+                "username": "bot",
+                "api_key": "jira-token",
+            },
+        }
+    ]
+
+    assert root["confluence"]["default_instance"] == "docs"
+    assert root["confluence"]["instances"] == [
+        {
+            "name": "docs",
+            "base_url": "https://conf.example.test/wiki",
+            "rest_path": "/rest/api",
+            "auth": {"type": "bearer_token", "token": "conf-token"},
+        },
+        {
+            "name": "docs-password",
+            "base_url": "https://conf2.example.test",
+            "rest_path": "/rest/api",
+            "auth": {
+                "type": "basic_password",
+                "username": "bot",
+                "password": "conf-password",
             },
         },
-    )
+    ]
 
-    cfg.load()
-    assert cfg.get_effective_config()["instruction_texts"] == ["Portal supplied instructions."]
+    # Verbatim sections.
+    assert root["jenkins"] == {"enabled": True, "username": "jenkins-user", "password": "jenkins-password"}
+    assert root["aws"] == {"enabled": True, "domain": "HBEU", "username": "aws-user", "password": "aws-password"}
+    assert root["mobile-auto"]["browserstack"]["access_key"] == "bs-key"
+
+    # The whole payload round-trips as JSON.
+    json.dumps(root)
+
+
+def test_build_tools_config_json_omits_empty_and_disabled_sections():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jira": {"enabled": False, "instances": [{"name": "x", "url": "https://x.test"}]},
+            "confluence": {"enabled": True, "instances": []},
+            "jenkins": {},
+            "llm": {"provider": "github_copilot"},
+        }
+    )
+    assert root == {}

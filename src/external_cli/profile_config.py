@@ -57,14 +57,9 @@ def apply_runtime_profile_external_config(
 
     metadata: dict[str, Any] = {"version": _METADATA_VERSION, "managed_by": _MANAGED_BY}
 
+    # NOTE: jira/confluence are intentionally NOT projected through CLI writes
+    # anymore; those CLIs read the EFP_CONFIG_JSON env blob exported at boot.
     try:
-        _apply_atlassian_product(profile_config, product="jira", metadata=metadata, cli_environment=cli_environment)
-        _apply_atlassian_product(
-            profile_config,
-            product="confluence",
-            metadata=metadata,
-            cli_environment=cli_environment,
-        )
         _apply_github(profile_config, metadata=metadata, cli_environment=cli_environment)
         _apply_aws(profile_config, metadata=metadata, cli_environment=cli_environment)
         _apply_git_user(profile_config, metadata=metadata, cli_environment=cli_environment)
@@ -106,73 +101,68 @@ def redact_runtime_profile_external_config_error(
     return _truncate(_redact_text(str(error), _profile_config_redaction_secrets(profile_config)))
 
 
-def _apply_atlassian_product(
-    profile_config: dict[str, Any],
-    *,
-    product: str,
-    metadata: dict[str, Any],
-    cli_environment: _CliEnvironment,
-) -> None:
-    instances = _build_product_instances(profile_config.get(product), product=product)
-    if not instances:
-        return
+def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
+    """Build the EFP_CONFIG_JSON payload for the Go CLI tools.
 
-    default_name = _default_instance_name(profile_config.get(product), instances)
-    product_meta: dict[str, Any] = {"instances": []}
-    metadata[product] = product_meta
-    for instance in instances:
-        _remove_atlassian_instance_if_exists(product, instance["name"], cli_environment=cli_environment)
-        _add_atlassian_instance(
-            product,
-            instance,
-            default=instance["name"] == default_name,
-            cli_environment=cli_environment,
-        )
-        product_meta["instances"].append({"name": instance["name"]})
+    The shape matches ``RootConfig`` in engineering-flow-platform-tools
+    (internal/config/config.go): top-level keys version/jira/confluence/
+    jenkins/aws/visual/mobile-auto. Jira/Confluence sections are transformed
+    from the profile shape into the tools instances shape; the other sections
+    are taken from the effective config verbatim. Empty sections are omitted.
+    """
+    root: dict[str, Any] = {}
+    if not isinstance(effective_config, dict):
+        return root
+
+    version = effective_config.get("version")
+    if isinstance(version, int) and not isinstance(version, bool):
+        root["version"] = version
+
+    for product in ("jira", "confluence"):
+        section = effective_config.get(product)
+        instances = _build_product_instances(section, product=product)
+        if not instances:
+            continue
+        root[product] = {
+            "default_instance": _default_instance_name(section, instances),
+            "instances": [_tools_instance_config(instance, product=product) for instance in instances],
+        }
+
+    for section_name in ("jenkins", "aws", "visual", "mobile-auto"):
+        section = effective_config.get(section_name)
+        if isinstance(section, dict) and section:
+            root[section_name] = json.loads(json.dumps(section))
+
+    return root
 
 
-def _add_atlassian_instance(
-    product: str,
-    instance: dict[str, Any],
-    *,
-    default: bool,
-    cli_environment: _CliEnvironment,
-) -> None:
-    args = [
-        product,
-        "--json",
-        "instance",
-        "add",
-        instance["name"],
-        "--base-url",
-        instance["base_url"],
-        "--rest-path",
-        instance["rest_path"],
-    ]
+def _tools_instance_config(instance: dict[str, Any], *, product: str) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "name": instance["name"],
+        "base_url": instance["base_url"],
+        "rest_path": instance["rest_path"],
+    }
     if product == "jira":
-        args.extend(["--api-version", instance["api_version"]])
-    if default:
-        args.append("--default")
+        out["api_version"] = instance["api_version"]
 
     auth = instance.get("auth") if isinstance(instance.get("auth"), dict) else {}
-    secret = str(auth.get("secret") or "")
-    if auth.get("type"):
-        args.extend(["--auth-type", str(auth["type"])])
-    username = str(auth.get("username") or "")
-    if username:
-        args.extend(["--username", username])
-    stdin_text = None
-    if secret:
-        args.append(str(auth["stdin_flag"]))
-        stdin_text = secret
-
-    _run_cli(
-        args,
-        input_text=stdin_text,
-        secrets=(secret,),
-        env=cli_environment.env,
-        env_secrets=cli_environment.secrets,
-    )
+    auth_type = str(auth.get("type") or "")
+    if auth_type:
+        auth_out: dict[str, Any] = {"type": auth_type}
+        username = str(auth.get("username") or "")
+        if username:
+            auth_out["username"] = username
+        secret = str(auth.get("secret") or "")
+        if secret:
+            secret_field = {
+                "basic_password": "password",
+                "basic_api_key": "api_key",
+                "bearer_token": "token",
+            }.get(auth_type)
+            if secret_field:
+                auth_out[secret_field] = secret
+        out["auth"] = auth_out
+    return out
 
 
 def _remove_atlassian_instance(product: str, name: str, *, cli_environment: _CliEnvironment) -> None:
@@ -193,15 +183,6 @@ def _remove_atlassian_instance_if_exists(product: str, name: str, *, cli_environ
         )
     except RuntimeError:
         return
-
-
-def _remove_jenkins_instance(name: str, *, cli_environment: _CliEnvironment) -> None:
-    _run_cli(
-        ["jenkins", "instance", "remove", name, "--yes", "--json"],
-        allowed_returncodes=tuple(range(256)),
-        env=cli_environment.env,
-        env_secrets=cli_environment.secrets,
-    )
 
 
 def _apply_github(
@@ -314,10 +295,6 @@ def _clear_new_metadata(meta: dict[str, Any], *, cli_environment: _CliEnvironmen
         product_meta = meta.get(product) if isinstance(meta.get(product), dict) else {}
         for name in _metadata_instance_names(product_meta):
             _remove_atlassian_instance(product, name, cli_environment=cli_environment)
-
-    jenkins_meta = meta.get("jenkins") if isinstance(meta.get("jenkins"), dict) else {}
-    for name in _metadata_instance_names(jenkins_meta):
-        _remove_jenkins_instance(name, cli_environment=cli_environment)
 
     gh = meta.get("gh") if isinstance(meta.get("gh"), dict) else {}
     if "path" not in gh:

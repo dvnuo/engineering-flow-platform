@@ -1,9 +1,7 @@
-"""Tests for Config class and hot reload functionality."""
+"""Tests for Config class."""
 
 import os
 import tempfile
-import time
-from pathlib import Path
 
 import pytest
 
@@ -35,81 +33,26 @@ class TestConfigBasic:
         assert config.get("nonexistent.key", "default") == "default"
 
 
-class TestConfigHotReload:
-    """Tests for configuration hot reload feature."""
-
-    def test_config_reload_detects_changes(self):
-        """Test that reload() detects file changes."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("initial: value1\n")
-            f.flush()
-            config = Config(f.name)
-            
-            # Initial value
-            assert config.get("initial") == "value1"
-            
-            # Modify file
-            time.sleep(0.1)  # Ensure mtime changes
-            with open(f.name, 'w') as wf:
-                wf.write("initial: value2\n")
-            
-            # Reload should detect change
-            reloaded = config.reload()
-            assert reloaded is True
-            assert config.get("initial") == "value2"
-            
-            os.unlink(f.name)
-
-    def test_config_reload_no_changes(self):
-        """Test that reload() returns False when no changes."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("key: value\n")
-            f.flush()
-            config = Config(f.name)
-            
-            # No changes should return False
-            reloaded = config.reload()
-            assert reloaded is False
-            
-            os.unlink(f.name)
-
-    def test_config_auto_reload_on_get(self):
-        """Test that config auto-reloads when accessed via get()."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("model: gpt-4o\n")
-            f.flush()
-            config = Config(f.name)
-            
-            # Initial value
-            assert config.get("model") == "gpt-4o"
-            
-            # Modify file
-            time.sleep(0.1)
-            with open(f.name, 'w') as wf:
-                wf.write("model: claude-3-5-sonnet\n")
-            
-            # Access via get() should trigger auto-reload
-            value = config.get("model")
-            assert value == "claude-3-5-sonnet"
-            
-            os.unlink(f.name)
+class TestConfigStaticLoad:
+    """The base config is read once at boot; there is no hot reload."""
 
     def test_config_nonexistent_file(self):
         """Test config with nonexistent file."""
         config = Config("/nonexistent/path/config.yaml")
         assert config._config == {}
-        assert config.reload() is False
 
-    def test_config_timestamp_tracking(self):
-        """Test that _last_modified is set correctly."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("key: value\n")
-            f.flush()
-            config = Config(f.name)
-            
-            assert config._last_modified > 0
-            
-            os.unlink(f.name)
+    def test_config_get_does_not_reload_on_file_change(self, tmp_path):
+        """Config values stay stable after boot even when the file changes."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("model: gpt-4o\n", encoding="utf-8")
+        config = Config(str(config_path))
+
+        assert config.get("model") == "gpt-4o"
+
+        config_path.write_text("model: claude-3-5-sonnet\n", encoding="utf-8")
+
+        # No mtime auto-reload: a pod restart is the only delivery path.
+        assert config.get("model") == "gpt-4o"
 
 
 class TestConfigEdgeCases:

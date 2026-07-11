@@ -1,5 +1,6 @@
+import json
+
 from src.config import Config
-from src.external_cli import profile_config as profile_config_module
 
 
 def _write_base_config(path):
@@ -16,6 +17,24 @@ def _write_base_config(path):
     )
 
 
+def _env_config(tmp_path, monkeypatch, overlay_config, profile_id="rp-env", revision=1):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+    monkeypatch.setenv(
+        "EFP_PROFILE_CONFIG",
+        json.dumps(
+            {
+                "runtime_profile_id": profile_id,
+                "name": "test",
+                "revision": revision,
+                "runtime_type": "native",
+                "config": overlay_config,
+            }
+        ),
+    )
+    return Config(str(config_path))
+
+
 def test_portal_managed_field_tree_provider_sections_do_not_include_automation():
     assert "automation" not in Config.PORTAL_MANAGED_FIELD_TREE["github"]
     assert "automation" not in Config.PORTAL_MANAGED_FIELD_TREE["jira"]
@@ -27,14 +46,10 @@ def test_portal_managed_field_tree_provider_sections_do_not_include_automation()
     assert Config.PORTAL_MANAGED_FIELD_TREE["llm"]["response_flow"] is True
 
 
-def test_set_managed_overlay_allows_llm_response_flow_subtree(tmp_path):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp-response-flow",
-        1,
+def test_env_overlay_allows_llm_response_flow_subtree(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
         {
             "llm": {
                 "provider": "openai",
@@ -46,26 +61,16 @@ def test_set_managed_overlay_allows_llm_response_flow_subtree(tmp_path):
                 },
             }
         },
+        profile_id="rp-response-flow",
     )
-    cfg.load()
     effective = cfg.get_effective_config()
     assert effective["llm"]["response_flow"]["plan_policy"] == "explicit_or_complex"
 
 
-def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(
-        profile_config_module,
-        "apply_runtime_profile_external_config",
-        lambda overlay, **_: None,
-    )
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay(
-        "rp-automation-removed",
-        1,
+def test_env_overlay_ignores_provider_automation_subtrees(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
         {
             "github": {
                 "enabled": True,
@@ -90,18 +95,17 @@ def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path, monk
                 },
             },
         },
+        profile_id="rp-automation-removed",
     )
 
-    cfg.load()
     effective = cfg.get_effective_config()
 
     assert effective["github"]["enabled"] is True
     assert effective["github"]["api_token"] == "x"
     assert effective["github"]["base_url"] == "https://api.github.com"
     assert "automation" not in effective["github"]
-
-    assert "jira" not in effective
-    assert "confluence" not in effective
+    assert "automation" not in effective["jira"]
+    assert "automation" not in effective["confluence"]
 
     assert cfg.get_managed_overlay_meta()["managed_sections"] == [
         "confluence",
@@ -111,20 +115,7 @@ def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path, monk
     ]
 
 
-def test_set_managed_overlay_applies_and_clears_llm_temperature(tmp_path):
-    config_path = tmp_path / "config.yaml"
-    _write_base_config(config_path)
-
-    cfg = Config(str(config_path))
-    cfg.set_managed_overlay("rp1", 1, {"llm": {"temperature": 0.2}})
-    cfg.load()
-
+def test_env_overlay_applies_llm_temperature(tmp_path, monkeypatch):
+    cfg = _env_config(tmp_path, monkeypatch, {"llm": {"temperature": 0.2}}, profile_id="rp1")
     effective = cfg.get_effective_config()
     assert effective["llm"]["temperature"] == 0.2
-    raw_text = config_path.read_text(encoding="utf-8")
-    assert "temperature: 0.2" in raw_text
-
-    cfg.clear_managed_overlay()
-    cfg.load()
-    cleared = cfg.get_effective_config()
-    assert "temperature" not in cleared.get("llm", {})
