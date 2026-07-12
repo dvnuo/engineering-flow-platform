@@ -32,7 +32,7 @@ def test_runtime_contract_doc_mentions_current_native_contract_surfaces():
         "EFP_PROFILE_CONFIG",
         "EFP_PROFILE_REVISION",
         "EFP_PROFILE_ID",
-        "EFP_CONFIG_JSON",
+        "JIRA_INSTANCES_0_BASE_URL",
         "EFP_SKILLS_DIR",
         "/app/skills",
         "/workspace",

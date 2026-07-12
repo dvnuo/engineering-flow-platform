@@ -58,7 +58,8 @@ def apply_runtime_profile_external_config(
     metadata: dict[str, Any] = {"version": _METADATA_VERSION, "managed_by": _MANAGED_BY}
 
     # NOTE: jira/confluence are intentionally NOT projected through CLI writes
-    # anymore; those CLIs read the EFP_CONFIG_JSON env blob exported at boot.
+    # anymore; those CLIs read the bare-name tools config env vars exported at
+    # boot (see flatten_config_to_env).
     try:
         _apply_github(profile_config, metadata=metadata, cli_environment=cli_environment)
         _apply_aws(profile_config, metadata=metadata, cli_environment=cli_environment)
@@ -102,13 +103,16 @@ def redact_runtime_profile_external_config_error(
 
 
 def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
-    """Build the EFP_CONFIG_JSON payload for the Go CLI tools.
+    """Build the tools config payload (RootConfig-shaped dict) for the Go CLIs.
 
     The shape matches ``RootConfig`` in engineering-flow-platform-tools
     (internal/config/config.go): top-level keys version/jira/confluence/
     jenkins/aws/visual/mobile-auto. Jira/Confluence sections are transformed
     from the profile shape into the tools instances shape; the other sections
     are taken from the effective config verbatim. Empty sections are omitted.
+
+    The returned dict is flattened by :func:`flatten_config_to_env` into the
+    bare-name indexed env vars the Go CLIs consume.
     """
     root: dict[str, Any] = {}
     if not isinstance(effective_config, dict):
@@ -134,6 +138,49 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
             root[section_name] = json.loads(json.dumps(section))
 
     return root
+
+
+def flatten_config_to_env(root: dict[str, Any]) -> dict[str, str]:
+    """Flatten a RootConfig-shaped dict into bare-name indexed env vars.
+
+    Produces the deterministic naming convention consumed by the Go CLIs: each
+    scalar leaf becomes an UPPERCASED, "_"-joined path from the root, with "-"
+    replaced by "_" and list elements indexed by their 0-based position. For
+    example ``{"jira": {"instances": [{"base_url": "x"}]}}`` yields
+    ``{"JIRA_INSTANCES_0_BASE_URL": "x"}``.
+
+    Scalar encoding: bool -> "true"/"false"; int -> decimal string; str ->
+    verbatim. ``None`` and empty strings are omitted entirely (no key emitted),
+    matching the "only present values are emitted" contract on the Go side.
+    """
+    out: dict[str, str] = {}
+    _flatten_into(root, (), out)
+    return out
+
+
+def _flatten_into(value: Any, path: tuple[str, ...], out: dict[str, str]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            segment = str(key).upper().replace("-", "_")
+            _flatten_into(child, path + (segment,), out)
+        return
+    if isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _flatten_into(child, path + (str(index),), out)
+        return
+    if value is None:
+        return
+    if isinstance(value, bool):
+        rendered = "true" if value else "false"
+    elif isinstance(value, int):
+        rendered = str(value)
+    else:
+        rendered = str(value)
+        if rendered == "":
+            return
+    if not path:
+        return
+    out["_".join(path)] = rendered
 
 
 def _tools_instance_config(instance: dict[str, Any], *, product: str) -> dict[str, Any]:

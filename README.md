@@ -157,8 +157,11 @@ boot (no hot apply; config changes require a Portal-triggered restart):
   the read-only base `config.yaml` and scrubbed from the process environment
   after projection.
 - `EFP_PROFILE_REVISION` / `EFP_PROFILE_ID` — profile revision and id.
-- `EFP_CONFIG_JSON` — exported by the runtime for CLI child processes
-  (`jira`, `confluence`, `jenkins`, `aws-auth`, `mobile-auto`, `visual`).
+- Tools config env vars — exported by the runtime for CLI child processes
+  (`jira`, `confluence`, `jenkins`, `aws-auth`, `mobile-auto`, `visual`) as
+  bare-name, indexed variables flattened from the tools `RootConfig`-shaped
+  config (e.g. `JIRA_DEFAULT_INSTANCE`, `JIRA_INSTANCES_0_BASE_URL`,
+  `AWS_DOMAIN`, `MOBILE_AUTO_BROWSERSTACK_USERNAME`).
 
 `GET /ready` reports readiness only after the boot projection succeeded. In
 local development (no `EFP_PROFILE_CONFIG`), the runtime uses `config.yaml`
