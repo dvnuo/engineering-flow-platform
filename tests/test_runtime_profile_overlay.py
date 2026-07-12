@@ -622,7 +622,7 @@ def test_external_config_apply_skips_atlassian_and_jenkins_clis(tmp_path, monkey
         }
     )
 
-    # Jira/Confluence/Jenkins reach CLIs via bare-name tools config env vars only, never CLI writes.
+    # Jira/Confluence/Jenkins reach CLIs via EFP_-prefixed tools config env vars only, never CLI writes.
     assert _command_calls(recorder, ["jira"]) == []
     assert _command_calls(recorder, ["confluence"]) == []
     assert _command_calls(recorder, ["jenkins"]) == []
@@ -1304,7 +1304,7 @@ def test_build_tools_config_json_omits_empty_and_disabled_sections():
     assert root == {}
 
 
-def test_flatten_config_to_env_produces_bare_name_indexed_vars():
+def test_flatten_config_to_env_produces_efp_prefixed_indexed_vars():
     root = {
         "version": 1,
         "jira": {
@@ -1338,33 +1338,33 @@ def test_flatten_config_to_env_produces_bare_name_indexed_vars():
     env = profile_config_module.flatten_config_to_env(root)
 
     assert env == {
-        "VERSION": "1",
-        "JIRA_DEFAULT_INSTANCE": "jira-main",
-        "JIRA_INSTANCES_0_NAME": "jira-main",
-        "JIRA_INSTANCES_0_BASE_URL": "https://jira.example.test",
-        "JIRA_INSTANCES_0_REST_PATH": "/rest/api/3",
-        "JIRA_INSTANCES_0_API_VERSION": "3",
-        "JIRA_INSTANCES_0_AUTH_TYPE": "basic_api_key",
-        "JIRA_INSTANCES_0_AUTH_USERNAME": "bot",
-        "JIRA_INSTANCES_0_AUTH_API_KEY": "jira-token",
-        "JIRA_INSTANCES_1_NAME": "jira-2",
-        "JIRA_INSTANCES_1_BASE_URL": "https://jira2.example.test",
-        "JIRA_INSTANCES_1_REST_PATH": "/rest/api/2",
-        "JIRA_INSTANCES_1_API_VERSION": "2",
-        "JIRA_INSTANCES_1_AUTH_TYPE": "bearer_token",
-        "JIRA_INSTANCES_1_AUTH_TOKEN": "jira2-token",
+        "EFP_VERSION": "1",
+        "EFP_JIRA_DEFAULT_INSTANCE": "jira-main",
+        "EFP_JIRA_INSTANCES_0_NAME": "jira-main",
+        "EFP_JIRA_INSTANCES_0_BASE_URL": "https://jira.example.test",
+        "EFP_JIRA_INSTANCES_0_REST_PATH": "/rest/api/3",
+        "EFP_JIRA_INSTANCES_0_API_VERSION": "3",
+        "EFP_JIRA_INSTANCES_0_AUTH_TYPE": "basic_api_key",
+        "EFP_JIRA_INSTANCES_0_AUTH_USERNAME": "bot",
+        "EFP_JIRA_INSTANCES_0_AUTH_API_KEY": "jira-token",
+        "EFP_JIRA_INSTANCES_1_NAME": "jira-2",
+        "EFP_JIRA_INSTANCES_1_BASE_URL": "https://jira2.example.test",
+        "EFP_JIRA_INSTANCES_1_REST_PATH": "/rest/api/2",
+        "EFP_JIRA_INSTANCES_1_API_VERSION": "2",
+        "EFP_JIRA_INSTANCES_1_AUTH_TYPE": "bearer_token",
+        "EFP_JIRA_INSTANCES_1_AUTH_TOKEN": "jira2-token",
         # bool renders lowercase; the empty-string "password" is omitted.
-        "AWS_ENABLED": "true",
-        "AWS_DOMAIN": "HBEU",
-        "AWS_USERNAME": "aws-user",
+        "EFP_AWS_ENABLED": "true",
+        "EFP_AWS_DOMAIN": "HBEU",
+        "EFP_AWS_USERNAME": "aws-user",
         # "mobile-auto" -> MOBILE_AUTO; []string elements indexed by position.
-        "MOBILE_AUTO_BROWSERSTACK_USERNAME": "bs-user",
-        "MOBILE_AUTO_BROWSERSTACK_NO_PROXY_HOSTS_0": "host-a",
-        "MOBILE_AUTO_BROWSERSTACK_NO_PROXY_HOSTS_1": "host-b",
+        "EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME": "bs-user",
+        "EFP_MOBILE_AUTO_BROWSERSTACK_NO_PROXY_HOSTS_0": "host-a",
+        "EFP_MOBILE_AUTO_BROWSERSTACK_NO_PROXY_HOSTS_1": "host-b",
     }
 
     # Empty/absent scalars emit no key at all.
-    assert "AWS_PASSWORD" not in env
+    assert "EFP_AWS_PASSWORD" not in env
 
 
 def test_flatten_config_to_env_omits_empty_and_none_and_renders_bool_false():
@@ -1373,4 +1373,4 @@ def test_flatten_config_to_env_omits_empty_and_none_and_renders_bool_false():
         "empty": {},
     }
     env = profile_config_module.flatten_config_to_env(root)
-    assert env == {"AWS_ENABLED": "false", "AWS_DOMAIN": "D"}
+    assert env == {"EFP_AWS_ENABLED": "false", "EFP_AWS_DOMAIN": "D"}

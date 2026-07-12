@@ -64,9 +64,9 @@ def test_bootstrap_exports_tools_config_env_vars_scrubs_env_and_applies_env_sect
         "JENKINS_USERNAME",
         "JENKINS_PASSWORD",
         "EFP_CONFIG_JSON",
-        "JIRA_DEFAULT_INSTANCE",
-        "JIRA_INSTANCES_0_BASE_URL",
-        "JIRA_INSTANCES_0_AUTH_API_KEY",
+        "EFP_JIRA_DEFAULT_INSTANCE",
+        "EFP_JIRA_INSTANCES_0_BASE_URL",
+        "EFP_JIRA_INSTANCES_0_AUTH_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -115,16 +115,16 @@ def test_bootstrap_exports_tools_config_env_vars_scrubs_env_and_applies_env_sect
     # The full profile blob is scrubbed before any child process can spawn.
     assert "EFP_PROFILE_CONFIG" not in os.environ
 
-    # The bare-name, indexed tools config env vars carry the RootConfig subset.
-    assert os.environ["JIRA_DEFAULT_INSTANCE"] == "jira-main"
-    assert os.environ["JIRA_INSTANCES_0_NAME"] == "jira-main"
-    assert os.environ["JIRA_INSTANCES_0_BASE_URL"] == "https://jira.example.test"
-    assert os.environ["JIRA_INSTANCES_0_REST_PATH"] == "/rest/api/3"
-    assert os.environ["JIRA_INSTANCES_0_API_VERSION"] == "3"
-    assert os.environ["JIRA_INSTANCES_0_AUTH_TYPE"] == "basic_api_key"
-    assert os.environ["JIRA_INSTANCES_0_AUTH_USERNAME"] == "bot"
-    assert os.environ["JIRA_INSTANCES_0_AUTH_API_KEY"] == "jira-token"
-    assert os.environ["JENKINS_ENABLED"] == "true"
+    # The EFP_-prefixed, indexed tools config env vars carry the RootConfig subset.
+    assert os.environ["EFP_JIRA_DEFAULT_INSTANCE"] == "jira-main"
+    assert os.environ["EFP_JIRA_INSTANCES_0_NAME"] == "jira-main"
+    assert os.environ["EFP_JIRA_INSTANCES_0_BASE_URL"] == "https://jira.example.test"
+    assert os.environ["EFP_JIRA_INSTANCES_0_REST_PATH"] == "/rest/api/3"
+    assert os.environ["EFP_JIRA_INSTANCES_0_API_VERSION"] == "3"
+    assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_TYPE"] == "basic_api_key"
+    assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_USERNAME"] == "bot"
+    assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_API_KEY"] == "jira-token"
+    assert os.environ["EFP_JENKINS_ENABLED"] == "true"
     assert os.environ["JENKINS_USERNAME"] == "jenkins-user"
     assert os.environ["JENKINS_PASSWORD"] == "jenkins-password"
 
@@ -144,7 +144,7 @@ def test_bootstrap_exports_tools_config_env_vars_scrubs_env_and_applies_env_sect
 
 
 def test_bootstrap_dev_mode_without_profile_env(tmp_path, monkeypatch, boot_state_reset):
-    for key in ("EFP_CONFIG_JSON", "JIRA_INSTANCES_0_BASE_URL", "AWS_DOMAIN"):
+    for key in ("EFP_CONFIG_JSON", "EFP_JIRA_INSTANCES_0_BASE_URL", "EFP_AWS_DOMAIN"):
         monkeypatch.delenv(key, raising=False)
 
     def _fail_apply(*_args, **_kwargs):
@@ -158,7 +158,7 @@ def test_bootstrap_dev_mode_without_profile_env(tmp_path, monkeypatch, boot_stat
 
     assert config_module.bootstrap_profile_boot() is True
     assert "EFP_CONFIG_JSON" not in os.environ
-    assert "JIRA_INSTANCES_0_BASE_URL" not in os.environ
+    assert "EFP_JIRA_INSTANCES_0_BASE_URL" not in os.environ
     assert config_module.get_profile_boot_state() == {
         "completed": True,
         "ready": True,
@@ -167,7 +167,7 @@ def test_bootstrap_dev_mode_without_profile_env(tmp_path, monkeypatch, boot_stat
 
 
 def test_bootstrap_empty_profile_config_is_ready(tmp_path, monkeypatch, boot_state_reset):
-    for key in ("EFP_CONFIG_JSON", "JIRA_INSTANCES_0_BASE_URL", "AWS_DOMAIN"):
+    for key in ("EFP_CONFIG_JSON", "EFP_JIRA_INSTANCES_0_BASE_URL", "EFP_AWS_DOMAIN"):
         monkeypatch.delenv(key, raising=False)
     applied = []
     monkeypatch.setattr(
@@ -182,8 +182,8 @@ def test_bootstrap_empty_profile_config_is_ready(tmp_path, monkeypatch, boot_sta
     assert applied == [{}]
     # An empty profile flattens to zero tools config env vars (not env-managed).
     assert "EFP_CONFIG_JSON" not in os.environ
-    assert "JIRA_INSTANCES_0_BASE_URL" not in os.environ
-    assert "AWS_DOMAIN" not in os.environ
+    assert "EFP_JIRA_INSTANCES_0_BASE_URL" not in os.environ
+    assert "EFP_AWS_DOMAIN" not in os.environ
     assert config_module.get_profile_boot_state()["ready"] is True
 
 

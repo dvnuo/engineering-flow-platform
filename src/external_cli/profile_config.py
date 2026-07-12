@@ -58,8 +58,8 @@ def apply_runtime_profile_external_config(
     metadata: dict[str, Any] = {"version": _METADATA_VERSION, "managed_by": _MANAGED_BY}
 
     # NOTE: jira/confluence are intentionally NOT projected through CLI writes
-    # anymore; those CLIs read the bare-name tools config env vars exported at
-    # boot (see flatten_config_to_env).
+    # anymore; those CLIs read the EFP_-prefixed tools config env vars exported
+    # at boot (see flatten_config_to_env).
     try:
         _apply_github(profile_config, metadata=metadata, cli_environment=cli_environment)
         _apply_aws(profile_config, metadata=metadata, cli_environment=cli_environment)
@@ -112,7 +112,7 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
     are taken from the effective config verbatim. Empty sections are omitted.
 
     The returned dict is flattened by :func:`flatten_config_to_env` into the
-    bare-name indexed env vars the Go CLIs consume.
+    EFP_-prefixed indexed env vars the Go CLIs consume.
     """
     root: dict[str, Any] = {}
     if not isinstance(effective_config, dict):
@@ -141,13 +141,15 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
 
 
 def flatten_config_to_env(root: dict[str, Any]) -> dict[str, str]:
-    """Flatten a RootConfig-shaped dict into bare-name indexed env vars.
+    """Flatten a RootConfig-shaped dict into EFP_-prefixed indexed env vars.
 
     Produces the deterministic naming convention consumed by the Go CLIs: each
-    scalar leaf becomes an UPPERCASED, "_"-joined path from the root, with "-"
-    replaced by "_" and list elements indexed by their 0-based position. For
-    example ``{"jira": {"instances": [{"base_url": "x"}]}}`` yields
-    ``{"JIRA_INSTANCES_0_BASE_URL": "x"}``.
+    scalar leaf becomes the literal prefix ``EFP_`` plus an UPPERCASED,
+    "_"-joined path from the root, with "-" replaced by "_" and list elements
+    indexed by their 0-based position. For example
+    ``{"jira": {"instances": [{"base_url": "x"}]}}`` yields
+    ``{"EFP_JIRA_INSTANCES_0_BASE_URL": "x"}``. The EFP_ prefix keeps these
+    names out of other tools' namespaces (AWS_*, JIRA_*, JENKINS_*).
 
     Scalar encoding: bool -> "true"/"false"; int -> decimal string; str ->
     verbatim. ``None`` and empty strings are omitted entirely (no key emitted),
@@ -180,7 +182,7 @@ def _flatten_into(value: Any, path: tuple[str, ...], out: dict[str, str]) -> Non
             return
     if not path:
         return
-    out["_".join(path)] = rendered
+    out["EFP_" + "_".join(path)] = rendered
 
 
 def _tools_instance_config(instance: dict[str, Any], *, product: str) -> dict[str, Any]:

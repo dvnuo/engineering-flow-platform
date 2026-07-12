@@ -1009,10 +1009,11 @@ def bootstrap_profile_boot() -> bool:
 
     1. Project gh/aws/git external CLI config from the overlay via real CLIs.
        Jira/Confluence/Jenkins/mobile-auto/visual reach the Go CLIs through
-       the bare-name tools config env vars only.
-    2. Export the tools config env vars (bare-name indexed vars flattened from
-       the tools RootConfig-shaped subset of the effective config, e.g.
-       JIRA_INSTANCES_0_BASE_URL / AWS_DOMAIN) for every CLI child process.
+       the EFP_-prefixed tools config env vars only.
+    2. Export the tools config env vars (EFP_-prefixed indexed vars flattened
+       from the tools RootConfig-shaped subset of the effective config, e.g.
+       EFP_JIRA_INSTANCES_0_BASE_URL / EFP_AWS_DOMAIN) for every CLI child
+       process.
     3. Apply proxy / jenkins / mobile env exactly once.
     4. Scrub EFP_PROFILE_CONFIG from os.environ so no child process can see the
        full profile blob.

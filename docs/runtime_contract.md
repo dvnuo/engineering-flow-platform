@@ -41,13 +41,13 @@ Portal-triggered restart with a new Secret.
 - `EFP_PROFILE_REVISION`: profile revision string from the same Secret.
 - `EFP_PROFILE_ID`: bound profile id, or `none` for unbound agents.
 - Tools config env vars: exported by the runtime itself after projection —
-  bare-name, indexed environment variables flattened from the tools
+  EFP_-prefixed, indexed environment variables flattened from the tools
   `RootConfig`-shaped subset (`version`/`jira`/`confluence`/`jenkins`/`aws`/
-  `visual`/`mobile-auto`) of the effective config. Each scalar leaf becomes an
-  UPPERCASED `_`-joined path from the root (with `-` replaced by `_` and list
-  elements indexed by position), e.g. `JIRA_DEFAULT_INSTANCE`,
-  `JIRA_INSTANCES_0_BASE_URL`, `AWS_DOMAIN`,
-  `MOBILE_AUTO_BROWSERSTACK_USERNAME`. Only present values are emitted, and
+  `visual`/`mobile-auto`) of the effective config. Each scalar leaf becomes the
+  literal prefix `EFP_` plus an UPPERCASED `_`-joined path from the root (with
+  `-` replaced by `_` and list elements indexed by position), e.g.
+  `EFP_JIRA_DEFAULT_INSTANCE`, `EFP_JIRA_INSTANCES_0_BASE_URL`, `EFP_AWS_DOMAIN`,
+  `EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME`. Only present values are emitted, and
   every CLI child process reads them.
 - `GET /ready` returns `200 {"ready": true, "runtime_profile_id", "revision"}`
   only after the boot projection succeeded, `503 {"ready": false, "error"}`
@@ -68,7 +68,7 @@ Portal-triggered restart with a new Secret.
 - Legacy Python tool packages such as `src.bash_tools` are not present, and Jira/GitHub/Confluence/Git Python tools are not exposed as LLM tools.
 - The runtime image may include prebuilt `engineering-flow-platform-tools` CLI binaries on `PATH` in `/usr/local/bin`. Current binaries include `jira`, `confluence`, `browser`, and `mobile-auto`; future binaries are discovered from `cmd/<tool>` in that repo.
 - Agents use those CLIs through the model-visible `bash` built-in in the workspace-full-access runtime workspace. They should run `<tool> commands --json`, then `<tool> schema <command> --json`, prefer `--json`, use `--dry-run` before writes, and pass `--yes` for destructive operations.
-- Runtime profile boot projection applies GitHub, AWS, and Git configuration through real CLIs and exports Jira, Confluence, Jenkins, mobile BrowserStack, and visual configuration to CLI child processes via bare-name indexed tools config env vars (e.g. `JIRA_INSTANCES_0_BASE_URL`, `AWS_DOMAIN`, `MOBILE_AUTO_BROWSERSTACK_USERNAME`).
+- Runtime profile boot projection applies GitHub, AWS, and Git configuration through real CLIs and exports Jira, Confluence, Jenkins, mobile BrowserStack, and visual configuration to CLI child processes via EFP_-prefixed indexed tools config env vars (e.g. `EFP_JIRA_INSTANCES_0_BASE_URL`, `EFP_AWS_DOMAIN`, `EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME`).
 - Private managed mobile runs require BrowserStackLocal at `/usr/local/bin/BrowserStackLocal` or a configured `BROWSERSTACK_LOCAL_BINARY`; CI may stage that third-party binary into `runtime-tools/BrowserStackLocal`.
 - Legacy `EFP_TOOLS_DIR` / `EFP_EXTERNAL_TOOLS_*` Python external tool loaders are ignored by native runtime. `runtime-tools/*` is a Docker/CI build input for prebuilt CLI binaries and is copied into `PATH`; it is not a Python loader.
 - MCP servers and external protocol tool providers are intentionally excluded.
