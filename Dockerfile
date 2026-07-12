@@ -3,6 +3,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HOME=/root \
     VIRTUAL_ENV=/opt/venv
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
