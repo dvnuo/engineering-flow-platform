@@ -1232,7 +1232,12 @@ def test_build_tools_config_json_transforms_atlassian_and_copies_verbatim_sectio
                 },
             ],
         },
-        "jenkins": {"enabled": True, "username": "jenkins-user", "password": "jenkins-password"},
+        "jenkins": {
+            "enabled": True,
+            "url": "https://jenkins.example.test",
+            "username": "jenkins-user",
+            "password": "jenkins-password",
+        },
         "aws": {"enabled": True, "domain": "HBEU", "username": "aws-user", "password": "aws-password"},
         "mobile-auto": {
             "enabled": True,
@@ -1283,8 +1288,23 @@ def test_build_tools_config_json_transforms_atlassian_and_copies_verbatim_sectio
         },
     ]
 
+    # Jenkins is projected as a single tools instance (not copied verbatim).
+    assert root["jenkins"] == {
+        "default_instance": "jenkins",
+        "instances": [
+            {
+                "name": "jenkins",
+                "base_url": "https://jenkins.example.test",
+                "rest_path": "",
+                "auth": {
+                    "type": "basic_password",
+                    "username": "jenkins-user",
+                    "password": "jenkins-password",
+                },
+            }
+        ],
+    }
     # Verbatim sections.
-    assert root["jenkins"] == {"enabled": True, "username": "jenkins-user", "password": "jenkins-password"}
     assert root["aws"] == {"enabled": True, "domain": "HBEU", "username": "aws-user", "password": "aws-password"}
     assert root["mobile-auto"]["browserstack"]["access_key"] == "bs-key"
 
@@ -1302,6 +1322,83 @@ def test_build_tools_config_json_omits_empty_and_disabled_sections():
         }
     )
     assert root == {}
+
+
+def test_build_tools_config_json_projects_jenkins_as_single_instance():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": True,
+                "url": "https://jenkins.example.test/",
+                "username": "jenkins-user",
+                "password": "jenkins-password",
+            },
+        }
+    )
+    assert root == {
+        "jenkins": {
+            "default_instance": "jenkins",
+            "instances": [
+                {
+                    "name": "jenkins",
+                    "base_url": "https://jenkins.example.test",
+                    "rest_path": "",
+                    "auth": {
+                        "type": "basic_password",
+                        "username": "jenkins-user",
+                        "password": "jenkins-password",
+                    },
+                }
+            ],
+        }
+    }
+
+
+def test_build_tools_config_json_jenkins_bearer_token_instance():
+    root = profile_config_module.build_tools_config_json(
+        {"jenkins": {"enabled": True, "url": "https://ci.example.test", "token": "ci-token"}}
+    )
+    assert root["jenkins"]["instances"][0]["auth"] == {
+        "type": "bearer_token",
+        "token": "ci-token",
+    }
+
+
+def test_build_tools_config_json_drops_jenkins_without_url():
+    assert profile_config_module.build_tools_config_json(
+        {"jenkins": {"enabled": True, "username": "u", "password": "p"}}
+    ) == {}
+
+
+def test_build_tools_config_json_drops_disabled_jenkins():
+    assert profile_config_module.build_tools_config_json(
+        {"jenkins": {"enabled": False, "url": "https://jenkins.example.test"}}
+    ) == {}
+
+
+def test_flatten_config_to_env_produces_jenkins_instance_vars():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": True,
+                "url": "https://jenkins.example.test",
+                "username": "jenkins-user",
+                "password": "jenkins-password",
+            },
+        }
+    )
+    env = profile_config_module.flatten_config_to_env(root)
+    assert env == {
+        "EFP_JENKINS_DEFAULT_INSTANCE": "jenkins",
+        "EFP_JENKINS_INSTANCES_0_NAME": "jenkins",
+        "EFP_JENKINS_INSTANCES_0_BASE_URL": "https://jenkins.example.test",
+        "EFP_JENKINS_INSTANCES_0_AUTH_TYPE": "basic_password",
+        "EFP_JENKINS_INSTANCES_0_AUTH_USERNAME": "jenkins-user",
+        "EFP_JENKINS_INSTANCES_0_AUTH_PASSWORD": "jenkins-password",
+    }
+    # Empty rest_path emits no key; the old verbatim EFP_JENKINS_ENABLED is gone.
+    assert "EFP_JENKINS_INSTANCES_0_REST_PATH" not in env
+    assert "EFP_JENKINS_ENABLED" not in env
 
 
 def test_flatten_config_to_env_produces_efp_prefixed_indexed_vars():

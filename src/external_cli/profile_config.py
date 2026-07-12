@@ -107,9 +107,11 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
 
     The shape matches ``RootConfig`` in engineering-flow-platform-tools
     (internal/config/config.go): top-level keys version/jira/confluence/
-    jenkins/aws/visual/mobile-auto. Jira/Confluence sections are transformed
-    from the profile shape into the tools instances shape; the other sections
-    are taken from the effective config verbatim. Empty sections are omitted.
+    jenkins/aws/visual/mobile-auto. Jira/Confluence/Jenkins sections are
+    transformed from the profile shape into the tools instances shape (Jenkins
+    is a single flat instance wrapped into a one-element list); the other
+    sections are taken from the effective config verbatim. Empty sections are
+    omitted.
 
     The returned dict is flattened by :func:`flatten_config_to_env` into the
     EFP_-prefixed indexed env vars the Go CLIs consume.
@@ -132,7 +134,15 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
             "instances": [_tools_instance_config(instance, product=product) for instance in instances],
         }
 
-    for section_name in ("jenkins", "aws", "visual", "mobile-auto"):
+    jenkins_section = effective_config.get("jenkins")
+    jenkins_instances = _build_jenkins_instances(jenkins_section)
+    if jenkins_instances:
+        root["jenkins"] = {
+            "default_instance": _default_instance_name(jenkins_section, jenkins_instances),
+            "instances": [_tools_instance_config(instance, product="jenkins") for instance in jenkins_instances],
+        }
+
+    for section_name in ("aws", "visual", "mobile-auto"):
         section = effective_config.get(section_name)
         if isinstance(section, dict) and section:
             root[section_name] = json.loads(json.dumps(section))
@@ -507,6 +517,24 @@ def _build_product_instances(product_config: Any, *, product: str) -> list[dict[
             }
         instances.append(instance)
     return instances
+
+
+def _build_jenkins_instances(section: Any) -> list[dict[str, Any]]:
+    """Wrap the flat Jenkins profile section into a single tools instance.
+
+    The Jenkins profile is a single flat ``{enabled, url, username, password}``
+    block (not a multi-instance list like Jira/Confluence), so it maps to a
+    one-element instances list. Dropped (returns ``[]``) when disabled or when
+    no base URL is present, since the Jenkins CLI requires a base URL.
+    """
+    if not isinstance(section, dict) or section.get("enabled") is False:
+        return []
+    base_url = _profile_instance_base_url(section)
+    if not base_url:
+        return []
+    auth = _build_auth(section)
+    name = str(section.get("name") or "jenkins").strip() or "jenkins"
+    return [{"name": name, "base_url": base_url, "rest_path": str(section.get("rest_path") or ""), "auth": auth}]
 
 
 def _profile_instance_base_url(raw: dict[str, Any]) -> str:

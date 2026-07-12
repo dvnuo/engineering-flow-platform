@@ -63,6 +63,9 @@ def test_bootstrap_exports_tools_config_env_vars_scrubs_env_and_applies_env_sect
         "EFP_JENKINS_PASSWORD",
         "JENKINS_USERNAME",
         "JENKINS_PASSWORD",
+        "EFP_JENKINS_DEFAULT_INSTANCE",
+        "EFP_JENKINS_INSTANCES_0_BASE_URL",
+        "EFP_JENKINS_INSTANCES_0_AUTH_PASSWORD",
         "EFP_CONFIG_JSON",
         "EFP_JIRA_DEFAULT_INSTANCE",
         "EFP_JIRA_INSTANCES_0_BASE_URL",
@@ -97,7 +100,12 @@ def test_bootstrap_exports_tools_config_env_vars_scrubs_env_and_applies_env_sect
                     }
                 ],
             },
-            "jenkins": {"enabled": True, "username": "jenkins-user", "password": "jenkins-password"},
+            "jenkins": {
+                "enabled": True,
+                "url": "https://jenkins.example.test",
+                "username": "jenkins-user",
+                "password": "jenkins-password",
+            },
             "github": {"enabled": True, "access_token": "gh-token"},
         },
     )
@@ -124,7 +132,16 @@ def test_bootstrap_exports_tools_config_env_vars_scrubs_env_and_applies_env_sect
     assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_TYPE"] == "basic_api_key"
     assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_USERNAME"] == "bot"
     assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_API_KEY"] == "jira-token"
-    assert os.environ["EFP_JENKINS_ENABLED"] == "true"
+    # Jenkins is projected as a single tools instance via the flatten convention;
+    # the old verbatim EFP_JENKINS_ENABLED is no longer emitted.
+    assert "EFP_JENKINS_ENABLED" not in os.environ
+    assert os.environ["EFP_JENKINS_DEFAULT_INSTANCE"] == "jenkins"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_NAME"] == "jenkins"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_BASE_URL"] == "https://jenkins.example.test"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_AUTH_TYPE"] == "basic_password"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_AUTH_USERNAME"] == "jenkins-user"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_AUTH_PASSWORD"] == "jenkins-password"
+    # The agent-facing JENKINS_* creds come from apply_jenkins_env, unchanged.
     assert os.environ["JENKINS_USERNAME"] == "jenkins-user"
     assert os.environ["JENKINS_PASSWORD"] == "jenkins-password"
 

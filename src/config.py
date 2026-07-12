@@ -316,6 +316,7 @@ class Config:
         },
         "jenkins": {
             "enabled": True,
+            "url": True,
             "username": True,
             "password": True,
         },
