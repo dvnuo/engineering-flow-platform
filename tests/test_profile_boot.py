@@ -55,12 +55,23 @@ def _install_config(tmp_path, monkeypatch, overlay_config, **payload_kwargs):
     return cfg
 
 
-def test_bootstrap_exports_efp_config_json_scrubs_env_and_applies_env_sections(
+def test_bootstrap_exports_tools_config_env_vars_scrubs_env_and_applies_env_sections(
     tmp_path, monkeypatch, boot_state_reset
 ):
-    for key in ("EFP_JENKINS_USERNAME", "EFP_JENKINS_PASSWORD", "JENKINS_USERNAME", "JENKINS_PASSWORD"):
+    for key in (
+        "EFP_JENKINS_USERNAME",
+        "EFP_JENKINS_PASSWORD",
+        "JENKINS_USERNAME",
+        "JENKINS_PASSWORD",
+        "EFP_JENKINS_DEFAULT_INSTANCE",
+        "EFP_JENKINS_INSTANCES_0_BASE_URL",
+        "EFP_JENKINS_INSTANCES_0_AUTH_PASSWORD",
+        "EFP_CONFIG_JSON",
+        "EFP_JIRA_DEFAULT_INSTANCE",
+        "EFP_JIRA_INSTANCES_0_BASE_URL",
+        "EFP_JIRA_INSTANCES_0_AUTH_API_KEY",
+    ):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("EFP_CONFIG_JSON", "")
 
     applied = []
 
@@ -89,7 +100,12 @@ def test_bootstrap_exports_efp_config_json_scrubs_env_and_applies_env_sections(
                     }
                 ],
             },
-            "jenkins": {"enabled": True, "username": "jenkins-user", "password": "jenkins-password"},
+            "jenkins": {
+                "enabled": True,
+                "url": "https://jenkins.example.test",
+                "username": "jenkins-user",
+                "password": "jenkins-password",
+            },
             "github": {"enabled": True, "access_token": "gh-token"},
         },
     )
@@ -107,23 +123,33 @@ def test_bootstrap_exports_efp_config_json_scrubs_env_and_applies_env_sections(
     # The full profile blob is scrubbed before any child process can spawn.
     assert "EFP_PROFILE_CONFIG" not in os.environ
 
-    # EFP_CONFIG_JSON carries the tools RootConfig-shaped subset.
-    tools_config = json.loads(os.environ["EFP_CONFIG_JSON"])
-    assert tools_config["jira"]["instances"] == [
-        {
-            "name": "jira-main",
-            "base_url": "https://jira.example.test",
-            "rest_path": "/rest/api/3",
-            "api_version": "3",
-            "auth": {"type": "basic_api_key", "username": "bot", "api_key": "jira-token"},
-        }
-    ]
-    assert tools_config["jenkins"] == {
-        "enabled": True,
-        "username": "jenkins-user",
-        "password": "jenkins-password",
-    }
-    assert "github" not in tools_config
+    # The EFP_-prefixed, indexed tools config env vars carry the RootConfig subset.
+    assert os.environ["EFP_JIRA_DEFAULT_INSTANCE"] == "jira-main"
+    assert os.environ["EFP_JIRA_INSTANCES_0_NAME"] == "jira-main"
+    assert os.environ["EFP_JIRA_INSTANCES_0_BASE_URL"] == "https://jira.example.test"
+    assert os.environ["EFP_JIRA_INSTANCES_0_REST_PATH"] == "/rest/api/3"
+    assert os.environ["EFP_JIRA_INSTANCES_0_API_VERSION"] == "3"
+    assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_TYPE"] == "basic_api_key"
+    assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_USERNAME"] == "bot"
+    assert os.environ["EFP_JIRA_INSTANCES_0_AUTH_API_KEY"] == "jira-token"
+    # Jenkins is projected as a single tools instance via the flatten convention;
+    # the old verbatim EFP_JENKINS_ENABLED is no longer emitted.
+    assert "EFP_JENKINS_ENABLED" not in os.environ
+    assert os.environ["EFP_JENKINS_DEFAULT_INSTANCE"] == "jenkins"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_NAME"] == "jenkins"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_BASE_URL"] == "https://jenkins.example.test"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_AUTH_TYPE"] == "basic_password"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_AUTH_USERNAME"] == "jenkins-user"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_AUTH_PASSWORD"] == "jenkins-password"
+    # The agent-facing JENKINS_* creds come from apply_jenkins_env, unchanged.
+    assert os.environ["JENKINS_USERNAME"] == "jenkins-user"
+    assert os.environ["JENKINS_PASSWORD"] == "jenkins-password"
+
+    # github is projected via real CLIs, never through the tools config env vars.
+    assert not any(key.startswith("GITHUB_") for key in os.environ)
+
+    # The legacy single-blob env var is no longer exported.
+    assert "EFP_CONFIG_JSON" not in os.environ
 
     # apply_jenkins_env ran exactly once at boot.
     assert os.environ["EFP_JENKINS_USERNAME"] == "jenkins-user"
@@ -135,7 +161,8 @@ def test_bootstrap_exports_efp_config_json_scrubs_env_and_applies_env_sections(
 
 
 def test_bootstrap_dev_mode_without_profile_env(tmp_path, monkeypatch, boot_state_reset):
-    monkeypatch.delenv("EFP_CONFIG_JSON", raising=False)
+    for key in ("EFP_CONFIG_JSON", "EFP_JIRA_INSTANCES_0_BASE_URL", "EFP_AWS_DOMAIN"):
+        monkeypatch.delenv(key, raising=False)
 
     def _fail_apply(*_args, **_kwargs):
         raise AssertionError("external CLI projection must not run in dev mode")
@@ -148,6 +175,7 @@ def test_bootstrap_dev_mode_without_profile_env(tmp_path, monkeypatch, boot_stat
 
     assert config_module.bootstrap_profile_boot() is True
     assert "EFP_CONFIG_JSON" not in os.environ
+    assert "EFP_JIRA_INSTANCES_0_BASE_URL" not in os.environ
     assert config_module.get_profile_boot_state() == {
         "completed": True,
         "ready": True,
@@ -156,7 +184,8 @@ def test_bootstrap_dev_mode_without_profile_env(tmp_path, monkeypatch, boot_stat
 
 
 def test_bootstrap_empty_profile_config_is_ready(tmp_path, monkeypatch, boot_state_reset):
-    monkeypatch.setenv("EFP_CONFIG_JSON", "")
+    for key in ("EFP_CONFIG_JSON", "EFP_JIRA_INSTANCES_0_BASE_URL", "EFP_AWS_DOMAIN"):
+        monkeypatch.delenv(key, raising=False)
     applied = []
     monkeypatch.setattr(
         profile_config_module,
@@ -168,15 +197,16 @@ def test_bootstrap_empty_profile_config_is_ready(tmp_path, monkeypatch, boot_sta
 
     assert config_module.bootstrap_profile_boot() is True
     assert applied == [{}]
-    assert json.loads(os.environ["EFP_CONFIG_JSON"]) == {}
+    # An empty profile flattens to zero tools config env vars (not env-managed).
+    assert "EFP_CONFIG_JSON" not in os.environ
+    assert "EFP_JIRA_INSTANCES_0_BASE_URL" not in os.environ
+    assert "EFP_AWS_DOMAIN" not in os.environ
     assert config_module.get_profile_boot_state()["ready"] is True
 
 
 def test_bootstrap_projection_failure_keeps_process_alive_but_unready(
     tmp_path, monkeypatch, boot_state_reset
 ):
-    monkeypatch.setenv("EFP_CONFIG_JSON", "")
-
     def _fail_apply(_overlay, **_kwargs):
         raise RuntimeError("External CLI command failed: gh auth login with gh-token")
 
@@ -210,7 +240,6 @@ def test_bootstrap_invalid_profile_payload_is_unready(tmp_path, monkeypatch, boo
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
     monkeypatch.setenv("EFP_PROFILE_CONFIG", "{not json")
-    monkeypatch.setenv("EFP_CONFIG_JSON", "")
     cfg = Config(str(config_path))
     monkeypatch.setattr(config_module, "config", cfg)
 
@@ -235,7 +264,6 @@ async def _ready_response():
 
 @pytest.mark.asyncio
 async def test_ready_endpoint_gates_on_boot_projection(tmp_path, monkeypatch, boot_state_reset):
-    monkeypatch.setenv("EFP_CONFIG_JSON", "")
     monkeypatch.setattr(
         profile_config_module,
         "apply_runtime_profile_external_config",
@@ -274,8 +302,6 @@ async def test_ready_endpoint_dev_mode_reports_null_profile(tmp_path, monkeypatc
 
 @pytest.mark.asyncio
 async def test_ready_endpoint_reports_projection_failure(tmp_path, monkeypatch, boot_state_reset):
-    monkeypatch.setenv("EFP_CONFIG_JSON", "")
-
     def _fail_apply(_overlay, **_kwargs):
         raise RuntimeError("External CLI command failed: aws-auth login")
 

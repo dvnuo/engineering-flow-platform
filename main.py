@@ -25,7 +25,7 @@ from src.config import bootstrap_profile_boot, config
 from src.workspace_defaults import resolve_runtime_workspace
 
 # Project the EFP_PROFILE_CONFIG overlay exactly once: external CLI projection,
-# EFP_CONFIG_JSON export, proxy/jenkins/mobile env, then scrub the profile blob.
+# tools config env-var export, proxy/jenkins/mobile env, then scrub the profile blob.
 # Must run before importing src.gateway.server (Gateway() executes at import).
 bootstrap_profile_boot()
 

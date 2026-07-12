@@ -316,6 +316,7 @@ class Config:
         },
         "jenkins": {
             "enabled": True,
+            "url": True,
             "username": True,
             "password": True,
         },
@@ -1009,9 +1010,11 @@ def bootstrap_profile_boot() -> bool:
 
     1. Project gh/aws/git external CLI config from the overlay via real CLIs.
        Jira/Confluence/Jenkins/mobile-auto/visual reach the Go CLIs through
-       EFP_CONFIG_JSON only.
-    2. Export EFP_CONFIG_JSON (tools RootConfig-shaped subset of the effective
-       config) for every CLI child process.
+       the EFP_-prefixed tools config env vars only.
+    2. Export the tools config env vars (EFP_-prefixed indexed vars flattened
+       from the tools RootConfig-shaped subset of the effective config, e.g.
+       EFP_JIRA_INSTANCES_0_BASE_URL / EFP_AWS_DOMAIN) for every CLI child
+       process.
     3. Apply proxy / jenkins / mobile env exactly once.
     4. Scrub EFP_PROFILE_CONFIG from os.environ so no child process can see the
        full profile blob.
@@ -1041,15 +1044,18 @@ def bootstrap_profile_boot() -> bool:
 
     if profile_env_present:
         try:
-            from src.external_cli.profile_config import build_tools_config_json
-
-            os.environ["EFP_CONFIG_JSON"] = json.dumps(
-                build_tools_config_json(config.get_effective_config())
+            from src.external_cli.profile_config import (
+                build_tools_config_json,
+                flatten_config_to_env,
             )
+
+            root = build_tools_config_json(config.get_effective_config())
+            for key, value in flatten_config_to_env(root).items():
+                os.environ[key] = value
         except Exception as exc:
             if error is None:
-                error = f"Failed to build EFP_CONFIG_JSON: {exc}"
-            logger.warning("Failed to build EFP_CONFIG_JSON", exc_info=True)
+                error = f"Failed to build tools config env vars: {exc}"
+            logger.warning("Failed to build tools config env vars", exc_info=True)
 
     config.apply_proxy()
     config.apply_jenkins_env()

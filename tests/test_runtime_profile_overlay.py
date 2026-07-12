@@ -622,7 +622,7 @@ def test_external_config_apply_skips_atlassian_and_jenkins_clis(tmp_path, monkey
         }
     )
 
-    # Jira/Confluence/Jenkins reach CLIs via EFP_CONFIG_JSON only, never CLI writes.
+    # Jira/Confluence/Jenkins reach CLIs via EFP_-prefixed tools config env vars only, never CLI writes.
     assert _command_calls(recorder, ["jira"]) == []
     assert _command_calls(recorder, ["confluence"]) == []
     assert _command_calls(recorder, ["jenkins"]) == []
@@ -1194,7 +1194,7 @@ def test_runtime_profile_external_cli_failure_redacts_profile_proxy_secrets(tmp_
 
 
 # ---------------------------------------------------------------------------
-# EFP_CONFIG_JSON builder (tools RootConfig shape)
+# Tools config builder (RootConfig shape) + env-var flattener
 # ---------------------------------------------------------------------------
 
 
@@ -1232,7 +1232,12 @@ def test_build_tools_config_json_transforms_atlassian_and_copies_verbatim_sectio
                 },
             ],
         },
-        "jenkins": {"enabled": True, "username": "jenkins-user", "password": "jenkins-password"},
+        "jenkins": {
+            "enabled": True,
+            "url": "https://jenkins.example.test",
+            "username": "jenkins-user",
+            "password": "jenkins-password",
+        },
         "aws": {"enabled": True, "domain": "HBEU", "username": "aws-user", "password": "aws-password"},
         "mobile-auto": {
             "enabled": True,
@@ -1283,8 +1288,23 @@ def test_build_tools_config_json_transforms_atlassian_and_copies_verbatim_sectio
         },
     ]
 
+    # Jenkins is projected as a single tools instance (not copied verbatim).
+    assert root["jenkins"] == {
+        "default_instance": "jenkins",
+        "instances": [
+            {
+                "name": "jenkins",
+                "base_url": "https://jenkins.example.test",
+                "rest_path": "",
+                "auth": {
+                    "type": "basic_password",
+                    "username": "jenkins-user",
+                    "password": "jenkins-password",
+                },
+            }
+        ],
+    }
     # Verbatim sections.
-    assert root["jenkins"] == {"enabled": True, "username": "jenkins-user", "password": "jenkins-password"}
     assert root["aws"] == {"enabled": True, "domain": "HBEU", "username": "aws-user", "password": "aws-password"}
     assert root["mobile-auto"]["browserstack"]["access_key"] == "bs-key"
 
@@ -1302,3 +1322,152 @@ def test_build_tools_config_json_omits_empty_and_disabled_sections():
         }
     )
     assert root == {}
+
+
+def test_build_tools_config_json_projects_jenkins_as_single_instance():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": True,
+                "url": "https://jenkins.example.test/",
+                "username": "jenkins-user",
+                "password": "jenkins-password",
+            },
+        }
+    )
+    assert root == {
+        "jenkins": {
+            "default_instance": "jenkins",
+            "instances": [
+                {
+                    "name": "jenkins",
+                    "base_url": "https://jenkins.example.test",
+                    "rest_path": "",
+                    "auth": {
+                        "type": "basic_password",
+                        "username": "jenkins-user",
+                        "password": "jenkins-password",
+                    },
+                }
+            ],
+        }
+    }
+
+
+def test_build_tools_config_json_jenkins_bearer_token_instance():
+    root = profile_config_module.build_tools_config_json(
+        {"jenkins": {"enabled": True, "url": "https://ci.example.test", "token": "ci-token"}}
+    )
+    assert root["jenkins"]["instances"][0]["auth"] == {
+        "type": "bearer_token",
+        "token": "ci-token",
+    }
+
+
+def test_build_tools_config_json_drops_jenkins_without_url():
+    assert profile_config_module.build_tools_config_json(
+        {"jenkins": {"enabled": True, "username": "u", "password": "p"}}
+    ) == {}
+
+
+def test_build_tools_config_json_drops_disabled_jenkins():
+    assert profile_config_module.build_tools_config_json(
+        {"jenkins": {"enabled": False, "url": "https://jenkins.example.test"}}
+    ) == {}
+
+
+def test_flatten_config_to_env_produces_jenkins_instance_vars():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": True,
+                "url": "https://jenkins.example.test",
+                "username": "jenkins-user",
+                "password": "jenkins-password",
+            },
+        }
+    )
+    env = profile_config_module.flatten_config_to_env(root)
+    assert env == {
+        "EFP_JENKINS_DEFAULT_INSTANCE": "jenkins",
+        "EFP_JENKINS_INSTANCES_0_NAME": "jenkins",
+        "EFP_JENKINS_INSTANCES_0_BASE_URL": "https://jenkins.example.test",
+        "EFP_JENKINS_INSTANCES_0_AUTH_TYPE": "basic_password",
+        "EFP_JENKINS_INSTANCES_0_AUTH_USERNAME": "jenkins-user",
+        "EFP_JENKINS_INSTANCES_0_AUTH_PASSWORD": "jenkins-password",
+    }
+    # Empty rest_path emits no key; the old verbatim EFP_JENKINS_ENABLED is gone.
+    assert "EFP_JENKINS_INSTANCES_0_REST_PATH" not in env
+    assert "EFP_JENKINS_ENABLED" not in env
+
+
+def test_flatten_config_to_env_produces_efp_prefixed_indexed_vars():
+    root = {
+        "version": 1,
+        "jira": {
+            "default_instance": "jira-main",
+            "instances": [
+                {
+                    "name": "jira-main",
+                    "base_url": "https://jira.example.test",
+                    "rest_path": "/rest/api/3",
+                    "api_version": "3",
+                    "auth": {"type": "basic_api_key", "username": "bot", "api_key": "jira-token"},
+                },
+                {
+                    "name": "jira-2",
+                    "base_url": "https://jira2.example.test",
+                    "rest_path": "/rest/api/2",
+                    "api_version": "2",
+                    "auth": {"type": "bearer_token", "token": "jira2-token"},
+                },
+            ],
+        },
+        "aws": {"enabled": True, "domain": "HBEU", "username": "aws-user", "password": ""},
+        "mobile-auto": {
+            "browserstack": {
+                "username": "bs-user",
+                "no_proxy_hosts": ["host-a", "host-b"],
+            },
+        },
+    }
+
+    env = profile_config_module.flatten_config_to_env(root)
+
+    assert env == {
+        "EFP_VERSION": "1",
+        "EFP_JIRA_DEFAULT_INSTANCE": "jira-main",
+        "EFP_JIRA_INSTANCES_0_NAME": "jira-main",
+        "EFP_JIRA_INSTANCES_0_BASE_URL": "https://jira.example.test",
+        "EFP_JIRA_INSTANCES_0_REST_PATH": "/rest/api/3",
+        "EFP_JIRA_INSTANCES_0_API_VERSION": "3",
+        "EFP_JIRA_INSTANCES_0_AUTH_TYPE": "basic_api_key",
+        "EFP_JIRA_INSTANCES_0_AUTH_USERNAME": "bot",
+        "EFP_JIRA_INSTANCES_0_AUTH_API_KEY": "jira-token",
+        "EFP_JIRA_INSTANCES_1_NAME": "jira-2",
+        "EFP_JIRA_INSTANCES_1_BASE_URL": "https://jira2.example.test",
+        "EFP_JIRA_INSTANCES_1_REST_PATH": "/rest/api/2",
+        "EFP_JIRA_INSTANCES_1_API_VERSION": "2",
+        "EFP_JIRA_INSTANCES_1_AUTH_TYPE": "bearer_token",
+        "EFP_JIRA_INSTANCES_1_AUTH_TOKEN": "jira2-token",
+        # bool renders lowercase; the empty-string "password" is omitted.
+        "EFP_AWS_ENABLED": "true",
+        "EFP_AWS_DOMAIN": "HBEU",
+        "EFP_AWS_USERNAME": "aws-user",
+        # "mobile-auto" -> MOBILE_AUTO; []string elements indexed by position.
+        "EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME": "bs-user",
+        "EFP_MOBILE_AUTO_BROWSERSTACK_NO_PROXY_HOSTS_0": "host-a",
+        "EFP_MOBILE_AUTO_BROWSERSTACK_NO_PROXY_HOSTS_1": "host-b",
+    }
+
+    # Empty/absent scalars emit no key at all.
+    assert "EFP_AWS_PASSWORD" not in env
+
+
+def test_flatten_config_to_env_omits_empty_and_none_and_renders_bool_false():
+    root = {
+        "aws": {"enabled": False, "domain": "D", "username": None, "password": ""},
+        "empty": {},
+    }
+    env = profile_config_module.flatten_config_to_env(root)
+    assert env == {"EFP_AWS_ENABLED": "false", "EFP_AWS_DOMAIN": "D"}
