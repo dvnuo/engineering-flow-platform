@@ -57,12 +57,12 @@ def test_runtime_chat_resolves_default_and_alias_models(monkeypatch):
     class _FakeConfig:
         @property
         def llm(self):
-            return {"model": "gpt-5.4 mini"}
+            return {"model": "gpt-5.6 terra"}
 
     monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
 
-    assert runtime_chat._resolve_model(None) == "gpt-5.4-mini"
-    assert runtime_chat._resolve_model("gemini 3.5 flash") == "gemini-3.5-flash"
+    assert runtime_chat._resolve_model(None) == "gpt-5.6-terra"
+    assert runtime_chat._resolve_model("gpt-5.6 luna") == "gpt-5.6-luna"
 
 
 def test_runtime_chat_rejects_invalid_model_locally(monkeypatch):
@@ -375,7 +375,7 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
         message="hello",
         session_id="s-profile",
         request_id="req-profile",
-        model="gpt-5.4 mini",
+        model="gpt-5.6 terra",
         track_usage=False,
         execution_metadata={
             "runtime_profile": {
@@ -386,10 +386,10 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
     )
 
     runtime_config = captured["config"]
-    assert captured["provider_model"] == "gpt-5.4-mini"
+    assert captured["provider_model"] == "gpt-5.6-terra"
     assert runtime_config.workspace_root == runtime_chat._runtime_workspace_root()
     assert runtime_config.default_provider_id == "github-copilot"
-    assert runtime_config.default_model == "gpt-5.4-mini"
+    assert runtime_config.default_model == "gpt-5.6-terra"
     assert runtime_config.track_usage is False
     assert runtime_config.enabled_tools == ["read"]
     assert runtime_config.disabled_tools == ["write"]
@@ -582,7 +582,7 @@ async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(
             "llm": {
                 "provider": "github_copilot",
                 "api_key": "copilot-config-token",
-                "model": "gpt-5-mini",
+                "model": "gpt-5.6-terra",
             },
             "session": {"max_iterations": 1},
         },

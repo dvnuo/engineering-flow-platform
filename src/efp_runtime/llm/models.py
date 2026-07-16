@@ -7,18 +7,16 @@ from typing import Any
 
 
 DEFAULT_PROVIDER_ID = "github-copilot"
-DEFAULT_MODEL_ID = "gpt-5.4"
+DEFAULT_MODEL_ID = "gpt-5.6-terra"
 DEFAULT_CHARS_PER_TOKEN = 4
 MIN_PRESERVE_RECENT_TOKENS = 2_000
 MAX_PRESERVE_RECENT_TOKENS = 8_000
 SUPPORTED_COPILOT_MODEL_IDS = (
-    "gpt-5-mini",
-    "gpt-5.3-codex",
     "gpt-5.4",
-    "gpt-5.4-mini",
     "gpt-5.5",
-    "gemini-2.5-pro",
-    "gemini-3.5-flash",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
 )
 
 
@@ -124,23 +122,8 @@ def _default_preserve_recent_tokens(
 
 
 _COPILOT_PROFILES = {
-    "gpt-5-mini": _profile(
-        "gpt-5-mini",
-        context_window_tokens=264_000,
-        default_reserve_tokens=64_000,
-    ),
-    "gpt-5.3-codex": _profile(
-        "gpt-5.3-codex",
-        context_window_tokens=400_000,
-        default_reserve_tokens=128_000,
-    ),
     "gpt-5.4": _profile(
         "gpt-5.4",
-        context_window_tokens=400_000,
-        default_reserve_tokens=128_000,
-    ),
-    "gpt-5.4-mini": _profile(
-        "gpt-5.4-mini",
         context_window_tokens=400_000,
         default_reserve_tokens=128_000,
     ),
@@ -149,15 +132,20 @@ _COPILOT_PROFILES = {
         context_window_tokens=400_000,
         default_reserve_tokens=128_000,
     ),
-    "gemini-2.5-pro": _profile(
-        "gemini-2.5-pro",
-        context_window_tokens=128_000,
-        default_reserve_tokens=64_000,
+    "gpt-5.6-luna": _profile(
+        "gpt-5.6-luna",
+        context_window_tokens=328_000,
+        default_reserve_tokens=128_000,
     ),
-    "gemini-3.5-flash": _profile(
-        "gemini-3.5-flash",
-        context_window_tokens=128_000,
-        default_reserve_tokens=64_000,
+    "gpt-5.6-sol": _profile(
+        "gpt-5.6-sol",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gpt-5.6-terra": _profile(
+        "gpt-5.6-terra",
+        context_window_tokens=400_000,
+        default_reserve_tokens=128_000,
     ),
 }
 

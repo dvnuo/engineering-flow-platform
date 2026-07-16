@@ -24,25 +24,13 @@ llm:
   # If EFP_GITHUB_COPILOT_TOKEN/GITHUB_COPILOT_TOKEN is already a Copilot token,
   # EFP uses it directly.
   api_key: "ghp_YOUR_GITHUB_TOKEN"
-  model: "gpt-5.4"
+  model: "gpt-5.6-terra"
   reasoning_effort: "high"
   
   max_tokens: 128000
   allow_lower_max_tokens_than_model_limit: false
   model_limits:
-    gpt-5-mini:
-      max_context_window_tokens: 264000
-      max_prompt_tokens: 128000
-      max_output_tokens: 64000
-    gpt-5.3-codex:
-      max_context_window_tokens: 400000
-      max_prompt_tokens: 272000
-      max_output_tokens: 128000
     gpt-5.4:
-      max_context_window_tokens: 400000
-      max_prompt_tokens: 272000
-      max_output_tokens: 128000
-    gpt-5.4-mini:
       max_context_window_tokens: 400000
       max_prompt_tokens: 272000
       max_output_tokens: 128000
@@ -50,14 +38,18 @@ llm:
       max_context_window_tokens: 400000
       max_prompt_tokens: 272000
       max_output_tokens: 128000
-    gemini-2.5-pro:
-      max_context_window_tokens: 128000
-      max_prompt_tokens: 128000
-      max_output_tokens: 64000
-    gemini-3.5-flash:
-      max_context_window_tokens: 128000
-      max_prompt_tokens: 128000
-      max_output_tokens: 64000
+    gpt-5.6-luna:
+      max_context_window_tokens: 328000
+      max_prompt_tokens: 200000
+      max_output_tokens: 128000
+    gpt-5.6-sol:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
+      max_output_tokens: 128000
+    gpt-5.6-terra:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
+      max_output_tokens: 128000
   temperature: 0.7
   reasoning_replay: false
   max_retries: 3
@@ -173,7 +165,7 @@ cost_tracking:
 #   retention_days: 30
 
 # EFP runtime native provider and common models:
-# - github_copilot: gpt-5.4, gpt-5.4-mini, gpt-5.5, gpt-5.3-codex, gpt-5-mini, gemini-2.5-pro, gemini-3.5-flash
+# - github_copilot: gpt-5.4, gpt-5.5, gpt-5.6-luna, gpt-5.6-sol, gpt-5.6-terra (default: gpt-5.6-terra)
 
 # ============================================
 # Workspace Configuration (OPTIONAL)
