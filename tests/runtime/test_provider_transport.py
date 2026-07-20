@@ -220,12 +220,12 @@ async def test_github_copilot_provider_defaults_strict_responses_payload():
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5.4"
+    assert provider.model == "gpt-5.6-terra"
     assert provider.endpoint == "responses"
     assert provider.reasoning_effort == DEFAULT_COPILOT_REASONING_EFFORT
     assert provider.metadata["provider_id"] == "github-copilot"
     payload = transport.payloads[0]
-    assert payload["model"] == "gpt-5.4"
+    assert payload["model"] == "gpt-5.6-terra"
     assert "input" in payload
     assert "messages" not in payload
     assert payload["reasoning"] == {"effort": "high"}
@@ -251,12 +251,12 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     result = await runner.run(
         session_id="session-copilot-model-hint",
         user_text="Answer with requested model.",
-        metadata={"requested_model": "gpt-5 mini"},
+        metadata={"requested_model": "gpt-5.6 luna"},
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5.4"
-    assert transport.payloads[0]["model"] == "gpt-5-mini"
+    assert provider.model == "gpt-5.6-terra"
+    assert transport.payloads[0]["model"] == "gpt-5.6-luna"
     assert "metadata" not in transport.payloads[0]
 
 
@@ -287,13 +287,11 @@ def test_github_copilot_provider_rejects_invalid_reasoning_effort_locally():
 
 def test_github_copilot_supported_models_and_reasoning_are_exact():
     assert SUPPORTED_COPILOT_MODEL_IDS == (
-        "gpt-5-mini",
-        "gpt-5.3-codex",
         "gpt-5.4",
-        "gpt-5.4-mini",
         "gpt-5.5",
-        "gemini-2.5-pro",
-        "gemini-3.5-flash",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
     )
     assert SUPPORTED_COPILOT_REASONING_EFFORTS == (
         "low",
@@ -1133,7 +1131,7 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
         }
     )
 
-    assert provider.model == "gpt-5.4"
+    assert provider.model == "gpt-5.6-terra"
     assert provider.endpoint == "responses"
     assert provider.reasoning_effort == "medium"
     assert provider.metadata["provider_id"] == "github-copilot"
@@ -1149,11 +1147,11 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
 
 def test_github_copilot_provider_from_env_falls_back_to_github_token():
     provider = github_copilot_provider_from_env(
-        model="gemini 3.5 flash",
+        model="gpt-5.6 sol",
         env={"GITHUB_COPILOT_TOKEN": "github-token"},
     )
 
-    assert provider.model == "gemini-3.5-flash"
+    assert provider.model == "gpt-5.6-sol"
     assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
     assert provider.transport._headers()["Authorization"] == "Bearer github-token"
 
@@ -1174,7 +1172,7 @@ def test_github_copilot_provider_from_env_exchanges_github_source_token(monkeypa
         env={"EFP_GITHUB_COPILOT_TOKEN": "ghu_source123"}
     )
 
-    assert provider.model == "gpt-5.4"
+    assert provider.model == "gpt-5.6-terra"
     assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
     assert provider.transport.token_source == "github_exchange"
     assert provider.transport.endpoint == "https://api.enterprise.githubcopilot.com/responses"
@@ -1219,11 +1217,11 @@ def test_github_copilot_smoke_dry_run_outputs_payload_without_token():
     assert payload["dry_run"] is True
     assert payload["provider"] == "github-copilot"
     assert payload["provider_id"] == "github-copilot"
-    assert payload["model"] == "gpt-5.4"
+    assert payload["model"] == "gpt-5.6-terra"
     assert payload["payload_summary"]["tool_count"] == 0
     assert payload["payload_summary"]["stream"] is False
     assert payload["payload_summary"]["reasoning"] == {"effort": "high"}
-    assert payload["payload"]["model"] == "gpt-5.4"
+    assert payload["payload"]["model"] == "gpt-5.6-terra"
     assert payload["payload"]["reasoning"] == {"effort": "high"}
     assert payload["payload"]["input"][-1]["role"] == "user"
     input_item = payload["payload"]["input"][-1]["content"][0]
