@@ -1220,12 +1220,18 @@ async def api_chat(request: web.Request) -> web.Response:
         if not message and not attachment_ids:
             return web.json_response({'error': 'Empty message'}, status=400)
         
-        # Check if LLM is configured before processing
-        api_key = global_config.llm.get('api_key')
-        if not api_key:
+        # Check if an LLM is configured before processing. Copilot needs an
+        # api_key; AI Platform authenticates via its own ai_platform.auth block
+        # (username/password or a direct token) and has no api_key.
+        llm_cfg = global_config.llm if isinstance(global_config.llm, dict) else {}
+        provider = str(llm_cfg.get('provider') or '').strip().lower()
+        ai_platform_configured = provider in ('ai_platform', 'ai-platform') and isinstance(
+            llm_cfg.get('ai_platform'), dict
+        )
+        if not llm_cfg.get('api_key') and not ai_platform_configured:
             return web.json_response({
                 'error': 'LLM not configured',
-                'message': 'Please configure LLM API Key in Settings to use the chat feature.',
+                'message': 'Please configure an LLM provider in Settings to use the chat feature.',
                 'code': 'llm_not_configured'
             }, status=503)
         

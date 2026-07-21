@@ -235,6 +235,32 @@ def test_env_overlay_invalid_json_records_load_error_without_crashing(tmp_path, 
     assert cfg.get_effective_config()["llm"]["provider"] == "openai"
 
 
+def test_env_overlay_ai_platform_provider_and_block(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "llm": {
+                "provider": "ai_platform",
+                "model": "gpt-5.4",
+                "ai_platform": {
+                    "chat": {"host": "https://chat.int", "uri": "/v1/api/v1/chat/completions"},
+                    "ib2b": {"host": "https://ib2b.int", "uri": "/dsp/token"},
+                    "auth": {"username": "u", "password": "pw", "usercase": "uc"},
+                },
+            },
+        },
+    )
+    effective = cfg.get_effective_config()["llm"]
+    # ai_platform is a supported provider: it is NOT coerced to copilot at boot.
+    assert effective["provider"] == "ai_platform"
+    assert effective["model"] == "gpt-5.4"
+    ap = effective["ai_platform"]
+    assert ap["chat"]["host"] == "https://chat.int"
+    assert ap["ib2b"]["uri"] == "/dsp/token"
+    assert ap["auth"]["password"] == "pw"
+
+
 def test_env_overlay_filters_unmanaged_nested_fields(tmp_path, monkeypatch):
     cfg = _env_config(
         tmp_path,

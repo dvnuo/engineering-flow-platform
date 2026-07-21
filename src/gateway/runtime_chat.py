@@ -15,14 +15,18 @@ from src.workspace_defaults import resolve_runtime_workspace
 from src.efp_runtime.event_bus import RuntimeEventBus
 from src.efp_runtime.events import RuntimeEvent
 from src.efp_runtime.llm.provider import (
+    DEFAULT_AI_PLATFORM_TRACKING_PREFIX,
+    DEFAULT_AI_PLATFORM_TRUST_TOKEN_HEADER,
     DEFAULT_COPILOT_REASONING_EFFORT,
     DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
+    AIPlatformHTTPTransport,
+    AIPlatformProvider,
     GitHubCopilotHTTPTransport,
     GitHubCopilotProvider,
     ProviderTransportError,
     validate_copilot_reasoning_effort,
 )
-from src.efp_runtime.llm.models import canonicalize_copilot_model_id
+from src.efp_runtime.llm.models import AI_PLATFORM_MODEL_IDS, DEFAULT_AI_PLATFORM_MODEL, canonicalize_copilot_model_id
 from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from src.efp_runtime.session.gateway_facade import (
@@ -92,8 +96,7 @@ async def run_runtime_chat(
 ) -> dict[str, Any]:
     """Run the production chat loop through ``efp_runtime.runtime.AgentRuntime``."""
 
-    runtime_model = _resolve_model(model)
-    provider = _build_github_copilot_provider(runtime_model)
+    provider, runtime_model = _build_llm_provider(model)
     event_bus = RuntimeEventBus()
     runtime = AgentRuntime(
         provider=provider,
@@ -212,8 +215,7 @@ async def resume_runtime_chat(
 ) -> dict[str, Any]:
     """Resume an existing native runtime session without appending a new user message."""
 
-    runtime_model = _resolve_model(model)
-    provider = _build_github_copilot_provider(runtime_model)
+    provider, runtime_model = _build_llm_provider(model)
     event_bus = RuntimeEventBus()
     runtime = AgentRuntime(
         provider=provider,
@@ -532,6 +534,78 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
         metadata={"gateway": "runtime_api"},
         reasoning_effort=_resolve_reasoning_effort(llm_config),
     )
+
+
+def _join_url(host: str, uri: str) -> str:
+    host = (host or "").rstrip("/")
+    uri = (uri or "").strip()
+    if uri.startswith("http://") or uri.startswith("https://"):
+        return uri
+    if uri and not uri.startswith("/"):
+        uri = "/" + uri
+    return host + uri
+
+
+def _resolve_ai_platform_model(model: str | None) -> str:
+    # Coerce to a valid AI Platform model. /api/chat forwards a Copilot default
+    # model id (e.g. gpt-5.6-terra) when llm.model is unset, which AI Platform
+    # does not serve; fall back to the AI Platform default in that case.
+    configured = str(model or config.llm.get("model") or "").strip()
+    if configured in AI_PLATFORM_MODEL_IDS:
+        return configured
+    return DEFAULT_AI_PLATFORM_MODEL
+
+
+def _build_ai_platform_provider(model: str) -> AIPlatformProvider:
+    llm_config = config.llm if isinstance(config.llm, dict) else {}
+    ap = llm_config.get("ai_platform") if isinstance(llm_config.get("ai_platform"), dict) else {}
+    chat = ap.get("chat") if isinstance(ap.get("chat"), dict) else {}
+    ib2b = ap.get("ib2b") if isinstance(ap.get("ib2b"), dict) else {}
+    auth = ap.get("auth") if isinstance(ap.get("auth"), dict) else {}
+
+    chat_host = str(chat.get("host") or "").strip()
+    if not chat_host:
+        raise RuntimeChatError(
+            "AI Platform chat host is required (llm.ai_platform.chat.host).",
+            status_code=400,
+            error_type="invalid_config",
+            details={"provider": "ai_platform"},
+        )
+    chat_endpoint = _join_url(chat_host, str(chat.get("uri") or "/v1/api/v1/chat/completions"))
+    ib2b_host = str(ib2b.get("host") or "").strip()
+    ib2b_endpoint = _join_url(ib2b_host, str(ib2b.get("uri") or "")) if ib2b_host else ""
+    usercase = str(auth.get("usercase") or "").strip()
+
+    transport = AIPlatformHTTPTransport(
+        chat_endpoint=chat_endpoint,
+        ib2b_endpoint=ib2b_endpoint,
+        username=str(auth.get("username") or ""),
+        password=str(auth.get("password") or ""),
+        usercase=usercase,
+        token=str(auth.get("token") or ""),
+        trust_token_header=str(auth.get("trust_token_header") or "") or DEFAULT_AI_PLATFORM_TRUST_TOKEN_HEADER,
+        tracking_prefix=str(auth.get("tracking_prefix") or "") or DEFAULT_AI_PLATFORM_TRACKING_PREFIX,
+        timeout=_resolve_github_copilot_timeout(llm_config),
+    )
+    return AIPlatformProvider(
+        transport=transport,
+        model=model,
+        stream=True,
+        metadata={"gateway": "runtime_api"},
+        reasoning_effort=_resolve_reasoning_effort(llm_config),
+        usercase=usercase,
+    )
+
+
+def _build_llm_provider(model: str | None):
+    """Dispatch to the configured provider; returns (provider, runtime_model)."""
+    llm_config = config.llm if isinstance(config.llm, dict) else {}
+    provider = str(llm_config.get("provider") or "").strip().lower()
+    if provider in {"ai_platform", "ai-platform"}:
+        runtime_model = _resolve_ai_platform_model(model)
+        return _build_ai_platform_provider(runtime_model), runtime_model
+    runtime_model = _resolve_model(model)
+    return _build_github_copilot_provider(runtime_model), runtime_model
 
 
 def _resolve_reasoning_effort(llm_config: Mapping[str, Any]) -> str:

@@ -566,6 +566,312 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         return response
 
 
+DEFAULT_AI_PLATFORM_TOKEN_TTL_SECONDS = 30
+AI_PLATFORM_TOKEN_REFRESH_MARGIN_SECONDS = 5
+DEFAULT_AI_PLATFORM_TRUST_TOKEN_HEADER = "X-XXXX-E2E-Trust-Token"
+DEFAULT_AI_PLATFORM_TRACKING_PREFIX = "EFP"
+
+
+class AIPlatformHTTPTransport:
+    """HTTP JSON transport for the AI Platform OpenAI-compatible chat endpoint.
+
+    Auth is two-legged: username/password/usercase are exchanged at an iB2B STS
+    endpoint for a short-lived JWT ("trust token"), which is sent in a
+    configurable trust-token header on each chat call (plus tracking ids). The
+    JWT is re-exchanged when missing or within a refresh margin of expiry, and
+    once reactively on a 401/403.
+    """
+
+    def __init__(
+        self,
+        *,
+        chat_endpoint: str,
+        ib2b_endpoint: str = "",
+        username: str = "",
+        password: str = "",
+        usercase: str = "",
+        token: str = "",
+        trust_token_header: str = DEFAULT_AI_PLATFORM_TRUST_TOKEN_HEADER,
+        tracking_prefix: str = DEFAULT_AI_PLATFORM_TRACKING_PREFIX,
+        timeout: float | None = DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
+        token_ttl_seconds: int = DEFAULT_AI_PLATFORM_TOKEN_TTL_SECONDS,
+    ) -> None:
+        self.endpoint = _required_non_empty_string(chat_endpoint, "chat_endpoint")
+        self.ib2b_endpoint = (ib2b_endpoint or "").strip()
+        self.timeout = timeout
+        self.token_source = "ai_platform"
+        self._username = (username or "").strip()
+        self._password = (password or "").strip()
+        self._usercase = (usercase or "").strip()
+        self._trust_token_header = (trust_token_header or DEFAULT_AI_PLATFORM_TRUST_TOKEN_HEADER).strip()
+        self._tracking_prefix = (tracking_prefix or DEFAULT_AI_PLATFORM_TRACKING_PREFIX).strip()
+        self._token_ttl_seconds = max(1, int(token_ttl_seconds or DEFAULT_AI_PLATFORM_TOKEN_TTL_SECONDS))
+        self._token = (token or "").strip()
+        self._token_expires_at: float | None = (
+            time.time() + self._token_ttl_seconds if self._token else None
+        )
+        self._refresh_lock = threading.Lock()
+
+    # -- token management --------------------------------------------------
+
+    def _token_is_fresh(self) -> bool:
+        if not self._token:
+            return False
+        if self._token_expires_at is None:
+            return True
+        return self._token_expires_at > time.time() + AI_PLATFORM_TOKEN_REFRESH_MARGIN_SECONDS
+
+    def _ensure_token(self, *, force: bool = False) -> None:
+        if not force and self._token_is_fresh():
+            return
+        with self._refresh_lock:
+            if not force and self._token_is_fresh():
+                return
+            self._exchange_token()
+
+    def _exchange_token(self) -> None:
+        if not (self._username and self._password and self.ib2b_endpoint):
+            if self._token:
+                return
+            raise ProviderTransportError(
+                "AI Platform requires a token, or username/password plus an iB2B endpoint."
+            )
+        body = json.dumps(
+            {
+                "input_token_state": {
+                    "token_type": "CREDENTIAL",
+                    "username": self._username,
+                    "password": self._password,
+                },
+                "output_token_state": {"token_type": "JWT"},
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        request = urllib_request.Request(
+            self.ib2b_endpoint,
+            data=body,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                raw = response.read()
+        except urllib_error.HTTPError as exc:
+            text = _read_http_error_body(exc)
+            raise ProviderTransportError(
+                "AI Platform token exchange failed ({0}): {1}".format(
+                    exc.code, _redact_secret(text, self._password)
+                )
+            ) from None
+        except urllib_error.URLError as exc:
+            reason = _redact_secret(str(getattr(exc, "reason", exc)), self._password)
+            raise ProviderTransportError(
+                "AI Platform token exchange failed: {0}".format(reason)
+            ) from None
+        except TimeoutError:
+            raise ProviderTransportError(
+                _format_timeout_message("AI Platform token exchange", self.timeout)
+            ) from None
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProviderTransportError(
+                "AI Platform token exchange returned invalid JSON"
+            ) from exc
+        token = str(data.get("issued_token") or "").strip() if isinstance(data, dict) else ""
+        if not token:
+            raise ProviderTransportError(
+                "AI Platform token exchange did not return issued_token."
+            )
+        self._token = token
+        self._token_expires_at = time.time() + self._token_ttl_seconds
+
+    def _tracking_id(self) -> str:
+        prefix = self._tracking_prefix or DEFAULT_AI_PLATFORM_TRACKING_PREFIX
+        return "{0}-{1}".format(prefix, time.strftime("%Y%m%d%H%M%S", time.gmtime()))
+
+    def _headers(self, *, stream: bool = False) -> dict[str, str]:
+        tracking = self._tracking_id()
+        return {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream" if stream else "application/json",
+            self._trust_token_header: self._token,
+            "x-correlation-id": tracking,
+            "x-usersession-id": tracking,
+        }
+
+    @staticmethod
+    def _should_reexchange(exc: urllib_error.HTTPError) -> bool:
+        return getattr(exc, "code", None) in (401, 403)
+
+    # -- send --------------------------------------------------------------
+
+    async def send(self, payload: dict[str, Any]) -> TransportOutput:
+        if payload.get("stream") is True:
+            return self._send_stream(payload)
+        return await asyncio.to_thread(self._send_sync, payload)
+
+    async def _send_stream(self, payload: dict[str, Any]) -> AsyncIterator[Mapping[str, Any]]:
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        done = object()
+        loop = asyncio.get_running_loop()
+
+        def worker() -> None:
+            try:
+                for chunk in self._send_stream_sync(payload):
+                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            except BaseException as exc:  # noqa: BLE001 - propagated through async iterator.
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, done)
+
+        task = asyncio.create_task(asyncio.to_thread(worker))
+        try:
+            while True:
+                item = await queue.get()
+                if item is done:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    def _encode_payload(self, payload: dict[str, Any]) -> bytes:
+        try:
+            return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ProviderTransportError(
+                "AI Platform HTTP transport received a non-JSON payload"
+            ) from exc
+
+    def _send_stream_sync(self, payload: dict[str, Any]) -> Iterable[Mapping[str, Any]]:
+        body = self._encode_payload(payload)
+        self._ensure_token()
+        for attempt in range(2):
+            request = urllib_request.Request(
+                self.endpoint, data=body, headers=self._headers(stream=True), method="POST"
+            )
+            try:
+                with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                    yield from parse_sse_json_events(_iter_response_lines(response))
+                return
+            except urllib_error.HTTPError as exc:
+                if attempt == 0 and self._should_reexchange(exc):
+                    self._ensure_token(force=True)
+                    continue
+                text = _read_http_error_body(exc)
+                raise ProviderTransportError(
+                    "AI Platform HTTP transport failed ({0}): {1}".format(
+                        exc.code, _redact_secret(text, self._token)
+                    )
+                ) from None
+            except urllib_error.URLError as exc:
+                reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
+                raise ProviderTransportError(
+                    "AI Platform HTTP transport failed: {0}".format(reason)
+                ) from None
+            except TimeoutError:
+                raise ProviderTransportError(
+                    _format_timeout_message("AI Platform HTTP transport", self.timeout)
+                ) from None
+
+    def _send_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
+        body = self._encode_payload(payload)
+        self._ensure_token()
+        for attempt in range(2):
+            request = urllib_request.Request(
+                self.endpoint, data=body, headers=self._headers(), method="POST"
+            )
+            try:
+                with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                    return self._decode_json_response(response.read())
+            except urllib_error.HTTPError as exc:
+                if attempt == 0 and self._should_reexchange(exc):
+                    self._ensure_token(force=True)
+                    continue
+                text = _read_http_error_body(exc)
+                raise ProviderTransportError(
+                    "AI Platform HTTP transport failed ({0}): {1}".format(
+                        exc.code, _redact_secret(text, self._token)
+                    )
+                ) from None
+            except urllib_error.URLError as exc:
+                reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
+                raise ProviderTransportError(
+                    "AI Platform HTTP transport failed: {0}".format(reason)
+                ) from None
+            except TimeoutError:
+                raise ProviderTransportError(
+                    _format_timeout_message("AI Platform HTTP transport", self.timeout)
+                ) from None
+        raise ProviderTransportError("AI Platform HTTP transport exhausted retries")
+
+    def _decode_json_response(self, raw_body: bytes) -> dict[str, Any]:
+        try:
+            data = json.loads(raw_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProviderTransportError(
+                "AI Platform HTTP transport returned invalid JSON"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ProviderTransportError(
+                "AI Platform HTTP transport returned a non-object JSON response"
+            )
+        return data
+
+
+class AIPlatformProvider(OpenAICompatibleProvider):
+    """OpenAI-compatible facade for the AI Platform chat/completions endpoint."""
+
+    def __init__(
+        self,
+        *,
+        transport: ProviderTransport,
+        model: str,
+        instructions: Optional[str] = None,
+        stream: bool = False,
+        metadata: Optional[Mapping[str, Any]] = None,
+        reasoning_effort: Optional[str] = None,
+        usercase: Optional[str] = None,
+        adapter: Optional[LLMEventAdapter] = None,
+    ) -> None:
+        provider_metadata = dict(metadata or {})
+        provider_metadata.update({"provider": "ai_platform", "provider_id": "ai_platform"})
+        self._usercase = (usercase or "").strip()
+        super().__init__(
+            model=model,
+            transport=transport,
+            endpoint="chat",
+            instructions=instructions,
+            stream=stream,
+            metadata=provider_metadata,
+            reasoning_effort=reasoning_effort,
+            adapter=adapter,
+        )
+
+    def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
+        payload = super().build_payload(request)
+        if self.reasoning_effort:
+            payload.setdefault("reasoning_effort", self.reasoning_effort)
+        if self._usercase:
+            payload.setdefault("user", self._usercase)
+        return payload
+
+    def _transport_error_response(self, exc: BaseException) -> dict[str, Any]:
+        response = super()._transport_error_response(exc)
+        metadata = response.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["provider"] = "ai_platform"
+            metadata["provider_id"] = "ai_platform"
+        return response
+
+
 class RecordingTransport:
     """Small deterministic transport for tests and local prototypes."""
 
