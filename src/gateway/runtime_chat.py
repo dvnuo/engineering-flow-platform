@@ -26,7 +26,7 @@ from src.efp_runtime.llm.provider import (
     ProviderTransportError,
     validate_copilot_reasoning_effort,
 )
-from src.efp_runtime.llm.models import DEFAULT_AI_PLATFORM_MODEL, canonicalize_copilot_model_id
+from src.efp_runtime.llm.models import AI_PLATFORM_MODEL_IDS, DEFAULT_AI_PLATFORM_MODEL, canonicalize_copilot_model_id
 from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
 from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from src.efp_runtime.session.gateway_facade import (
@@ -547,8 +547,13 @@ def _join_url(host: str, uri: str) -> str:
 
 
 def _resolve_ai_platform_model(model: str | None) -> str:
-    configured = model or config.llm.get("model") or DEFAULT_AI_PLATFORM_MODEL
-    return str(configured).strip() or DEFAULT_AI_PLATFORM_MODEL
+    # Coerce to a valid AI Platform model. /api/chat forwards a Copilot default
+    # model id (e.g. gpt-5.6-terra) when llm.model is unset, which AI Platform
+    # does not serve; fall back to the AI Platform default in that case.
+    configured = str(model or config.llm.get("model") or "").strip()
+    if configured in AI_PLATFORM_MODEL_IDS:
+        return configured
+    return DEFAULT_AI_PLATFORM_MODEL
 
 
 def _build_ai_platform_provider(model: str) -> AIPlatformProvider:

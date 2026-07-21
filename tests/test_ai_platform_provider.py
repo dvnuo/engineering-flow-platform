@@ -112,6 +112,52 @@ def test_missing_credentials_raises(monkeypatch):
         t._send_sync({"messages": []})
 
 
+def test_resolve_ai_platform_model_coerces_non_ai_platform_model(monkeypatch):
+    import src.gateway.runtime_chat as rc
+
+    monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "ai_platform"}}, raising=False)
+    assert rc._resolve_ai_platform_model("gpt-5.6-terra") == "gpt-5.4"  # copilot id coerced
+    assert rc._resolve_ai_platform_model("gpt-5.4") == "gpt-5.4"
+    assert rc._resolve_ai_platform_model(None) == "gpt-5.4"
+
+
+def test_build_llm_provider_dispatches_to_ai_platform(monkeypatch):
+    import src.gateway.runtime_chat as rc
+    from src.efp_runtime.llm.provider import AIPlatformProvider
+
+    monkeypatch.setattr(
+        rc.config,
+        "_config",
+        {
+            "llm": {
+                "provider": "ai_platform",
+                "model": "gpt-5.4",
+                "ai_platform": {
+                    "chat": {"host": "https://c", "uri": "/v1/api/v1/chat/completions"},
+                    "auth": {"username": "u", "password": "p"},
+                },
+            }
+        },
+        raising=False,
+    )
+    provider, model = rc._build_llm_provider(None)
+    assert isinstance(provider, AIPlatformProvider)
+    assert model == "gpt-5.4"
+
+
+def test_build_ai_platform_provider_requires_chat_host(monkeypatch):
+    import src.gateway.runtime_chat as rc
+
+    monkeypatch.setattr(
+        rc.config,
+        "_config",
+        {"llm": {"provider": "ai_platform", "ai_platform": {"auth": {"username": "u"}}}},
+        raising=False,
+    )
+    with pytest.raises(rc.RuntimeChatError):
+        rc._build_llm_provider(None)
+
+
 def test_direct_token_skips_exchange(monkeypatch):
     t = _transport(username="", password="", ib2b_endpoint="", token="JWT-DIRECT")
     open_fn, calls = _urlopen_script([{"choices": []}])
