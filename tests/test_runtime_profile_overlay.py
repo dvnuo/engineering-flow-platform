@@ -175,7 +175,9 @@ def test_env_overlay_merges_whitelisted_sections_and_keeps_base_read_only(tmp_pa
     )
 
     effective = cfg.get_effective_config()
-    assert effective["llm"]["provider"] == "anthropic"
+    # GitHub Copilot is the only supported provider: the overlay provider is
+    # coerced to it at projection time.
+    assert effective["llm"]["provider"] == "github_copilot"
     # Deep merge: unmanaged base llm fields survive the overlay.
     assert effective["llm"]["model"] == "gpt-4o"
     assert effective["llm"]["api_base"] == "https://api.local"
@@ -252,7 +254,8 @@ def test_env_overlay_filters_unmanaged_nested_fields(tmp_path, monkeypatch):
     )
 
     effective = cfg.get_effective_config()
-    assert effective["llm"]["provider"] == "openai"
+    # Overlay provider is coerced to the only supported provider, Copilot.
+    assert effective["llm"]["provider"] == "github_copilot"
     assert effective["llm"]["model"] == "gpt-5"
     assert effective["llm"]["api_base"] == "https://api.local"
     assert effective["github"]["enabled"] is True
