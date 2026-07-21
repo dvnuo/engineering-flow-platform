@@ -225,6 +225,16 @@ def _render_source_context(
     return "\n\n".join(section for section in sections if section)
 
 
+def _summary_url(url: object) -> str:
+    """Render an attachment url for summaries, collapsing inline data: URIs to a
+    short placeholder so a base64 image payload never bloats a compaction summary."""
+    text = str(url or "")
+    if text.startswith("data:"):
+        head = text[5:].split(",", 1)[0]
+        return f"[inline {head or 'data'}]"
+    return text
+
+
 def _render_messages_for_prompt(messages: list[Message]) -> str:
     if not messages:
         return "(none)"
@@ -286,7 +296,7 @@ def _render_part_for_prompt(index: int, part: MessagePart) -> list[str]:
         return [
             (
                 f"{prefix} attachment_id={part.attachment.attachment_id} "
-                f"filename={part.attachment.filename} url={part.attachment.url} "
+                f"filename={part.attachment.filename} url={_summary_url(part.attachment.url)} "
                 f"text_ref={part.attachment.text_ref}"
             )
         ]
@@ -317,7 +327,7 @@ def _part_text_sources(part: MessagePart) -> list[str]:
         sources.extend(
             [
                 part.attachment.filename or "",
-                part.attachment.url or "",
+                _summary_url(part.attachment.url),
                 part.attachment.text_ref or "",
             ]
         )
