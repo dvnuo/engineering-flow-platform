@@ -6,6 +6,7 @@ import pytest
 from ruamel.yaml import YAML
 from src.config import Config
 from src.external_cli import profile_config as profile_config_module
+from src.runtime_profile_projection import RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS
 
 
 class _FakeCompleted:
@@ -370,10 +371,13 @@ def test_external_cli_instructions_are_injected_for_atlassian_config(tmp_path, m
     )
 
     instructions = cfg.get_effective_config()["instruction_texts"]
+    # Boot-time projection re-adds the portal's single canonical CLI-tool
+    # instruction string byte-for-byte (it used to be baked into native.json).
+    assert instructions == [RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS]
     joined = "\n".join(instructions)
     assert "Use bash" in joined
-    assert "jira, confluence, gh, aws, jenkins, mobile-auto, and git" in joined
-    assert "always pass --json" in joined
+    assert "jira/confluence for Atlassian" in joined
+    assert "add --json" in joined
     assert "EFP_JENKINS_USERNAME" in joined
     assert "EFP_JENKINS_PASSWORD" in joined
     assert "git for clone, fetch, push, and status" in joined
@@ -423,6 +427,47 @@ def test_external_cli_instructions_preserve_portal_texts(tmp_path, monkeypatch):
     assert cfg.get_effective_config()["instruction_texts"] == [
         "Portal supplied instructions."
     ]
+
+
+def test_boot_projection_adds_cli_instructions_and_keeps_canonical_llm(tmp_path, monkeypatch):
+    # A canonical (runtime-agnostic) profile config: github_copilot + bare model,
+    # jira enabled. The native runtime projects it at boot, which re-adds the CLI
+    # tool instructions and leaves the LLM in canonical github_copilot form.
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "llm": {"provider": "github_copilot", "model": "gpt-5.4"},
+            "jira": {
+                "enabled": True,
+                "instances": [
+                    {"name": "jira-main", "url": "https://jira.example.test", "token": "t"}
+                ],
+            },
+        },
+    )
+
+    effective = cfg.get_effective_config()
+    assert effective["instruction_texts"] == [RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS]
+    # native keeps the canonical github_copilot provider and the bare model.
+    assert effective["llm"]["provider"] == "github_copilot"
+    assert effective["llm"]["model"] == "gpt-5.4"
+
+
+def test_boot_projection_omits_cli_instructions_when_no_tools_enabled(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "llm": {"provider": "github_copilot", "model": "gpt-5.4"},
+            "jira": {"enabled": False},
+        },
+    )
+
+    effective = cfg.get_effective_config()
+    assert "instruction_texts" not in effective
+    assert effective["llm"]["provider"] == "github_copilot"
+    assert effective["llm"]["model"] == "gpt-5.4"
 
 
 # ---------------------------------------------------------------------------

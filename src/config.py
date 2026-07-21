@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
+from src.runtime_profile_projection import project_canonical_for_runtime
+
 
 logger = logging.getLogger(__name__)
 
@@ -92,37 +94,6 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
     }
 )
 
-RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS = [
-    (
-        "Use bash for external CLI tools configured by the runtime profile: "
-        "jira, confluence, gh, aws, jenkins, mobile-auto, and git."
-    ),
-    (
-        "For jira, confluence, jenkins, and mobile-auto, always pass --json. Before complex commands, "
-        "inspect commands/schema/help llm; prefer --dry-run for writes, and use "
-        "--yes only when a destructive action was explicitly confirmed."
-    ),
-    (
-        "Use gh for GitHub issues, pull requests, and api calls; use aws for AWS operations; "
-        "use jenkins for Jenkins controller operations; use mobile-auto for BrowserStack/Appium device automation; "
-        "use git for clone, fetch, push, and status."
-    ),
-    (
-        "For mobile automation, start with `mobile-auto doctor --json` and `mobile-auto auth test --json`. "
-        "Use `private-external` with an existing BrowserStackLocal identifier, or `private-managed` only when "
-        "the runtime image provides `/usr/local/bin/BrowserStackLocal`."
-    ),
-    (
-        "Jenkins runtime profile credentials are available as EFP_JENKINS_USERNAME and EFP_JENKINS_PASSWORD. "
-        "When the user provides a Jenkins controller URL or pipeline/job, configure or log in to that controller at that time and pass the password through stdin."
-    ),
-    (
-        "Credentials were applied by the runtime profile through real CLIs or environment variables; "
-        "if jira, confluence, jenkins, or mobile-auto returns auth_failed, aws returns an auth error, or gh/git authentication fails, "
-        "report a runtime profile configuration problem."
-    ),
-]
-
 _ATLASSIAN_INSTANCE_URL_FIELDS = ("url", "base_url", "baseUrl", "uri")
 
 
@@ -134,77 +105,6 @@ def _first_atlassian_instance_url(value: Dict[str, Any]) -> str:
         if text:
             return text.rstrip("/")
     return ""
-
-
-def _should_inject_runtime_profile_external_cli_instructions(overlay: Dict[str, Any]) -> bool:
-    if not isinstance(overlay, dict) or "instruction_texts" in overlay:
-        return False
-    return (
-        _has_atlassian_profile_instances(overlay.get("jira"))
-        or _has_atlassian_profile_instances(overlay.get("confluence"))
-        or _has_jenkins_profile_credentials(overlay.get("jenkins"))
-        or _has_mobile_profile_config(overlay.get("mobile-auto"))
-        or _has_github_profile_token(overlay.get("github"))
-        or _has_aws_profile_config(overlay.get("aws"))
-        or _has_git_profile_user(overlay.get("git"))
-    )
-
-
-def _has_atlassian_profile_instances(section: Any) -> bool:
-    if not isinstance(section, dict) or section.get("enabled") is False:
-        return False
-    instances = section.get("instances")
-    if not isinstance(instances, list):
-        return False
-    for instance in instances:
-        if not isinstance(instance, dict) or instance.get("enabled") is False:
-            continue
-        if _first_atlassian_instance_url(instance):
-            return True
-    return False
-
-
-def _has_github_profile_token(section: Any) -> bool:
-    if not isinstance(section, dict) or section.get("enabled") is False:
-        return False
-    return bool(str(section.get("api_token") or section.get("token") or section.get("access_token") or "").strip())
-
-
-def _has_aws_profile_config(section: Any) -> bool:
-    if not isinstance(section, dict) or section.get("enabled") is False:
-        return False
-    domain = str(section.get("domain") or "").strip()
-    username = str(section.get("username") or "").strip()
-    password = str(section.get("password") or "").strip()
-    return bool(domain and username and password)
-
-
-def _has_jenkins_profile_credentials(section: Any) -> bool:
-    if not isinstance(section, dict) or section.get("enabled") is False:
-        return False
-    username = str(section.get("username") or "").strip()
-    password = str(section.get("password") or "").strip()
-    return bool(username and password)
-
-
-def _has_mobile_profile_config(section: Any) -> bool:
-    if not isinstance(section, dict) or section.get("enabled") is False:
-        return False
-    browserstack = section.get("browserstack")
-    if not isinstance(browserstack, dict):
-        return False
-    return bool(
-        str(browserstack.get("username") or browserstack.get("username_env") or "").strip()
-        or str(browserstack.get("access_key") or browserstack.get("access_key_env") or "").strip()
-        or str(browserstack.get("api_base_url") or browserstack.get("appium_base_url") or "").strip()
-    )
-
-
-def _has_git_profile_user(section: Any) -> bool:
-    user = section.get("user") if isinstance(section, dict) else None
-    if not isinstance(user, dict):
-        return False
-    return bool(str(user.get("name") or "").strip() and str(user.get("email") or "").strip())
 
 
 class Config:
@@ -454,9 +354,14 @@ class Config:
             return
 
         overlay_config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+        # The Secret stores a single runtime-agnostic canonical config; this
+        # native runtime applies its own projection at boot (the portal used to
+        # bake this into the per-runtime Secret payload). For native this
+        # re-adds the CLI tool instructions and keeps the LLM in canonical
+        # github_copilot/bare-model form. The payload no longer carries a
+        # runtime_type field; native is always the native runtime.
+        overlay_config = project_canonical_for_runtime(overlay_config, "native")
         overlay = self._filter_managed_overlay_sections(overlay_config)
-        if _should_inject_runtime_profile_external_cli_instructions(overlay):
-            overlay["instruction_texts"] = list(RUNTIME_PROFILE_EXTERNAL_CLI_INSTRUCTIONS)
         self._env_overlay = overlay
         self._managed_overlay_meta = {
             "runtime_profile_id": payload.get("runtime_profile_id"),
