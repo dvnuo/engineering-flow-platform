@@ -135,7 +135,7 @@ def request_message_to_openai_chat_messages(message: RequestMessage) -> List[Jso
             return
         chat_message: JsonDict = {
             "role": message.role,
-            "content": _parts_to_text(buffered_parts),
+            "content": _chat_content_from_parts(buffered_parts),
         }
         if buffered_tool_calls:
             chat_message["tool_calls"] = [
@@ -221,6 +221,8 @@ def request_part_to_openai_responses_content(
                 "metadata": _copy_mapping(part.reasoning.metadata),
             }
         ]
+    if _is_image_attachment_part(part):
+        return [{"type": "input_image", "image_url": part.attachment.url}]
     if _part_has_projectable_text(part):
         return [
             {
@@ -345,6 +347,40 @@ def _tool_schema_trace(index: int, schema: RequestToolSchema) -> JsonDict:
 def _parts_to_text(parts: List[RequestMessagePart]) -> str:
     chunks = [_part_to_text(part) for part in parts]
     return "\n\n".join(chunk for chunk in chunks if chunk != "")
+
+
+def _is_image_attachment_part(part: RequestMessagePart) -> bool:
+    att = part.attachment
+    return (
+        att is not None
+        and isinstance(getattr(att, "mime_type", None), str)
+        and att.mime_type.startswith("image/")
+        and bool(getattr(att, "url", None))
+    )
+
+
+def _chat_content_from_parts(parts: List[RequestMessagePart]):
+    """Chat Completions content: a plain string, or a list mixing text and
+    image_url blocks when any part is an image attachment."""
+    if not any(_is_image_attachment_part(part) for part in parts):
+        return _parts_to_text(parts)
+    items: List[JsonDict] = []
+    text_buffer: List[str] = []
+
+    def _flush_text() -> None:
+        joined = "\n\n".join(chunk for chunk in text_buffer if chunk != "")
+        if joined:
+            items.append({"type": "text", "text": joined})
+        text_buffer.clear()
+
+    for part in parts:
+        if _is_image_attachment_part(part):
+            _flush_text()
+            items.append({"type": "image_url", "image_url": {"url": part.attachment.url}})
+        else:
+            text_buffer.append(_part_to_text(part))
+    _flush_text()
+    return items
 
 
 def _part_has_projectable_text(part: RequestMessagePart) -> bool:

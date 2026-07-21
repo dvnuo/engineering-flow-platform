@@ -702,11 +702,14 @@ def _part_chars(part: MessagePart) -> int:
     if part.type is MessagePartType.TOOL_RESULT and part.tool_result is not None:
         return len(part.tool_result.content or "")
     if part.type is MessagePartType.ATTACHMENT and part.attachment is not None:
+        url = part.attachment.url or ""
+        # Inline image data: URIs are not text tokens; don't count the (large)
+        # base64 payload against the char budget or it would distort compaction.
         metadata = {
             "attachment_id": part.attachment.attachment_id,
             "mime_type": part.attachment.mime_type,
             "filename": part.attachment.filename,
-            "url": part.attachment.url,
+            "url": "" if url.startswith("data:") else url,
             "metadata": _copy_mapping(part.attachment.metadata),
             "created_at": part.attachment.created_at,
         }

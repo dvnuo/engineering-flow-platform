@@ -315,7 +315,7 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-        async def run(self, _prompt, *, session_id, metadata=None):
+        async def run(self, _prompt, *, session_id, metadata=None, attached_images=None):
             captured["run_metadata"] = metadata
             return RuntimeLoopResult(
                 session_id=session_id,
