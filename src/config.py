@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
+from src.runtime_profile_encryption import decrypt_sensitive_fields
 from src.runtime_profile_projection import project_canonical_for_runtime
 
 
@@ -354,6 +355,18 @@ class Config:
             return
 
         overlay_config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+        # The portal encrypts the sensitive VALUES (api keys, tokens, passwords)
+        # of the canonical config as ENC:<fernet-token> so broad Secret readers
+        # see ciphertext. Decrypt them here, immediately after parsing the payload
+        # and BEFORE the per-runtime projection, so the projection and every
+        # downstream consumer see plaintext. Raises if an ENC: value is present
+        # but EFP_CONFIG_KEY is unset; surface that like a parse error below.
+        try:
+            overlay_config = decrypt_sensitive_fields(overlay_config)
+        except Exception as exc:
+            self._profile_load_error = f"Invalid EFP_PROFILE_CONFIG payload: {exc}"
+            logger.error(self._profile_load_error)
+            return
         # The Secret stores a single runtime-agnostic canonical config; this
         # native runtime applies its own projection at boot (the portal used to
         # bake this into the per-runtime Secret payload). For native this
