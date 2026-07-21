@@ -37,7 +37,6 @@ class RuntimeEventProjector:
     model: str | None = None
     engine: str = DEFAULT_ENGINE
     _text_started: set[str] = field(default_factory=set)
-    _reasoning_started: set[str] = field(default_factory=set)
     _tool_input_started: set[str] = field(default_factory=set)
 
     def project(self, event: Any) -> list[dict[str, Any]]:
@@ -130,75 +129,6 @@ class RuntimeEventProjector:
                         "content": delta,
                         "text": delta,
                     },
-                )
-            )
-            return outputs
-
-        if raw_type == "llm.reasoning_start":
-            reasoning_id = _reasoning_id(raw_event, payload)
-            self._reasoning_started.add(reasoning_id)
-            outputs.append(
-                self._build(
-                    raw_event,
-                    payload,
-                    "session.next.reasoning.started",
-                    state="running",
-                    summary="Reasoning started",
-                    created_at=created_at,
-                    data={"reasoning_id": reasoning_id, "reasoningID": reasoning_id},
-                )
-            )
-            return outputs
-
-        if raw_type == "llm.reasoning_delta":
-            reasoning_id = _reasoning_id(raw_event, payload)
-            if reasoning_id not in self._reasoning_started:
-                self._reasoning_started.add(reasoning_id)
-                outputs.append(
-                    self._build(
-                        raw_event,
-                        payload,
-                        "session.next.reasoning.started",
-                        state="running",
-                        summary="Reasoning started",
-                        created_at=created_at,
-                        data={"reasoning_id": reasoning_id, "reasoningID": reasoning_id},
-                    )
-                )
-            delta = _text_delta(payload)
-            outputs.append(
-                self._build(
-                    raw_event,
-                    payload,
-                    "session.next.reasoning.delta",
-                    state="running",
-                    summary=safe_preview(delta, 160) if delta else "Reasoning delta",
-                    created_at=created_at,
-                    data={
-                        "reasoning_id": reasoning_id,
-                        "reasoningID": reasoning_id,
-                        "delta": delta,
-                        "reasoning_delta": delta,
-                        "text_delta": delta,
-                        "content": delta,
-                        "text": delta,
-                    },
-                )
-            )
-            return outputs
-
-        if raw_type == "llm.reasoning_end":
-            reasoning_id = _reasoning_id(raw_event, payload)
-            self._reasoning_started.discard(reasoning_id)
-            outputs.append(
-                self._build(
-                    raw_event,
-                    payload,
-                    "session.next.reasoning.ended",
-                    state="success",
-                    summary="Reasoning ended",
-                    created_at=created_at,
-                    data={"reasoning_id": reasoning_id, "reasoningID": reasoning_id},
                 )
             )
             return outputs
@@ -573,19 +503,6 @@ class RuntimeEventProjector:
                 )
             )
         self._text_started.clear()
-        for reasoning_id in sorted(self._reasoning_started):
-            outputs.append(
-                self._build(
-                    raw_event,
-                    payload,
-                    "session.next.reasoning.ended",
-                    state="success",
-                    summary="Reasoning ended",
-                    created_at=created_at,
-                    data={"reasoning_id": reasoning_id, "reasoningID": reasoning_id},
-                )
-            )
-        self._reasoning_started.clear()
         return outputs
 
     def _build(
@@ -760,22 +677,6 @@ def _stable_part_id(prefix: str, raw_event: Mapping[str, Any], payload: Mapping[
         ]
     )
     return f"{prefix}_{digest[:12]}"
-
-
-def _reasoning_id(raw_event: Mapping[str, Any], payload: Mapping[str, Any]) -> str:
-    part_id = _part_id(raw_event, payload)
-    if part_id:
-        return _short_identifier(part_id, prefix="reasoning")
-    digest = _digest(
-        [
-            "reasoning",
-            _session_id(raw_event, payload),
-            payload.get("run_id"),
-            payload.get("iteration"),
-            _message_id(raw_event, payload),
-        ]
-    )
-    return f"reasoning_{digest[:12]}"
 
 
 def _tool_data(payload: Mapping[str, Any]) -> dict[str, Any]:

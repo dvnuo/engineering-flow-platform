@@ -12,9 +12,6 @@ from ..llm.events import LLMEvent, LLMEventType
 _RUNTIME_EVENT_TYPES = {
     LLMEventType.STEP_START.value: "llm.step_start",
     LLMEventType.TEXT_DELTA.value: "llm.text_delta",
-    LLMEventType.REASONING_START.value: "llm.reasoning_start",
-    LLMEventType.REASONING_DELTA.value: "llm.reasoning_delta",
-    LLMEventType.REASONING_END.value: "llm.reasoning_end",
     LLMEventType.TOOL_INPUT_START.value: "llm.tool_call_delta",
     LLMEventType.TOOL_INPUT_DELTA.value: "llm.tool_call_delta",
     LLMEventType.TOOL_INPUT_END.value: "llm.tool_call_delta",
@@ -89,12 +86,7 @@ def runtime_event_from_llm_event(
     if safe_raw:
         payload["raw"] = safe_raw
 
-    if event.type_value in (
-        LLMEventType.TEXT_DELTA.value,
-        LLMEventType.REASONING_START.value,
-        LLMEventType.REASONING_DELTA.value,
-        LLMEventType.REASONING_END.value,
-    ):
+    if event.type_value == LLMEventType.TEXT_DELTA.value:
         delta = event.delta or event.text
         _set_if_present(payload, "delta", delta)
         _set_if_present(payload, "text", event.text or delta)

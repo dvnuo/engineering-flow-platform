@@ -314,26 +314,18 @@ async def test_bridge_projects_new_llm_event_contract_payloads():
     ]
 
     assert yielded == llm_events
+    # Reasoning LLM events are still yielded (and persisted downstream as
+    # MessageParts) but are no longer projected into observable runtime/display
+    # events, so no llm.reasoning_* runtime events are produced.
     assert [event.type for event in runtime_events] == [
-        "llm.reasoning_start",
-        "llm.reasoning_delta",
-        "llm.reasoning_end",
         "llm.finish",
         "llm.provider_error",
         "llm.tool_error",
     ]
-    reasoning_payload = runtime_events[0].payload
-    assert reasoning_payload["event_type"] == "reasoning_start"
-    assert reasoning_payload["metadata"] == {"item_id": "rs_1"}
-    assert reasoning_payload["provider_metadata"] == {"openai": {"itemId": "rs_1"}}
-    assert reasoning_payload["raw"] == {
-        "type": "response.output_item.added",
-        "item_id": "rs_1",
-    }
-    assert runtime_events[3].payload["usage"] == {"total_tokens": 7}
-    assert runtime_events[4].payload["code"] == "rate_limit_exceeded"
-    assert runtime_events[4].payload["retryable"] is True
-    assert runtime_events[5].payload["tool_call_id"] == "call-1"
+    assert runtime_events[0].payload["usage"] == {"total_tokens": 7}
+    assert runtime_events[1].payload["code"] == "rate_limit_exceeded"
+    assert runtime_events[1].payload["retryable"] is True
+    assert runtime_events[2].payload["tool_call_id"] == "call-1"
 
 
 def test_llm_stream_events_import_boundary():
