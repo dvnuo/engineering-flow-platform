@@ -19,6 +19,10 @@ SUPPORTED_COPILOT_MODEL_IDS = (
     "gpt-5.6-terra",
 )
 
+# AI Platform (enterprise gateway) models.
+DEFAULT_AI_PLATFORM_MODEL = "gpt-5.4"
+AI_PLATFORM_MODEL_IDS = ("gpt-5.4",)
+
 
 @dataclass(frozen=True)
 class ModelContextProfile:

@@ -1,0 +1,121 @@
+"""AI Platform native transport: iB2B token exchange + chat call + refresh."""
+import io
+import json
+
+import pytest
+
+from src.efp_runtime.llm import provider as provider_mod
+from src.efp_runtime.llm.provider import AIPlatformHTTPTransport, ProviderTransportError
+
+
+class _FakeResp:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def _urlopen_script(steps):
+    """steps: list of dict-body (returned) or urllib HTTPError (raised)."""
+    calls = []
+    it = iter(steps)
+
+    def _open(request, timeout=None):
+        calls.append(request)
+        step = next(it)
+        if isinstance(step, BaseException):
+            raise step
+        return _FakeResp(json.dumps(step).encode("utf-8"))
+
+    return _open, calls
+
+
+def _http_error(code):
+    from urllib import error as urllib_error
+
+    return urllib_error.HTTPError("https://x", code, "denied", {}, io.BytesIO(b'{"error":"nope"}'))
+
+
+def _transport(**kw):
+    base = dict(
+        chat_endpoint="https://chat.int/v1/api/v1/chat/completions",
+        ib2b_endpoint="https://ib2b.int/dsp",
+        username="u",
+        password="pw",
+        usercase="uc",
+        trust_token_header="X-Trust",
+        tracking_prefix="EFP",
+    )
+    base.update(kw)
+    return AIPlatformHTTPTransport(**base)
+
+
+def test_exchange_then_chat_carries_trust_token(monkeypatch):
+    t = _transport()
+    open_fn, calls = _urlopen_script([
+        {"issued_token": "JWT-1"},
+        {"choices": [{"message": {"content": "pong"}}]},
+    ])
+    monkeypatch.setattr(provider_mod.urllib_request, "urlopen", open_fn)
+
+    out = t._send_sync({"model": "gpt-5.4", "messages": [{"role": "user", "content": "ping"}]})
+    assert out["choices"][0]["message"]["content"] == "pong"
+    assert len(calls) == 2
+    # 1) iB2B exchange with the CREDENTIAL body
+    body0 = json.loads(calls[0].data)
+    assert body0["input_token_state"]["token_type"] == "CREDENTIAL"
+    assert body0["input_token_state"]["username"] == "u"
+    # 2) chat call carries the exchanged JWT in the trust-token header + tracking
+    header_values = list(calls[1].headers.values())
+    assert "JWT-1" in header_values
+    assert any(str(v).startswith("EFP-") for v in header_values)
+
+
+def test_token_is_reused_until_expiry(monkeypatch):
+    t = _transport()
+    open_fn, calls = _urlopen_script([
+        {"issued_token": "JWT-1"},
+        {"choices": []},
+        {"choices": []},
+    ])
+    monkeypatch.setattr(provider_mod.urllib_request, "urlopen", open_fn)
+    t._send_sync({"messages": []})
+    t._send_sync({"messages": []})
+    # 1 exchange + 2 chat calls (token reused for the second)
+    assert len(calls) == 3
+
+
+def test_reexchanges_once_on_401(monkeypatch):
+    t = _transport()
+    open_fn, calls = _urlopen_script([
+        {"issued_token": "JWT-1"},   # initial exchange
+        _http_error(401),            # chat -> 401
+        {"issued_token": "JWT-2"},   # forced re-exchange
+        {"choices": []},             # chat retry OK
+    ])
+    monkeypatch.setattr(provider_mod.urllib_request, "urlopen", open_fn)
+    t._send_sync({"messages": []})
+    assert len(calls) == 4
+    assert "JWT-2" in list(calls[3].headers.values())
+
+
+def test_missing_credentials_raises(monkeypatch):
+    t = _transport(username="", password="", ib2b_endpoint="")
+    with pytest.raises(ProviderTransportError):
+        t._send_sync({"messages": []})
+
+
+def test_direct_token_skips_exchange(monkeypatch):
+    t = _transport(username="", password="", ib2b_endpoint="", token="JWT-DIRECT")
+    open_fn, calls = _urlopen_script([{"choices": []}])
+    monkeypatch.setattr(provider_mod.urllib_request, "urlopen", open_fn)
+    t._send_sync({"messages": []})
+    assert len(calls) == 1  # no exchange, straight to chat
+    assert "JWT-DIRECT" in list(calls[0].headers.values())
