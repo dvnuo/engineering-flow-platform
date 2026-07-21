@@ -85,7 +85,7 @@ from ..tools.registry import ToolRegistry
 from ..tools.runtime import ToolRuntime
 from ..tools.selection import ToolSelection, resolve_tool_selection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
-from ..types import SkillPackage, ToolCall, ToolResult, new_id
+from ..types import Attachment, SkillPackage, ToolCall, ToolResult, new_id
 from ..workspace_snapshots import (
     WorkspaceSnapshot,
     WorkspaceSnapshotDiff,
@@ -131,6 +131,16 @@ class _AgentMention:
 class _CommandSubtaskExecution:
     user_text: str | None = None
     events: list[RuntimeEvent] = field(default_factory=list)
+
+
+def _mime_from_data_uri(uri: str) -> str:
+    """Parse the MIME type from a data: URI, defaulting to image/png."""
+    text = str(uri or "")
+    if text.startswith("data:"):
+        mime = text[5:].split(",", 1)[0].split(";", 1)[0].strip()
+        if mime:
+            return mime
+    return "image/png"
 
 
 class AgentRuntime:
@@ -477,6 +487,7 @@ class AgentRuntime:
         *,
         agent: "str | AgentProfile | None" = None,
         output_schema: Mapping[str, Any] | None = None,
+        attached_images: list[str] | None = None,
     ) -> RuntimeLoopResult:
         skill_command = parse_skill_commands(user_text)
         run_metadata = self._base_run_metadata(metadata)
@@ -617,6 +628,9 @@ class AgentRuntime:
             )
             run_metadata["skill_context_count"] = len(skill_context_messages)
             user_parts = self._resolve_user_parts(user_text_for_request)
+            user_parts = self._merge_attached_images(
+                user_parts, user_text_for_request, attached_images
+            )
             runner = RuntimeLoopRunner(
                 store=self.store,
                 provider=self.provider,
@@ -1261,6 +1275,31 @@ class AgentRuntime:
             max_directory_entries=self.config.max_prompt_directory_entries,
         )
         return resolved_prompt.parts
+
+    def _merge_attached_images(self, user_parts, user_text: str, attached_images):
+        """Append gateway-supplied images as ATTACHMENT parts on the user message
+        so they reach the LLM request as image content (not just a text note)."""
+        images = [str(uri or "").strip() for uri in (attached_images or []) if str(uri or "").strip()]
+        if not images:
+            return user_parts
+        if user_parts is not None:
+            parts = list(user_parts)
+        elif str(user_text or "").strip():
+            parts = [MessagePart.text_part(user_text)]
+        else:
+            parts = []
+        for data_uri in images:
+            parts.append(
+                MessagePart.attachment_part(
+                    Attachment(
+                        mime_type=_mime_from_data_uri(data_uri),
+                        url=data_uri,
+                        metadata={"kind": "image", "source": "gateway.attached_images"},
+                    ),
+                    metadata={"source": "gateway.attached_images"},
+                )
+            )
+        return parts
 
     def _expand_command_prompt(
         self,

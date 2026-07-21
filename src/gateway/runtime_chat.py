@@ -155,6 +155,7 @@ async def run_runtime_chat(
             prompt,
             session_id=session_id,
             metadata=run_metadata,
+            attached_images=attached_images,
         )
         await get_runtime_session_manager().record_runtime_result(
             session_id,
