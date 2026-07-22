@@ -56,6 +56,7 @@ from ..session.query import (
 )
 from ..session.revert import (
     finalize_session_revert_record,
+    invalidate_session_snapshot_references,
     prepare_session_revert_record,
     revert_session_state,
     unrevert_session_state,
@@ -204,7 +205,10 @@ class AgentRuntime:
         self.question_broker = question_broker or QuestionBroker()
         self.store = store or InMemorySessionStore()
         self.workspace_snapshot_store = (
-            WorkspaceSnapshotStore(self.config.workspace_root)
+            WorkspaceSnapshotStore(
+                self.config.workspace_root,
+                on_snapshot_removed=self._invalidate_session_snapshot_references,
+            )
             if self.config.workspace_root is not None
             else None
         )
@@ -1798,6 +1802,12 @@ class AgentRuntime:
         if self.workspace_snapshot_store is None:
             raise TypeError("workspace snapshots require workspace_root")
         return self.workspace_snapshot_store
+
+    def _invalidate_session_snapshot_references(self, snapshot_id: str) -> None:
+        invalidate_session_snapshot_references(
+            store=self.store,
+            snapshot_id=snapshot_id,
+        )
 
     def _replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
         method = getattr(self.store, "replace_history", None)

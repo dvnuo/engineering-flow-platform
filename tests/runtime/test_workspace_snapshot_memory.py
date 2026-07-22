@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from src.efp_runtime.workspace_snapshots import (
     WorkspaceSnapshot,
     WorkspaceSnapshotStore,
@@ -49,6 +51,33 @@ def test_manifest_contains_file_metadata_and_reload_does_not_read_blobs(
     assert [item.snapshot_id for item in reloaded.list_snapshots()] == [
         snapshot.snapshot_id
     ]
+
+
+@pytest.mark.parametrize("corruption", ["missing", "truncated"])
+def test_restore_validates_all_blobs_before_mutating_workspace(
+    tmp_path: Path,
+    corruption: str,
+):
+    _write_text(tmp_path / "a.txt", "captured a\n")
+    _write_text(tmp_path / "b.txt", "captured b\n")
+    snapshot = WorkspaceSnapshotStore(tmp_path).create_snapshot()
+    _write_text(tmp_path / "a.txt", "current a\n")
+    _write_text(tmp_path / "b.txt", "current b\n")
+
+    blob = _snapshot_dir(tmp_path, snapshot.snapshot_id) / "files" / "b.txt"
+    if corruption == "missing":
+        blob.unlink()
+        expected_error = OSError
+    else:
+        blob.write_bytes(b"bad")
+        expected_error = ValueError
+
+    reloaded = WorkspaceSnapshotStore(tmp_path)
+    with pytest.raises(expected_error, match="b.txt"):
+        reloaded.restore_snapshot(snapshot.snapshot_id)
+
+    assert (tmp_path / "a.txt").read_bytes() == b"current a\n"
+    assert (tmp_path / "b.txt").read_bytes() == b"current b\n"
 
 
 def test_size_capped_files_are_skipped_and_protected_on_restore(tmp_path: Path):

@@ -117,6 +117,7 @@ class WorkspaceSnapshotStore:
         *,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         max_retained_snapshots: int = DEFAULT_MAX_RETAINED_SNAPSHOTS,
+        on_snapshot_removed: Callable[[str], None] | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.storage_root = (
@@ -124,6 +125,7 @@ class WorkspaceSnapshotStore:
         )
         self.max_file_bytes = max(0, int(max_file_bytes))
         self.max_retained_snapshots = max(1, int(max_retained_snapshots))
+        self._on_snapshot_removed = on_snapshot_removed
         self._snapshots: dict[str, _SnapshotRecord] = {}
         self._protected_snapshot_ids: dict[str, int] = {}
         self._next_snapshot_index = 1
@@ -221,6 +223,7 @@ class WorkspaceSnapshotStore:
     ) -> WorkspaceSnapshot:
         with self._lock:
             record = self._require_snapshot(snapshot_id)
+            self._validate_snapshot_blobs(snapshot_id, record)
             load_content = self._snapshot_content_loader(snapshot_id)
 
             for relative_path in sorted(record.files):
@@ -236,12 +239,8 @@ class WorkspaceSnapshotStore:
 
     def delete_snapshot(self, snapshot_id: str) -> bool:
         with self._lock:
-            record = self._require_snapshot(snapshot_id)
-            shutil.rmtree(
-                self._snapshot_dir(record.snapshot.snapshot_id),
-                ignore_errors=True,
-            )
-            del self._snapshots[snapshot_id]
+            self._require_snapshot(snapshot_id)
+            self._remove_snapshot(snapshot_id)
             return True
 
     def _require_snapshot(self, snapshot_id: str) -> _SnapshotRecord:
@@ -274,9 +273,35 @@ class WorkspaceSnapshotStore:
                 break
             if snapshot_id in protected:
                 continue
-            shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
-            del self._snapshots[snapshot_id]
+            self._remove_snapshot(snapshot_id)
             excess -= 1
+
+    def _remove_snapshot(self, snapshot_id: str) -> None:
+        if self._on_snapshot_removed is not None:
+            self._on_snapshot_removed(snapshot_id)
+        shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
+        del self._snapshots[snapshot_id]
+
+    def _validate_snapshot_blobs(
+        self,
+        snapshot_id: str,
+        record: _SnapshotRecord,
+    ) -> None:
+        files_dir = self._snapshot_dir(snapshot_id) / _SNAPSHOT_FILES_DIR_NAME
+        for relative_path, captured in sorted(record.files.items()):
+            blob_path = self._snapshot_file_path(files_dir, relative_path)
+            try:
+                sha256, size = _stream_sha256(blob_path)
+            except OSError as exc:
+                raise OSError(
+                    f"workspace snapshot blob unavailable: "
+                    f"{snapshot_id}:{relative_path}"
+                ) from exc
+            if sha256 != captured.sha256 or size != captured.size:
+                raise ValueError(
+                    f"workspace snapshot blob failed validation: "
+                    f"{snapshot_id}:{relative_path}"
+                )
 
     def _load_existing_snapshots(self) -> None:
         if not self.storage_root.is_dir():

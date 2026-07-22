@@ -194,3 +194,39 @@ async def test_runtime_session_revert_preserves_oldest_target_at_retention_limit
     assert {
         snapshot.snapshot_id for snapshot in runtime.list_workspace_snapshots()
     } == {target_snapshot_id, unrevert_snapshot_id}
+
+
+@pytest.mark.asyncio
+async def test_runtime_pruning_invalidates_expired_session_snapshot_reference(
+    tmp_path: Path,
+):
+    runtime = AgentRuntime(
+        provider=ScriptedLLMProvider(
+            [{"content": "first"}, {"content": "second"}, {"content": "third"}]
+        ),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            model_aware_tool_selection=False,
+        ),
+    )
+    assert runtime.workspace_snapshot_store is not None
+    runtime.workspace_snapshot_store.max_retained_snapshots = 2
+
+    await runtime.run("First", session_id="session-first")
+    first_snapshot_id = runtime.get_session("session-first").metadata["revert"][
+        "workspace_snapshot_id"
+    ]
+    await runtime.run("Second", session_id="session-second")
+    await runtime.run("Third", session_id="session-third")
+
+    assert first_snapshot_id not in {
+        snapshot.snapshot_id for snapshot in runtime.list_workspace_snapshots()
+    }
+    assert (
+        runtime.get_session("session-first").metadata["revert"][
+            "workspace_snapshot_id"
+        ]
+        is None
+    )
+    reverted = runtime.revert_session("session-first")
+    assert reverted.metadata["revert"]["status"] == "reverted"
