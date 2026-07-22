@@ -25,11 +25,13 @@ from typing import Any, Literal
 from .types import utc_now_iso
 
 
-_EXCLUDED_NAMES = {
+_ALWAYS_EXCLUDED_NAMES = {
     ".efp_runtime",
     ".git",
     ".pytest_cache",
     "__pycache__",
+}
+_EXCLUDED_DIRECTORY_NAMES = {
     # Heavy dependency/build directories: never useful to revert and they
     # dominate tree size (a node_modules alone is routinely hundreds of MB).
     "node_modules",
@@ -542,7 +544,7 @@ class WorkspaceSnapshotStore:
 
             for entry in sorted_entries:
                 name = entry.name
-                if name in _EXCLUDED_NAMES:
+                if name in _ALWAYS_EXCLUDED_NAMES:
                     continue
                 if entry.is_symlink():
                     continue
@@ -550,6 +552,8 @@ class WorkspaceSnapshotStore:
                 path = Path(entry.path)
                 child_parts = (*relative_parts, name)
                 if entry.is_dir(follow_symlinks=False):
+                    if name in _EXCLUDED_DIRECTORY_NAMES:
+                        continue
                     self._capture_directory(
                         path, child_parts, files_dir, files, skipped
                     )
@@ -598,7 +602,7 @@ class WorkspaceSnapshotStore:
 
             for entry in sorted_entries:
                 name = entry.name
-                if name in _EXCLUDED_NAMES:
+                if name in _ALWAYS_EXCLUDED_NAMES:
                     continue
                 if entry.is_symlink():
                     continue
@@ -606,6 +610,8 @@ class WorkspaceSnapshotStore:
                 path = Path(entry.path)
                 child_parts = (*relative_parts, name)
                 if entry.is_dir(follow_symlinks=False):
+                    if name in _EXCLUDED_DIRECTORY_NAMES:
+                        continue
                     self._scan_directory(path, child_parts, files)
                     continue
                 if not entry.is_file(follow_symlinks=False):

@@ -128,15 +128,18 @@ def test_oversized_current_files_have_metadata_only_diffs(tmp_path: Path):
 
 def test_heavy_dependency_directories_are_excluded(tmp_path: Path):
     _write_text(tmp_path / "src/main.py", "print('hi')\n")
+    _write_text(tmp_path / "build", "#!/bin/sh\necho build\n")
     _write_text(tmp_path / "node_modules/pkg/index.js", "module.exports = 1\n")
     _write_text(tmp_path / ".venv/lib/site.py", "# venv\n")
     store = WorkspaceSnapshotStore(tmp_path)
     snapshot = store.create_snapshot()
 
-    assert snapshot.file_count == 1
+    assert snapshot.file_count == 2
 
+    _write_text(tmp_path / "build", "changed\n")
     store.restore_snapshot(snapshot.snapshot_id, delete_added=True)
     # Excluded directories are invisible to restore: never deleted as "added".
+    assert (tmp_path / "build").read_bytes() == b"#!/bin/sh\necho build\n"
     assert (tmp_path / "node_modules/pkg/index.js").is_file()
     assert (tmp_path / ".venv/lib/site.py").is_file()
 
