@@ -54,6 +54,7 @@ _RUNTIME_DIR_NAME = ".efp_runtime"
 _SNAPSHOT_DIR_NAME = "workspace_snapshots"
 _SNAPSHOT_FILES_DIR_NAME = "files"
 _SNAPSHOT_MANIFEST_NAME = "manifest.json"
+_SNAPSHOT_ALLOCATOR_NAME = "allocator.json"
 _SNAPSHOT_ID_PREFIX = "workspace_snapshot_"
 _MANIFEST_FORMAT = 2
 _HASH_CHUNK_BYTES = 1024 * 1024
@@ -276,6 +277,8 @@ class WorkspaceSnapshotStore:
         with self._lock:
             self._reload_existing_snapshots()
             self._require_snapshot(snapshot_id)
+            if self._protected_snapshot_ids.get(snapshot_id, 0) > 0:
+                raise RuntimeError(f"workspace snapshot is protected: {snapshot_id}")
             self._remove_snapshot(snapshot_id)
             return True
 
@@ -293,6 +296,7 @@ class WorkspaceSnapshotStore:
                 continue
             if self._snapshot_dir(snapshot_id).exists():
                 continue
+            self._write_next_snapshot_index()
             return snapshot_id
 
     def _prune_old_snapshots(self, *, protect: set[str]) -> None:
@@ -375,12 +379,45 @@ class WorkspaceSnapshotStore:
             if index is not None:
                 highest_index = max(highest_index, index)
 
-        self._next_snapshot_index = max(self._next_snapshot_index, highest_index + 1)
+        self._next_snapshot_index = max(
+            self._next_snapshot_index,
+            highest_index + 1,
+            self._read_next_snapshot_index(),
+        )
 
     def _reload_existing_snapshots(self) -> None:
         self._snapshots.clear()
-        self._next_snapshot_index = 1
         self._load_existing_snapshots()
+
+    def _read_next_snapshot_index(self) -> int:
+        allocator_path = self.storage_root / _SNAPSHOT_ALLOCATOR_NAME
+        try:
+            payload = json.loads(allocator_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return 1
+        if not isinstance(payload, dict):
+            return 1
+        next_index = _safe_nonnegative_int(payload.get("next_snapshot_index"))
+        return max(1, next_index or 1)
+
+    def _write_next_snapshot_index(self) -> None:
+        self.storage_root.mkdir(parents=True, exist_ok=True)
+        allocator_path = self.storage_root / _SNAPSHOT_ALLOCATOR_NAME
+        temporary_path = allocator_path.with_name(
+            f".{_SNAPSHOT_ALLOCATOR_NAME}.{os.getpid()}.{id(self)}.tmp"
+        )
+        try:
+            temporary_path.write_text(
+                json.dumps(
+                    {"next_snapshot_index": self._next_snapshot_index},
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary_path, allocator_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def _load_snapshot_record(self, snapshot_dir: Path) -> _SnapshotRecord | None:
         manifest_path = snapshot_dir / _SNAPSHOT_MANIFEST_NAME

@@ -204,6 +204,34 @@ def test_snapshot_protection_is_shared_across_store_instances(tmp_path: Path):
     } == {first.snapshot_id, third.snapshot_id}
 
 
+def test_protected_snapshot_cannot_be_deleted_by_another_store(tmp_path: Path):
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot(label="leased")
+    competing_store = WorkspaceSnapshotStore(tmp_path)
+
+    with store.protect_snapshot(snapshot.snapshot_id):
+        with pytest.raises(RuntimeError, match="workspace snapshot is protected"):
+            competing_store.delete_snapshot(snapshot.snapshot_id)
+        assert competing_store.restore_snapshot(snapshot.snapshot_id).snapshot_id == (
+            snapshot.snapshot_id
+        )
+
+    assert competing_store.delete_snapshot(snapshot.snapshot_id) is True
+
+
+def test_snapshot_ids_are_not_reused_after_delete_and_reload(tmp_path: Path):
+    store = WorkspaceSnapshotStore(tmp_path)
+    first = store.create_snapshot(label="first")
+    store.delete_snapshot(first.snapshot_id)
+
+    second = store.create_snapshot(label="second")
+    store.delete_snapshot(second.snapshot_id)
+    restarted = WorkspaceSnapshotStore(tmp_path)
+    third = restarted.create_snapshot(label="third")
+
+    assert len({first.snapshot_id, second.snapshot_id, third.snapshot_id}) == 3
+
+
 def test_legacy_format1_manifest_still_loads_and_restores(tmp_path: Path):
     _write_text(tmp_path / "keep.txt", "current\n")
     legacy_dir = _snapshot_dir(tmp_path, "workspace_snapshot_1")
