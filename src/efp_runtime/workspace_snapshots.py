@@ -9,7 +9,7 @@ disk one file at a time for restore/diff.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -122,6 +122,7 @@ class WorkspaceSnapshotStore:
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         max_retained_snapshots: int = DEFAULT_MAX_RETAINED_SNAPSHOTS,
         on_snapshot_removed: Callable[[str], None] | None = None,
+        retained_snapshot_ids: Callable[[], Iterable[str]] | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.storage_root = (
@@ -130,6 +131,7 @@ class WorkspaceSnapshotStore:
         self.max_file_bytes = max(0, int(max_file_bytes))
         self.max_retained_snapshots = max(1, int(max_retained_snapshots))
         self._on_snapshot_removed = on_snapshot_removed
+        self._retained_snapshot_ids = retained_snapshot_ids
         self._snapshots: dict[str, _SnapshotRecord] = {}
         self._next_snapshot_index = 1
         self._lock, self._protected_snapshot_ids = _workspace_coordination(
@@ -223,6 +225,7 @@ class WorkspaceSnapshotStore:
                 current_files,
                 before_loader=self._snapshot_content_loader(snapshot_id),
                 after_loader=self._workspace_content_loader(),
+                max_patch_bytes=self.max_file_bytes or None,
             )
 
     def restore_snapshot(
@@ -275,6 +278,8 @@ class WorkspaceSnapshotStore:
         if len(self._snapshots) <= self.max_retained_snapshots:
             return
         protected = protect | set(self._protected_snapshot_ids)
+        if self._retained_snapshot_ids is not None:
+            protected.update(self._retained_snapshot_ids())
         ordered = sorted(
             self._snapshots,
             key=lambda snapshot_id: _snapshot_sort_key(snapshot_id),
@@ -716,14 +721,20 @@ def _diff_files(
     *,
     before_loader: Callable[[str], bytes],
     after_loader: Callable[[str], bytes],
+    max_patch_bytes: int | None = None,
 ) -> list[WorkspaceSnapshotDiff]:
     diffs: list[WorkspaceSnapshotDiff] = []
     for path in sorted(set(before_files) | set(after_files)):
         before = before_files.get(path)
         after = after_files.get(path)
         if before is None and after is not None:
-            patch, additions, deletions = _unified_patch(
-                path, None, _load_or_empty(after_loader, path)
+            patch, additions, deletions = _bounded_patch(
+                path,
+                None,
+                after,
+                before_loader,
+                after_loader,
+                max_patch_bytes=max_patch_bytes,
             )
             diffs.append(
                 WorkspaceSnapshotDiff(
@@ -740,8 +751,13 @@ def _diff_files(
             )
             continue
         if before is not None and after is None:
-            patch, additions, deletions = _unified_patch(
-                path, _load_or_empty(before_loader, path), None
+            patch, additions, deletions = _bounded_patch(
+                path,
+                before,
+                None,
+                before_loader,
+                after_loader,
+                max_patch_bytes=max_patch_bytes,
             )
             diffs.append(
                 WorkspaceSnapshotDiff(
@@ -760,10 +776,13 @@ def _diff_files(
         if before is None or after is None or before.sha256 == after.sha256:
             continue
 
-        patch, additions, deletions = _unified_patch(
+        patch, additions, deletions = _bounded_patch(
             path,
-            _load_or_empty(before_loader, path),
-            _load_or_empty(after_loader, path),
+            before,
+            after,
+            before_loader,
+            after_loader,
+            max_patch_bytes=max_patch_bytes,
         )
         diffs.append(
             WorkspaceSnapshotDiff(
@@ -779,6 +798,26 @@ def _diff_files(
             )
         )
     return diffs
+
+
+def _bounded_patch(
+    path: str,
+    before: _CapturedFile | None,
+    after: _CapturedFile | None,
+    before_loader: Callable[[str], bytes],
+    after_loader: Callable[[str], bytes],
+    *,
+    max_patch_bytes: int | None,
+) -> tuple[str | None, int, int]:
+    if max_patch_bytes is not None and any(
+        item is not None and item.size > max_patch_bytes for item in (before, after)
+    ):
+        return None, 0, 0
+    return _unified_patch(
+        path,
+        _load_or_empty(before_loader, path) if before is not None else None,
+        _load_or_empty(after_loader, path) if after is not None else None,
+    )
 
 
 def _load_or_empty(loader: Callable[[str], bytes], path: str) -> bytes:

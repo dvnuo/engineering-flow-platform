@@ -105,6 +105,25 @@ def test_size_capped_files_are_skipped_and_protected_on_restore(tmp_path: Path):
     assert (tmp_path / "big.bin").read_bytes() == b"y" * 600
 
 
+def test_oversized_current_files_have_metadata_only_diffs(tmp_path: Path):
+    _write_text(tmp_path / "modified.bin", "small")
+    store = WorkspaceSnapshotStore(tmp_path, max_file_bytes=10)
+    snapshot = store.create_snapshot()
+    _write_text(tmp_path / "modified.bin", "m" * 20)
+    _write_text(tmp_path / "added.bin", "a" * 20)
+
+    diffs = {item.path: item for item in store.diff_snapshot(snapshot.snapshot_id)}
+
+    assert diffs["modified.bin"].status == "modified"
+    assert diffs["modified.bin"].after_bytes == 20
+    assert diffs["modified.bin"].patch is None
+    assert diffs["modified.bin"].additions == 0
+    assert diffs["modified.bin"].deletions == 0
+    assert diffs["added.bin"].status == "added"
+    assert diffs["added.bin"].after_bytes == 20
+    assert diffs["added.bin"].patch is None
+
+
 def test_heavy_dependency_directories_are_excluded(tmp_path: Path):
     _write_text(tmp_path / "src/main.py", "print('hi')\n")
     _write_text(tmp_path / "node_modules/pkg/index.js", "module.exports = 1\n")

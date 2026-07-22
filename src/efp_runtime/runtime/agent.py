@@ -208,6 +208,7 @@ class AgentRuntime:
             WorkspaceSnapshotStore(
                 self.config.workspace_root,
                 on_snapshot_removed=self._invalidate_session_snapshot_references,
+                retained_snapshot_ids=self._active_unrevert_snapshot_ids,
             )
             if self.config.workspace_root is not None
             else None
@@ -1808,6 +1809,17 @@ class AgentRuntime:
             store=self.store,
             snapshot_id=snapshot_id,
         )
+
+    def _active_unrevert_snapshot_ids(self) -> set[str]:
+        snapshot_ids: set[str] = set()
+        for session in self.store.list_sessions():
+            revert_metadata = session.metadata.get("revert")
+            if not isinstance(revert_metadata, Mapping):
+                continue
+            snapshot_id = revert_metadata.get("unrevert_snapshot_id")
+            if revert_metadata.get("active") is True and isinstance(snapshot_id, str):
+                snapshot_ids.add(snapshot_id)
+        return snapshot_ids
 
     def _replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
         method = getattr(self.store, "replace_history", None)

@@ -230,3 +230,53 @@ async def test_runtime_pruning_invalidates_expired_session_snapshot_reference(
     )
     reverted = runtime.revert_session("session-first")
     assert reverted.metadata["revert"]["status"] == "reverted"
+
+
+@pytest.mark.asyncio
+async def test_runtime_retention_preserves_active_unrevert_snapshot(tmp_path: Path):
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-write-active-unrevert",
+                        "type": "function",
+                        "function": {
+                            "name": "write",
+                            "arguments": json.dumps(
+                                {"filePath": "created.txt", "content": "created\n"},
+                                sort_keys=True,
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=2,
+            model_aware_tool_selection=False,
+            tool_permissions={"write": "allow"},
+        ),
+    )
+    assert runtime.workspace_snapshot_store is not None
+    runtime.workspace_snapshot_store.max_retained_snapshots = 2
+
+    await runtime.run("Create a file.", session_id="session-active-unrevert")
+    runtime.revert_session("session-active-unrevert")
+    unrevert_snapshot_id = runtime.get_session("session-active-unrevert").metadata[
+        "revert"
+    ]["unrevert_snapshot_id"]
+    runtime.create_workspace_snapshot(label="newer-one")
+    runtime.create_workspace_snapshot(label="newer-two")
+
+    assert unrevert_snapshot_id in {
+        snapshot.snapshot_id for snapshot in runtime.list_workspace_snapshots()
+    }
+    unreverted = runtime.unrevert_session("session-active-unrevert")
+    assert (tmp_path / "created.txt").read_bytes() == b"created\n"
+    assert unreverted.metadata["revert"]["status"] == "unreverted"
