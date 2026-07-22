@@ -25,6 +25,7 @@ class SessionRevertRunRecord:
     message_ids: tuple[str, ...]
     workspace_snapshot_id: str | None
     created_at: str
+    workspace_snapshot_protected: bool = False
 
 
 def prepare_session_revert_record(
@@ -35,6 +36,7 @@ def prepare_session_revert_record(
     source: str,
     workspace_snapshot_store: WorkspaceSnapshotStore | None = None,
     enable_workspace_snapshot: bool = True,
+    protect_workspace_snapshot: bool = False,
 ) -> SessionRevertRunRecord:
     """Capture the session and optional workspace state before a run starts."""
 
@@ -53,6 +55,7 @@ def prepare_session_revert_record(
                 "source": source,
                 "purpose": "session_revert",
             },
+            protect=protect_workspace_snapshot,
         )
         workspace_snapshot_id = snapshot.snapshot_id
 
@@ -63,6 +66,9 @@ def prepare_session_revert_record(
         message_ids=tuple(message.message_id for message in session.messages),
         workspace_snapshot_id=workspace_snapshot_id,
         created_at=utc_now_iso(),
+        workspace_snapshot_protected=(
+            workspace_snapshot_id is not None and protect_workspace_snapshot
+        ),
     )
 
 

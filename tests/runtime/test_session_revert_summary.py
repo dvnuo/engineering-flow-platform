@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -232,6 +233,62 @@ async def test_runtime_pruning_invalidates_expired_session_snapshot_reference(
         is None
     )
     reverted = runtime.revert_session("session-first")
+    assert reverted.metadata["revert"]["status"] == "reverted"
+
+
+@pytest.mark.asyncio
+async def test_runtime_retention_protects_snapshot_until_run_finalizes(
+    tmp_path: Path,
+):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingProvider:
+        async def invoke(self, request):
+            started.set()
+            await release.wait()
+            return {"content": "done"}
+
+    runtime = AgentRuntime(
+        provider=BlockingProvider(),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            model_aware_tool_selection=False,
+        ),
+    )
+    competing_runtime = AgentRuntime(
+        provider=ScriptedLLMProvider([]),
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            model_aware_tool_selection=False,
+        ),
+    )
+    assert runtime.workspace_snapshot_store is not None
+    assert competing_runtime.workspace_snapshot_store is not None
+    runtime.workspace_snapshot_store.max_retained_snapshots = 1
+    competing_runtime.workspace_snapshot_store.max_retained_snapshots = 1
+
+    task = asyncio.create_task(runtime.run("Wait.", session_id="session-in-flight"))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    pending_snapshot = runtime.list_workspace_snapshots()[0]
+
+    competing_runtime.create_workspace_snapshot(label="newer-snapshot")
+
+    assert pending_snapshot.snapshot_id in {
+        snapshot.snapshot_id for snapshot in runtime.list_workspace_snapshots()
+    }
+
+    release.set()
+    result = await asyncio.wait_for(task, timeout=1)
+
+    assert result.status == LoopStatus.COMPLETED
+    assert (
+        runtime.get_session("session-in-flight").metadata["revert"][
+            "workspace_snapshot_id"
+        ]
+        is None
+    )
+    reverted = runtime.revert_session("session-in-flight")
     assert reverted.metadata["revert"]["status"] == "reverted"
 
 

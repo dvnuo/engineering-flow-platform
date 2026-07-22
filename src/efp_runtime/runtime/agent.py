@@ -703,9 +703,11 @@ class AgentRuntime:
                 structured_output_tool_id=structured_output_tool_id,
             )
         except asyncio.CancelledError:
+            self._release_session_revert_record(revert_record)
             self.run_state.finish(resolved_session_id, LoopStatus.CANCELLED)
             raise
         except Exception:
+            self._release_session_revert_record(revert_record)
             self.run_state.finish(resolved_session_id, LoopStatus.ERROR)
             raise
 
@@ -929,9 +931,11 @@ class AgentRuntime:
                 structured_output_tool_id=structured_output_tool_id,
             )
         except asyncio.CancelledError:
+            self._release_session_revert_record(revert_record)
             self.run_state.finish(session_id, LoopStatus.CANCELLED)
             raise
         except Exception:
+            self._release_session_revert_record(revert_record)
             self.run_state.finish(session_id, LoopStatus.ERROR)
             raise
 
@@ -1620,6 +1624,7 @@ class AgentRuntime:
             source=source,
             workspace_snapshot_store=self.workspace_snapshot_store,
             enable_workspace_snapshot=self._session_revert_snapshots_enabled(),
+            protect_workspace_snapshot=True,
         )
 
     def _finalize_session_revert_record(
@@ -1630,10 +1635,25 @@ class AgentRuntime:
     ) -> None:
         if record is None:
             return
-        finalize_session_revert_record(
-            store=self.store,
-            record=record,
-            status=status,
+        try:
+            finalize_session_revert_record(
+                store=self.store,
+                record=record,
+                status=status,
+            )
+        finally:
+            self._release_session_revert_record(record)
+
+    def _release_session_revert_record(self, record) -> None:
+        if (
+            record is None
+            or not record.workspace_snapshot_protected
+            or record.workspace_snapshot_id is None
+            or self.workspace_snapshot_store is None
+        ):
+            return
+        self.workspace_snapshot_store.release_snapshot_protection(
+            record.workspace_snapshot_id
         )
 
     def _session_revert_snapshots_enabled(self) -> bool:

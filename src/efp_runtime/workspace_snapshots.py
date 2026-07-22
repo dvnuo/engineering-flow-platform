@@ -146,6 +146,8 @@ class WorkspaceSnapshotStore:
         self,
         label: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        *,
+        protect: bool = False,
     ) -> WorkspaceSnapshot:
         with self._lock:
             self._reload_existing_snapshots()
@@ -185,6 +187,10 @@ class WorkspaceSnapshotStore:
                 raise
 
             self._snapshots[snapshot.snapshot_id] = record
+            if protect:
+                self._protected_snapshot_ids[snapshot.snapshot_id] = (
+                    self._protected_snapshot_ids.get(snapshot.snapshot_id, 0) + 1
+                )
             self._prune_old_snapshots(protect={snapshot.snapshot_id})
             return deepcopy(snapshot)
 
@@ -203,15 +209,24 @@ class WorkspaceSnapshotStore:
             self._protected_snapshot_ids[snapshot_id] = (
                 self._protected_snapshot_ids.get(snapshot_id, 0) + 1
             )
-            try:
-                yield
-            finally:
-                remaining = self._protected_snapshot_ids[snapshot_id] - 1
-                if remaining:
-                    self._protected_snapshot_ids[snapshot_id] = remaining
-                else:
-                    del self._protected_snapshot_ids[snapshot_id]
-                self._prune_old_snapshots(protect=set())
+        try:
+            yield
+        finally:
+            self.release_snapshot_protection(snapshot_id)
+
+    def release_snapshot_protection(self, snapshot_id: str) -> None:
+        """Release one retained-snapshot lease and reapply the retention cap."""
+
+        with self._lock:
+            remaining = self._protected_snapshot_ids.get(snapshot_id, 0) - 1
+            if remaining < 0:
+                raise ValueError(f"snapshot is not protected: {snapshot_id}")
+            if remaining:
+                self._protected_snapshot_ids[snapshot_id] = remaining
+            else:
+                self._protected_snapshot_ids.pop(snapshot_id, None)
+            self._reload_existing_snapshots()
+            self._prune_old_snapshots(protect=set())
 
     def diff_snapshot(self, snapshot_id: str) -> list[WorkspaceSnapshotDiff]:
         with self._lock:
