@@ -164,7 +164,6 @@ def build_runtime_response_payload(result: Optional[Dict[str, Any]], session_id:
         "error_type",
         "details",
         "_llm_debug",
-        "reasoning",
         "author_type",
         "author_id",
         "author_name",

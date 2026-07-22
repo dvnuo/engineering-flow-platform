@@ -858,7 +858,7 @@ def _result_payload(
     request_id: str | None,
     model: str,
 ) -> dict[str, Any]:
-    response_text, reasoning_text = _assistant_text_and_reasoning(result)
+    response_text = _assistant_text(result)
     runtime_events = [_event_to_dict(event) for event in result.runtime_events]
     error_message = _runtime_error_message(result, runtime_events)
     payload: dict[str, Any] = {
@@ -880,8 +880,6 @@ def _result_payload(
     if error_message:
         payload["error"] = error_message
         payload["error_type"] = _runtime_error_type(runtime_events)
-    if reasoning_text:
-        payload["reasoning"] = reasoning_text
     if result.pending_permission_request is not None:
         payload["pending_permission_request"] = result.pending_permission_request
     if result.pending_question_request is not None:
@@ -891,18 +889,15 @@ def _result_payload(
     return payload
 
 
-def _assistant_text_and_reasoning(result: RuntimeLoopResult) -> tuple[str, str]:
+def _assistant_text(result: RuntimeLoopResult) -> str:
     message = result.final_assistant_message
     if message is None:
-        return "", ""
+        return ""
     text_parts: list[str] = []
-    reasoning_parts: list[str] = []
     for part in message.parts:
         if part.type is MessagePartType.TEXT and part.text:
             text_parts.append(part.text)
-        elif part.type is MessagePartType.REASONING and part.reasoning:
-            reasoning_parts.append(part.reasoning)
-    return "\n".join(text_parts).strip(), "\n".join(reasoning_parts).strip()
+    return "\n".join(text_parts).strip()
 
 
 def _runtime_error_message(
