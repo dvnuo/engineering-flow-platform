@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 import difflib
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -56,6 +57,8 @@ _SNAPSHOT_MANIFEST_NAME = "manifest.json"
 _SNAPSHOT_ID_PREFIX = "workspace_snapshot_"
 _MANIFEST_FORMAT = 2
 _HASH_CHUNK_BYTES = 1024 * 1024
+
+_LOGGER = logging.getLogger(__name__)
 
 # Files larger than this are not captured (recorded as skipped instead).
 DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -316,10 +319,19 @@ class WorkspaceSnapshotStore:
             excess -= 1
 
     def _remove_snapshot(self, snapshot_id: str) -> None:
-        if self._on_snapshot_removed is not None:
-            self._on_snapshot_removed(deepcopy(self._snapshots[snapshot_id].snapshot))
-        shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
-        del self._snapshots[snapshot_id]
+        try:
+            if self._on_snapshot_removed is not None:
+                self._on_snapshot_removed(
+                    deepcopy(self._snapshots[snapshot_id].snapshot)
+                )
+        except Exception:
+            _LOGGER.exception(
+                "failed to invalidate references for workspace snapshot %s",
+                snapshot_id,
+            )
+        finally:
+            shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
+            del self._snapshots[snapshot_id]
 
     def _validate_snapshot_blobs(
         self,

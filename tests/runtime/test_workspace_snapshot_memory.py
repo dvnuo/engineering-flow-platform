@@ -161,6 +161,30 @@ def test_retention_cap_prunes_oldest_snapshots(tmp_path: Path):
     assert [item.snapshot_id for item in reloaded.list_snapshots()] == listed
 
 
+def test_retention_removes_snapshot_when_invalidation_callback_fails(tmp_path: Path):
+    def invalidate(snapshot):
+        if snapshot.label == "first":
+            raise OSError("session metadata unavailable")
+
+    store = WorkspaceSnapshotStore(
+        tmp_path,
+        max_retained_snapshots=1,
+        on_snapshot_removed=invalidate,
+    )
+    first = store.create_snapshot(label="first")
+
+    second = store.create_snapshot(label="second")
+
+    retained = store.list_snapshots()
+    assert [snapshot.snapshot_id for snapshot in retained] == [second.snapshot_id]
+    assert not _snapshot_dir(tmp_path, first.snapshot_id).exists()
+
+    third = store.create_snapshot(label="third")
+    assert [snapshot.snapshot_id for snapshot in store.list_snapshots()] == [
+        third.snapshot_id
+    ]
+
+
 def test_snapshot_protection_is_shared_across_store_instances(tmp_path: Path):
     _write_text(tmp_path / "state.txt", "first\n")
     first_store = WorkspaceSnapshotStore(tmp_path, max_retained_snapshots=2)
