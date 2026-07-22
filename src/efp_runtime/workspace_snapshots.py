@@ -1,13 +1,22 @@
-"""Persistent workspace file snapshots for EFP runtime."""
+"""Persistent workspace file snapshots for EFP runtime.
+
+Memory model: snapshot file *content* lives only on disk (under
+``.efp_runtime/workspace_snapshots/<id>/files``). The in-memory store keeps
+metadata only (path, sha256, size), so holding many snapshots costs a few KB
+each instead of a full copy of the workspace tree. Content is streamed from
+disk one file at a time for restore/diff.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 import difflib
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -17,17 +26,49 @@ from typing import Any, Literal
 from .types import utc_now_iso
 
 
-_EXCLUDED_NAMES = {
+_ALWAYS_EXCLUDED_NAMES = {
     ".efp_runtime",
     ".git",
     ".pytest_cache",
     "__pycache__",
 }
+_EXCLUDED_DIRECTORY_NAMES = {
+    # Heavy dependency/build directories: never useful to revert and they
+    # dominate tree size (a node_modules alone is routinely hundreds of MB).
+    "node_modules",
+    ".venv",
+    "venv",
+    ".tox",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
+    ".next",
+    ".nuxt",
+    "dist",
+    "build",
+    "target",
+    "vendor",
+    "coverage",
+}
 _RUNTIME_DIR_NAME = ".efp_runtime"
 _SNAPSHOT_DIR_NAME = "workspace_snapshots"
 _SNAPSHOT_FILES_DIR_NAME = "files"
 _SNAPSHOT_MANIFEST_NAME = "manifest.json"
+_SNAPSHOT_ALLOCATOR_NAME = "allocator.json"
 _SNAPSHOT_ID_PREFIX = "workspace_snapshot_"
+_MANIFEST_FORMAT = 2
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+_LOGGER = logging.getLogger(__name__)
+
+# Files larger than this are not captured (recorded as skipped instead).
+DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024
+# Oldest snapshots beyond this count are pruned from disk after each capture.
+DEFAULT_MAX_RETAINED_SNAPSHOTS = 20
+
+_COORDINATION_LOCK = RLock()
+_WORKSPACE_LOCKS: dict[Path, RLock] = {}
+_WORKSPACE_PROTECTED_SNAPSHOTS: dict[Path, dict[str, int]] = {}
 
 
 @dataclass
@@ -60,65 +101,160 @@ class WorkspaceSnapshotDiff:
 
 @dataclass(frozen=True)
 class _CapturedFile:
+    """Metadata for one captured file; content lives on disk only."""
+
     path: str
-    content: bytes
     sha256: str
     size: int
+
+
+@dataclass(frozen=True)
+class _LoadedWorkspaceFile:
+    metadata: _CapturedFile
+    content: bytes | None
 
 
 @dataclass
 class _SnapshotRecord:
     snapshot: WorkspaceSnapshot
     files: dict[str, _CapturedFile] = field(default_factory=dict)
+    # Paths present at capture time but not captured (e.g. above the size
+    # cap), mapped to their observed size. Restore must neither recreate nor
+    # delete these.
+    skipped: dict[str, int] = field(default_factory=dict)
 
 
 class WorkspaceSnapshotStore:
     """Capture, diff, and restore regular workspace files with disk backing."""
 
-    def __init__(self, workspace_root: str | Path) -> None:
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        *,
+        max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+        max_retained_snapshots: int = DEFAULT_MAX_RETAINED_SNAPSHOTS,
+        on_snapshot_removed: Callable[[WorkspaceSnapshot], None] | None = None,
+        retain_snapshot: Callable[[WorkspaceSnapshot], bool] | None = None,
+    ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.storage_root = (
             self.workspace_root / _RUNTIME_DIR_NAME / _SNAPSHOT_DIR_NAME
         )
+        self.max_file_bytes = max(0, int(max_file_bytes))
+        self.max_retained_snapshots = max(1, int(max_retained_snapshots))
+        self._on_snapshot_removed = on_snapshot_removed
+        self._retain_snapshot = retain_snapshot
         self._snapshots: dict[str, _SnapshotRecord] = {}
         self._next_snapshot_index = 1
-        self._lock = RLock()
-        self._load_existing_snapshots()
+        self._lock, self._protected_snapshot_ids = _workspace_coordination(
+            self.workspace_root
+        )
+        with self._lock:
+            self._load_existing_snapshots()
 
     def create_snapshot(
         self,
         label: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        *,
+        protect: bool = False,
     ) -> WorkspaceSnapshot:
         with self._lock:
-            files = self._scan_workspace()
+            self._reload_existing_snapshots()
             snapshot_id = self._allocate_snapshot_id()
-            snapshot = WorkspaceSnapshot(
-                snapshot_id=snapshot_id,
-                workspace_root=self.workspace_root,
-                created_at=utc_now_iso(),
-                label=label,
-                metadata=dict(metadata or {}),
-                file_count=len(files),
-                total_bytes=sum(item.size for item in files.values()),
-            )
-            record = _SnapshotRecord(
-                snapshot=deepcopy(snapshot),
-                files=dict(files),
-            )
-            self._persist_record(record)
+            snapshot_dir = self._snapshot_dir(snapshot_id)
+            if snapshot_dir.exists():
+                shutil.rmtree(snapshot_dir)
+            files_dir = snapshot_dir / _SNAPSHOT_FILES_DIR_NAME
+            files_dir.mkdir(parents=True, exist_ok=False)
+
+            files: dict[str, _CapturedFile] = {}
+            skipped: dict[str, int] = {}
+            try:
+                self._capture_directory(
+                    self.workspace_root, (), files_dir, files, skipped
+                )
+                snapshot = WorkspaceSnapshot(
+                    snapshot_id=snapshot_id,
+                    workspace_root=self.workspace_root,
+                    created_at=utc_now_iso(),
+                    label=label,
+                    metadata=dict(metadata or {}),
+                    file_count=len(files),
+                    total_bytes=sum(item.size for item in files.values()),
+                )
+                record = _SnapshotRecord(
+                    snapshot=deepcopy(snapshot),
+                    files=files,
+                    skipped=skipped,
+                )
+                # Manifest is written last: its presence marks the snapshot
+                # as complete (partial dirs without a manifest are ignored
+                # by _load_existing_snapshots).
+                self._write_manifest(snapshot_dir, record)
+            except BaseException:
+                shutil.rmtree(snapshot_dir, ignore_errors=True)
+                raise
+
             self._snapshots[snapshot.snapshot_id] = record
+            if protect:
+                self._protected_snapshot_ids[snapshot.snapshot_id] = (
+                    self._protected_snapshot_ids.get(snapshot.snapshot_id, 0) + 1
+                )
+            self._prune_old_snapshots(protect={snapshot.snapshot_id})
             return deepcopy(snapshot)
 
     def list_snapshots(self) -> list[WorkspaceSnapshot]:
         with self._lock:
+            self._reload_existing_snapshots()
             return [deepcopy(record.snapshot) for record in self._snapshots.values()]
+
+    @contextmanager
+    def protect_snapshot(self, snapshot_id: str) -> Iterator[None]:
+        """Keep a snapshot retained for a multi-step operation."""
+
+        with self._lock:
+            self._reload_existing_snapshots()
+            self._require_snapshot(snapshot_id)
+            self._protected_snapshot_ids[snapshot_id] = (
+                self._protected_snapshot_ids.get(snapshot_id, 0) + 1
+            )
+        try:
+            yield
+        finally:
+            self.release_snapshot_protection(snapshot_id)
+
+    def release_snapshot_protection(self, snapshot_id: str) -> None:
+        """Release one retained-snapshot lease and reapply the retention cap."""
+
+        with self._lock:
+            remaining = self._protected_snapshot_ids.get(snapshot_id, 0) - 1
+            if remaining < 0:
+                raise ValueError(f"snapshot is not protected: {snapshot_id}")
+            if remaining:
+                self._protected_snapshot_ids[snapshot_id] = remaining
+            else:
+                self._protected_snapshot_ids.pop(snapshot_id, None)
+            self._reload_existing_snapshots()
+            self._prune_old_snapshots(protect=set())
 
     def diff_snapshot(self, snapshot_id: str) -> list[WorkspaceSnapshotDiff]:
         with self._lock:
+            self._reload_existing_snapshots()
             record = self._require_snapshot(snapshot_id)
+            self._validate_snapshot_blobs(snapshot_id, record)
             current_files = self._scan_workspace()
-            return _diff_files(record.files, current_files)
+            # Files that existed at capture time but were skipped (size cap)
+            # have no captured content to compare against.
+            for skipped_path in record.skipped:
+                current_files.pop(skipped_path, None)
+            return _diff_files(
+                record.files,
+                current_files,
+                before_loader=self._snapshot_content_loader(snapshot_id),
+                after_loader=self._workspace_file_loader(),
+                max_patch_bytes=self.max_file_bytes or None,
+            )
 
     def restore_snapshot(
         self,
@@ -127,27 +263,29 @@ class WorkspaceSnapshotStore:
         delete_added: bool = True,
     ) -> WorkspaceSnapshot:
         with self._lock:
+            self._reload_existing_snapshots()
             record = self._require_snapshot(snapshot_id)
-            current_files = self._scan_workspace()
+            self._validate_snapshot_blobs(snapshot_id, record)
+            load_content = self._snapshot_content_loader(snapshot_id)
 
-            for relative_path, captured in record.files.items():
-                self._write_file(relative_path, captured.content)
+            for relative_path in sorted(record.files):
+                self._write_file(relative_path, load_content(relative_path))
 
             if delete_added:
-                snapshot_paths = set(record.files)
-                for relative_path in sorted(set(current_files) - snapshot_paths):
+                current_files = self._scan_workspace()
+                protected = set(record.files) | set(record.skipped)
+                for relative_path in sorted(set(current_files) - protected):
                     self._delete_regular_file(relative_path)
 
             return deepcopy(record.snapshot)
 
     def delete_snapshot(self, snapshot_id: str) -> bool:
         with self._lock:
-            record = self._require_snapshot(snapshot_id)
-            shutil.rmtree(
-                self._snapshot_dir(record.snapshot.snapshot_id),
-                ignore_errors=True,
-            )
-            del self._snapshots[snapshot_id]
+            self._reload_existing_snapshots()
+            self._require_snapshot(snapshot_id)
+            if self._protected_snapshot_ids.get(snapshot_id, 0) > 0:
+                raise RuntimeError(f"workspace snapshot is protected: {snapshot_id}")
+            self._remove_snapshot(snapshot_id)
             return True
 
     def _require_snapshot(self, snapshot_id: str) -> _SnapshotRecord:
@@ -164,7 +302,73 @@ class WorkspaceSnapshotStore:
                 continue
             if self._snapshot_dir(snapshot_id).exists():
                 continue
+            self._write_next_snapshot_index()
             return snapshot_id
+
+    def _prune_old_snapshots(self, *, protect: set[str]) -> None:
+        if len(self._snapshots) <= self.max_retained_snapshots:
+            return
+        protected = protect | set(self._protected_snapshot_ids)
+        if self._retain_snapshot is not None:
+            for snapshot_id, record in self._snapshots.items():
+                try:
+                    retain = self._retain_snapshot(deepcopy(record.snapshot))
+                except Exception:
+                    _LOGGER.exception(
+                        "failed to inspect retention for workspace snapshot %s",
+                        snapshot_id,
+                    )
+                    continue
+                if retain:
+                    protected.add(snapshot_id)
+        ordered = sorted(
+            self._snapshots,
+            key=lambda snapshot_id: _snapshot_sort_key(snapshot_id),
+        )
+        excess = len(self._snapshots) - self.max_retained_snapshots
+        for snapshot_id in ordered:
+            if excess <= 0:
+                break
+            if snapshot_id in protected:
+                continue
+            self._remove_snapshot(snapshot_id)
+            excess -= 1
+
+    def _remove_snapshot(self, snapshot_id: str) -> None:
+        try:
+            if self._on_snapshot_removed is not None:
+                self._on_snapshot_removed(
+                    deepcopy(self._snapshots[snapshot_id].snapshot)
+                )
+        except Exception:
+            _LOGGER.exception(
+                "failed to invalidate references for workspace snapshot %s",
+                snapshot_id,
+            )
+        finally:
+            shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
+            del self._snapshots[snapshot_id]
+
+    def _validate_snapshot_blobs(
+        self,
+        snapshot_id: str,
+        record: _SnapshotRecord,
+    ) -> None:
+        files_dir = self._snapshot_dir(snapshot_id) / _SNAPSHOT_FILES_DIR_NAME
+        for relative_path, captured in sorted(record.files.items()):
+            blob_path = self._snapshot_file_path(files_dir, relative_path)
+            try:
+                sha256, size = _stream_sha256(blob_path)
+            except OSError as exc:
+                raise OSError(
+                    f"workspace snapshot blob unavailable: "
+                    f"{snapshot_id}:{relative_path}"
+                ) from exc
+            if sha256 != captured.sha256 or size != captured.size:
+                raise ValueError(
+                    f"workspace snapshot blob failed validation: "
+                    f"{snapshot_id}:{relative_path}"
+                )
 
     def _load_existing_snapshots(self) -> None:
         if not self.storage_root.is_dir():
@@ -187,7 +391,45 @@ class WorkspaceSnapshotStore:
             if index is not None:
                 highest_index = max(highest_index, index)
 
-        self._next_snapshot_index = max(self._next_snapshot_index, highest_index + 1)
+        self._next_snapshot_index = max(
+            self._next_snapshot_index,
+            highest_index + 1,
+            self._read_next_snapshot_index(),
+        )
+
+    def _reload_existing_snapshots(self) -> None:
+        self._snapshots.clear()
+        self._load_existing_snapshots()
+
+    def _read_next_snapshot_index(self) -> int:
+        allocator_path = self.storage_root / _SNAPSHOT_ALLOCATOR_NAME
+        try:
+            payload = json.loads(allocator_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return 1
+        if not isinstance(payload, dict):
+            return 1
+        next_index = _safe_nonnegative_int(payload.get("next_snapshot_index"))
+        return max(1, next_index or 1)
+
+    def _write_next_snapshot_index(self) -> None:
+        self.storage_root.mkdir(parents=True, exist_ok=True)
+        allocator_path = self.storage_root / _SNAPSHOT_ALLOCATOR_NAME
+        temporary_path = allocator_path.with_name(
+            f".{_SNAPSHOT_ALLOCATOR_NAME}.{os.getpid()}.{id(self)}.tmp"
+        )
+        try:
+            temporary_path.write_text(
+                json.dumps(
+                    {"next_snapshot_index": self._next_snapshot_index},
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary_path, allocator_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def _load_snapshot_record(self, snapshot_dir: Path) -> _SnapshotRecord | None:
         manifest_path = snapshot_dir / _SNAPSHOT_MANIFEST_NAME
@@ -217,7 +459,9 @@ class WorkspaceSnapshotStore:
             except OSError:
                 return None
 
-        files = self._load_snapshot_files(snapshot_dir)
+        files = self._load_snapshot_file_metadata(snapshot_dir, payload)
+        if files is None:
+            return None
         file_count = _safe_nonnegative_int(payload.get("file_count"))
         total_bytes = _safe_nonnegative_int(payload.get("total_bytes"))
         if file_count is not None and file_count != len(files):
@@ -225,6 +469,14 @@ class WorkspaceSnapshotStore:
         calculated_total_bytes = sum(item.size for item in files.values())
         if total_bytes is not None and total_bytes != calculated_total_bytes:
             return None
+
+        skipped_payload = payload.get("skipped_files")
+        skipped: dict[str, int] = {}
+        if isinstance(skipped_payload, dict):
+            for raw_path, raw_size in skipped_payload.items():
+                size = _safe_nonnegative_int(raw_size)
+                if isinstance(raw_path, str) and size is not None:
+                    skipped[raw_path] = size
 
         metadata = payload.get("metadata")
         label = payload.get("label")
@@ -239,17 +491,45 @@ class WorkspaceSnapshotStore:
             file_count=len(files),
             total_bytes=calculated_total_bytes,
         )
-        return _SnapshotRecord(snapshot=snapshot, files=files)
+        return _SnapshotRecord(snapshot=snapshot, files=files, skipped=skipped)
 
-    def _load_snapshot_files(self, snapshot_dir: Path) -> dict[str, _CapturedFile]:
+    def _load_snapshot_file_metadata(
+        self, snapshot_dir: Path, payload: dict[str, Any]
+    ) -> dict[str, _CapturedFile] | None:
+        manifest_files = payload.get("files")
+        if isinstance(manifest_files, dict):
+            files: dict[str, _CapturedFile] = {}
+            for raw_path, raw_meta in manifest_files.items():
+                if not isinstance(raw_path, str) or not isinstance(raw_meta, dict):
+                    return None
+                sha256 = raw_meta.get("sha256")
+                size = _safe_nonnegative_int(raw_meta.get("size"))
+                if not isinstance(sha256, str) or size is None:
+                    return None
+                try:
+                    self._validate_relative_path(raw_path)
+                except ValueError:
+                    return None
+                files[raw_path] = _CapturedFile(
+                    path=raw_path, sha256=sha256, size=size
+                )
+            return files
+        # Legacy manifest (format 1) without a files map: derive metadata by
+        # streaming the persisted blobs — content is hashed chunk-wise and
+        # never retained in memory.
+        return self._scan_snapshot_files_metadata(snapshot_dir)
+
+    def _scan_snapshot_files_metadata(
+        self, snapshot_dir: Path
+    ) -> dict[str, _CapturedFile]:
         files_dir = snapshot_dir / _SNAPSHOT_FILES_DIR_NAME
         files: dict[str, _CapturedFile] = {}
         if not files_dir.is_dir():
             return files
-        self._load_snapshot_files_directory(files_dir, (), files)
+        self._scan_snapshot_files_directory(files_dir, (), files)
         return files
 
-    def _load_snapshot_files_directory(
+    def _scan_snapshot_files_directory(
         self,
         directory: Path,
         relative_parts: tuple[str, ...],
@@ -265,34 +545,21 @@ class WorkspaceSnapshotStore:
                 path = Path(entry.path)
                 child_parts = (*relative_parts, entry.name)
                 if entry.is_dir(follow_symlinks=False):
-                    self._load_snapshot_files_directory(path, child_parts, files)
+                    self._scan_snapshot_files_directory(path, child_parts, files)
                     continue
                 if not entry.is_file(follow_symlinks=False):
                     continue
 
                 relative_path = "/".join(child_parts)
                 self._validate_relative_path(relative_path)
-                content = path.read_bytes()
+                sha256, size = _stream_sha256(path)
                 files[relative_path] = _CapturedFile(
-                    path=relative_path,
-                    content=content,
-                    sha256=hashlib.sha256(content).hexdigest(),
-                    size=len(content),
+                    path=relative_path, sha256=sha256, size=size
                 )
 
-    def _persist_record(self, record: _SnapshotRecord) -> None:
-        snapshot_dir = self._snapshot_dir(record.snapshot.snapshot_id)
-        if snapshot_dir.exists():
-            shutil.rmtree(snapshot_dir)
-        files_dir = snapshot_dir / _SNAPSHOT_FILES_DIR_NAME
-        files_dir.mkdir(parents=True, exist_ok=False)
-
-        for relative_path, captured in sorted(record.files.items()):
-            path = self._snapshot_file_path(files_dir, relative_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(captured.content)
-
+    def _write_manifest(self, snapshot_dir: Path, record: _SnapshotRecord) -> None:
         manifest = {
+            "format": _MANIFEST_FORMAT,
             "snapshot_id": record.snapshot.snapshot_id,
             "workspace_root": str(record.snapshot.workspace_root),
             "created_at": record.snapshot.created_at,
@@ -300,6 +567,11 @@ class WorkspaceSnapshotStore:
             "metadata": record.snapshot.metadata,
             "file_count": record.snapshot.file_count,
             "total_bytes": record.snapshot.total_bytes,
+            "files": {
+                item.path: {"sha256": item.sha256, "size": item.size}
+                for item in record.files.values()
+            },
+            "skipped_files": dict(record.skipped),
         }
         (snapshot_dir / _SNAPSHOT_MANIFEST_NAME).write_text(
             json.dumps(manifest, default=str, indent=2, sort_keys=True) + "\n",
@@ -320,7 +592,121 @@ class WorkspaceSnapshotStore:
         posix_path = self._validate_relative_path(relative_path)
         return files_dir.joinpath(*posix_path.parts)
 
+    def _snapshot_content_loader(self, snapshot_id: str) -> Callable[[str], bytes]:
+        files_dir = self._snapshot_dir(snapshot_id) / _SNAPSHOT_FILES_DIR_NAME
+
+        def load(relative_path: str) -> bytes:
+            return self._snapshot_file_path(files_dir, relative_path).read_bytes()
+
+        return load
+
+    def _workspace_file_loader(
+        self,
+    ) -> Callable[[str], _LoadedWorkspaceFile | None]:
+        def load(relative_path: str) -> _LoadedWorkspaceFile | None:
+            path = self._workspace_path(relative_path)
+            digest = hashlib.sha256()
+            size = 0
+            chunks: list[bytes] | None = []
+            try:
+                with path.open("rb") as handle:
+                    while True:
+                        chunk = handle.read(_HASH_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                        size += len(chunk)
+                        if chunks is None:
+                            continue
+                        if self.max_file_bytes and size > self.max_file_bytes:
+                            chunks = None
+                        else:
+                            chunks.append(chunk)
+            except (FileNotFoundError, IsADirectoryError):
+                return None
+            return _LoadedWorkspaceFile(
+                metadata=_CapturedFile(
+                    path=relative_path,
+                    sha256=digest.hexdigest(),
+                    size=size,
+                ),
+                content=b"".join(chunks) if chunks is not None else None,
+            )
+
+        return load
+
+    def _capture_directory(
+        self,
+        directory: Path,
+        relative_parts: tuple[str, ...],
+        files_dir: Path,
+        files: dict[str, _CapturedFile],
+        skipped: dict[str, int],
+    ) -> None:
+        """Walk the workspace, streaming each captured file straight to disk.
+
+        Content is copied chunk-wise into the snapshot directory while the
+        sha256 is computed, so peak memory is one chunk — never the tree.
+        """
+        with os.scandir(directory) as entries:
+            sorted_entries = sorted(entries, key=lambda entry: entry.name)
+
+            for entry in sorted_entries:
+                name = entry.name
+                if name in _ALWAYS_EXCLUDED_NAMES:
+                    continue
+                if entry.is_symlink():
+                    continue
+
+                path = Path(entry.path)
+                child_parts = (*relative_parts, name)
+                if entry.is_dir(follow_symlinks=False):
+                    if name in _EXCLUDED_DIRECTORY_NAMES:
+                        continue
+                    self._capture_directory(
+                        path, child_parts, files_dir, files, skipped
+                    )
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+
+                relative_path = "/".join(child_parts)
+                size = entry.stat(follow_symlinks=False).st_size
+                if self.max_file_bytes and size > self.max_file_bytes:
+                    skipped[relative_path] = size
+                    continue
+
+                destination = self._snapshot_file_path(files_dir, relative_path)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                digest = hashlib.sha256()
+                copied = 0
+                exceeded_limit = False
+                with path.open("rb") as source, destination.open("wb") as target:
+                    while True:
+                        chunk = source.read(_HASH_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        if (
+                            self.max_file_bytes
+                            and copied + len(chunk) > self.max_file_bytes
+                        ):
+                            skipped[relative_path] = copied + len(chunk)
+                            exceeded_limit = True
+                            break
+                        digest.update(chunk)
+                        target.write(chunk)
+                        copied += len(chunk)
+                if exceeded_limit:
+                    destination.unlink(missing_ok=True)
+                    continue
+                files[relative_path] = _CapturedFile(
+                    path=relative_path,
+                    sha256=digest.hexdigest(),
+                    size=copied,
+                )
+
     def _scan_workspace(self) -> dict[str, _CapturedFile]:
+        """Metadata-only scan of the workspace (streaming hash, no content)."""
         files: dict[str, _CapturedFile] = {}
         self._scan_directory(self.workspace_root, (), files)
         return files
@@ -336,7 +722,7 @@ class WorkspaceSnapshotStore:
 
             for entry in sorted_entries:
                 name = entry.name
-                if name in _EXCLUDED_NAMES:
+                if name in _ALWAYS_EXCLUDED_NAMES:
                     continue
                 if entry.is_symlink():
                     continue
@@ -344,18 +730,22 @@ class WorkspaceSnapshotStore:
                 path = Path(entry.path)
                 child_parts = (*relative_parts, name)
                 if entry.is_dir(follow_symlinks=False):
+                    if name in _EXCLUDED_DIRECTORY_NAMES:
+                        continue
                     self._scan_directory(path, child_parts, files)
                     continue
                 if not entry.is_file(follow_symlinks=False):
                     continue
 
-                content = path.read_bytes()
                 relative_path = "/".join(child_parts)
+                try:
+                    sha256, size = _stream_sha256(path)
+                except (FileNotFoundError, IsADirectoryError):
+                    continue
                 files[relative_path] = _CapturedFile(
                     path=relative_path,
-                    content=content,
-                    sha256=hashlib.sha256(content).hexdigest(),
-                    size=len(content),
+                    sha256=sha256,
+                    size=size,
                 )
 
     def _workspace_path(self, relative_path: str) -> Path:
@@ -405,6 +795,28 @@ class WorkspaceSnapshotStore:
         path.unlink()
 
 
+def _stream_sha256(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(_HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _workspace_coordination(
+    workspace_root: Path,
+) -> tuple[RLock, dict[str, int]]:
+    with _COORDINATION_LOCK:
+        lock = _WORKSPACE_LOCKS.setdefault(workspace_root, RLock())
+        protected = _WORKSPACE_PROTECTED_SNAPSHOTS.setdefault(workspace_root, {})
+        return lock, protected
+
+
 def _snapshot_index(snapshot_id: str) -> int | None:
     if not snapshot_id.startswith(_SNAPSHOT_ID_PREFIX):
         return None
@@ -436,13 +848,33 @@ def _safe_nonnegative_int(value: Any) -> int | None:
 def _diff_files(
     before_files: Mapping[str, _CapturedFile],
     after_files: Mapping[str, _CapturedFile],
+    *,
+    before_loader: Callable[[str], bytes],
+    after_loader: Callable[[str], _LoadedWorkspaceFile | None],
+    max_patch_bytes: int | None = None,
 ) -> list[WorkspaceSnapshotDiff]:
     diffs: list[WorkspaceSnapshotDiff] = []
     for path in sorted(set(before_files) | set(after_files)):
         before = before_files.get(path)
-        after = after_files.get(path)
+        scanned_after = after_files.get(path)
+        if (
+            before is not None
+            and scanned_after is not None
+            and before.sha256 == scanned_after.sha256
+        ):
+            continue
+        loaded_after = after_loader(path)
+        after = loaded_after.metadata if loaded_after is not None else None
+        after_content = loaded_after.content if loaded_after is not None else None
         if before is None and after is not None:
-            patch, additions, deletions = _unified_patch(path, None, after)
+            patch, additions, deletions = _bounded_patch(
+                path,
+                None,
+                after,
+                before_loader,
+                after_content,
+                max_patch_bytes=max_patch_bytes,
+            )
             diffs.append(
                 WorkspaceSnapshotDiff(
                     path=path,
@@ -458,7 +890,14 @@ def _diff_files(
             )
             continue
         if before is not None and after is None:
-            patch, additions, deletions = _unified_patch(path, before, None)
+            patch, additions, deletions = _bounded_patch(
+                path,
+                before,
+                None,
+                before_loader,
+                None,
+                max_patch_bytes=max_patch_bytes,
+            )
             diffs.append(
                 WorkspaceSnapshotDiff(
                     path=path,
@@ -476,7 +915,14 @@ def _diff_files(
         if before is None or after is None or before.sha256 == after.sha256:
             continue
 
-        patch, additions, deletions = _unified_patch(path, before, after)
+        patch, additions, deletions = _bounded_patch(
+            path,
+            before,
+            after,
+            before_loader,
+            after_content,
+            max_patch_bytes=max_patch_bytes,
+        )
         diffs.append(
             WorkspaceSnapshotDiff(
                 path=path,
@@ -493,15 +939,35 @@ def _diff_files(
     return diffs
 
 
-def _unified_patch(
+def _bounded_patch(
     path: str,
     before: _CapturedFile | None,
     after: _CapturedFile | None,
+    before_loader: Callable[[str], bytes],
+    after_content: bytes | None,
+    *,
+    max_patch_bytes: int | None,
 ) -> tuple[str | None, int, int]:
-    before_lines = _diff_lines(before.content if before is not None else b"")
-    after_lines = _diff_lines(after.content if after is not None else b"")
-    fromfile = f"a/{path}" if before is not None else "/dev/null"
-    tofile = f"b/{path}" if after is not None else "/dev/null"
+    if max_patch_bytes is not None and any(
+        item is not None and item.size > max_patch_bytes for item in (before, after)
+    ):
+        return None, 0, 0
+    return _unified_patch(
+        path,
+        before_loader(path) if before is not None else None,
+        after_content if after is not None else None,
+    )
+
+
+def _unified_patch(
+    path: str,
+    before_content: bytes | None,
+    after_content: bytes | None,
+) -> tuple[str | None, int, int]:
+    before_lines = _diff_lines(before_content if before_content is not None else b"")
+    after_lines = _diff_lines(after_content if after_content is not None else b"")
+    fromfile = f"a/{path}" if before_content is not None else "/dev/null"
+    tofile = f"b/{path}" if after_content is not None else "/dev/null"
     lines = list(
         difflib.unified_diff(
             before_lines,
@@ -525,10 +991,3 @@ def _unified_patch(
 
 def _diff_lines(content: bytes) -> list[str]:
     return content.decode("utf-8", errors="replace").splitlines()
-
-
-__all__ = [
-    "WorkspaceSnapshot",
-    "WorkspaceSnapshotDiff",
-    "WorkspaceSnapshotStore",
-]

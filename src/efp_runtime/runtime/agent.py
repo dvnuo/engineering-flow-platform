@@ -56,6 +56,7 @@ from ..session.query import (
 )
 from ..session.revert import (
     finalize_session_revert_record,
+    invalidate_session_snapshot_references,
     prepare_session_revert_record,
     revert_session_state,
     unrevert_session_state,
@@ -204,7 +205,11 @@ class AgentRuntime:
         self.question_broker = question_broker or QuestionBroker()
         self.store = store or InMemorySessionStore()
         self.workspace_snapshot_store = (
-            WorkspaceSnapshotStore(self.config.workspace_root)
+            WorkspaceSnapshotStore(
+                self.config.workspace_root,
+                on_snapshot_removed=self._invalidate_session_snapshot_references,
+                retain_snapshot=self._retain_workspace_snapshot,
+            )
             if self.config.workspace_root is not None
             else None
         )
@@ -698,9 +703,11 @@ class AgentRuntime:
                 structured_output_tool_id=structured_output_tool_id,
             )
         except asyncio.CancelledError:
+            self._release_session_revert_record(revert_record)
             self.run_state.finish(resolved_session_id, LoopStatus.CANCELLED)
             raise
         except Exception:
+            self._release_session_revert_record(revert_record)
             self.run_state.finish(resolved_session_id, LoopStatus.ERROR)
             raise
 
@@ -924,9 +931,11 @@ class AgentRuntime:
                 structured_output_tool_id=structured_output_tool_id,
             )
         except asyncio.CancelledError:
+            self._release_session_revert_record(revert_record)
             self.run_state.finish(session_id, LoopStatus.CANCELLED)
             raise
         except Exception:
+            self._release_session_revert_record(revert_record)
             self.run_state.finish(session_id, LoopStatus.ERROR)
             raise
 
@@ -1615,6 +1624,7 @@ class AgentRuntime:
             source=source,
             workspace_snapshot_store=self.workspace_snapshot_store,
             enable_workspace_snapshot=self._session_revert_snapshots_enabled(),
+            protect_workspace_snapshot=True,
         )
 
     def _finalize_session_revert_record(
@@ -1625,10 +1635,25 @@ class AgentRuntime:
     ) -> None:
         if record is None:
             return
-        finalize_session_revert_record(
-            store=self.store,
-            record=record,
-            status=status,
+        try:
+            finalize_session_revert_record(
+                store=self.store,
+                record=record,
+                status=status,
+            )
+        finally:
+            self._release_session_revert_record(record)
+
+    def _release_session_revert_record(self, record) -> None:
+        if (
+            record is None
+            or not record.workspace_snapshot_protected
+            or record.workspace_snapshot_id is None
+            or self.workspace_snapshot_store is None
+        ):
+            return
+        self.workspace_snapshot_store.release_snapshot_protection(
+            record.workspace_snapshot_id
         )
 
     def _session_revert_snapshots_enabled(self) -> bool:
@@ -1798,6 +1823,43 @@ class AgentRuntime:
         if self.workspace_snapshot_store is None:
             raise TypeError("workspace snapshots require workspace_root")
         return self.workspace_snapshot_store
+
+    def _invalidate_session_snapshot_references(
+        self,
+        snapshot: WorkspaceSnapshot,
+    ) -> None:
+        session_id = snapshot.metadata.get("session_id")
+        invalidate_session_snapshot_references(
+            store=self.store,
+            snapshot_id=snapshot.snapshot_id,
+            session_id=session_id if isinstance(session_id, str) else None,
+        )
+
+    def _retain_workspace_snapshot(self, snapshot: WorkspaceSnapshot) -> bool:
+        if snapshot.metadata.get("purpose") != "session_unrevert":
+            return False
+        session_id = snapshot.metadata.get("session_id")
+        if not isinstance(session_id, str):
+            return False
+        try:
+            get_summary = getattr(self.store, "get_session_summary", None)
+            if callable(get_summary):
+                summary = get_summary(session_id)
+                revert_active = summary.revert_active is True
+                unrevert_snapshot_id = summary.unrevert_snapshot_id
+            else:
+                session = self.store.get_session(session_id)
+                revert_metadata = session.metadata.get("revert")
+                if not isinstance(revert_metadata, Mapping):
+                    return False
+                revert_active = revert_metadata.get("active") is True
+                unrevert_snapshot_id = revert_metadata.get("unrevert_snapshot_id")
+        except KeyError:
+            return False
+        return (
+            revert_active is True
+            and unrevert_snapshot_id == snapshot.snapshot_id
+        )
 
     def _replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
         method = getattr(self.store, "replace_history", None)

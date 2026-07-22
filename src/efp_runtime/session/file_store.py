@@ -54,6 +54,9 @@ class SessionSummary:
     user_message_count: int
     first_user_preview: str
     last_preview: str
+    revert_active: bool = False
+    workspace_snapshot_id: Optional[str] = None
+    unrevert_snapshot_id: Optional[str] = None
 
 
 # malloc_trim(0) hands freed arenas back to the OS after a large parse burst.
@@ -132,6 +135,10 @@ def build_session_summary(session: Session) -> SessionSummary:
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
     custom_name = metadata.get("custom_session_name")
     custom_name = custom_name.strip() if isinstance(custom_name, str) and custom_name.strip() else None
+    revert_metadata = metadata.get("revert")
+    revert_metadata = revert_metadata if isinstance(revert_metadata, Mapping) else {}
+    workspace_snapshot_id = revert_metadata.get("workspace_snapshot_id")
+    unrevert_snapshot_id = revert_metadata.get("unrevert_snapshot_id")
     return SessionSummary(
         session_id=session.session_id,
         title=session.title,
@@ -142,6 +149,13 @@ def build_session_summary(session: Session) -> SessionSummary:
         user_message_count=user_count,
         first_user_preview=first_user_preview,
         last_preview=last_preview,
+        revert_active=revert_metadata.get("active") is True,
+        workspace_snapshot_id=(
+            workspace_snapshot_id if isinstance(workspace_snapshot_id, str) else None
+        ),
+        unrevert_snapshot_id=(
+            unrevert_snapshot_id if isinstance(unrevert_snapshot_id, str) else None
+        ),
     )
 
 
@@ -299,6 +313,16 @@ class FileSessionStore:
                 sessions.append(self._read_session_file_locked(path, cache_store=False))
             return deepcopy(sessions)
 
+    def get_session_summary(self, session_id: str) -> SessionSummary:
+        with self._lock:
+            path = self._session_path(session_id)
+            if not path.exists():
+                raise KeyError(f"unknown session: {session_id}")
+            summary, parsed = self._read_session_summary_file_locked(path)
+            if parsed:
+                _release_allocator_memory()
+            return summary
+
     def list_session_summaries(self) -> List[SessionSummary]:
         """Return lightweight headers for every session without loading bodies.
 
@@ -312,32 +336,35 @@ class FileSessionStore:
             summaries: List[SessionSummary] = []
             parsed_any = False
             for path in sorted(self.sessions_dir.glob("*.json")):
-                key = str(path)
                 try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                cached = self._summary_cache.get(key)
-                if (
-                    cached is not None
-                    and cached[0] == stat.st_mtime_ns
-                    and cached[1] == stat.st_size
-                ):
-                    self._summary_cache.move_to_end(key)
-                    summaries.append(cached[2])
-                    continue
-                try:
-                    session = self._read_session_file_locked(path, cache_store=False)
+                    summary, parsed = self._read_session_summary_file_locked(path)
                 except Exception:
                     # A corrupt or half-written file must not break listing.
                     continue
-                summary = build_session_summary(session)
-                self._summary_cache_put(key, stat.st_mtime_ns, stat.st_size, summary)
                 summaries.append(summary)
-                parsed_any = True
+                parsed_any = parsed_any or parsed
             if parsed_any:
                 _release_allocator_memory()
             return summaries
+
+    def _read_session_summary_file_locked(
+        self,
+        path: Path,
+    ) -> tuple[SessionSummary, bool]:
+        key = str(path)
+        stat = path.stat()
+        cached = self._summary_cache.get(key)
+        if (
+            cached is not None
+            and cached[0] == stat.st_mtime_ns
+            and cached[1] == stat.st_size
+        ):
+            self._summary_cache.move_to_end(key)
+            return cached[2], False
+        session = self._read_session_file_locked(path, cache_store=False)
+        summary = build_session_summary(session)
+        self._summary_cache_put(key, stat.st_mtime_ns, stat.st_size, summary)
+        return summary, True
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock:

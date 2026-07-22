@@ -49,7 +49,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/opt/venv/bin:/usr/local/bin:$PATH" \
-    BROWSERSTACK_LOCAL_BINARY="/usr/local/bin/BrowserStackLocal"
+    BROWSERSTACK_LOCAL_BINARY="/usr/local/bin/BrowserStackLocal" \
+    # Cap glibc malloc arenas: without this a multi-threaded Python process
+    # can hold 8*ncpu arenas and park freed turn-memory as resident high-water.
+    MALLOC_ARENA_MAX=2
 
 # Install Python dependencies into the virtual environment.
 COPY requirements.txt .
