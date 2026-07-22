@@ -9,6 +9,7 @@ legacy (format-1) manifest compatibility.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -185,6 +186,25 @@ def test_retention_removes_snapshot_when_invalidation_callback_fails(tmp_path: P
     ]
 
 
+def test_retention_ignores_snapshot_retainer_failures(tmp_path: Path):
+    def retain(snapshot):
+        raise OSError("session summary unavailable")
+
+    store = WorkspaceSnapshotStore(
+        tmp_path,
+        max_retained_snapshots=1,
+        retain_snapshot=retain,
+    )
+    first = store.create_snapshot(label="first")
+    second = store.create_snapshot(label="second", protect=True)
+
+    assert [snapshot.snapshot_id for snapshot in store.list_snapshots()] == [
+        second.snapshot_id
+    ]
+    assert not _snapshot_dir(tmp_path, first.snapshot_id).exists()
+    store.release_snapshot_protection(second.snapshot_id)
+
+
 def test_snapshot_protection_is_shared_across_store_instances(tmp_path: Path):
     _write_text(tmp_path / "state.txt", "first\n")
     first_store = WorkspaceSnapshotStore(tmp_path, max_retained_snapshots=2)
@@ -230,6 +250,59 @@ def test_snapshot_ids_are_not_reused_after_delete_and_reload(tmp_path: Path):
     third = restarted.create_snapshot(label="third")
 
     assert len({first.snapshot_id, second.snapshot_id, third.snapshot_id}) == 3
+
+
+def test_diff_uses_one_current_file_read_for_metadata_and_patch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = tmp_path / "state.txt"
+    _write_text(path, "before\n")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+    _write_text(path, "intermediate\n")
+    original_scan = store._scan_workspace
+
+    def scan_then_change():
+        files = original_scan()
+        _write_text(path, "final\n")
+        return files
+
+    monkeypatch.setattr(store, "_scan_workspace", scan_then_change)
+
+    [diff] = store.diff_snapshot(snapshot.snapshot_id)
+
+    final_content = b"final\n"
+    assert diff.after_hash == hashlib.sha256(final_content).hexdigest()
+    assert diff.after_bytes == len(final_content)
+    assert diff.patch is not None
+    assert "+final" in diff.patch
+    assert "intermediate" not in diff.patch
+
+
+def test_diff_treats_file_deleted_after_scan_as_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = tmp_path / "state.txt"
+    _write_text(path, "before\n")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+    _write_text(path, "intermediate\n")
+    original_scan = store._scan_workspace
+
+    def scan_then_delete():
+        files = original_scan()
+        path.unlink()
+        return files
+
+    monkeypatch.setattr(store, "_scan_workspace", scan_then_delete)
+
+    [diff] = store.diff_snapshot(snapshot.snapshot_id)
+
+    assert diff.status == "deleted"
+    assert diff.after_hash is None
+    assert diff.after_bytes is None
 
 
 def test_legacy_format1_manifest_still_loads_and_restores(tmp_path: Path):

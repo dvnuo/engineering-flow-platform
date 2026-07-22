@@ -108,6 +108,12 @@ class _CapturedFile:
     size: int
 
 
+@dataclass(frozen=True)
+class _LoadedWorkspaceFile:
+    metadata: _CapturedFile
+    content: bytes | None
+
+
 @dataclass
 class _SnapshotRecord:
     snapshot: WorkspaceSnapshot
@@ -246,7 +252,7 @@ class WorkspaceSnapshotStore:
                 record.files,
                 current_files,
                 before_loader=self._snapshot_content_loader(snapshot_id),
-                after_loader=self._workspace_content_loader(),
+                after_loader=self._workspace_file_loader(),
                 max_patch_bytes=self.max_file_bytes or None,
             )
 
@@ -304,11 +310,17 @@ class WorkspaceSnapshotStore:
             return
         protected = protect | set(self._protected_snapshot_ids)
         if self._retain_snapshot is not None:
-            protected.update(
-                snapshot_id
-                for snapshot_id, record in self._snapshots.items()
-                if self._retain_snapshot(deepcopy(record.snapshot))
-            )
+            for snapshot_id, record in self._snapshots.items():
+                try:
+                    retain = self._retain_snapshot(deepcopy(record.snapshot))
+                except Exception:
+                    _LOGGER.exception(
+                        "failed to inspect retention for workspace snapshot %s",
+                        snapshot_id,
+                    )
+                    continue
+                if retain:
+                    protected.add(snapshot_id)
         ordered = sorted(
             self._snapshots,
             key=lambda snapshot_id: _snapshot_sort_key(snapshot_id),
@@ -588,9 +600,38 @@ class WorkspaceSnapshotStore:
 
         return load
 
-    def _workspace_content_loader(self) -> Callable[[str], bytes]:
-        def load(relative_path: str) -> bytes:
-            return self._workspace_path(relative_path).read_bytes()
+    def _workspace_file_loader(
+        self,
+    ) -> Callable[[str], _LoadedWorkspaceFile | None]:
+        def load(relative_path: str) -> _LoadedWorkspaceFile | None:
+            path = self._workspace_path(relative_path)
+            digest = hashlib.sha256()
+            size = 0
+            chunks: list[bytes] | None = []
+            try:
+                with path.open("rb") as handle:
+                    while True:
+                        chunk = handle.read(_HASH_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                        size += len(chunk)
+                        if chunks is None:
+                            continue
+                        if self.max_file_bytes and size > self.max_file_bytes:
+                            chunks = None
+                        else:
+                            chunks.append(chunk)
+            except (FileNotFoundError, IsADirectoryError):
+                return None
+            return _LoadedWorkspaceFile(
+                metadata=_CapturedFile(
+                    path=relative_path,
+                    sha256=digest.hexdigest(),
+                    size=size,
+                ),
+                content=b"".join(chunks) if chunks is not None else None,
+            )
 
         return load
 
@@ -686,7 +727,10 @@ class WorkspaceSnapshotStore:
                     continue
 
                 relative_path = "/".join(child_parts)
-                sha256, size = _stream_sha256(path)
+                try:
+                    sha256, size = _stream_sha256(path)
+                except (FileNotFoundError, IsADirectoryError):
+                    continue
                 files[relative_path] = _CapturedFile(
                     path=relative_path,
                     sha256=sha256,
@@ -795,20 +839,29 @@ def _diff_files(
     after_files: Mapping[str, _CapturedFile],
     *,
     before_loader: Callable[[str], bytes],
-    after_loader: Callable[[str], bytes],
+    after_loader: Callable[[str], _LoadedWorkspaceFile | None],
     max_patch_bytes: int | None = None,
 ) -> list[WorkspaceSnapshotDiff]:
     diffs: list[WorkspaceSnapshotDiff] = []
     for path in sorted(set(before_files) | set(after_files)):
         before = before_files.get(path)
-        after = after_files.get(path)
+        scanned_after = after_files.get(path)
+        if (
+            before is not None
+            and scanned_after is not None
+            and before.sha256 == scanned_after.sha256
+        ):
+            continue
+        loaded_after = after_loader(path)
+        after = loaded_after.metadata if loaded_after is not None else None
+        after_content = loaded_after.content if loaded_after is not None else None
         if before is None and after is not None:
             patch, additions, deletions = _bounded_patch(
                 path,
                 None,
                 after,
                 before_loader,
-                after_loader,
+                after_content,
                 max_patch_bytes=max_patch_bytes,
             )
             diffs.append(
@@ -831,7 +884,7 @@ def _diff_files(
                 before,
                 None,
                 before_loader,
-                after_loader,
+                None,
                 max_patch_bytes=max_patch_bytes,
             )
             diffs.append(
@@ -856,7 +909,7 @@ def _diff_files(
             before,
             after,
             before_loader,
-            after_loader,
+            after_content,
             max_patch_bytes=max_patch_bytes,
         )
         diffs.append(
@@ -880,7 +933,7 @@ def _bounded_patch(
     before: _CapturedFile | None,
     after: _CapturedFile | None,
     before_loader: Callable[[str], bytes],
-    after_loader: Callable[[str], bytes],
+    after_content: bytes | None,
     *,
     max_patch_bytes: int | None,
 ) -> tuple[str | None, int, int]:
@@ -891,7 +944,7 @@ def _bounded_patch(
     return _unified_patch(
         path,
         before_loader(path) if before is not None else None,
-        after_loader(path) if after is not None else None,
+        after_content if after is not None else None,
     )
 
 
