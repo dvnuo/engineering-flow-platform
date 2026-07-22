@@ -60,6 +60,10 @@ DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024
 # Oldest snapshots beyond this count are pruned from disk after each capture.
 DEFAULT_MAX_RETAINED_SNAPSHOTS = 20
 
+_COORDINATION_LOCK = RLock()
+_WORKSPACE_LOCKS: dict[Path, RLock] = {}
+_WORKSPACE_PROTECTED_SNAPSHOTS: dict[Path, dict[str, int]] = {}
+
 
 @dataclass
 class WorkspaceSnapshot:
@@ -127,10 +131,12 @@ class WorkspaceSnapshotStore:
         self.max_retained_snapshots = max(1, int(max_retained_snapshots))
         self._on_snapshot_removed = on_snapshot_removed
         self._snapshots: dict[str, _SnapshotRecord] = {}
-        self._protected_snapshot_ids: dict[str, int] = {}
         self._next_snapshot_index = 1
-        self._lock = RLock()
-        self._load_existing_snapshots()
+        self._lock, self._protected_snapshot_ids = _workspace_coordination(
+            self.workspace_root
+        )
+        with self._lock:
+            self._load_existing_snapshots()
 
     def create_snapshot(
         self,
@@ -138,6 +144,7 @@ class WorkspaceSnapshotStore:
         metadata: Mapping[str, Any] | None = None,
     ) -> WorkspaceSnapshot:
         with self._lock:
+            self._reload_existing_snapshots()
             snapshot_id = self._allocate_snapshot_id()
             snapshot_dir = self._snapshot_dir(snapshot_id)
             if snapshot_dir.exists():
@@ -179,6 +186,7 @@ class WorkspaceSnapshotStore:
 
     def list_snapshots(self) -> list[WorkspaceSnapshot]:
         with self._lock:
+            self._reload_existing_snapshots()
             return [deepcopy(record.snapshot) for record in self._snapshots.values()]
 
     @contextmanager
@@ -186,6 +194,7 @@ class WorkspaceSnapshotStore:
         """Keep a snapshot retained for a multi-step operation."""
 
         with self._lock:
+            self._reload_existing_snapshots()
             self._require_snapshot(snapshot_id)
             self._protected_snapshot_ids[snapshot_id] = (
                 self._protected_snapshot_ids.get(snapshot_id, 0) + 1
@@ -202,6 +211,7 @@ class WorkspaceSnapshotStore:
 
     def diff_snapshot(self, snapshot_id: str) -> list[WorkspaceSnapshotDiff]:
         with self._lock:
+            self._reload_existing_snapshots()
             record = self._require_snapshot(snapshot_id)
             current_files = self._scan_workspace()
             # Files that existed at capture time but were skipped (size cap)
@@ -222,6 +232,7 @@ class WorkspaceSnapshotStore:
         delete_added: bool = True,
     ) -> WorkspaceSnapshot:
         with self._lock:
+            self._reload_existing_snapshots()
             record = self._require_snapshot(snapshot_id)
             self._validate_snapshot_blobs(snapshot_id, record)
             load_content = self._snapshot_content_loader(snapshot_id)
@@ -239,6 +250,7 @@ class WorkspaceSnapshotStore:
 
     def delete_snapshot(self, snapshot_id: str) -> bool:
         with self._lock:
+            self._reload_existing_snapshots()
             self._require_snapshot(snapshot_id)
             self._remove_snapshot(snapshot_id)
             return True
@@ -325,6 +337,11 @@ class WorkspaceSnapshotStore:
                 highest_index = max(highest_index, index)
 
         self._next_snapshot_index = max(self._next_snapshot_index, highest_index + 1)
+
+    def _reload_existing_snapshots(self) -> None:
+        self._snapshots.clear()
+        self._next_snapshot_index = 1
+        self._load_existing_snapshots()
 
     def _load_snapshot_record(self, snapshot_dir: Path) -> _SnapshotRecord | None:
         manifest_path = snapshot_dir / _SNAPSHOT_MANIFEST_NAME
@@ -654,6 +671,15 @@ def _stream_sha256(path: Path) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
+
+
+def _workspace_coordination(
+    workspace_root: Path,
+) -> tuple[RLock, dict[str, int]]:
+    with _COORDINATION_LOCK:
+        lock = _WORKSPACE_LOCKS.setdefault(workspace_root, RLock())
+        protected = _WORKSPACE_PROTECTED_SNAPSHOTS.setdefault(workspace_root, {})
+        return lock, protected
 
 
 def _snapshot_index(snapshot_id: str) -> int | None:

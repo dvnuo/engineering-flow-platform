@@ -137,6 +137,25 @@ def test_retention_cap_prunes_oldest_snapshots(tmp_path: Path):
     assert [item.snapshot_id for item in reloaded.list_snapshots()] == listed
 
 
+def test_snapshot_protection_is_shared_across_store_instances(tmp_path: Path):
+    _write_text(tmp_path / "state.txt", "first\n")
+    first_store = WorkspaceSnapshotStore(tmp_path, max_retained_snapshots=2)
+    first = first_store.create_snapshot(label="first")
+    _write_text(tmp_path / "state.txt", "second\n")
+    first_store.create_snapshot(label="second")
+    second_store = WorkspaceSnapshotStore(tmp_path, max_retained_snapshots=2)
+
+    with first_store.protect_snapshot(first.snapshot_id):
+        _write_text(tmp_path / "state.txt", "third\n")
+        third = second_store.create_snapshot(label="third")
+        first_store.restore_snapshot(first.snapshot_id)
+
+    assert (tmp_path / "state.txt").read_bytes() == b"first\n"
+    assert {
+        snapshot.snapshot_id for snapshot in first_store.list_snapshots()
+    } == {first.snapshot_id, third.snapshot_id}
+
+
 def test_legacy_format1_manifest_still_loads_and_restores(tmp_path: Path):
     _write_text(tmp_path / "keep.txt", "current\n")
     legacy_dir = _snapshot_dir(tmp_path, "workspace_snapshot_1")
