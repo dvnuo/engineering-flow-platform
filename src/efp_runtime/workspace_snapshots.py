@@ -9,7 +9,8 @@ disk one file at a time for restore/diff.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 import difflib
@@ -124,6 +125,7 @@ class WorkspaceSnapshotStore:
         self.max_file_bytes = max(0, int(max_file_bytes))
         self.max_retained_snapshots = max(1, int(max_retained_snapshots))
         self._snapshots: dict[str, _SnapshotRecord] = {}
+        self._protected_snapshot_ids: dict[str, int] = {}
         self._next_snapshot_index = 1
         self._lock = RLock()
         self._load_existing_snapshots()
@@ -176,6 +178,25 @@ class WorkspaceSnapshotStore:
     def list_snapshots(self) -> list[WorkspaceSnapshot]:
         with self._lock:
             return [deepcopy(record.snapshot) for record in self._snapshots.values()]
+
+    @contextmanager
+    def protect_snapshot(self, snapshot_id: str) -> Iterator[None]:
+        """Keep a snapshot retained for a multi-step operation."""
+
+        with self._lock:
+            self._require_snapshot(snapshot_id)
+            self._protected_snapshot_ids[snapshot_id] = (
+                self._protected_snapshot_ids.get(snapshot_id, 0) + 1
+            )
+            try:
+                yield
+            finally:
+                remaining = self._protected_snapshot_ids[snapshot_id] - 1
+                if remaining:
+                    self._protected_snapshot_ids[snapshot_id] = remaining
+                else:
+                    del self._protected_snapshot_ids[snapshot_id]
+                self._prune_old_snapshots(protect=set())
 
     def diff_snapshot(self, snapshot_id: str) -> list[WorkspaceSnapshotDiff]:
         with self._lock:
@@ -242,6 +263,7 @@ class WorkspaceSnapshotStore:
     def _prune_old_snapshots(self, *, protect: set[str]) -> None:
         if len(self._snapshots) <= self.max_retained_snapshots:
             return
+        protected = protect | set(self._protected_snapshot_ids)
         ordered = sorted(
             self._snapshots,
             key=lambda snapshot_id: _snapshot_sort_key(snapshot_id),
@@ -250,7 +272,7 @@ class WorkspaceSnapshotStore:
         for snapshot_id in ordered:
             if excess <= 0:
                 break
-            if snapshot_id in protect:
+            if snapshot_id in protected:
                 continue
             shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
             del self._snapshots[snapshot_id]

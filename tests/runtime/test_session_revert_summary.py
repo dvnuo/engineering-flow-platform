@@ -138,3 +138,59 @@ async def test_runtime_session_revert_and_unrevert_restore_history_and_workspace
     assert len(runtime.session_messages("session-revert")) == 4
     assert unreverted.metadata["revert"]["active"] is False
     assert unreverted.metadata["revert"]["status"] == "unreverted"
+
+
+@pytest.mark.asyncio
+async def test_runtime_session_revert_preserves_oldest_target_at_retention_limit(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-write",
+                        "type": "function",
+                        "function": {
+                            "name": "write",
+                            "arguments": json.dumps(
+                                {
+                                    "filePath": "created.txt",
+                                    "content": "created\n",
+                                },
+                                sort_keys=True,
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=2,
+            model_aware_tool_selection=False,
+            tool_permissions={"write": "allow"},
+        ),
+    )
+    assert runtime.workspace_snapshot_store is not None
+    runtime.workspace_snapshot_store.max_retained_snapshots = 2
+
+    await runtime.run("Create a file.", session_id="session-retention-revert")
+    target_snapshot_id = runtime.get_session("session-retention-revert").metadata[
+        "revert"
+    ]["workspace_snapshot_id"]
+    runtime.create_workspace_snapshot(label="newer-session-snapshot")
+
+    reverted = runtime.revert_session("session-retention-revert")
+
+    assert not (tmp_path / "created.txt").exists()
+    assert reverted.metadata["revert"]["workspace_snapshot_id"] == target_snapshot_id
+    unrevert_snapshot_id = reverted.metadata["revert"]["unrevert_snapshot_id"]
+    assert unrevert_snapshot_id
+    assert {
+        snapshot.snapshot_id for snapshot in runtime.list_workspace_snapshots()
+    } == {target_snapshot_id, unrevert_snapshot_id}

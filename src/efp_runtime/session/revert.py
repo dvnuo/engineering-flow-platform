@@ -138,19 +138,20 @@ def revert_session_state(
     if workspace_snapshot_id is not None:
         if workspace_snapshot_store is None:
             raise TypeError("workspace snapshots require workspace_root")
-        unrevert_snapshot = workspace_snapshot_store.create_snapshot(
-            label=f"session:{session_id}:unrevert",
-            metadata={
-                "session_id": session_id,
-                "history_checkpoint_id": checkpoint.checkpoint_id,
-                "purpose": "session_unrevert",
-            },
-        )
-        unrevert_snapshot_id = unrevert_snapshot.snapshot_id
-        workspace_snapshot_store.restore_snapshot(
-            workspace_snapshot_id,
-            delete_added=delete_added,
-        )
+        with workspace_snapshot_store.protect_snapshot(workspace_snapshot_id):
+            unrevert_snapshot = workspace_snapshot_store.create_snapshot(
+                label=f"session:{session_id}:unrevert",
+                metadata={
+                    "session_id": session_id,
+                    "history_checkpoint_id": checkpoint.checkpoint_id,
+                    "purpose": "session_unrevert",
+                },
+            )
+            unrevert_snapshot_id = unrevert_snapshot.snapshot_id
+            workspace_snapshot_store.restore_snapshot(
+                workspace_snapshot_id,
+                delete_added=delete_added,
+            )
 
     trimmed_history, removed_counts = trim_session_history(
         history,
