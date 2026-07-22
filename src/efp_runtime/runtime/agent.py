@@ -208,7 +208,7 @@ class AgentRuntime:
             WorkspaceSnapshotStore(
                 self.config.workspace_root,
                 on_snapshot_removed=self._invalidate_session_snapshot_references,
-                retained_snapshot_ids=self._active_unrevert_snapshot_ids,
+                retain_snapshot=self._retain_workspace_snapshot,
             )
             if self.config.workspace_root is not None
             else None
@@ -1804,22 +1804,31 @@ class AgentRuntime:
             raise TypeError("workspace snapshots require workspace_root")
         return self.workspace_snapshot_store
 
-    def _invalidate_session_snapshot_references(self, snapshot_id: str) -> None:
+    def _invalidate_session_snapshot_references(
+        self,
+        snapshot: WorkspaceSnapshot,
+    ) -> None:
+        session_id = snapshot.metadata.get("session_id")
         invalidate_session_snapshot_references(
             store=self.store,
-            snapshot_id=snapshot_id,
+            snapshot_id=snapshot.snapshot_id,
+            session_id=session_id if isinstance(session_id, str) else None,
         )
 
-    def _active_unrevert_snapshot_ids(self) -> set[str]:
-        snapshot_ids: set[str] = set()
-        for session in self.store.list_sessions():
-            revert_metadata = session.metadata.get("revert")
-            if not isinstance(revert_metadata, Mapping):
-                continue
-            snapshot_id = revert_metadata.get("unrevert_snapshot_id")
-            if revert_metadata.get("active") is True and isinstance(snapshot_id, str):
-                snapshot_ids.add(snapshot_id)
-        return snapshot_ids
+    def _retain_workspace_snapshot(self, snapshot: WorkspaceSnapshot) -> bool:
+        if snapshot.metadata.get("purpose") != "session_unrevert":
+            return False
+        session_id = snapshot.metadata.get("session_id")
+        if not isinstance(session_id, str):
+            return False
+        try:
+            summary = self.store.get_session_summary(session_id)
+        except KeyError:
+            return False
+        return (
+            summary.revert_active is True
+            and summary.unrevert_snapshot_id == snapshot.snapshot_id
+        )
 
     def _replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
         method = getattr(self.store, "replace_history", None)

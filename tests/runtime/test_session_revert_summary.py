@@ -217,6 +217,9 @@ async def test_runtime_pruning_invalidates_expired_session_snapshot_reference(
         "workspace_snapshot_id"
     ]
     await runtime.run("Second", session_id="session-second")
+    runtime.store.list_sessions = lambda: pytest.fail(
+        "snapshot pruning must not load every session body"
+    )
     await runtime.run("Third", session_id="session-third")
 
     assert first_snapshot_id not in {

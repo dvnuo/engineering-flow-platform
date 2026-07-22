@@ -69,6 +69,43 @@ def test_summary_refreshes_after_write(tmp_path: Path):
     assert refreshed.last_preview == "q2"
 
 
+def test_targeted_snapshot_reference_summary_loads_only_one_session(
+    tmp_path: Path,
+    monkeypatch,
+):
+    seed_store = FileSessionStore(tmp_path)
+    for session_id in ("s-1", "s-2", "s-3"):
+        _seed(seed_store, session_id, user_text="x" * 4096)
+    seed_store.update_session(
+        "s-2",
+        metadata={
+            "revert": {
+                "active": True,
+                "workspace_snapshot_id": "workspace_snapshot_1",
+                "unrevert_snapshot_id": "workspace_snapshot_2",
+            }
+        },
+    )
+    store = FileSessionStore(tmp_path)
+    calls = {"n": 0}
+    real_load = fs_mod.json.load
+
+    def counting_load(handle):
+        calls["n"] += 1
+        return real_load(handle)
+
+    monkeypatch.setattr(fs_mod.json, "load", counting_load)
+
+    summary = store.get_session_summary("s-2")
+
+    assert calls["n"] == 1
+    assert summary.revert_active is True
+    assert summary.workspace_snapshot_id == "workspace_snapshot_1"
+    assert summary.unrevert_snapshot_id == "workspace_snapshot_2"
+    assert store.get_session_summary("s-2") == summary
+    assert calls["n"] == 1
+
+
 def test_delete_removes_from_summaries_and_caches(tmp_path: Path):
     store = FileSessionStore(tmp_path)
     _seed(store, "s-1")

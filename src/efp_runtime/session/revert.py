@@ -104,26 +104,30 @@ def invalidate_session_snapshot_references(
     *,
     store: SessionStore,
     snapshot_id: str,
+    session_id: str | None,
 ) -> int:
     """Clear session revert metadata that references a removed snapshot."""
 
-    updated = 0
-    for session in store.list_sessions():
-        current_revert = session.metadata.get("revert")
-        if not isinstance(current_revert, Mapping):
+    if session_id is None:
+        return 0
+    try:
+        session = store.get_session(session_id)
+    except KeyError:
+        return 0
+    current_revert = session.metadata.get("revert")
+    if not isinstance(current_revert, Mapping):
+        return 0
+    revert_metadata = deepcopy(dict(current_revert))
+    changed = False
+    for key in ("workspace_snapshot_id", "unrevert_snapshot_id"):
+        if revert_metadata.get(key) != snapshot_id:
             continue
-        revert_metadata = deepcopy(dict(current_revert))
-        changed = False
-        for key in ("workspace_snapshot_id", "unrevert_snapshot_id"):
-            if revert_metadata.get(key) != snapshot_id:
-                continue
-            revert_metadata[key] = None
-            changed = True
-        if not changed:
-            continue
-        store.update_session(session.session_id, metadata={"revert": revert_metadata})
-        updated += 1
-    return updated
+        revert_metadata[key] = None
+        changed = True
+    if not changed:
+        return 0
+    store.update_session(session.session_id, metadata={"revert": revert_metadata})
+    return 1
 
 
 def revert_session_state(

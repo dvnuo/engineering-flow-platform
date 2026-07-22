@@ -9,7 +9,7 @@ disk one file at a time for restore/diff.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -123,8 +123,8 @@ class WorkspaceSnapshotStore:
         *,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         max_retained_snapshots: int = DEFAULT_MAX_RETAINED_SNAPSHOTS,
-        on_snapshot_removed: Callable[[str], None] | None = None,
-        retained_snapshot_ids: Callable[[], Iterable[str]] | None = None,
+        on_snapshot_removed: Callable[[WorkspaceSnapshot], None] | None = None,
+        retain_snapshot: Callable[[WorkspaceSnapshot], bool] | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.storage_root = (
@@ -133,7 +133,7 @@ class WorkspaceSnapshotStore:
         self.max_file_bytes = max(0, int(max_file_bytes))
         self.max_retained_snapshots = max(1, int(max_retained_snapshots))
         self._on_snapshot_removed = on_snapshot_removed
-        self._retained_snapshot_ids = retained_snapshot_ids
+        self._retain_snapshot = retain_snapshot
         self._snapshots: dict[str, _SnapshotRecord] = {}
         self._next_snapshot_index = 1
         self._lock, self._protected_snapshot_ids = _workspace_coordination(
@@ -281,8 +281,12 @@ class WorkspaceSnapshotStore:
         if len(self._snapshots) <= self.max_retained_snapshots:
             return
         protected = protect | set(self._protected_snapshot_ids)
-        if self._retained_snapshot_ids is not None:
-            protected.update(self._retained_snapshot_ids())
+        if self._retain_snapshot is not None:
+            protected.update(
+                snapshot_id
+                for snapshot_id, record in self._snapshots.items()
+                if self._retain_snapshot(deepcopy(record.snapshot))
+            )
         ordered = sorted(
             self._snapshots,
             key=lambda snapshot_id: _snapshot_sort_key(snapshot_id),
@@ -298,7 +302,7 @@ class WorkspaceSnapshotStore:
 
     def _remove_snapshot(self, snapshot_id: str) -> None:
         if self._on_snapshot_removed is not None:
-            self._on_snapshot_removed(snapshot_id)
+            self._on_snapshot_removed(deepcopy(self._snapshots[snapshot_id].snapshot))
         shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
         del self._snapshots[snapshot_id]
 
