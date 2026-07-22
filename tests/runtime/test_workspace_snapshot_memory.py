@@ -108,6 +108,56 @@ def test_size_capped_files_are_skipped_and_protected_on_restore(tmp_path: Path):
     assert (tmp_path / "big.bin").read_bytes() == b"y" * 600
 
 
+def test_file_size_cap_stops_file_that_grows_during_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source_path = tmp_path / "growing.bin"
+    source_path.write_bytes(b"1234")
+    original_open = Path.open
+    reader_used = False
+
+    class GrowingReader:
+        def __init__(self):
+            self.handle = None
+            self.grown = False
+
+        def __enter__(self):
+            self.handle = original_open(source_path, "rb")
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            assert self.handle is not None
+            self.handle.close()
+
+        def read(self, size=-1):
+            assert self.handle is not None
+            chunk = self.handle.read(size)
+            if chunk and not self.grown:
+                self.grown = True
+                with original_open(source_path, "ab") as writer:
+                    writer.write(b"5678")
+            return chunk
+
+    def growing_open(path, mode="r", *args, **kwargs):
+        nonlocal reader_used
+        if path == source_path and mode == "rb" and not reader_used:
+            reader_used = True
+            return GrowingReader()
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", growing_open)
+    store = WorkspaceSnapshotStore(tmp_path, max_file_bytes=4)
+
+    snapshot = store.create_snapshot()
+
+    assert snapshot.file_count == 0
+    assert snapshot.total_bytes == 0
+    source_path.write_bytes(b"current")
+    store.restore_snapshot(snapshot.snapshot_id, delete_added=True)
+    assert source_path.read_bytes() == b"current"
+
+
 def test_oversized_current_files_have_metadata_only_diffs(tmp_path: Path):
     _write_text(tmp_path / "modified.bin", "small")
     store = WorkspaceSnapshotStore(tmp_path, max_file_bytes=10)

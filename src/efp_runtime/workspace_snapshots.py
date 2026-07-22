@@ -680,14 +680,25 @@ class WorkspaceSnapshotStore:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 digest = hashlib.sha256()
                 copied = 0
+                exceeded_limit = False
                 with path.open("rb") as source, destination.open("wb") as target:
                     while True:
                         chunk = source.read(_HASH_CHUNK_BYTES)
                         if not chunk:
                             break
+                        if (
+                            self.max_file_bytes
+                            and copied + len(chunk) > self.max_file_bytes
+                        ):
+                            skipped[relative_path] = copied + len(chunk)
+                            exceeded_limit = True
+                            break
                         digest.update(chunk)
                         target.write(chunk)
                         copied += len(chunk)
+                if exceeded_limit:
+                    destination.unlink(missing_ok=True)
+                    continue
                 files[relative_path] = _CapturedFile(
                     path=relative_path,
                     sha256=digest.hexdigest(),
