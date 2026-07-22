@@ -215,6 +215,7 @@ class WorkspaceSnapshotStore:
         with self._lock:
             self._reload_existing_snapshots()
             record = self._require_snapshot(snapshot_id)
+            self._validate_snapshot_blobs(snapshot_id, record)
             current_files = self._scan_workspace()
             # Files that existed at capture time but were skipped (size cap)
             # have no captured content to compare against.
@@ -815,16 +816,9 @@ def _bounded_patch(
         return None, 0, 0
     return _unified_patch(
         path,
-        _load_or_empty(before_loader, path) if before is not None else None,
-        _load_or_empty(after_loader, path) if after is not None else None,
+        before_loader(path) if before is not None else None,
+        after_loader(path) if after is not None else None,
     )
-
-
-def _load_or_empty(loader: Callable[[str], bytes], path: str) -> bytes:
-    try:
-        return loader(path)
-    except OSError:
-        return b""
 
 
 def _unified_patch(

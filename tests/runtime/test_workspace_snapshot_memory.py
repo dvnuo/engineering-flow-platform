@@ -74,6 +74,8 @@ def test_restore_validates_all_blobs_before_mutating_workspace(
 
     reloaded = WorkspaceSnapshotStore(tmp_path)
     with pytest.raises(expected_error, match="b.txt"):
+        reloaded.diff_snapshot(snapshot.snapshot_id)
+    with pytest.raises(expected_error, match="b.txt"):
         reloaded.restore_snapshot(snapshot.snapshot_id)
 
     assert (tmp_path / "a.txt").read_bytes() == b"current a\n"

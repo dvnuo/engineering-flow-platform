@@ -280,3 +280,48 @@ async def test_runtime_retention_preserves_active_unrevert_snapshot(tmp_path: Pa
     unreverted = runtime.unrevert_session("session-active-unrevert")
     assert (tmp_path / "created.txt").read_bytes() == b"created\n"
     assert unreverted.metadata["revert"]["status"] == "unreverted"
+
+
+@pytest.mark.asyncio
+async def test_runtime_revert_does_not_republish_pruned_target(tmp_path: Path):
+    provider = ScriptedLLMProvider(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-write-retention-one",
+                        "type": "function",
+                        "function": {
+                            "name": "write",
+                            "arguments": json.dumps(
+                                {"filePath": "created.txt", "content": "created\n"},
+                                sort_keys=True,
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=2,
+            model_aware_tool_selection=False,
+            tool_permissions={"write": "allow"},
+        ),
+    )
+    assert runtime.workspace_snapshot_store is not None
+    runtime.workspace_snapshot_store.max_retained_snapshots = 1
+
+    await runtime.run("Create a file.", session_id="session-retention-one")
+    reverted = runtime.revert_session("session-retention-one")
+
+    assert reverted.metadata["revert"]["workspace_snapshot_id"] is None
+    assert reverted.metadata["revert"]["unrevert_snapshot_id"]
+    runtime.unrevert_session("session-retention-one")
+    assert (tmp_path / "created.txt").read_bytes() == b"created\n"
+    reverted_again = runtime.revert_session("session-retention-one")
+    assert reverted_again.metadata["revert"]["status"] == "reverted"

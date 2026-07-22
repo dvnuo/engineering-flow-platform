@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -161,10 +162,15 @@ def revert_session_state(
         current_revert.get("workspace_snapshot_id")
     )
     unrevert_snapshot_id = None
-    if workspace_snapshot_id is not None:
-        if workspace_snapshot_store is None:
-            raise TypeError("workspace snapshots require workspace_root")
-        with workspace_snapshot_store.protect_snapshot(workspace_snapshot_id):
+    if workspace_snapshot_id is not None and workspace_snapshot_store is None:
+        raise TypeError("workspace snapshots require workspace_root")
+    snapshot_protection = (
+        workspace_snapshot_store.protect_snapshot(workspace_snapshot_id)
+        if workspace_snapshot_id is not None and workspace_snapshot_store is not None
+        else nullcontext()
+    )
+    with snapshot_protection:
+        if workspace_snapshot_id is not None and workspace_snapshot_store is not None:
             unrevert_snapshot = workspace_snapshot_store.create_snapshot(
                 label=f"session:{session_id}:unrevert",
                 metadata={
@@ -179,36 +185,37 @@ def revert_session_state(
                 delete_added=delete_added,
             )
 
-    trimmed_history, removed_counts = trim_session_history(
-        history,
-        message_id=target_message_id,
-        part_id=target_part_id,
-    )
-    store.replace_history(session_id, trimmed_history)
+        trimmed_history, removed_counts = trim_session_history(
+            history,
+            message_id=target_message_id,
+            part_id=target_part_id,
+        )
+        store.replace_history(session_id, trimmed_history)
 
-    now = utc_now_iso()
-    metadata = deepcopy(store.get_session(session_id).metadata)
-    revert_metadata = deepcopy(current_revert)
-    revert_metadata.update(
-        {
-            "active": True,
-            "message_id": target_message_id,
-            "part_id": target_part_id,
-            "history_checkpoint_id": checkpoint.checkpoint_id,
-            "workspace_snapshot_id": workspace_snapshot_id,
-            "unrevert_snapshot_id": unrevert_snapshot_id,
-            "delete_added": bool(delete_added),
-            "removed_message_count": removed_counts["messages"],
-            "removed_part_count": removed_counts["parts"],
-            "summary": summary,
-            "status": "reverted",
-            "reverted_at": now,
-            "updated_at": now,
-        }
-    )
-    metadata["revert"] = revert_metadata
-    metadata["summary"] = summary
-    return store.update_session(session_id, metadata=metadata, replace_metadata=True)
+        now = utc_now_iso()
+        metadata = deepcopy(store.get_session(session_id).metadata)
+        revert_metadata = deepcopy(current_revert)
+        revert_metadata.update(
+            {
+                "active": True,
+                "message_id": target_message_id,
+                "part_id": target_part_id,
+                "history_checkpoint_id": checkpoint.checkpoint_id,
+                "workspace_snapshot_id": workspace_snapshot_id,
+                "unrevert_snapshot_id": unrevert_snapshot_id,
+                "delete_added": bool(delete_added),
+                "removed_message_count": removed_counts["messages"],
+                "removed_part_count": removed_counts["parts"],
+                "summary": summary,
+                "status": "reverted",
+                "reverted_at": now,
+                "updated_at": now,
+            }
+        )
+        metadata["revert"] = revert_metadata
+        metadata["summary"] = summary
+        store.update_session(session_id, metadata=metadata, replace_metadata=True)
+    return store.get_session(session_id)
 
 
 def unrevert_session_state(
