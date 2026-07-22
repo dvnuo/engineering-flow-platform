@@ -274,6 +274,7 @@ async def test_runtime_retention_preserves_active_unrevert_snapshot(tmp_path: Pa
     unrevert_snapshot_id = runtime.get_session("session-active-unrevert").metadata[
         "revert"
     ]["unrevert_snapshot_id"]
+    runtime.store.get_session_summary = None
     runtime.create_workspace_snapshot(label="newer-one")
     runtime.create_workspace_snapshot(label="newer-two")
 

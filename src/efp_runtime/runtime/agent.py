@@ -1822,12 +1822,23 @@ class AgentRuntime:
         if not isinstance(session_id, str):
             return False
         try:
-            summary = self.store.get_session_summary(session_id)
+            get_summary = getattr(self.store, "get_session_summary", None)
+            if callable(get_summary):
+                summary = get_summary(session_id)
+                revert_active = summary.revert_active is True
+                unrevert_snapshot_id = summary.unrevert_snapshot_id
+            else:
+                session = self.store.get_session(session_id)
+                revert_metadata = session.metadata.get("revert")
+                if not isinstance(revert_metadata, Mapping):
+                    return False
+                revert_active = revert_metadata.get("active") is True
+                unrevert_snapshot_id = revert_metadata.get("unrevert_snapshot_id")
         except KeyError:
             return False
         return (
-            summary.revert_active is True
-            and summary.unrevert_snapshot_id == snapshot.snapshot_id
+            revert_active is True
+            and unrevert_snapshot_id == snapshot.snapshot_id
         )
 
     def _replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
