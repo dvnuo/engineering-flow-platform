@@ -237,13 +237,13 @@ def test_retention_removes_snapshot_when_invalidation_callback_fails(tmp_path: P
 
 
 def test_retention_ignores_snapshot_retainer_failures(tmp_path: Path):
-    def retain(snapshot):
+    def retain(snapshots):
         raise OSError("session summary unavailable")
 
     store = WorkspaceSnapshotStore(
         tmp_path,
         max_retained_snapshots=1,
-        retain_snapshot=retain,
+        retain_snapshots=retain,
     )
     first = store.create_snapshot(label="first")
     second = store.create_snapshot(label="second", protect=True)

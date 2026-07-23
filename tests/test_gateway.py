@@ -1,5 +1,6 @@
 """Tests for Gateway server."""
 
+import logging
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -352,6 +353,155 @@ class TestGatewayEdgeCases:
         assert hasattr(gateway.app, 'router')
         assert hasattr(gateway.app, 'on_startup')
         assert hasattr(gateway.app, 'on_shutdown')
+
+
+class TestGatewayAccessLogMiddleware:
+    """Every request must leave a start and an end line on stdout."""
+
+    @staticmethod
+    def _app_with(handler, path="/probe", method="GET"):
+        from aiohttp import web
+        from src.gateway import server as gateway_server
+
+        app = web.Application(middlewares=[gateway_server.access_log_middleware])
+        app.router.add_route(method, path, handler)
+        return app
+
+    @staticmethod
+    def _lines(caplog, prefix):
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith(prefix)
+        ]
+
+    def test_middleware_is_wired_into_the_application(self):
+        from src.gateway import server as gateway_server
+
+        gateway = Gateway()
+        assert gateway_server.access_log_middleware in gateway.app.middlewares
+
+    @pytest.mark.asyncio
+    async def test_logs_start_and_end_with_status_and_duration(self, caplog):
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async def handler(request):
+            return web.json_response({"ok": True})
+
+        caplog.set_level(logging.INFO, logger="src.gateway.server")
+        async with TestClient(TestServer(self._app_with(handler))) as client:
+            response = await client.get("/probe")
+            assert response.status == 200
+
+        start_lines = self._lines(caplog, "http.start")
+        end_lines = self._lines(caplog, "http.end")
+
+        assert len(start_lines) == 1
+        assert len(end_lines) == 1
+        assert "method=GET" in start_lines[0]
+        assert "path=/probe" in start_lines[0]
+        assert "remote=" in start_lines[0]
+        assert "request_id=" in start_lines[0]
+        assert "status=200" in end_lines[0]
+        assert "duration_ms=" in end_lines[0]
+        assert "\n" not in end_lines[0]
+
+        start_request_id = start_lines[0].split("request_id=")[1].strip()
+        assert start_request_id
+        assert f"request_id={start_request_id}" in end_lines[0]
+
+    @pytest.mark.asyncio
+    async def test_reuses_inbound_request_id_header(self, caplog):
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async def handler(request):
+            return web.json_response({"request_id": request["request_id"]})
+
+        caplog.set_level(logging.INFO, logger="src.gateway.server")
+        async with TestClient(TestServer(self._app_with(handler))) as client:
+            response = await client.get("/probe", headers={"X-Request-Id": "portal-42"})
+            payload = await response.json()
+
+        assert payload["request_id"] == "portal-42"
+        assert "request_id=portal-42" in self._lines(caplog, "http.start")[0]
+        assert "request_id=portal-42" in self._lines(caplog, "http.end")[0]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_trace_id_header(self, caplog):
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async def handler(request):
+            return web.json_response({"ok": True})
+
+        caplog.set_level(logging.INFO, logger="src.gateway.server")
+        async with TestClient(TestServer(self._app_with(handler))) as client:
+            await client.get("/probe", headers={"X-Trace-Id": "trace one 99"})
+
+        # Whitespace/separator characters are stripped so the line stays greppable.
+        assert "request_id=traceone99" in self._lines(caplog, "http.start")[0]
+
+    @pytest.mark.asyncio
+    async def test_error_responses_keep_status_and_exception_propagates(self, caplog):
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async def boom(request):
+            raise RuntimeError("kaboom")
+
+        async def not_found(request):
+            raise web.HTTPNotFound()
+
+        caplog.set_level(logging.INFO, logger="src.gateway.server")
+        app = self._app_with(boom, path="/boom")
+        app.router.add_route("GET", "/missing", not_found)
+
+        async with TestClient(TestServer(app)) as client:
+            assert (await client.get("/boom")).status == 500
+            assert (await client.get("/missing")).status == 404
+
+        end_lines = self._lines(caplog, "http.end")
+        assert len(end_lines) == 2
+        assert "path=/boom" in end_lines[0] and "status=500" in end_lines[0]
+        assert "path=/missing" in end_lines[1] and "status=404" in end_lines[1]
+
+    @pytest.mark.asyncio
+    async def test_runner_disables_the_duplicate_aiohttp_access_log(self, monkeypatch):
+        """One line pair per request: the middleware's, not aiohttp's too."""
+        from src.gateway import server as gateway_server
+
+        recorded = {}
+
+        class FakeRunner:
+            def __init__(self, app, **kwargs):
+                recorded["app"] = app
+                recorded["kwargs"] = kwargs
+
+            async def setup(self):
+                return None
+
+            async def cleanup(self):
+                return None
+
+        class FakeSite:
+            def __init__(self, runner, host, port):
+                recorded["site"] = (host, port)
+
+            async def start(self):
+                return None
+
+        monkeypatch.setattr(gateway_server.web, "AppRunner", FakeRunner)
+        monkeypatch.setattr(gateway_server.web, "TCPSite", FakeSite)
+
+        instance = Gateway()
+        await instance.start()
+
+        assert recorded["app"] is instance.app
+        assert "access_log" in recorded["kwargs"]
+        assert recorded["kwargs"]["access_log"] is None
+        assert "access_log_format" not in recorded["kwargs"]
 
 
 if __name__ == "__main__":

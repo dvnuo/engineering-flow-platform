@@ -6,7 +6,9 @@ import asyncio
 import json
 import logging
 import sys
+import time
 import traceback
+import uuid
 from pathlib import Path
 
 from aiohttp import web
@@ -39,6 +41,18 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT_AGENTS_SECTION = "agents"
 SYSTEM_PROMPT_AGENTS_FILENAME = "AGENTS.md"
 
+# Access logging. Request ids are reused from the caller when supplied so a
+# Portal-side trace and a runtime-side trace line up in kubectl logs.
+REQUEST_ID_HEADERS = ("X-Request-Id", "X-Trace-Id")
+# aiohttp's own access log is disabled: ``access_log_middleware`` already emits
+# a richer http.start/http.end pair carrying the request id (which aiohttp's
+# ``%{X-Request-Id}i`` cannot see, because it reads the *inbound* header and so
+# prints "-" whenever the middleware mints the id — the common case). Leaving
+# both on emitted two near-duplicate lines per request.
+ACCESS_LOG = None
+# Status reported for a client disconnect / cancelled handler (nginx idiom).
+CLIENT_CLOSED_REQUEST_STATUS = 499
+
 # Upload sizing. EFP_MAX_UPLOAD_MB is the user-facing per-file cap the Portal
 # enforces and reports; the runtime allows that plus headroom for multipart /
 # transport overhead so it is never the gate for a file the Portal accepted.
@@ -56,6 +70,61 @@ def resolve_upload_client_max_size() -> int:
     if mb <= 0:
         mb = DEFAULT_MAX_UPLOAD_MB
     return (mb + UPLOAD_TRANSPORT_HEADROOM_MB) * 1024 * 1024
+
+
+def _sanitize_request_id(value: object, max_len: int = 64) -> str:
+    """One-line, greppable request id (mirrors runtime_api trace sanitizing)."""
+    if value is None:
+        return ""
+    cleaned = re.sub(r"[^A-Za-z0-9._:-]+", "", str(value)).strip()
+    return cleaned[:max_len]
+
+
+def resolve_request_id(request: Request) -> str:
+    """Reuse an inbound correlation id when present, else mint a short one."""
+    headers = getattr(request, "headers", {}) or {}
+    for header in REQUEST_ID_HEADERS:
+        candidate = _sanitize_request_id(headers.get(header))
+        if candidate:
+            return candidate
+    return uuid.uuid4().hex[:12]
+
+
+@web.middleware
+async def access_log_middleware(request: Request, handler):
+    """Log one ``http.start`` line before and one ``http.end`` line after.
+
+    The start line is emitted before awaiting the handler on purpose: a slow
+    handler (e.g. a synchronous workspace snapshot) otherwise leaves no
+    evidence in stdout that the request was even received.
+    """
+    request_id = resolve_request_id(request)
+    request["request_id"] = request_id
+    method = request.method
+    path = request.path
+    remote = request.remote or "-"
+    started = time.perf_counter()
+    status = 500
+
+    logger.info(
+        f"http.start method={method} path={path} remote={remote} request_id={request_id}"
+    )
+    try:
+        response = await handler(request)
+        status = getattr(response, "status", status)
+        return response
+    except web.HTTPException as http_error:
+        status = http_error.status
+        raise
+    except asyncio.CancelledError:
+        status = CLIENT_CLOSED_REQUEST_STATUS
+        raise
+    finally:
+        duration_ms = (time.perf_counter() - started) * 1000
+        logger.info(
+            f"http.end method={method} path={path} status={status} "
+            f"duration_ms={duration_ms:.1f} request_id={request_id}"
+        )
 
 
 def _runtime_workspace_root() -> Path:
@@ -215,7 +284,10 @@ class Gateway:
         self.jira_enabled = config.jira.get("enabled", False)
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
-        self.app = web.Application(client_max_size=resolve_upload_client_max_size())
+        self.app = web.Application(
+            client_max_size=resolve_upload_client_max_size(),
+            middlewares=[access_log_middleware],
+        )
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
 
@@ -599,7 +671,7 @@ class Gateway:
     async def start(self) -> None:
         """Start the gateway server."""
         # Start HTTP server
-        self.runner = web.AppRunner(self.app)
+        self.runner = web.AppRunner(self.app, access_log=ACCESS_LOG)
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, self.host, self.port)
         await self.site.start()

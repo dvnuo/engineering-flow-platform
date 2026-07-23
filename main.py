@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -29,34 +30,110 @@ from src.workspace_defaults import resolve_runtime_workspace
 # Must run before importing src.gateway.server (Gateway() executes at import).
 bootstrap_profile_boot()
 
+from src.utils.logger import setup_logging, get_logger
+
+# Log destination. The pod's workingDir is the (network) workspace volume, so a
+# relative "logs" default would write onto EFS and inside the snapshotted tree.
+DEFAULT_LOG_DIR = "/app/logs"
+LOG_DIR_ENV = "EFP_LOG_DIR"
+LOG_LEVEL_ENV = "EFP_LOG_LEVEL"
+
+
+def resolve_log_level() -> str:
+    """Effective log level: EFP_LOG_LEVEL > config.debug.log_level > debug flag.
+
+    The env override lets operators run `kubectl set env ... EFP_LOG_LEVEL=DEBUG`
+    without editing the runtime profile.
+    """
+    env_level = str(os.getenv(LOG_LEVEL_ENV) or "").strip()
+    if env_level:
+        return env_level.upper()
+
+    configured = str(config.debug.get("log_level") or "").strip()
+    if configured:
+        return configured.upper()
+
+    return "DEBUG" if config.debug.get("enabled") else "INFO"
+
+
+def merge_debug_cli_overrides(
+    current_debug: object,
+    *,
+    debug: bool,
+    httpx_trace: bool,
+) -> dict:
+    """Fold --debug/--httpx-trace into the existing debug config.
+
+    Merged rather than replaced: replacing the dict wiped sibling debug keys
+    (notably ``log_level``), so `--debug` silently reset the configured level.
+    """
+    merged = dict(current_debug or {})
+    if debug:
+        merged.update({"enabled": True, "httpx_trace": httpx_trace})
+    elif httpx_trace:
+        merged["httpx_trace"] = True
+    return merged
+
+
+def setup_logging_config() -> logging.Logger:
+    """Configure comprehensive logging with detailed output.
+
+    Returns:
+        Logger instance
+    """
+    # Determine log level from env / config
+    log_level_str = resolve_log_level()
+
+    # Setup enhanced logging
+    logger = setup_logging(
+        level=log_level_str,
+        log_dir=os.getenv(LOG_DIR_ENV, DEFAULT_LOG_DIR),
+        log_file="efp.log",
+        max_size_mb=10,
+        backup_count=5
+    )
+
+    return logger
+
+
+# Logging must be configured BEFORE importing src.gateway.server: Gateway() is
+# constructed at import time and logs while doing it, so anything emitted
+# during import would otherwise be dropped.
+setup_logging_config()
+
 from src.efp_runtime.session.gateway_facade import runtime_session_manager
+from src.efp_runtime.workspace_snapshots import snapshot_storage_root
 from src.gateway.server import gateway
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
 from src.cron.jira_reconciliation import start_reconciliation, stop_reconciliation, is_enabled as is_jira_reconciliation_enabled
 from src.git.api import setup_git_user
-from src.utils.logger import setup_logging, get_logger
 
 
-def setup_logging_config() -> logging.Logger:
-    """Configure comprehensive logging with detailed output.
-    
-    Returns:
-        Logger instance
+def log_runtime_paths(logger: logging.Logger, workspace_root: Path) -> None:
+    """One greppable line naming every root the runtime reads/writes.
+
+    Makes "which of these lives on the network volume?" permanently answerable
+    from `kubectl logs` alone.
     """
-    # Determine log level from config
-    log_level_str = config.debug.get("log_level", "INFO").upper()
-    
-    # Setup enhanced logging
-    logger = setup_logging(
-        level=log_level_str,
-        log_dir="logs",
-        log_file="efp.log",
-        max_size_mb=10,
-        backup_count=5
-    )
-    
-    return logger
+    try:
+        from src.skills.registry import (
+            resolve_project_skills_dir,
+            resolve_user_skills_dir,
+        )
+
+        logger.info(
+            "runtime.paths "
+            f"workspace_root={workspace_root} "
+            f"session_root={runtime_session_manager.root} "
+            f"project_skills_dir={resolve_project_skills_dir()} "
+            f"user_skills_dir={resolve_user_skills_dir()} "
+            f"snapshot_storage_root={snapshot_storage_root(workspace_root)} "
+            f"log_dir={os.getenv(LOG_DIR_ENV, DEFAULT_LOG_DIR)} "
+            f"cwd={Path.cwd()}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log runtime paths | error={e}", exc_info=True)
 
 
 def check_config() -> tuple[bool, list[str]]:
@@ -168,14 +245,13 @@ async def main() -> None:
                         help="Enable debug logging")
     args, _ = parser.parse_known_args()
     
-    # Apply command line arguments to config
-    if args.debug:
-        config._config["debug"] = {"enabled": True, "httpx_trace": args.httpx_trace}
-    elif args.httpx_trace:
-        current_debug = config._config.get("debug", {})
-        current_debug["httpx_trace"] = True
-        config._config["debug"] = current_debug
-    
+    # Apply command line arguments to config.
+    config._config["debug"] = merge_debug_cli_overrides(
+        config._config.get("debug"),
+        debug=args.debug,
+        httpx_trace=args.httpx_trace,
+    )
+
     # Setup httpx logging level BEFORE setup_logging
     httpx_logger = logging.getLogger("httpx")
     httpcore_logger = logging.getLogger("httpcore")
@@ -191,6 +267,8 @@ async def main() -> None:
         httpx_logger.setLevel(logging.WARNING)
         httpcore_logger.setLevel(logging.WARNING)
     
+    # Re-apply now that CLI flags have been merged into the debug config
+    # (logging was already configured at import time, see above).
     logger = setup_logging_config()
     logger.info("=" * 60)
     logger.info("Engineering Flow Platform - Starting...")
@@ -212,7 +290,7 @@ async def main() -> None:
     logger.info("Configuration check passed")
 
     # Initialize workspace
-    initialize_workspace(logger)
+    workspace_root = initialize_workspace(logger)
 
     # Initialize session store and usage tracker
     try:
@@ -221,6 +299,7 @@ async def main() -> None:
         logger.info(f"Usage tracker initialized | path={usage_tracker.base_path}")
         await runtime_session_manager.initialize()
         logger.info("Runtime session manager initialized successfully")
+        log_runtime_paths(logger, workspace_root)
     except Exception as e:
         logger.error(f"Failed to initialize session/usage tracking | error={e}", exc_info=True)
 

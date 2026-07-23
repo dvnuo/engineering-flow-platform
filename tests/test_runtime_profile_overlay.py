@@ -74,7 +74,7 @@ RUNTIME_OVERLAY_FIELDS = {
     "compaction_prune_protect_chars": 40000,
     "enable_compaction_summarizer": True,
     "enable_context_overflow_retry": False,
-    "enable_session_revert_snapshots": False,
+    "enable_session_revert_snapshots": True,
     "skill_directories": ["/workspace/.efp/skills"],
     "active_skills": ["review"],
     "command_directories": ["/workspace/.efp/commands"],

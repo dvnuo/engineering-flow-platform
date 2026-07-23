@@ -70,6 +70,9 @@ _TRACE_FIELD_MAPPING = (
     ("path", "path"),
 )
 _FIRST_PARTY_LOGGER_PREFIXES = ("src.", "skills.")
+# Rotating log files are dead weight in k8s (nobody reads them) and slow when
+# the working directory is a network volume, so they are opt-in.
+LOG_TO_FILE_ENV = "EFP_LOG_TO_FILE"
 _log_context_var: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
     "efp_log_context",
     default=dict(_LOG_CONTEXT_DEFAULTS),
@@ -272,6 +275,11 @@ class EnhancedLogger:
             self.info(msg)
 
 
+def log_to_file_enabled() -> bool:
+    """Whether rotating log files are enabled (default: off, stdout only)."""
+    return os.getenv(LOG_TO_FILE_ENV, "").strip() == "1"
+
+
 def setup_logging(
     level: str = "INFO",
     log_dir: str = "logs",
@@ -279,10 +287,11 @@ def setup_logging(
     max_size_mb: int = 10,
     backup_count: int = 5,
     structured: bool = False,
-    console: bool = True
+    console: bool = True,
+    log_to_file: Optional[bool] = None
 ) -> logging.Logger:
     """Setup comprehensive logging configuration.
-    
+
     Args:
         level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         log_dir: Directory for log files
@@ -291,16 +300,21 @@ def setup_logging(
         backup_count: Number of backup files to keep
         structured: Whether to use structured (JSON) logging
         console: Whether to output to console
-    
+        log_to_file: Whether to attach rotating file handlers. Defaults to
+            the EFP_LOG_TO_FILE=1 env flag (off), because in k8s only stdout
+            is read and the log directory may live on a network volume.
+
     Returns:
         Root logger instance
     """
     # Convert level string to logging level
     log_level = getattr(logging, level.upper(), logging.INFO)
-    
-    # Create logs directory
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
-    
+    file_logging = log_to_file_enabled() if log_to_file is None else bool(log_to_file)
+
+    # Create logs directory (only when files are actually written)
+    if file_logging:
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+
     # Create root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
@@ -321,40 +335,46 @@ def setup_logging(
         console_handler.addFilter(RedactingFilter())
         root_logger.addHandler(console_handler)
     
-    # File handler with rotation
-    log_path = Path(log_dir) / log_file
-    file_handler = RotatingFileHandler(
-        log_path,
-        maxBytes=max_size_mb * 1024 * 1024,
-        backupCount=backup_count,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(formatter)
-    file_handler.addFilter(RedactingFilter())
-    root_logger.addHandler(file_handler)
-    
-    # Error-only file handler (only ERROR and above)
-    error_log_path = Path(log_dir) / "errors.log"
-    error_handler = RotatingFileHandler(
-        error_log_path,
-        maxBytes=max_size_mb * 1024 * 1024,
-        backupCount=backup_count,
-        encoding='utf-8'
-    )
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(formatter)
-    error_handler.addFilter(RedactingFilter())
-    root_logger.addHandler(error_handler)
-    
+    log_path = None
+    error_log_path = None
+    if file_logging:
+        # File handler with rotation
+        log_path = Path(log_dir) / log_file
+        file_handler = RotatingFileHandler(
+            log_path,
+            maxBytes=max_size_mb * 1024 * 1024,
+            backupCount=backup_count,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(formatter)
+        file_handler.addFilter(RedactingFilter())
+        root_logger.addHandler(file_handler)
+
+        # Error-only file handler (only ERROR and above)
+        error_log_path = Path(log_dir) / "errors.log"
+        error_handler = RotatingFileHandler(
+            error_log_path,
+            maxBytes=max_size_mb * 1024 * 1024,
+            backupCount=backup_count,
+            encoding='utf-8'
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(formatter)
+        error_handler.addFilter(RedactingFilter())
+        root_logger.addHandler(error_handler)
+
     # Log startup info
     root_logger.info("=" * 60)
     root_logger.info("Engineering Flow Platform - Logging Initialized")
     root_logger.info(f"Log Level: {level}")
-    root_logger.info(f"Log File: {log_path}")
-    root_logger.info(f"Error Log: {error_log_path}")
+    root_logger.info(
+        f"logging.sinks console={str(bool(console)).lower()} "
+        f"file={str(file_logging).lower()} log_file={log_path or '-'} "
+        f"error_log={error_log_path or '-'}"
+    )
     root_logger.info("=" * 60)
-    
+
     return root_logger
 
 
