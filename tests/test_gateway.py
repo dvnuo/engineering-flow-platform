@@ -468,6 +468,108 @@ class TestGatewayAccessLogMiddleware:
         assert "path=/missing" in end_lines[1] and "status=404" in end_lines[1]
 
     @pytest.mark.asyncio
+    async def test_failing_probe_is_visible_at_info(self, caplog):
+        """A probe demoted to DEBUG must resurface at INFO when it FAILS.
+
+        /ready and /health report failure by returning 503, not by raising,
+        and this middleware replaces aiohttp's own access log — so keying the
+        level on the path alone would make a pod stuck failing readiness emit
+        nothing at INFO, the single most important line when a pod won't come
+        up.
+        """
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async def handler(request):
+            return web.json_response({"ready": False}, status=503)
+
+        caplog.set_level(logging.DEBUG, logger="src.gateway.server")
+        app = self._app_with(handler, path="/ready")
+        async with TestClient(TestServer(app)) as client:
+            assert (await client.get("/ready")).status == 503
+
+        # The start line may stay quiet, but the failing end line must be INFO+.
+        info_end = self._records(caplog, "http.end", logging.INFO)
+        assert len(info_end) == 1
+        assert "status=503" in info_end[0]
+        assert self._records(caplog, "http.end", logging.DEBUG) == []
+
+    @staticmethod
+    def _records(caplog, prefix, level):
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == level and record.getMessage().startswith(prefix)
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/ready",
+            "/readyz",
+            "/health",
+            "/healthz",
+            "/live",
+            "/actuator",
+            "/actuator/health",
+            "/actuator/threaddump",
+        ],
+    )
+    async def test_probe_traffic_is_logged_at_debug_instead_of_info(
+        self, caplog, path
+    ):
+        """k8s and actuator probes were 96.8% of production access-log lines."""
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async def handler(request):
+            return web.json_response({"ok": True})
+
+        caplog.set_level(logging.DEBUG, logger="src.gateway.server")
+        app = self._app_with(handler, path=path)
+        async with TestClient(TestServer(app)) as client:
+            assert (await client.get(path)).status == 200
+
+        assert self._records(caplog, "http.start", logging.INFO) == []
+        assert self._records(caplog, "http.end", logging.INFO) == []
+
+        # Still recoverable — the lines keep every field, only the level drops.
+        debug_start = self._records(caplog, "http.start", logging.DEBUG)
+        debug_end = self._records(caplog, "http.end", logging.DEBUG)
+        assert len(debug_start) == 1
+        assert f"path={path}" in debug_start[0]
+        assert len(debug_end) == 1
+        assert "status=200" in debug_end[0]
+        assert "duration_ms=" in debug_end[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path",
+        ["/api/chat/stream", "/api/actuator-report", "/actuatorish"],
+    )
+    async def test_application_traffic_stays_at_info(self, caplog, path):
+        """Only whole-path probes are demoted; lookalike routes are real traffic."""
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+
+        async def handler(request):
+            return web.json_response({"ok": True})
+
+        caplog.set_level(logging.DEBUG, logger="src.gateway.server")
+        app = self._app_with(handler, path=path)
+        async with TestClient(TestServer(app)) as client:
+            assert (await client.get(path)).status == 200
+
+        info_start = self._records(caplog, "http.start", logging.INFO)
+        info_end = self._records(caplog, "http.end", logging.INFO)
+        assert len(info_start) == 1
+        assert f"path={path}" in info_start[0]
+        assert len(info_end) == 1
+        assert "status=200" in info_end[0]
+        assert self._records(caplog, "http.start", logging.DEBUG) == []
+
+    @pytest.mark.asyncio
     async def test_runner_disables_the_duplicate_aiohttp_access_log(self, monkeypatch):
         """One line pair per request: the middleware's, not aiohttp's too."""
         from src.gateway import server as gateway_server

@@ -205,15 +205,8 @@ class AgentRuntime:
         self.compaction_summarizer = compaction_summarizer
         self.question_broker = question_broker or QuestionBroker()
         self.store = store or InMemorySessionStore()
-        self.workspace_snapshot_store = (
-            WorkspaceSnapshotStore(
-                self.config.workspace_root,
-                on_snapshot_removed=self._invalidate_session_snapshot_references,
-                retain_snapshots=self._retain_workspace_snapshots,
-            )
-            if self.config.workspace_root is not None
-            else None
-        )
+        # Materialised on first use only: see ``workspace_snapshot_store``.
+        self._workspace_snapshot_store: WorkspaceSnapshotStore | None = None
         self.skill_discovery = _resolve_skill_discovery(
             config=self.config,
             skill_discovery=skill_discovery,
@@ -1173,19 +1166,19 @@ class AgentRuntime:
         label: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> WorkspaceSnapshot:
-        return self._workspace_snapshot_store().create_snapshot(
+        return self._require_workspace_snapshot_store().create_snapshot(
             label=label,
             metadata=metadata,
         )
 
     def list_workspace_snapshots(self) -> list[WorkspaceSnapshot]:
-        return self._workspace_snapshot_store().list_snapshots()
+        return self._require_workspace_snapshot_store().list_snapshots()
 
     def diff_workspace_snapshot(
         self,
         snapshot_id: str,
     ) -> list[WorkspaceSnapshotDiff]:
-        return self._workspace_snapshot_store().diff_snapshot(snapshot_id)
+        return self._require_workspace_snapshot_store().diff_snapshot(snapshot_id)
 
     def restore_workspace_snapshot(
         self,
@@ -1193,13 +1186,13 @@ class AgentRuntime:
         *,
         delete_added: bool = True,
     ) -> WorkspaceSnapshot:
-        return self._workspace_snapshot_store().restore_snapshot(
+        return self._require_workspace_snapshot_store().restore_snapshot(
             snapshot_id,
             delete_added=delete_added,
         )
 
     def delete_workspace_snapshot(self, snapshot_id: str) -> bool:
-        return self._workspace_snapshot_store().delete_snapshot(snapshot_id)
+        return self._require_workspace_snapshot_store().delete_snapshot(snapshot_id)
 
     def _build_instruction_context_messages(
         self,
@@ -1618,13 +1611,19 @@ class AgentRuntime:
         run_id: str,
         source: str,
     ):
+        # The store is only reached for when a snapshot is actually going to
+        # be taken: touching it otherwise would build it on every turn, which
+        # is exactly the per-request cost the lazy store exists to avoid.
+        enabled = self._session_revert_snapshots_enabled()
         return prepare_session_revert_record(
             store=self.store,
             session_id=session_id,
             run_id=run_id,
             source=source,
-            workspace_snapshot_store=self.workspace_snapshot_store,
-            enable_workspace_snapshot=self._session_revert_snapshots_enabled(),
+            workspace_snapshot_store=(
+                self.workspace_snapshot_store if enabled else None
+            ),
+            enable_workspace_snapshot=enabled,
             protect_workspace_snapshot=True,
         )
 
@@ -1660,7 +1659,10 @@ class AgentRuntime:
     def _session_revert_snapshots_enabled(self) -> bool:
         if not self.config.enable_session_revert_snapshots:
             return False
-        if self.workspace_snapshot_store is None or self.config.workspace_root is None:
+        # ``workspace_root is None`` is exactly the condition under which there
+        # is no snapshot store, and asking for the store here would build one
+        # just to discover the feature is off.
+        if self.config.workspace_root is None:
             return False
         return Path(self.config.workspace_root).exists()
 
@@ -1820,10 +1822,34 @@ class AgentRuntime:
             raise TypeError("session store does not support checkpoints")
         return method
 
-    def _workspace_snapshot_store(self) -> WorkspaceSnapshotStore:
-        if self.workspace_snapshot_store is None:
+    @property
+    def workspace_snapshot_store(self) -> WorkspaceSnapshotStore | None:
+        """The workspace snapshot store, built on first use.
+
+        ``None`` when the runtime has no workspace root, exactly as before.
+        Otherwise the store is constructed on demand rather than in
+        ``__init__``: constructing it walks the on-disk snapshot directory, and
+        an ``AgentRuntime`` is built once per chat request. A runtime that
+        never captures or restores a snapshot (the default, with
+        ``enable_session_revert_snapshots`` off) must not pay to read a
+        directory nothing is going to use — on a network volume that scan was
+        the dominant cost of a turn.
+        """
+        if self.config.workspace_root is None:
+            return None
+        if self._workspace_snapshot_store is None:
+            self._workspace_snapshot_store = WorkspaceSnapshotStore(
+                self.config.workspace_root,
+                on_snapshot_removed=self._invalidate_session_snapshot_references,
+                retain_snapshots=self._retain_workspace_snapshots,
+            )
+        return self._workspace_snapshot_store
+
+    def _require_workspace_snapshot_store(self) -> WorkspaceSnapshotStore:
+        store = self.workspace_snapshot_store
+        if store is None:
             raise TypeError("workspace snapshots require workspace_root")
-        return self.workspace_snapshot_store
+        return store
 
     def _invalidate_session_snapshot_references(
         self,
@@ -1882,7 +1908,10 @@ class AgentRuntime:
         fall out of the window lose their workspace target and their revert
         degrades to the reported history-only trim.
         """
-        store = self.workspace_snapshot_store
+        # Read the materialised store directly: this runs *from inside* the
+        # store's own pruning, so going through the lazy property would be a
+        # re-entrant construction.
+        store = self._workspace_snapshot_store
         revert_target_budget = (
             store.max_retained_snapshots
             if store is not None
