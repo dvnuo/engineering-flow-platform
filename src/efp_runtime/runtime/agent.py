@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Mapping, MutableMapping
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from html import escape
@@ -88,6 +88,7 @@ from ..tools.selection import ToolSelection, resolve_tool_selection
 from ..tools.truncation import ToolOutputTruncator, TruncationLimits
 from ..types import Attachment, SkillPackage, ToolCall, ToolResult, new_id
 from ..workspace_snapshots import (
+    DEFAULT_MAX_RETAINED_SNAPSHOTS,
     WorkspaceSnapshot,
     WorkspaceSnapshotDiff,
     WorkspaceSnapshotStore,
@@ -208,7 +209,7 @@ class AgentRuntime:
             WorkspaceSnapshotStore(
                 self.config.workspace_root,
                 on_snapshot_removed=self._invalidate_session_snapshot_references,
-                retain_snapshot=self._retain_workspace_snapshot,
+                retain_snapshots=self._retain_workspace_snapshots,
             )
             if self.config.workspace_root is not None
             else None
@@ -1835,31 +1836,79 @@ class AgentRuntime:
             session_id=session_id if isinstance(session_id, str) else None,
         )
 
-    def _retain_workspace_snapshot(self, snapshot: WorkspaceSnapshot) -> bool:
-        if snapshot.metadata.get("purpose") != "session_unrevert":
-            return False
-        session_id = snapshot.metadata.get("session_id")
-        if not isinstance(session_id, str):
-            return False
+    def _session_revert_snapshot_ids(
+        self, session_id: str
+    ) -> tuple[bool, Any, Any] | None:
+        """(revert_active, workspace_snapshot_id, unrevert_snapshot_id)."""
         try:
             get_summary = getattr(self.store, "get_session_summary", None)
             if callable(get_summary):
                 summary = get_summary(session_id)
-                revert_active = summary.revert_active is True
-                unrevert_snapshot_id = summary.unrevert_snapshot_id
-            else:
-                session = self.store.get_session(session_id)
-                revert_metadata = session.metadata.get("revert")
-                if not isinstance(revert_metadata, Mapping):
-                    return False
-                revert_active = revert_metadata.get("active") is True
-                unrevert_snapshot_id = revert_metadata.get("unrevert_snapshot_id")
+                return (
+                    summary.revert_active is True,
+                    summary.workspace_snapshot_id,
+                    summary.unrevert_snapshot_id,
+                )
+            session = self.store.get_session(session_id)
         except KeyError:
-            return False
+            return None
+        revert_metadata = session.metadata.get("revert")
+        if not isinstance(revert_metadata, Mapping):
+            return None
         return (
-            revert_active is True
-            and unrevert_snapshot_id == snapshot.snapshot_id
+            revert_metadata.get("active") is True,
+            revert_metadata.get("workspace_snapshot_id"),
+            revert_metadata.get("unrevert_snapshot_id"),
         )
+
+    def _retain_workspace_snapshots(
+        self,
+        snapshots: Sequence[WorkspaceSnapshot],
+    ) -> list[str]:
+        """Snapshot ids to keep past the store's retention cap.
+
+        ``snapshots`` arrives oldest-first. Two kinds must survive pruning:
+
+        * the BEFORE snapshot a session's revert target points at — pruning it
+          turns a later ``revert_session`` into a silent history-only trim;
+        * the unrevert snapshot of a revert that is currently *active*.
+
+        A revert target is published on every finished turn, so pinning one per
+        session that has ever run grows with lifetime session count rather than
+        with live work — unbounded on a long-lived gateway. Only the newest
+        ``max_retained_snapshots`` revert targets are pinned, which keeps recent
+        sessions (including the turn that just finished) revertible while making
+        total retention independent of how many sessions ever ran. Sessions that
+        fall out of the window lose their workspace target and their revert
+        degrades to the reported history-only trim.
+        """
+        store = self.workspace_snapshot_store
+        revert_target_budget = (
+            store.max_retained_snapshots
+            if store is not None
+            else DEFAULT_MAX_RETAINED_SNAPSHOTS
+        )
+        revert_targets: list[str] = []
+        retained: list[str] = []
+        for snapshot in snapshots:
+            purpose = snapshot.metadata.get("purpose")
+            if purpose not in ("session_revert", "session_unrevert"):
+                continue
+            session_id = snapshot.metadata.get("session_id")
+            if not isinstance(session_id, str):
+                continue
+            state = self._session_revert_snapshot_ids(session_id)
+            if state is None:
+                continue
+            revert_active, workspace_snapshot_id, unrevert_snapshot_id = state
+            if purpose == "session_revert":
+                if workspace_snapshot_id == snapshot.snapshot_id:
+                    revert_targets.append(snapshot.snapshot_id)
+            elif revert_active and unrevert_snapshot_id == snapshot.snapshot_id:
+                retained.append(snapshot.snapshot_id)
+        if revert_target_budget > 0:
+            retained.extend(revert_targets[-revert_target_budget:])
+        return retained
 
     def _replace_history(self, session_id: str, messages: Iterable[Message]) -> Session:
         method = getattr(self.store, "replace_history", None)

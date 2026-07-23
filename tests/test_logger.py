@@ -2,6 +2,8 @@
 
 import logging
 import io
+import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import pytest
 
@@ -41,6 +43,7 @@ from src.utils.logger import (
     RedactingFormatter,
     set_log_context,
     clear_log_context,
+    log_to_file_enabled,
 )
 
 
@@ -234,27 +237,95 @@ class TestSetupLogging:
         assert logger.level == logging.INFO
 
     def test_setup_logging_creates_directory(self, tmp_path):
-        """Test that logging creates log directory."""
+        """Test that logging creates log directory when file logging is on."""
         log_dir = tmp_path / "logs"
         setup_logging(
             level="INFO",
             log_dir=str(log_dir),
             log_file="test.log",
             console=False,
+            log_to_file=True,
         )
         assert log_dir.exists()
 
     def test_setup_logging_creates_files(self, tmp_path):
-        """Test that logging creates log files."""
+        """Test that logging creates log files when file logging is on."""
         log_dir = tmp_path / "logs"
         setup_logging(
             level="INFO",
             log_dir=str(log_dir),
             log_file="test.log",
             console=False,
+            log_to_file=True,
         )
         assert (log_dir / "test.log").exists()
         assert (log_dir / "errors.log").exists()
+
+    def test_setup_logging_file_handlers_off_by_default(self, tmp_path, monkeypatch):
+        """No env flag: stdout only, no log directory and no file handlers."""
+        monkeypatch.delenv("EFP_LOG_TO_FILE", raising=False)
+        log_dir = tmp_path / "logs"
+
+        logger = setup_logging(
+            level="INFO",
+            log_dir=str(log_dir),
+            log_file="test.log",
+            console=True,
+        )
+
+        assert not log_dir.exists()
+        assert not any(
+            isinstance(handler, RotatingFileHandler) for handler in logger.handlers
+        )
+        assert any(
+            isinstance(handler, logging.StreamHandler)
+            and handler.stream is sys.stdout
+            for handler in logger.handlers
+        )
+
+    def test_setup_logging_file_handlers_enabled_by_env_flag(
+        self, tmp_path, monkeypatch
+    ):
+        """EFP_LOG_TO_FILE=1 restores the previous file-handler behaviour."""
+        monkeypatch.setenv("EFP_LOG_TO_FILE", "1")
+        log_dir = tmp_path / "logs"
+
+        logger = setup_logging(
+            level="INFO",
+            log_dir=str(log_dir),
+            log_file="test.log",
+            console=False,
+        )
+
+        assert log_to_file_enabled() is True
+        assert (log_dir / "test.log").exists()
+        assert (log_dir / "errors.log").exists()
+        assert (
+            sum(
+                1
+                for handler in logger.handlers
+                if isinstance(handler, RotatingFileHandler)
+            )
+            == 2
+        )
+
+    def test_setup_logging_explicit_flag_beats_env(self, tmp_path, monkeypatch):
+        """An explicit log_to_file argument overrides the env default."""
+        monkeypatch.setenv("EFP_LOG_TO_FILE", "1")
+        log_dir = tmp_path / "logs"
+
+        logger = setup_logging(
+            level="INFO",
+            log_dir=str(log_dir),
+            log_file="test.log",
+            console=False,
+            log_to_file=False,
+        )
+
+        assert not log_dir.exists()
+        assert not any(
+            isinstance(handler, RotatingFileHandler) for handler in logger.handlers
+        )
 
     def test_setup_logging_structured(self, tmp_path):
         """Test structured logging mode."""
@@ -296,7 +367,7 @@ class TestSetupLogging:
     def test_setup_logging_attaches_redacting_filter(self, tmp_path):
         """All handlers should have redaction filter attached."""
         log_dir = tmp_path / "logs"
-        logger = setup_logging(level="INFO", log_dir=str(log_dir), log_file="test.log", console=False)
+        logger = setup_logging(level="INFO", log_dir=str(log_dir), log_file="test.log", console=False, log_to_file=True)
         assert logger.handlers
         assert all(any(isinstance(f, RedactingFilter) for f in h.filters) for h in logger.handlers)
 

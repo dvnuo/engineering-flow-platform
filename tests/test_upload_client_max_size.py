@@ -5,8 +5,6 @@ capping every upload (and returning 413) regardless of the Portal's limit.
 These lock the EFP_MAX_UPLOAD_MB wiring and its transport headroom.
 """
 
-from pathlib import Path
-
 from src.gateway import server
 
 _HEADROOM = server.UPLOAD_TRANSPORT_HEADROOM_MB
@@ -39,5 +37,14 @@ def test_runtime_headroom_exceeds_user_cap():
 
 
 def test_application_is_wired_with_client_max_size():
-    source = Path("src/gateway/server.py").read_text(encoding="utf-8")
-    assert "web.Application(client_max_size=resolve_upload_client_max_size())" in source
+    # Assert the built application, not the source text: a matching kwarg on
+    # some *other* web.Application( call would not raise the real cap.
+    assert (
+        server.Gateway().app._client_max_size
+        == server.resolve_upload_client_max_size()
+    )
+
+
+def test_application_client_max_size_follows_env_override(monkeypatch):
+    monkeypatch.setenv("EFP_MAX_UPLOAD_MB", "37")
+    assert server.Gateway().app._client_max_size == (37 + _HEADROOM) * 1024 * 1024

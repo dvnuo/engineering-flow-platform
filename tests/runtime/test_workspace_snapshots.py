@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -156,9 +157,13 @@ def test_restore_ignores_excluded_directories_and_does_not_delete_them(
 ):
     excluded_paths = [
         tmp_path / ".git" / "config",
+        tmp_path / ".efp" / "runtime" / "sessions" / "session.json",
+        tmp_path / ".efp" / "runtime_tasks" / "task.json",
         tmp_path / ".efp_runtime" / "state.json",
         tmp_path / "__pycache__" / "module.pyc",
         tmp_path / ".pytest_cache" / "state",
+        tmp_path / "node_modules" / "pkg" / "index.js",
+        tmp_path / "nested" / "node_modules" / "index.js",
     ]
     _write_text(tmp_path / "app.py", "base\n")
     for path in excluded_paths:
@@ -179,6 +184,226 @@ def test_restore_ignores_excluded_directories_and_does_not_delete_them(
     assert not (tmp_path / "new.py").exists()
     for path in excluded_paths:
         assert path.read_text(encoding="utf-8") == "after\n"
+
+
+def test_snapshot_excludes_runtime_owned_state_directories(tmp_path: Path):
+    """`.efp/runtime` and `.efp/runtime_tasks` are runtime-owned, not content.
+
+    Everything else under `.efp` (config, skills, commands, ...) is ordinary
+    agent-editable workspace content and must stay capturable.
+    """
+    _write_text(tmp_path / "app.py", "base\n")
+    _write_text(tmp_path / ".efp" / "runtime" / "sessions" / "s.json", "{}\n")
+    _write_text(tmp_path / ".efp" / "runtime_tasks" / "task-1.json", "{}\n")
+    _write_text(tmp_path / ".efp" / "config.json", "{}\n")
+    # A nested directory with the same *name* is ordinary content: only the
+    # workspace-relative paths are runtime-owned.
+    _write_text(tmp_path / "src" / "runtime_tasks" / "keep.py", "keep\n")
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+    captured = {
+        item.path
+        for item in store._require_snapshot(snapshot.snapshot_id).files.values()
+    }
+
+    assert captured == {
+        "app.py",
+        ".efp/config.json",
+        "src/runtime_tasks/keep.py",
+    }
+    assert snapshot.file_count == 3
+
+
+def test_restore_does_not_delete_the_live_runtime_task_store(tmp_path: Path):
+    """`.efp/runtime_tasks` holds live background tasks; a revert must not touch it."""
+    _write_text(tmp_path / "app.py", "base\n")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    task_path = tmp_path / ".efp" / "runtime_tasks" / "task-1.json"
+    _write_text(task_path, '{"status": "running"}\n')
+
+    store.restore_snapshot(snapshot.snapshot_id)
+
+    assert task_path.read_text(encoding="utf-8") == '{"status": "running"}\n'
+
+
+def test_restore_of_an_older_snapshot_does_not_rewrite_the_live_task_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Snapshots taken before `.efp/runtime_tasks` was runtime-owned hold its blobs.
+
+    Writing those back on the first revert after a deploy drops a stale
+    background-task queue on top of the running one.
+    """
+    from efp_runtime import workspace_snapshots
+
+    task_path = tmp_path / ".efp" / "runtime_tasks" / "task-1.json"
+    _write_text(tmp_path / "app.py", "base\n")
+    _write_text(task_path, '{"status": "queued"}\n')
+
+    # Capture the way the pre-deploy build did: nothing runtime-owned excluded.
+    monkeypatch.setattr(
+        workspace_snapshots, "_ALWAYS_EXCLUDED_RELATIVE_DIRS", frozenset()
+    )
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+    monkeypatch.undo()
+
+    assert ".efp/runtime_tasks/task-1.json" in set(
+        store._require_snapshot(snapshot.snapshot_id).files
+    )
+
+    _write_text(task_path, '{"status": "running"}\n')
+    _write_text(tmp_path / "app.py", "changed\n")
+    WorkspaceSnapshotStore(tmp_path).restore_snapshot(snapshot.snapshot_id)
+
+    assert (tmp_path / "app.py").read_text(encoding="utf-8") == "base\n"
+    assert task_path.read_text(encoding="utf-8") == '{"status": "running"}\n'
+
+
+def test_log_directories_are_captured_by_default(tmp_path: Path):
+    """`logs/` is legitimately committed (logs/.gitkeep, a `logs` package)."""
+    _write_text(tmp_path / "logs" / ".gitkeep", "")
+    _write_text(tmp_path / "src" / "logs" / "__init__.py", "before\n")
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    assert set(store._require_snapshot(snapshot.snapshot_id).files) == {
+        "logs/.gitkeep",
+        "src/logs/__init__.py",
+    }
+    assert snapshot.excluded_directories == []
+
+    _write_text(tmp_path / "src" / "logs" / "__init__.py", "after\n")
+    store.restore_snapshot(snapshot.snapshot_id)
+
+    assert (tmp_path / "src" / "logs" / "__init__.py").read_text(
+        encoding="utf-8"
+    ) == "before\n"
+
+
+def test_capture_creates_each_destination_directory_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The mirrored directory is created once per source dir, not per file."""
+    for index in range(5):
+        _write_text(tmp_path / "pkg" / f"file{index}.txt", f"content {index}\n")
+
+    store = WorkspaceSnapshotStore(tmp_path)
+
+    made: list[Path] = []
+    original_mkdir = Path.mkdir
+
+    def counting_mkdir(self: Path, *args, **kwargs):
+        made.append(Path(self))
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", counting_mkdir)
+    snapshot = store.create_snapshot()
+    monkeypatch.undo()
+
+    mirror = (
+        tmp_path
+        / ".efp_runtime"
+        / "workspace_snapshots"
+        / snapshot.snapshot_id
+        / "files"
+        / "pkg"
+    )
+
+    assert snapshot.file_count == 5
+    assert made.count(mirror) == 1
+    for index in range(5):
+        assert (mirror / f"file{index}.txt").is_file()
+
+
+def test_capture_leaves_no_mirror_directory_when_nothing_is_captured(
+    tmp_path: Path,
+):
+    _write_text(tmp_path / "keep.txt", "keep\n")
+    _write_text(tmp_path / "node_modules" / "dep.js", "excluded\n")
+    _write_text(tmp_path / "huge" / "big.bin", "x" * 64)
+
+    store = WorkspaceSnapshotStore(tmp_path, max_file_bytes=16)
+    snapshot = store.create_snapshot()
+    files_dir = (
+        tmp_path
+        / ".efp_runtime"
+        / "workspace_snapshots"
+        / snapshot.snapshot_id
+        / "files"
+    )
+
+    assert (files_dir / "keep.txt").is_file()
+    assert not (files_dir / "node_modules").exists()
+    assert not (files_dir / "huge").exists()
+
+
+def test_create_snapshot_logs_one_timing_line(tmp_path: Path, caplog):
+    _write_text(tmp_path / "alpha.txt", "abc")
+    _write_text(tmp_path / "big.bin", "x" * 64)
+    store = WorkspaceSnapshotStore(tmp_path, max_file_bytes=16)
+
+    caplog.set_level(logging.INFO)
+    snapshot = store.create_snapshot()
+
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("workspace_snapshot.created")
+    ]
+
+    assert len(lines) == 1
+    line = lines[0]
+    assert "\n" not in line
+    assert f"id={snapshot.snapshot_id}" in line
+    assert f"root={store.workspace_root}" in line
+    assert "files=1" in line
+    assert "skipped=1" in line
+    assert "bytes=3" in line
+    for field in ("reload_ms=", "capture_ms=", "prune_ms=", "total_ms="):
+        assert field in line
+
+
+def test_legacy_manifest_rehash_is_logged_as_a_warning(tmp_path: Path, caplog):
+    import json
+
+    _write_text(tmp_path / "alpha.txt", "abc")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    manifest_path = (
+        tmp_path
+        / ".efp_runtime"
+        / "workspace_snapshots"
+        / snapshot.snapshot_id
+        / "manifest.json"
+    )
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["format"] = 1
+    payload.pop("files")
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    caplog.set_level(logging.WARNING)
+    reloaded = WorkspaceSnapshotStore(tmp_path)
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("workspace_snapshot.legacy_manifest_rehash")
+    ]
+
+    assert [item.snapshot_id for item in reloaded.list_snapshots()] == [
+        snapshot.snapshot_id
+    ]
+    assert len(warnings) >= 1
+    assert f"id={snapshot.snapshot_id}" in warnings[0]
+    assert "format=1" in warnings[0]
+    assert "files=1" in warnings[0]
+    assert "elapsed_ms=" in warnings[0]
 
 
 def test_snapshot_skips_symlinks_and_restore_does_not_follow_file_symlink(
@@ -247,6 +472,372 @@ def test_agent_runtime_workspace_snapshot_methods_work_when_configured(
     assert runtime.delete_workspace_snapshot(snapshot.snapshot_id) is True
     with pytest.raises(KeyError, match=snapshot.snapshot_id):
         runtime.delete_workspace_snapshot(snapshot.snapshot_id)
+
+
+def test_efp_workspace_content_is_captured_diffed_and_restored(tmp_path: Path):
+    """Only `.efp/runtime` is runtime-owned; the rest of `.efp` is user data."""
+    skill = tmp_path / ".efp" / "skills" / "my-skill" / "SKILL.md"
+    config = tmp_path / ".efp" / "config.json"
+    _write_text(skill, "# original skill\n")
+    _write_text(config, '{"model": "before"}\n')
+    _write_text(tmp_path / ".efp" / "commands" / "go.md", "go\n")
+    _write_text(tmp_path / ".efp" / "agents" / "helper.md", "helper\n")
+    _write_text(
+        tmp_path / ".efp" / "instructions" / "style.instructions.md", "style\n"
+    )
+    _write_text(tmp_path / ".efp" / "runtime" / "sessions" / "s.json", "{}\n")
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    captured = set(store._require_snapshot(snapshot.snapshot_id).files)
+    assert captured == {
+        ".efp/skills/my-skill/SKILL.md",
+        ".efp/config.json",
+        ".efp/commands/go.md",
+        ".efp/agents/helper.md",
+        ".efp/instructions/style.instructions.md",
+    }
+
+    # An agent rewrites the skill and the config, and drops a new file in.
+    _write_text(skill, "# corrupted\n")
+    _write_text(config, '{"model": "after"}\n')
+    _write_text(tmp_path / ".efp" / "skills" / "evil" / "x", "evil\n")
+
+    diffs = {
+        item.path: item.status for item in store.diff_snapshot(snapshot.snapshot_id)
+    }
+    assert diffs[".efp/skills/my-skill/SKILL.md"] == "modified"
+    assert diffs[".efp/config.json"] == "modified"
+    assert diffs[".efp/skills/evil/x"] == "added"
+
+    store.restore_snapshot(snapshot.snapshot_id)
+
+    assert skill.read_text(encoding="utf-8") == "# original skill\n"
+    assert config.read_text(encoding="utf-8") == '{"model": "before"}\n'
+    assert not (tmp_path / ".efp" / "skills" / "evil" / "x").exists()
+
+
+def test_session_store_under_efp_is_never_captured_or_deleted(tmp_path: Path):
+    session_file = tmp_path / ".efp" / "runtime" / "sessions" / "s.json"
+    _write_text(tmp_path / ".efp" / "config.json", "{}\n")
+    _write_text(session_file, '{"before": true}\n')
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    assert ".efp/runtime/sessions/s.json" not in set(
+        store._require_snapshot(snapshot.snapshot_id).files
+    )
+
+    _write_text(session_file, '{"after": true}\n')
+    added_session_file = tmp_path / ".efp" / "runtime" / "sessions" / "new.json"
+    _write_text(added_session_file, "{}\n")
+
+    assert not [
+        item
+        for item in store.diff_snapshot(snapshot.snapshot_id)
+        if item.path.startswith(".efp/runtime/")
+    ]
+
+    store.restore_snapshot(snapshot.snapshot_id, delete_added=True)
+
+    # Neither reverted nor deleted: the runtime owns this tree.
+    assert session_file.read_text(encoding="utf-8") == '{"after": true}\n'
+    assert added_session_file.exists()
+
+
+def test_nested_efp_directory_is_ordinary_workspace_content(tmp_path: Path):
+    """Exclusion is path-scoped, so a `.efp` at any other depth is captured."""
+    keep = tmp_path / "docs" / ".efp" / "keep.txt"
+    nested_runtime = tmp_path / "docs" / ".efp" / "runtime" / "notes.txt"
+    _write_text(keep, "keep\n")
+    _write_text(nested_runtime, "also kept\n")
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+    captured = set(store._require_snapshot(snapshot.snapshot_id).files)
+
+    assert captured == {"docs/.efp/keep.txt", "docs/.efp/runtime/notes.txt"}
+
+    _write_text(keep, "changed\n")
+    store.restore_snapshot(snapshot.snapshot_id)
+
+    assert keep.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_snapshot_reports_files_skipped_for_size(tmp_path: Path):
+    _write_text(tmp_path / "small.txt", "ok\n")
+    _write_text(tmp_path / "big.bin", "x" * 64)
+
+    store = WorkspaceSnapshotStore(tmp_path, max_file_bytes=16)
+    snapshot = store.create_snapshot()
+
+    assert snapshot.skipped_files == {"big.bin": 64}
+    assert set(store.list_snapshots()[0].skipped_files) == {"big.bin"}
+
+    # The size-capped file is unrestorable, and the restore result says so.
+    _write_text(tmp_path / "big.bin", "y" * 64)
+    restored = store.restore_snapshot(snapshot.snapshot_id)
+
+    assert restored.skipped_files == {"big.bin": 64}
+    assert (tmp_path / "big.bin").read_text(encoding="utf-8") == "y" * 64
+
+
+def test_snapshot_reports_excluded_directories_present_at_capture(tmp_path: Path):
+    _write_text(tmp_path / "app.py", "base\n")
+    _write_text(tmp_path / "node_modules" / "pkg" / "index.js", "dep\n")
+    _write_text(tmp_path / "src" / ".cache" / "run.bin", "noise\n")
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    assert snapshot.excluded_directories == ["node_modules", "src/.cache"]
+    # Survives a restart and reaches the caller through restore_snapshot.
+    restarted = WorkspaceSnapshotStore(tmp_path)
+    assert restarted.list_snapshots()[0].excluded_directories == [
+        "node_modules",
+        "src/.cache",
+    ]
+    assert restarted.restore_snapshot(snapshot.snapshot_id).excluded_directories == [
+        "node_modules",
+        "src/.cache",
+    ]
+
+
+def test_build_output_directories_are_skipped_but_reported(tmp_path: Path):
+    """Heavy build dirs stay out of the capture, and say so.
+
+    Capturing them is a latency/disk budget, not a preference: create_snapshot
+    runs synchronously on the request path against a network PVC once per turn.
+    Measured on a modest tree, including them cost 24x the time and 61x the
+    bytes. Some repos do commit ``vendor/`` or build output, so the honest
+    answer is to record what was skipped and let revert report a partial
+    restore -- not to silently drop the files, and not to copy a GB-scale
+    ``target/`` on every message.
+    """
+    names = ("vendor", "build", "dist", "target", "coverage")
+    for name in names:
+        _write_text(tmp_path / name / "tracked.txt", "before\n")
+    _write_text(tmp_path / "app.py", "base\n")
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    assert set(store._require_snapshot(snapshot.snapshot_id).files) == {"app.py"}
+    # The skip is recorded, so a caller can tell the user what was not covered.
+    assert set(snapshot.excluded_directories) == {f"{name}" for name in names}
+
+    # A skipped directory is never deleted as an "added" file either.
+    for name in names:
+        _write_text(tmp_path / name / "tracked.txt", "after\n")
+    store.restore_snapshot(snapshot.snapshot_id, delete_added=True)
+
+    for name in names:
+        assert (tmp_path / name / "tracked.txt").read_text(
+            encoding="utf-8"
+        ) == "after\n"
+
+
+def test_excluded_directory_names_are_configurable(tmp_path: Path):
+    _write_text(tmp_path / "app.py", "base\n")
+    _write_text(tmp_path / "vendor" / "dep.go", "before\n")
+    _write_text(tmp_path / "node_modules" / "pkg.js", "dep\n")
+
+    store = WorkspaceSnapshotStore(tmp_path, excluded_directory_names={"vendor"})
+    snapshot = store.create_snapshot()
+    captured = set(store._require_snapshot(snapshot.snapshot_id).files)
+
+    assert captured == {"app.py", "node_modules/pkg.js"}
+    assert snapshot.excluded_directories == ["vendor"]
+
+    _write_text(tmp_path / "vendor" / "dep.go", "after\n")
+    store.restore_snapshot(snapshot.snapshot_id)
+
+    assert (tmp_path / "vendor" / "dep.go").read_text(encoding="utf-8") == "after\n"
+
+
+def test_restore_never_deletes_files_under_a_recorded_excluded_directory(
+    tmp_path: Path,
+):
+    """A directory the capture skipped is out of scope, not "added by the turn".
+
+    The scan that finds "added" files uses the *current* exclusion policy, so a
+    directory excluded only at capture time looks entirely new on restore.
+    """
+    _write_text(tmp_path / "app.py", "base\n")
+    _write_text(tmp_path / "vendor" / "github.com" / "x" / "x.go", "before\n")
+    capturing_store = WorkspaceSnapshotStore(
+        tmp_path, excluded_directory_names={"vendor"}
+    )
+    snapshot = capturing_store.create_snapshot()
+
+    assert snapshot.excluded_directories == ["vendor"]
+
+    # A later store (or a later default) no longer excludes vendor/, so its
+    # files show up in the "added" scan.
+    restoring_store = WorkspaceSnapshotStore(tmp_path, excluded_directory_names=set())
+    _write_text(tmp_path / "new.py", "delete me\n")
+    restoring_store.restore_snapshot(snapshot.snapshot_id)
+
+    assert not (tmp_path / "new.py").exists()
+    assert (tmp_path / "vendor" / "github.com" / "x" / "x.go").read_text(
+        encoding="utf-8"
+    ) == "before\n"
+
+
+def test_restore_from_a_manifest_without_excluded_directories_keeps_historic_dirs(
+    tmp_path: Path,
+):
+    """A manifest that records no exclusions cannot prove a path was ever in scope.
+
+    Format-1 manifests (and format-2 ones written before the key existed) have
+    no ``excluded_directories``, so every file under a historically excluded
+    name looks "added" and would be deleted.
+    """
+    import json
+
+    _write_text(tmp_path / "app.py", "base\n")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    manifest_path = (
+        tmp_path
+        / ".efp_runtime"
+        / "workspace_snapshots"
+        / snapshot.snapshot_id
+        / "manifest.json"
+    )
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["format"] = 1
+    payload.pop("files")
+    payload.pop("excluded_directories")
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    survivors = [
+        tmp_path / "vendor" / "github.com" / "x" / "x.go",
+        tmp_path / "dist" / "bundle.js",
+        tmp_path / "build" / "out.o",
+        tmp_path / "target" / "debug" / "app",
+        tmp_path / "coverage" / "index.html",
+        tmp_path / "src" / "node_modules" / "pkg" / "index.js",
+        tmp_path / ".efp" / "runtime_tasks" / "task-1.json",
+    ]
+    for path in survivors:
+        _write_text(path, "live\n")
+    _write_text(tmp_path / "new.py", "delete me\n")
+
+    legacy_store = WorkspaceSnapshotStore(tmp_path)
+    legacy_store.restore_snapshot(snapshot.snapshot_id)
+
+    assert not (tmp_path / "new.py").exists()
+    for path in survivors:
+        assert path.read_text(encoding="utf-8") == "live\n"
+
+
+def test_restore_from_a_manifest_recording_no_exclusions_still_deletes_added_files(
+    tmp_path: Path,
+):
+    """An empty (but present) ``excluded_directories`` is trustworthy evidence."""
+    _write_text(tmp_path / "app.py", "base\n")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    assert snapshot.excluded_directories == []
+
+    # Not under an excluded directory, so it really is an added file.
+    _write_text(tmp_path / "src" / "bundle.js", "added by the turn\n")
+    reloaded = WorkspaceSnapshotStore(tmp_path)
+    reloaded.restore_snapshot(snapshot.snapshot_id)
+
+    assert not (tmp_path / "src" / "bundle.js").exists()
+
+
+def test_retained_set_outgrowing_the_cap_is_logged_once_per_transition(
+    tmp_path: Path, caplog
+):
+    """Retention beats the cap, so the overshoot must be visible — but once.
+
+    Pruning runs several times per turn; repeating the warning on every prune
+    turns a one-off condition into an endless log stream.
+    """
+    _write_text(tmp_path / "app.py", "base\n")
+    store = WorkspaceSnapshotStore(
+        tmp_path,
+        max_retained_snapshots=1,
+        retain_snapshots=lambda snapshots: [item.snapshot_id for item in snapshots],
+    )
+
+    caplog.set_level(logging.WARNING)
+    store.create_snapshot(label="one")
+    store.create_snapshot(label="two")
+    store.create_snapshot(label="three")
+    store.create_snapshot(label="four")
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("workspace_snapshot.retention_exceeds_cap")
+    ]
+
+    assert len(store.list_snapshots()) == 4
+    assert len(warnings) == 1
+    assert "retained=2" in warnings[0]
+    assert "cap=1" in warnings[0]
+
+
+def test_retained_set_within_the_cap_is_not_logged(tmp_path: Path, caplog):
+    _write_text(tmp_path / "app.py", "base\n")
+    store = WorkspaceSnapshotStore(
+        tmp_path,
+        max_retained_snapshots=4,
+        retain_snapshots=lambda snapshots: [item.snapshot_id for item in snapshots],
+    )
+
+    caplog.set_level(logging.WARNING)
+    for index in range(3):
+        store.create_snapshot(label=f"snapshot-{index}")
+
+    assert not [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("workspace_snapshot.retention_exceeds_cap")
+    ]
+
+
+def test_legacy_manifest_rehash_warns_once_per_manifest(tmp_path: Path, caplog):
+    """The rehash warning must not fire again on every runtime operation."""
+    import json
+
+    _write_text(tmp_path / "alpha.txt", "abc")
+    store = WorkspaceSnapshotStore(tmp_path)
+    snapshot = store.create_snapshot()
+
+    manifest_path = (
+        tmp_path
+        / ".efp_runtime"
+        / "workspace_snapshots"
+        / snapshot.snapshot_id
+        / "manifest.json"
+    )
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["format"] = 1
+    payload.pop("files")
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    caplog.set_level(logging.WARNING)
+    reloaded = WorkspaceSnapshotStore(tmp_path)
+    for _ in range(5):
+        reloaded.list_snapshots()
+        reloaded.diff_snapshot(snapshot.snapshot_id)
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("workspace_snapshot.legacy_manifest_rehash")
+    ]
+
+    assert len(warnings) == 1
 
 
 def _write_text(path: Path, text: str) -> None:

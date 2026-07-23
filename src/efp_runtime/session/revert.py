@@ -15,6 +15,20 @@ from .protocol import SessionStore
 from .summary import summarize_session_diffs
 
 
+# ``status`` values written to session ``metadata["revert"]``.
+REVERT_STATUS_REVERTED = "reverted"
+# History was trimmed but the workspace was NOT restored: the run captured a
+# workspace snapshot and it is no longer available (pruned/invalidated). A
+# caller must not present this as a complete revert.
+REVERT_STATUS_HISTORY_ONLY = "reverted_history_only"
+
+# ``workspace_restore_status`` values written alongside it.
+WORKSPACE_RESTORE_NOT_APPLICABLE = "not_applicable"
+WORKSPACE_RESTORE_RESTORED = "restored"
+WORKSPACE_RESTORE_PARTIAL = "partial"
+WORKSPACE_RESTORE_HISTORY_ONLY = "history_only"
+
+
 @dataclass(frozen=True)
 class SessionRevertRunRecord:
     """Pre-run state needed to publish a later session revert target."""
@@ -26,6 +40,10 @@ class SessionRevertRunRecord:
     workspace_snapshot_id: str | None
     created_at: str
     workspace_snapshot_protected: bool = False
+    # Whether a workspace snapshot was *attempted* for this run. Distinguishes
+    # "revert never had a workspace target" from "the target was lost", which
+    # is the difference between a complete and an incomplete revert.
+    workspace_snapshot_enabled: bool = False
 
 
 def prepare_session_revert_record(
@@ -46,7 +64,10 @@ def prepare_session_revert_record(
         session = store.create_session(session_id=session_id)
 
     workspace_snapshot_id = None
-    if enable_workspace_snapshot and workspace_snapshot_store is not None:
+    workspace_snapshot_enabled = (
+        enable_workspace_snapshot and workspace_snapshot_store is not None
+    )
+    if workspace_snapshot_enabled:
         snapshot = workspace_snapshot_store.create_snapshot(
             label=f"session:{session_id}:{source}:before",
             metadata={
@@ -69,6 +90,7 @@ def prepare_session_revert_record(
         workspace_snapshot_protected=(
             workspace_snapshot_id is not None and protect_workspace_snapshot
         ),
+        workspace_snapshot_enabled=workspace_snapshot_enabled,
     )
 
 
@@ -92,6 +114,7 @@ def finalize_session_revert_record(
         "active": False,
         "message_id": target_message_id,
         "workspace_snapshot_id": record.workspace_snapshot_id,
+        "workspace_snapshot_enabled": record.workspace_snapshot_enabled,
         "run_id": record.run_id,
         "source": record.source,
         "created_at": record.created_at,
@@ -171,9 +194,25 @@ def revert_session_state(
     workspace_snapshot_id = _string_or_none(
         current_revert.get("workspace_snapshot_id")
     )
+    workspace_snapshot_enabled = (
+        current_revert.get("workspace_snapshot_enabled") is True
+    )
     unrevert_snapshot_id = None
     if workspace_snapshot_id is not None and workspace_snapshot_store is None:
         raise TypeError("workspace snapshots require workspace_root")
+
+    # A run that captured a workspace snapshot whose target is now gone can
+    # only trim history: the turn's file changes stay on disk. That is a
+    # different outcome from a complete revert and must never be reported as
+    # one, so it gets its own status instead of a plain success.
+    workspace_restore_status = (
+        WORKSPACE_RESTORE_HISTORY_ONLY
+        if workspace_snapshot_id is None and workspace_snapshot_enabled
+        else WORKSPACE_RESTORE_NOT_APPLICABLE
+    )
+    unrestored_paths: list[str] = []
+    excluded_directories: list[str] = []
+
     snapshot_protection = (
         workspace_snapshot_store.protect_snapshot(workspace_snapshot_id)
         if workspace_snapshot_id is not None and workspace_snapshot_store is not None
@@ -190,9 +229,18 @@ def revert_session_state(
                 },
             )
             unrevert_snapshot_id = unrevert_snapshot.snapshot_id
-            workspace_snapshot_store.restore_snapshot(
+            restored = workspace_snapshot_store.restore_snapshot(
                 workspace_snapshot_id,
                 delete_added=delete_added,
+            )
+            # Paths the snapshot never captured cannot be put back; report them
+            # instead of letting a partial restore look complete.
+            unrestored_paths = sorted(restored.skipped_files)
+            excluded_directories = sorted(restored.excluded_directories)
+            workspace_restore_status = (
+                WORKSPACE_RESTORE_PARTIAL
+                if unrestored_paths
+                else WORKSPACE_RESTORE_RESTORED
             )
 
         trimmed_history, removed_counts = trim_session_history(
@@ -217,7 +265,16 @@ def revert_session_state(
                 "removed_message_count": removed_counts["messages"],
                 "removed_part_count": removed_counts["parts"],
                 "summary": summary,
-                "status": "reverted",
+                "status": (
+                    REVERT_STATUS_HISTORY_ONLY
+                    if workspace_restore_status == WORKSPACE_RESTORE_HISTORY_ONLY
+                    else REVERT_STATUS_REVERTED
+                ),
+                "workspace_restore_status": workspace_restore_status,
+                "workspace_restored": workspace_restore_status
+                in (WORKSPACE_RESTORE_RESTORED, WORKSPACE_RESTORE_PARTIAL),
+                "workspace_unrestored_paths": unrestored_paths,
+                "workspace_excluded_directories": excluded_directories,
                 "reverted_at": now,
                 "updated_at": now,
             }
@@ -386,6 +443,12 @@ def _string_or_none(value: Any) -> str | None:
 
 
 __all__ = [
+    "REVERT_STATUS_HISTORY_ONLY",
+    "REVERT_STATUS_REVERTED",
+    "WORKSPACE_RESTORE_HISTORY_ONLY",
+    "WORKSPACE_RESTORE_NOT_APPLICABLE",
+    "WORKSPACE_RESTORE_PARTIAL",
+    "WORKSPACE_RESTORE_RESTORED",
     "SessionRevertRunRecord",
     "finalize_session_revert_record",
     "invalidate_session_snapshot_references",

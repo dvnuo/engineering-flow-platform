@@ -9,7 +9,7 @@ disk one file at a time for restore/diff.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -21,6 +21,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 from threading import RLock
+import time
 from typing import Any, Literal
 
 from .types import utc_now_iso
@@ -32,24 +33,86 @@ _ALWAYS_EXCLUDED_NAMES = {
     ".pytest_cache",
     "__pycache__",
 }
-_EXCLUDED_DIRECTORY_NAMES = {
-    # Heavy dependency/build directories: never useful to revert and they
-    # dominate tree size (a node_modules alone is routinely hundreds of MB).
-    "node_modules",
-    ".venv",
-    "venv",
-    ".tox",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".cache",
-    ".next",
-    ".nuxt",
-    "dist",
-    "build",
-    "target",
-    "vendor",
-    "coverage",
-}
+# Runtime-owned state that lives inside the workspace, matched on the
+# *workspace-relative path* rather than the entry name. ``.efp`` itself is real,
+# agent-editable workspace content (config.json/config.jsonc, skills/, commands/,
+# agents/, modes/, instructions/) and must stay capturable, diffable and
+# restorable; the entries below are runtime-owned state that would otherwise
+# grow every snapshot and be dropped back on top of itself by a restore.
+_ALWAYS_EXCLUDED_RELATIVE_DIRS = frozenset(
+    {
+        # Session store / chatlogs.
+        ".efp/runtime",
+        # Background-task persistence store. Written live by the gateway
+        # (``src/gateway/runtime_api.py`` ->
+        # ``_runtime_task_persistence_storage_dir``), enabled by default
+        # (``EFP_RUNTIME_TASKS_PERSISTENCE`` defaults to "true") and resolved
+        # from the same ``resolve_runtime_workspace()`` root as this snapshot
+        # store. Capturing it copies a live task queue into every snapshot and
+        # a restore rewinds/deletes records for tasks that are still running.
+        # Kept as a literal because ``efp_runtime`` must not import the
+        # gateway; the resolver above is the source of truth for the name.
+        ".efp/runtime_tasks",
+    }
+)
+DEFAULT_EXCLUDED_DIRECTORY_NAMES = frozenset(
+    {
+        # Heavy dependency/build/tool-cache directories. ``create_snapshot``
+        # runs synchronously on the request path against a network PVC, once
+        # per turn, and up to ``max_retained_snapshots`` copies are kept — so
+        # what is captured here is a latency and disk budget, not a preference.
+        # Measured on a modest tree (200 source files + 3000 build artifacts,
+        # 24 MB): capturing these took 10.6 s / 24.4 MB versus 0.43 s / 0.4 MB
+        # without them — 24x the time, 61x the bytes, and a Rust/Java
+        # ``target/`` is GB-scale.
+        #
+        # Some repos do legitimately commit ``vendor/`` (Go) or build output,
+        # and skipping those means a revert cannot restore them. That is
+        # answered by *reporting* rather than by capturing everything: the
+        # directories skipped here are recorded on the snapshot as
+        # ``excluded_directories`` and surfaced through the restore/revert
+        # result, so a partial restore is declared instead of hidden. Callers
+        # that need a different policy pass ``excluded_directory_names``.
+        "node_modules",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".cache",
+        ".next",
+        ".nuxt",
+        "dist",
+        "build",
+        "target",
+        "vendor",
+        "coverage",
+    }
+)
+# Directory names that older captures may have skipped. Frozen in time on
+# purpose: a snapshot written before manifests recorded ``excluded_directories``
+# carries no record of what its capture skipped, so a restore cannot tell
+# "this file is new" from "this file was never in scope". Deleting the latter
+# is data loss, so anything under one of these names is left alone when the
+# manifest has no ``excluded_directories`` key. Never narrow this set.
+_HISTORIC_EXCLUDED_DIRECTORY_NAMES = frozenset(
+    {
+        "node_modules",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".cache",
+        ".next",
+        ".nuxt",
+        "dist",
+        "build",
+        "target",
+        "vendor",
+        "coverage",
+    }
+)
 _RUNTIME_DIR_NAME = ".efp_runtime"
 _SNAPSHOT_DIR_NAME = "workspace_snapshots"
 _SNAPSHOT_FILES_DIR_NAME = "files"
@@ -61,6 +124,10 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 
 _LOGGER = logging.getLogger(__name__)
 
+# A capture slower than this blocks the caller (today: the event loop) long
+# enough to be the dominant request cost, so it is logged as a warning.
+SLOW_SNAPSHOT_WARN_MS = 1000.0
+
 # Files larger than this are not captured (recorded as skipped instead).
 DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024
 # Oldest snapshots beyond this count are pruned from disk after each capture.
@@ -69,6 +136,18 @@ DEFAULT_MAX_RETAINED_SNAPSHOTS = 20
 _COORDINATION_LOCK = RLock()
 _WORKSPACE_LOCKS: dict[Path, RLock] = {}
 _WORKSPACE_PROTECTED_SNAPSHOTS: dict[Path, dict[str, int]] = {}
+# Cap a workspace root was last reported overshooting at. Pruning runs several
+# times per turn (and a fresh store is built per request), so without this the
+# overshoot warning would repeat forever once tripped; it is emitted on each
+# (root, cap) transition into overshoot instead.
+_WORKSPACE_RETENTION_OVERSHOOT: dict[Path, int] = {}
+
+
+def snapshot_storage_root(workspace_root: str | Path) -> Path:
+    """Directory holding persisted snapshots for ``workspace_root``."""
+
+    resolved = Path(workspace_root).expanduser().resolve()
+    return resolved / _RUNTIME_DIR_NAME / _SNAPSHOT_DIR_NAME
 
 
 @dataclass
@@ -80,10 +159,20 @@ class WorkspaceSnapshot:
     metadata: dict[str, Any]
     file_count: int
     total_bytes: int
+    # Paths that existed at capture time but hold no captured content (above
+    # ``max_file_bytes``), mapped to their observed size. A restore can neither
+    # recreate nor delete these, so they are surfaced instead of hidden.
+    skipped_files: dict[str, int] = field(default_factory=dict)
+    # Workspace-relative directories present at capture time that the exclusion
+    # policy skipped. Anything below them is outside the snapshot and therefore
+    # outside a restore.
+    excluded_directories: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.workspace_root = Path(self.workspace_root)
         self.metadata = dict(self.metadata)
+        self.skipped_files = dict(self.skipped_files)
+        self.excluded_directories = list(self.excluded_directories)
 
 
 @dataclass
@@ -122,6 +211,14 @@ class _SnapshotRecord:
     # cap), mapped to their observed size. Restore must neither recreate nor
     # delete these.
     skipped: dict[str, int] = field(default_factory=dict)
+    # Workspace-relative directories the exclusion policy skipped at capture.
+    excluded_directories: list[str] = field(default_factory=list)
+    # Whether the manifest actually carried an ``excluded_directories`` key.
+    # False for format-1 manifests and for format-2 manifests written before
+    # the key existed: those record nothing about what capture skipped, so a
+    # restore must not treat "present now, absent from the snapshot" as
+    # "added by this turn" for anything that could have been excluded.
+    excluded_directories_recorded: bool = True
 
 
 class WorkspaceSnapshotStore:
@@ -133,18 +230,32 @@ class WorkspaceSnapshotStore:
         *,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         max_retained_snapshots: int = DEFAULT_MAX_RETAINED_SNAPSHOTS,
+        excluded_directory_names: Iterable[str] | None = None,
         on_snapshot_removed: Callable[[WorkspaceSnapshot], None] | None = None,
-        retain_snapshot: Callable[[WorkspaceSnapshot], bool] | None = None,
+        retain_snapshots: (
+            Callable[[Sequence[WorkspaceSnapshot]], Iterable[str]] | None
+        ) = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
-        self.storage_root = (
-            self.workspace_root / _RUNTIME_DIR_NAME / _SNAPSHOT_DIR_NAME
-        )
+        self.storage_root = snapshot_storage_root(self.workspace_root)
         self.max_file_bytes = max(0, int(max_file_bytes))
         self.max_retained_snapshots = max(1, int(max_retained_snapshots))
+        self.excluded_directory_names = frozenset(
+            DEFAULT_EXCLUDED_DIRECTORY_NAMES
+            if excluded_directory_names is None
+            else excluded_directory_names
+        )
         self._on_snapshot_removed = on_snapshot_removed
-        self._retain_snapshot = retain_snapshot
+        # Called with every retained snapshot, oldest first, and returns the
+        # ids to keep past the cap. It is a *batch* hook on purpose: a
+        # per-snapshot predicate cannot see the whole set, so it cannot bound
+        # how much it pins, and an unbounded pin grows the store forever.
+        self._retain_snapshots = retain_snapshots
         self._snapshots: dict[str, _SnapshotRecord] = {}
+        # (snapshot_id -> manifest mtime) already reported as a legacy rehash.
+        # Every runtime operation reloads every manifest, so without this the
+        # warning fires once per retained format-1 snapshot per operation.
+        self._legacy_rehash_logged: dict[str, int | None] = {}
         self._next_snapshot_index = 1
         self._lock, self._protected_snapshot_ids = _workspace_coordination(
             self.workspace_root
@@ -160,7 +271,9 @@ class WorkspaceSnapshotStore:
         protect: bool = False,
     ) -> WorkspaceSnapshot:
         with self._lock:
+            started = time.perf_counter()
             self._reload_existing_snapshots()
+            reload_ms = (time.perf_counter() - started) * 1000.0
             snapshot_id = self._allocate_snapshot_id()
             snapshot_dir = self._snapshot_dir(snapshot_id)
             if snapshot_dir.exists():
@@ -170,10 +283,19 @@ class WorkspaceSnapshotStore:
 
             files: dict[str, _CapturedFile] = {}
             skipped: dict[str, int] = {}
+            excluded_directories: list[str] = []
             try:
+                capture_started = time.perf_counter()
                 self._capture_directory(
-                    self.workspace_root, (), files_dir, files, skipped
+                    self.workspace_root,
+                    (),
+                    files_dir,
+                    files,
+                    skipped,
+                    excluded_directories,
                 )
+                capture_ms = (time.perf_counter() - capture_started) * 1000.0
+                excluded_directories.sort()
                 snapshot = WorkspaceSnapshot(
                     snapshot_id=snapshot_id,
                     workspace_root=self.workspace_root,
@@ -182,11 +304,14 @@ class WorkspaceSnapshotStore:
                     metadata=dict(metadata or {}),
                     file_count=len(files),
                     total_bytes=sum(item.size for item in files.values()),
+                    skipped_files=dict(skipped),
+                    excluded_directories=list(excluded_directories),
                 )
                 record = _SnapshotRecord(
                     snapshot=deepcopy(snapshot),
                     files=files,
                     skipped=skipped,
+                    excluded_directories=excluded_directories,
                 )
                 # Manifest is written last: its presence marks the snapshot
                 # as complete (partial dirs without a manifest are ignored
@@ -201,7 +326,40 @@ class WorkspaceSnapshotStore:
                 self._protected_snapshot_ids[snapshot.snapshot_id] = (
                     self._protected_snapshot_ids.get(snapshot.snapshot_id, 0) + 1
                 )
+            prune_started = time.perf_counter()
             self._prune_old_snapshots(protect={snapshot.snapshot_id})
+            prune_ms = (time.perf_counter() - prune_started) * 1000.0
+            total_ms = (time.perf_counter() - started) * 1000.0
+            _LOGGER.info(
+                "workspace_snapshot.created id=%s root=%s files=%d skipped=%d "
+                "excluded_dirs=%d bytes=%d reload_ms=%.0f capture_ms=%.0f "
+                "prune_ms=%.0f total_ms=%.0f",
+                snapshot.snapshot_id,
+                self.workspace_root,
+                snapshot.file_count,
+                len(skipped),
+                len(excluded_directories),
+                snapshot.total_bytes,
+                reload_ms,
+                capture_ms,
+                prune_ms,
+                total_ms,
+            )
+            if total_ms > SLOW_SNAPSHOT_WARN_MS:
+                _LOGGER.warning(
+                    "workspace_snapshot.slow id=%s root=%s files=%d bytes=%d "
+                    "reload_ms=%.0f capture_ms=%.0f prune_ms=%.0f total_ms=%.0f "
+                    "threshold_ms=%.0f",
+                    snapshot.snapshot_id,
+                    self.workspace_root,
+                    snapshot.file_count,
+                    snapshot.total_bytes,
+                    reload_ms,
+                    capture_ms,
+                    prune_ms,
+                    total_ms,
+                    SLOW_SNAPSHOT_WARN_MS,
+                )
             return deepcopy(snapshot)
 
     def list_snapshots(self) -> list[WorkspaceSnapshot]:
@@ -269,12 +427,23 @@ class WorkspaceSnapshotStore:
             load_content = self._snapshot_content_loader(snapshot_id)
 
             for relative_path in sorted(record.files):
+                # Snapshots taken before a directory became runtime-owned still
+                # hold its blobs; writing them back drops a stale session store
+                # / background-task queue on top of the live one.
+                if _directory_prefixes(relative_path) & _ALWAYS_EXCLUDED_RELATIVE_DIRS:
+                    continue
                 self._write_file(relative_path, load_content(relative_path))
 
             if delete_added:
                 current_files = self._scan_workspace()
                 protected = set(record.files) | set(record.skipped)
                 for relative_path in sorted(set(current_files) - protected):
+                    # "Absent from the snapshot" only means "added by the turn"
+                    # for paths the capture actually looked at. Anything the
+                    # capture excluded was never in scope, and deleting it is
+                    # data loss, not a revert.
+                    if _is_outside_snapshot_scope(record, relative_path):
+                        continue
                     self._delete_regular_file(relative_path)
 
             return deepcopy(record.snapshot)
@@ -307,24 +476,34 @@ class WorkspaceSnapshotStore:
 
     def _prune_old_snapshots(self, *, protect: set[str]) -> None:
         if len(self._snapshots) <= self.max_retained_snapshots:
+            # Nothing can be retained past a cap nothing reaches; clear any
+            # standing overshoot so a later one is reported again.
+            self._report_retention_overshoot(len(self._snapshots))
             return
         protected = protect | set(self._protected_snapshot_ids)
-        if self._retain_snapshot is not None:
-            for snapshot_id, record in self._snapshots.items():
-                try:
-                    retain = self._retain_snapshot(deepcopy(record.snapshot))
-                except Exception:
-                    _LOGGER.exception(
-                        "failed to inspect retention for workspace snapshot %s",
-                        snapshot_id,
-                    )
-                    continue
-                if retain:
-                    protected.add(snapshot_id)
         ordered = sorted(
             self._snapshots,
             key=lambda snapshot_id: _snapshot_sort_key(snapshot_id),
         )
+        if self._retain_snapshots is not None:
+            try:
+                requested = set(
+                    self._retain_snapshots(
+                        [
+                            deepcopy(self._snapshots[snapshot_id].snapshot)
+                            for snapshot_id in ordered
+                        ]
+                    )
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "failed to inspect retention for workspace snapshots under %s",
+                    self.workspace_root,
+                )
+                requested = set()
+            protected |= requested & set(self._snapshots)
+        retained = protected & set(self._snapshots)
+        self._report_retention_overshoot(len(retained))
         excess = len(self._snapshots) - self.max_retained_snapshots
         for snapshot_id in ordered:
             if excess <= 0:
@@ -333,6 +512,31 @@ class WorkspaceSnapshotStore:
                 continue
             self._remove_snapshot(snapshot_id)
             excess -= 1
+
+    def _report_retention_overshoot(self, retained: int) -> None:
+        """Warn once per (root, cap) transition into retention overshoot.
+
+        Retention wins over the cap (dropping a referenced snapshot turns a
+        later revert into a silent history-only trim), so the overshoot is
+        reported instead of being silently unbounded. Pruning runs several
+        times per turn, so the report is edge-triggered rather than repeated.
+        """
+        cap = self.max_retained_snapshots
+        with _COORDINATION_LOCK:
+            if retained <= cap:
+                _WORKSPACE_RETENTION_OVERSHOOT.pop(self.workspace_root, None)
+                return
+            if _WORKSPACE_RETENTION_OVERSHOOT.get(self.workspace_root) == cap:
+                return
+            _WORKSPACE_RETENTION_OVERSHOOT[self.workspace_root] = cap
+        _LOGGER.warning(
+            "workspace_snapshot.retention_exceeds_cap root=%s retained=%d "
+            "cap=%d total=%d",
+            self.workspace_root,
+            retained,
+            cap,
+            len(self._snapshots),
+        )
 
     def _remove_snapshot(self, snapshot_id: str) -> None:
         try:
@@ -348,6 +552,7 @@ class WorkspaceSnapshotStore:
         finally:
             shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
             del self._snapshots[snapshot_id]
+            self._legacy_rehash_logged.pop(snapshot_id, None)
 
     def _validate_snapshot_blobs(
         self,
@@ -478,6 +683,14 @@ class WorkspaceSnapshotStore:
                 if isinstance(raw_path, str) and size is not None:
                     skipped[raw_path] = size
 
+        excluded_payload = payload.get("excluded_directories")
+        excluded_directories_recorded = isinstance(excluded_payload, list)
+        excluded_directories = sorted(
+            {item for item in excluded_payload if isinstance(item, str)}
+            if excluded_directories_recorded
+            else set()
+        )
+
         metadata = payload.get("metadata")
         label = payload.get("label")
         snapshot = WorkspaceSnapshot(
@@ -490,8 +703,16 @@ class WorkspaceSnapshotStore:
             metadata=dict(metadata) if isinstance(metadata, dict) else {},
             file_count=len(files),
             total_bytes=calculated_total_bytes,
+            skipped_files=dict(skipped),
+            excluded_directories=list(excluded_directories),
         )
-        return _SnapshotRecord(snapshot=snapshot, files=files, skipped=skipped)
+        return _SnapshotRecord(
+            snapshot=snapshot,
+            files=files,
+            skipped=skipped,
+            excluded_directories=excluded_directories,
+            excluded_directories_recorded=excluded_directories_recorded,
+        )
 
     def _load_snapshot_file_metadata(
         self, snapshot_dir: Path, payload: dict[str, Any]
@@ -516,8 +737,29 @@ class WorkspaceSnapshotStore:
             return files
         # Legacy manifest (format 1) without a files map: derive metadata by
         # streaming the persisted blobs — content is hashed chunk-wise and
-        # never retained in memory.
-        return self._scan_snapshot_files_metadata(snapshot_dir)
+        # never retained in memory. This re-hashes every blob on every reload,
+        # so it is logged loudly: on a network volume it can cost minutes.
+        # Every runtime operation reloads every manifest, so the warning is
+        # emitted once per (snapshot, manifest mtime) instead of once per read.
+        started = time.perf_counter()
+        legacy_files = self._scan_snapshot_files_metadata(snapshot_dir)
+        snapshot_id = snapshot_dir.name
+        manifest_mtime = _manifest_mtime_ns(snapshot_dir)
+        if (
+            snapshot_id not in self._legacy_rehash_logged
+            or self._legacy_rehash_logged[snapshot_id] != manifest_mtime
+        ):
+            self._legacy_rehash_logged[snapshot_id] = manifest_mtime
+            _LOGGER.warning(
+                "workspace_snapshot.legacy_manifest_rehash id=%s format=%s "
+                "files=%d bytes=%d elapsed_ms=%.0f",
+                snapshot_id,
+                payload.get("format"),
+                len(legacy_files),
+                sum(item.size for item in legacy_files.values()),
+                (time.perf_counter() - started) * 1000.0,
+            )
+        return legacy_files
 
     def _scan_snapshot_files_metadata(
         self, snapshot_dir: Path
@@ -572,6 +814,7 @@ class WorkspaceSnapshotStore:
                 for item in record.files.values()
             },
             "skipped_files": dict(record.skipped),
+            "excluded_directories": sorted(record.excluded_directories),
         }
         (snapshot_dir / _SNAPSHOT_MANIFEST_NAME).write_text(
             json.dumps(manifest, default=str, indent=2, sort_keys=True) + "\n",
@@ -642,12 +885,21 @@ class WorkspaceSnapshotStore:
         files_dir: Path,
         files: dict[str, _CapturedFile],
         skipped: dict[str, int],
+        excluded_directories: list[str],
     ) -> None:
         """Walk the workspace, streaming each captured file straight to disk.
 
         Content is copied chunk-wise into the snapshot directory while the
         sha256 is computed, so peak memory is one chunk — never the tree.
+
+        The mirrored destination directory is created at most once per source
+        directory (lazily, on the first file actually captured here) instead of
+        once per file: on a network volume the redundant ``mkdir`` was a large
+        share of all round-trips, and staying lazy keeps directories whose
+        files are all excluded/skipped from leaving stray empty mirrors.
         """
+        destination_dir_ready = False
+
         with os.scandir(directory) as entries:
             sorted_entries = sorted(entries, key=lambda entry: entry.name)
 
@@ -661,10 +913,21 @@ class WorkspaceSnapshotStore:
                 path = Path(entry.path)
                 child_parts = (*relative_parts, name)
                 if entry.is_dir(follow_symlinks=False):
-                    if name in _EXCLUDED_DIRECTORY_NAMES:
+                    relative_dir = "/".join(child_parts)
+                    if relative_dir in _ALWAYS_EXCLUDED_RELATIVE_DIRS:
+                        continue
+                    if name in self.excluded_directory_names:
+                        # Reported on the snapshot: everything below is outside
+                        # the snapshot and therefore outside a later restore.
+                        excluded_directories.append(relative_dir)
                         continue
                     self._capture_directory(
-                        path, child_parts, files_dir, files, skipped
+                        path,
+                        child_parts,
+                        files_dir,
+                        files,
+                        skipped,
+                        excluded_directories,
                     )
                     continue
                 if not entry.is_file(follow_symlinks=False):
@@ -677,7 +940,9 @@ class WorkspaceSnapshotStore:
                     continue
 
                 destination = self._snapshot_file_path(files_dir, relative_path)
-                destination.parent.mkdir(parents=True, exist_ok=True)
+                if not destination_dir_ready:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination_dir_ready = True
                 digest = hashlib.sha256()
                 copied = 0
                 exceeded_limit = False
@@ -730,7 +995,10 @@ class WorkspaceSnapshotStore:
                 path = Path(entry.path)
                 child_parts = (*relative_parts, name)
                 if entry.is_dir(follow_symlinks=False):
-                    if name in _EXCLUDED_DIRECTORY_NAMES:
+                    relative_dir = "/".join(child_parts)
+                    if relative_dir in _ALWAYS_EXCLUDED_RELATIVE_DIRS:
+                        continue
+                    if name in self.excluded_directory_names:
                         continue
                     self._scan_directory(path, child_parts, files)
                     continue
@@ -793,6 +1061,40 @@ class WorkspaceSnapshotStore:
         if path.is_symlink() or not path.exists() or not path.is_file():
             return
         path.unlink()
+
+
+def _directory_prefixes(relative_path: str) -> set[str]:
+    """Every workspace-relative directory ``relative_path`` sits under."""
+
+    directories = relative_path.split("/")[:-1]
+    return {"/".join(directories[: index + 1]) for index in range(len(directories))}
+
+
+def _is_outside_snapshot_scope(record: _SnapshotRecord, relative_path: str) -> bool:
+    """Whether ``relative_path`` sits under a directory the capture skipped."""
+
+    directories = relative_path.split("/")[:-1]
+    if not directories:
+        return False
+    prefixes = {
+        "/".join(directories[: index + 1]) for index in range(len(directories))
+    }
+    if prefixes & set(record.excluded_directories):
+        return True
+    if prefixes & _ALWAYS_EXCLUDED_RELATIVE_DIRS:
+        return True
+    if record.excluded_directories_recorded:
+        return False
+    # No record of what this snapshot excluded: assume the historic defaults
+    # were in force rather than deleting files that may never have been in it.
+    return any(name in _HISTORIC_EXCLUDED_DIRECTORY_NAMES for name in directories)
+
+
+def _manifest_mtime_ns(snapshot_dir: Path) -> int | None:
+    try:
+        return (snapshot_dir / _SNAPSHOT_MANIFEST_NAME).stat().st_mtime_ns
+    except OSError:
+        return None
 
 
 def _stream_sha256(path: Path) -> tuple[str, int]:
