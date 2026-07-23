@@ -40,7 +40,18 @@ class RuntimeConfig:
     provider_retry_backoff_seconds: float = 0.0
     provider_retry_backoff_multiplier: float = 2.0
     enable_context_overflow_retry: bool = True
-    enable_session_revert_snapshots: bool = True
+    # Off by default: the workspace snapshot it drives is the single most
+    # expensive thing on the request path (it walks and byte-copies the whole
+    # workspace to the PVC before the LLM call, once per run), and nothing
+    # consumes what it produces. ``AgentRuntime.revert_session`` has no HTTP
+    # route, no Portal UI and no production caller in any EFP repo — the
+    # capability arrived with the Runtime v2 opencode source replacement
+    # (#521) as a port of opencode's revert, but the client that drives it in
+    # opencode was never ported. Operators who want it can set this field per
+    # agent from the Portal (it is in PORTAL_MANAGED_RUNTIME_FIELDS); wiring a
+    # revert UI should flip it back on, ideally alongside deferring the
+    # capture until a workspace-mutating tool actually runs.
+    enable_session_revert_snapshots: bool = False
     emit_llm_stream_events: bool = True
     track_usage: bool = True
     usage_pricing: dict[str, float] = field(default_factory=dict)

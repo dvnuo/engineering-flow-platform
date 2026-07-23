@@ -105,6 +105,7 @@ async def test_runtime_session_revert_and_unrevert_restore_history_and_workspace
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
@@ -171,6 +172,7 @@ async def test_runtime_session_revert_preserves_oldest_target_at_retention_limit
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
@@ -213,6 +215,7 @@ async def test_runtime_pruning_keeps_recent_session_revert_targets(
             [{"content": "first"}, {"content": "second"}, {"content": "third"}]
         ),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             model_aware_tool_selection=False,
         ),
@@ -286,6 +289,7 @@ async def test_runtime_retention_of_session_revert_targets_is_bounded(
     runtime = AgentRuntime(
         provider=ScriptedLLMProvider(responses),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
@@ -328,6 +332,7 @@ async def test_runtime_pruning_invalidates_expired_unrevert_snapshot_reference(
     runtime = AgentRuntime(
         provider=ScriptedLLMProvider([{"content": "first"}]),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             model_aware_tool_selection=False,
         ),
@@ -376,6 +381,7 @@ async def test_runtime_retention_protects_snapshot_until_run_finalizes(
     runtime = AgentRuntime(
         provider=BlockingProvider(),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             model_aware_tool_selection=False,
         ),
@@ -383,6 +389,7 @@ async def test_runtime_retention_protects_snapshot_until_run_finalizes(
     competing_runtime = AgentRuntime(
         provider=ScriptedLLMProvider([]),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             model_aware_tool_selection=False,
         ),
@@ -447,6 +454,7 @@ async def test_runtime_retention_preserves_active_unrevert_snapshot(tmp_path: Pa
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
@@ -500,6 +508,7 @@ async def test_runtime_revert_restores_workspace_despite_retention_cap(
     runtime = AgentRuntime(
         provider=provider,
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
@@ -560,6 +569,7 @@ async def test_revert_still_restores_after_many_newer_snapshots_in_workspace(
     runtime = AgentRuntime(
         provider=_writing_provider("call-write-crowded", "created.txt", "created\n"),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
@@ -572,6 +582,7 @@ async def test_revert_still_restores_after_many_newer_snapshots_in_workspace(
     subagent_runtime = AgentRuntime(
         provider=ScriptedLLMProvider([]),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             model_aware_tool_selection=False,
         ),
@@ -609,6 +620,7 @@ async def test_revert_without_its_workspace_snapshot_reports_history_only(
     runtime = AgentRuntime(
         provider=_writing_provider("call-write-lost", "created.txt", "created\n"),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
@@ -676,6 +688,7 @@ async def test_revert_reports_paths_the_snapshot_could_not_capture(tmp_path: Pat
     runtime = AgentRuntime(
         provider=_writing_provider("call-write-partial", "created.txt", "created\n"),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
@@ -715,6 +728,7 @@ async def test_complete_revert_reports_no_unrestored_paths(tmp_path: Path):
     runtime = AgentRuntime(
         provider=_writing_provider("call-write-clean", "created.txt", "created\n"),
         config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
             workspace_root=tmp_path,
             max_iterations=2,
             model_aware_tool_selection=False,
