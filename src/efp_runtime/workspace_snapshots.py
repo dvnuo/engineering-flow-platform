@@ -867,7 +867,6 @@ class WorkspaceSnapshotStore:
 
         started = time.perf_counter()
         legacy_files = self._scan_snapshot_files_metadata(snapshot_dir)
-        self._legacy_files_cache[snapshot_id] = (manifest_mtime, legacy_files)
         total_bytes = sum(item.size for item in legacy_files.values())
         _LOGGER.warning(
             "workspace_snapshot.legacy_manifest_rehash id=%s format=%s "
@@ -880,12 +879,18 @@ class WorkspaceSnapshotStore:
         )
         declared_file_count = _safe_nonnegative_int(payload.get("file_count"))
         declared_total_bytes = _safe_nonnegative_int(payload.get("total_bytes"))
-        if (
+        counts_differ = (
             declared_file_count is not None
             and declared_file_count != len(legacy_files)
         ) or (
             declared_total_bytes is not None and declared_total_bytes != total_bytes
-        ):
+        )
+        if counts_differ:
+            # Never retain a map that the manifest says is incomplete. The
+            # blobs may be restored without rewriting the manifest, in which
+            # case the next attempt must scan them again rather than reuse the
+            # failed result.
+            self._legacy_files_cache.pop(snapshot_id, None)
             # The header promised a snapshot the blobs no longer back. What is
             # on disk is the truth a restore can deliver, so it is used — and
             # reported, because it means the snapshot is incomplete.
@@ -897,6 +902,11 @@ class WorkspaceSnapshotStore:
                 declared_total_bytes,
                 len(legacy_files),
                 total_bytes,
+            )
+        else:
+            self._legacy_files_cache[snapshot_id] = (
+                manifest_mtime,
+                legacy_files,
             )
         return dict(legacy_files)
 

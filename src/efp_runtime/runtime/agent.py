@@ -1611,7 +1611,7 @@ class AgentRuntime:
         run_id: str,
         source: str,
     ):
-        # The store is only reached for when a snapshot is actually going to
+        # The store is only reached when a snapshot is actually going to
         # be taken: touching it otherwise would build it on every turn, which
         # is exactly the per-request cost the lazy store exists to avoid.
         enabled = self._session_revert_snapshots_enabled()

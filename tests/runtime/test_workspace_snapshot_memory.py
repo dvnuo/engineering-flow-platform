@@ -581,3 +581,13 @@ def test_incomplete_legacy_snapshot_refuses_instead_of_wiping_the_workspace(
     # Nothing was touched: the workspace survives intact.
     assert (tmp_path / "app.py").read_bytes() == b"current\n"
     assert (tmp_path / "unrelated_new_work.py").read_bytes() == b"keep me\n"
+
+    # Repairing the blobs without rewriting the manifest must recover in this
+    # same store. A failed derived map must not remain cached by manifest mtime.
+    _write_text(blobs / "app.py", "orig\n")
+    _write_text(blobs / "README.md", "x\n")
+
+    store.restore_snapshot("workspace_snapshot_1", delete_added=False)
+
+    assert (tmp_path / "app.py").read_bytes() == b"orig\n"
+    assert (tmp_path / "unrelated_new_work.py").read_bytes() == b"keep me\n"
