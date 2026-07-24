@@ -52,6 +52,40 @@ REQUEST_ID_HEADERS = ("X-Request-Id", "X-Trace-Id")
 ACCESS_LOG = None
 # Status reported for a client disconnect / cancelled handler (nginx idiom).
 CLIENT_CLOSED_REQUEST_STATUS = 499
+# Infrastructure probes: kubernetes liveness/readiness checks and the
+# Spring-actuator endpoints scanners walk. Measured on a production pod, 568 of
+# 587 access-log lines (96.8%) were these, against 4 lines for the actual chat
+# requests — the real traffic was unreadable. They are logged at DEBUG instead
+# of INFO rather than dropped, so raising the level recovers them unchanged.
+PROBE_PATHS = frozenset(
+    {
+        "/health",
+        "/healthz",
+        "/live",
+        "/livez",
+        "/ready",
+        "/readyz",
+    }
+)
+# Everything at or below these prefixes is a probe (``/actuator`` itself plus
+# ``/actuator/health``, ``/actuator/env``, ``/actuator/jolokia``, ...).
+PROBE_PATH_PREFIXES = ("/actuator",)
+
+
+def is_probe_path(path: str) -> bool:
+    """Whether ``path`` is infrastructure noise rather than real traffic.
+
+    Matching is on whole path segments so an application route that merely
+    contains a probe word (``/api/actuator-report``) stays at INFO.
+    """
+    normalized = (path or "").rstrip("/") or "/"
+    if normalized in PROBE_PATHS:
+        return True
+    return any(
+        normalized == prefix or normalized.startswith(f"{prefix}/")
+        for prefix in PROBE_PATH_PREFIXES
+    )
+
 
 # Upload sizing. EFP_MAX_UPLOAD_MB is the user-facing per-file cap the Portal
 # enforces and reports; the runtime allows that plus headroom for multipart /
@@ -97,6 +131,13 @@ async def access_log_middleware(request: Request, handler):
     The start line is emitted before awaiting the handler on purpose: a slow
     handler (e.g. a synchronous workspace snapshot) otherwise leaves no
     evidence in stdout that the request was even received.
+
+    Probe traffic keeps the same lines with the same fields, at DEBUG -- but
+    only while it succeeds. Probes fail by *returning* an error (readiness
+    replies 503 rather than raising), and aiohttp's own access log is disabled
+    because this middleware replaces it, so keying the level on the path alone
+    would make a pod stuck failing readiness emit nothing at INFO. The end
+    line is therefore re-levelled from the final status.
     """
     request_id = resolve_request_id(request)
     request["request_id"] = request_id
@@ -105,9 +146,12 @@ async def access_log_middleware(request: Request, handler):
     remote = request.remote or "-"
     started = time.perf_counter()
     status = 500
+    is_probe = is_probe_path(path)
+    level = logging.DEBUG if is_probe else logging.INFO
 
-    logger.info(
-        f"http.start method={method} path={path} remote={remote} request_id={request_id}"
+    logger.log(
+        level,
+        f"http.start method={method} path={path} remote={remote} request_id={request_id}",
     )
     try:
         response = await handler(request)
@@ -121,9 +165,15 @@ async def access_log_middleware(request: Request, handler):
         raise
     finally:
         duration_ms = (time.perf_counter() - started) * 1000
-        logger.info(
+        # A probe that failed is the most important line in the log, so only a
+        # successful probe stays quiet. Non-int statuses (e.g. the cancelled
+        # sentinel) are treated as not-success.
+        succeeded = isinstance(status, int) and status < 400
+        end_level = logging.DEBUG if (is_probe and succeeded) else logging.INFO
+        logger.log(
+            end_level,
             f"http.end method={method} path={path} status={status} "
-            f"duration_ms={duration_ms:.1f} request_id={request_id}"
+            f"duration_ms={duration_ms:.1f} request_id={request_id}",
         )
 
 

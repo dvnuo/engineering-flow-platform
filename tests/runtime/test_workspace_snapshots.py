@@ -390,15 +390,26 @@ def test_legacy_manifest_rehash_is_logged_as_a_warning(tmp_path: Path, caplog):
     caplog.set_level(logging.WARNING)
     reloaded = WorkspaceSnapshotStore(tmp_path)
 
-    warnings = [
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("workspace_snapshot.legacy_manifest_rehash")
-    ]
+    def rehash_warnings():
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith(
+                "workspace_snapshot.legacy_manifest_rehash"
+            )
+        ]
 
+    # Loading and listing work from the manifest header alone: no blob is
+    # hashed, so nothing is reported.
     assert [item.snapshot_id for item in reloaded.list_snapshots()] == [
         snapshot.snapshot_id
     ]
+    assert rehash_warnings() == []
+
+    # Diffing needs the file map, so the rehash genuinely happens here.
+    reloaded.diff_snapshot(snapshot.snapshot_id)
+    warnings = rehash_warnings()
+
     assert len(warnings) >= 1
     assert f"id={snapshot.snapshot_id}" in warnings[0]
     assert "format=1" in warnings[0]

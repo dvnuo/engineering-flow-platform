@@ -122,6 +122,15 @@ _SNAPSHOT_ID_PREFIX = "workspace_snapshot_"
 _MANIFEST_FORMAT = 2
 _HASH_CHUNK_BYTES = 1024 * 1024
 
+class WorkspaceSnapshotIncompleteError(RuntimeError):
+    """A snapshot's manifest survives but its stored content does not match it.
+
+    Raised instead of quietly treating the surviving blobs as the whole
+    snapshot, which would let a restore delete everything the lost blobs
+    covered.
+    """
+
+
 _LOGGER = logging.getLogger(__name__)
 
 # A capture slower than this blocks the caller (today: the event loop) long
@@ -206,7 +215,13 @@ class _LoadedWorkspaceFile:
 @dataclass
 class _SnapshotRecord:
     snapshot: WorkspaceSnapshot
-    files: dict[str, _CapturedFile] = field(default_factory=dict)
+    # Per-file metadata, or ``None`` while it is still deferred. Read it
+    # through the ``files`` property, never directly.
+    loaded_files: dict[str, _CapturedFile] | None = None
+    # Derives ``files`` for a manifest that does not carry a file map. Deriving
+    # means hashing every persisted blob, so it is called at most once per
+    # record and only by a caller that genuinely needs the map.
+    files_loader: Callable[[], dict[str, _CapturedFile]] | None = None
     # Paths present at capture time but not captured (e.g. above the size
     # cap), mapped to their observed size. Restore must neither recreate nor
     # delete these.
@@ -219,6 +234,53 @@ class _SnapshotRecord:
     # restore must not treat "present now, absent from the snapshot" as
     # "added by this turn" for anything that could have been excluded.
     excluded_directories_recorded: bool = True
+    # Counts the manifest declared, kept for records whose file map is derived
+    # lazily. They are the only evidence of what the snapshot is *supposed* to
+    # contain, so they are checked against the blobs before the map is used.
+    declared_file_count: int | None = None
+    declared_total_bytes: int | None = None
+
+    @property
+    def files(self) -> dict[str, _CapturedFile]:
+        """Per-file metadata, deriving it from disk on first use if needed.
+
+        A derived map is validated against the counts the manifest declared.
+        Reconciling silently down to whatever blobs survive would be data
+        loss: ``restore_snapshot(delete_added=True)`` protects exactly
+        ``record.files | record.skipped``, so a snapshot that lost its blobs
+        would present an empty file set and delete the entire workspace. This
+        is reachable in normal operation, not just on exotic disk failure --
+        ``_remove_snapshot`` uses ``shutil.rmtree(ignore_errors=True)``, which
+        walks bottom-up and so removes ``files/`` before ``manifest.json``;
+        any partial failure leaves exactly that shape. Loading used to reject
+        such a snapshot outright, and refusing to use it preserves that.
+        """
+
+        if self.loaded_files is None:
+            loader = self.files_loader
+            if loader is None:
+                self.loaded_files = {}
+            else:
+                derived = loader()
+                derived_bytes = sum(item.size for item in derived.values())
+                if (
+                    self.declared_file_count is not None
+                    and self.declared_file_count != len(derived)
+                ) or (
+                    self.declared_total_bytes is not None
+                    and self.declared_total_bytes != derived_bytes
+                ):
+                    raise WorkspaceSnapshotIncompleteError(
+                        f"snapshot {self.snapshot.snapshot_id!r} is incomplete: "
+                        f"manifest declares {self.declared_file_count} files / "
+                        f"{self.declared_total_bytes} bytes but its stored "
+                        f"content holds {len(derived)} files / {derived_bytes} "
+                        f"bytes"
+                    )
+                self.loaded_files = derived
+                self.snapshot.file_count = len(derived)
+                self.snapshot.total_bytes = derived_bytes
+        return self.loaded_files
 
 
 class WorkspaceSnapshotStore:
@@ -252,10 +314,13 @@ class WorkspaceSnapshotStore:
         # how much it pins, and an unbounded pin grows the store forever.
         self._retain_snapshots = retain_snapshots
         self._snapshots: dict[str, _SnapshotRecord] = {}
-        # (snapshot_id -> manifest mtime) already reported as a legacy rehash.
-        # Every runtime operation reloads every manifest, so without this the
-        # warning fires once per retained format-1 snapshot per operation.
-        self._legacy_rehash_logged: dict[str, int | None] = {}
+        # snapshot_id -> (manifest mtime, derived file metadata) for manifests
+        # that carry no file map. Every runtime operation reloads every
+        # manifest and records are rebuilt each time, so without this a
+        # snapshot used twice would be re-hashed twice.
+        self._legacy_files_cache: dict[
+            str, tuple[int | None, dict[str, _CapturedFile]]
+        ] = {}
         self._next_snapshot_index = 1
         self._lock, self._protected_snapshot_ids = _workspace_coordination(
             self.workspace_root
@@ -309,7 +374,7 @@ class WorkspaceSnapshotStore:
                 )
                 record = _SnapshotRecord(
                     snapshot=deepcopy(snapshot),
-                    files=files,
+                    loaded_files=files,
                     skipped=skipped,
                     excluded_directories=excluded_directories,
                 )
@@ -552,7 +617,7 @@ class WorkspaceSnapshotStore:
         finally:
             shutil.rmtree(self._snapshot_dir(snapshot_id), ignore_errors=True)
             del self._snapshots[snapshot_id]
-            self._legacy_rehash_logged.pop(snapshot_id, None)
+            self._legacy_files_cache.pop(snapshot_id, None)
 
     def _validate_snapshot_blobs(
         self,
@@ -664,16 +729,31 @@ class WorkspaceSnapshotStore:
             except OSError:
                 return None
 
-        files = self._load_snapshot_file_metadata(snapshot_dir, payload)
-        if files is None:
+        loaded_files, files_loader = self._resolve_snapshot_file_metadata(
+            snapshot_dir, payload
+        )
+        if loaded_files is None and files_loader is None:
             return None
-        file_count = _safe_nonnegative_int(payload.get("file_count"))
-        total_bytes = _safe_nonnegative_int(payload.get("total_bytes"))
-        if file_count is not None and file_count != len(files):
-            return None
-        calculated_total_bytes = sum(item.size for item in files.values())
-        if total_bytes is not None and total_bytes != calculated_total_bytes:
-            return None
+        declared_file_count = _safe_nonnegative_int(payload.get("file_count"))
+        declared_total_bytes = _safe_nonnegative_int(payload.get("total_bytes"))
+        if loaded_files is not None:
+            file_count = len(loaded_files)
+            calculated_total_bytes = sum(item.size for item in loaded_files.values())
+            if declared_file_count is not None and declared_file_count != file_count:
+                return None
+            if (
+                declared_total_bytes is not None
+                and declared_total_bytes != calculated_total_bytes
+            ):
+                return None
+        else:
+            # Header-only load: the manifest's own counts describe the snapshot
+            # until a caller needs the file map. They are reconciled against
+            # the blobs at that point (see ``_SnapshotRecord.files``).
+            file_count = declared_file_count if declared_file_count is not None else 0
+            calculated_total_bytes = (
+                declared_total_bytes if declared_total_bytes is not None else 0
+            )
 
         skipped_payload = payload.get("skipped_files")
         skipped: dict[str, int] = {}
@@ -701,65 +781,134 @@ class WorkspaceSnapshotStore:
             else utc_now_iso(),
             label=label if isinstance(label, str) else None,
             metadata=dict(metadata) if isinstance(metadata, dict) else {},
-            file_count=len(files),
+            file_count=file_count,
             total_bytes=calculated_total_bytes,
             skipped_files=dict(skipped),
             excluded_directories=list(excluded_directories),
         )
         return _SnapshotRecord(
             snapshot=snapshot,
-            files=files,
+            loaded_files=loaded_files,
+            files_loader=files_loader,
             skipped=skipped,
             excluded_directories=excluded_directories,
             excluded_directories_recorded=excluded_directories_recorded,
+            declared_file_count=declared_file_count,
+            declared_total_bytes=declared_total_bytes,
         )
 
-    def _load_snapshot_file_metadata(
+    def _resolve_snapshot_file_metadata(
         self, snapshot_dir: Path, payload: dict[str, Any]
-    ) -> dict[str, _CapturedFile] | None:
+    ) -> tuple[
+        dict[str, _CapturedFile] | None,
+        Callable[[], dict[str, _CapturedFile]] | None,
+    ]:
+        """Per-file metadata for a manifest, deferred when it has to be derived.
+
+        Returns ``(files, None)`` when the metadata is known without touching
+        blobs, ``(None, loader)`` when it has to be derived on demand, and
+        ``(None, None)`` when the manifest is invalid.
+
+        A legacy manifest (format 1) carries no file map, so the metadata can
+        only come from hashing every persisted blob. That runs per store
+        construction and stores are built per request: one production pod was
+        re-hashing 577 MB across 27 retained snapshots — 26 s a turn — for a
+        feature that was switched off. Listing, pruning, retention and
+        protection all work from the manifest header alone, so the hashing is
+        deferred to the first caller that actually needs the file map
+        (diff/restore).
+        """
         manifest_files = payload.get("files")
         if isinstance(manifest_files, dict):
-            files: dict[str, _CapturedFile] = {}
-            for raw_path, raw_meta in manifest_files.items():
-                if not isinstance(raw_path, str) or not isinstance(raw_meta, dict):
-                    return None
-                sha256 = raw_meta.get("sha256")
-                size = _safe_nonnegative_int(raw_meta.get("size"))
-                if not isinstance(sha256, str) or size is None:
-                    return None
-                try:
-                    self._validate_relative_path(raw_path)
-                except ValueError:
-                    return None
-                files[raw_path] = _CapturedFile(
-                    path=raw_path, sha256=sha256, size=size
-                )
-            return files
-        # Legacy manifest (format 1) without a files map: derive metadata by
-        # streaming the persisted blobs — content is hashed chunk-wise and
-        # never retained in memory. This re-hashes every blob on every reload,
-        # so it is logged loudly: on a network volume it can cost minutes.
-        # Every runtime operation reloads every manifest, so the warning is
-        # emitted once per (snapshot, manifest mtime) instead of once per read.
-        started = time.perf_counter()
-        legacy_files = self._scan_snapshot_files_metadata(snapshot_dir)
+            return self._parse_manifest_file_metadata(manifest_files), None
+        if (
+            _safe_nonnegative_int(payload.get("file_count")) is None
+            or _safe_nonnegative_int(payload.get("total_bytes")) is None
+        ):
+            # No file map and no header counts: nothing describes the snapshot
+            # without reading the blobs, so there is nothing to defer.
+            return self._rehash_legacy_snapshot_files(snapshot_dir, payload), None
+        return None, lambda: self._rehash_legacy_snapshot_files(snapshot_dir, payload)
+
+    def _parse_manifest_file_metadata(
+        self, manifest_files: dict[Any, Any]
+    ) -> dict[str, _CapturedFile] | None:
+        files: dict[str, _CapturedFile] = {}
+        for raw_path, raw_meta in manifest_files.items():
+            if not isinstance(raw_path, str) or not isinstance(raw_meta, dict):
+                return None
+            sha256 = raw_meta.get("sha256")
+            size = _safe_nonnegative_int(raw_meta.get("size"))
+            if not isinstance(sha256, str) or size is None:
+                return None
+            try:
+                self._validate_relative_path(raw_path)
+            except ValueError:
+                return None
+            files[raw_path] = _CapturedFile(path=raw_path, sha256=sha256, size=size)
+        return files
+
+    def _rehash_legacy_snapshot_files(
+        self, snapshot_dir: Path, payload: dict[str, Any]
+    ) -> dict[str, _CapturedFile]:
+        """Derive one legacy snapshot's file metadata by streaming its blobs.
+
+        Content is hashed chunk-wise and never retained in memory. The result
+        is cached per (snapshot, manifest mtime) because every runtime
+        operation rebuilds every record, and it is logged loudly whenever the
+        hashing genuinely runs: on a network volume it can cost seconds per
+        snapshot, and that log line is what makes the cost diagnosable.
+        """
         snapshot_id = snapshot_dir.name
         manifest_mtime = _manifest_mtime_ns(snapshot_dir)
-        if (
-            snapshot_id not in self._legacy_rehash_logged
-            or self._legacy_rehash_logged[snapshot_id] != manifest_mtime
-        ):
-            self._legacy_rehash_logged[snapshot_id] = manifest_mtime
+        cached = self._legacy_files_cache.get(snapshot_id)
+        if cached is not None and cached[0] == manifest_mtime:
+            return dict(cached[1])
+
+        started = time.perf_counter()
+        legacy_files = self._scan_snapshot_files_metadata(snapshot_dir)
+        total_bytes = sum(item.size for item in legacy_files.values())
+        _LOGGER.warning(
+            "workspace_snapshot.legacy_manifest_rehash id=%s format=%s "
+            "files=%d bytes=%d elapsed_ms=%.0f",
+            snapshot_id,
+            payload.get("format"),
+            len(legacy_files),
+            total_bytes,
+            (time.perf_counter() - started) * 1000.0,
+        )
+        declared_file_count = _safe_nonnegative_int(payload.get("file_count"))
+        declared_total_bytes = _safe_nonnegative_int(payload.get("total_bytes"))
+        counts_differ = (
+            declared_file_count is not None
+            and declared_file_count != len(legacy_files)
+        ) or (
+            declared_total_bytes is not None and declared_total_bytes != total_bytes
+        )
+        if counts_differ:
+            # Never retain a map that the manifest says is incomplete. The
+            # blobs may be restored without rewriting the manifest, in which
+            # case the next attempt must scan them again rather than reuse the
+            # failed result.
+            self._legacy_files_cache.pop(snapshot_id, None)
+            # The header promised a snapshot the blobs no longer back. What is
+            # on disk is the truth a restore can deliver, so it is used — and
+            # reported, because it means the snapshot is incomplete.
             _LOGGER.warning(
-                "workspace_snapshot.legacy_manifest_rehash id=%s format=%s "
-                "files=%d bytes=%d elapsed_ms=%.0f",
+                "workspace_snapshot.legacy_manifest_counts_differ id=%s "
+                "manifest_files=%s manifest_bytes=%s files=%d bytes=%d",
                 snapshot_id,
-                payload.get("format"),
+                declared_file_count,
+                declared_total_bytes,
                 len(legacy_files),
-                sum(item.size for item in legacy_files.values()),
-                (time.perf_counter() - started) * 1000.0,
+                total_bytes,
             )
-        return legacy_files
+        else:
+            self._legacy_files_cache[snapshot_id] = (
+                manifest_mtime,
+                legacy_files,
+            )
+        return dict(legacy_files)
 
     def _scan_snapshot_files_metadata(
         self, snapshot_dir: Path

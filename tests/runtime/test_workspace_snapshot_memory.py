@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -355,6 +356,167 @@ def test_diff_treats_file_deleted_after_scan_as_deleted(
     assert diff.after_bytes is None
 
 
+def _write_legacy_snapshot(root: Path, snapshot_id: str, files: dict[str, str]) -> None:
+    """A snapshot as the pre-file-map code wrote it: no ``files`` map."""
+    snapshot_dir = _snapshot_dir(root, snapshot_id)
+    for relative_path, content in files.items():
+        _write_text(snapshot_dir / "files" / relative_path, content)
+    manifest = {
+        "snapshot_id": snapshot_id,
+        "workspace_root": str(root),
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "label": snapshot_id,
+        "metadata": {},
+        "file_count": len(files),
+        "total_bytes": sum(len(content.encode("utf-8")) for content in files.values()),
+    }
+    (snapshot_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+class _BlobHashWatch:
+    """Records which snapshot blobs get stream-hashed."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+        from src.efp_runtime import workspace_snapshots
+
+        self._storage_root = (root / ".efp_runtime" / "workspace_snapshots").resolve()
+        self.hashed: list[Path] = []
+        original = workspace_snapshots._stream_sha256
+
+        def tracked(path: Path):
+            resolved = Path(path).resolve()
+            if self._storage_root in resolved.parents:
+                self.hashed.append(resolved)
+            return original(path)
+
+        monkeypatch.setattr(workspace_snapshots, "_stream_sha256", tracked)
+
+    def snapshots_hashed(self) -> set[str]:
+        return {
+            path.relative_to(self._storage_root).parts[0] for path in self.hashed
+        }
+
+
+def _rehash_warnings(caplog) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("workspace_snapshot.legacy_manifest_rehash")
+    ]
+
+
+def test_loading_legacy_snapshots_reads_no_blobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+):
+    """Construction must not re-hash what the manifests already describe.
+
+    A production pod re-hashed 577 MB across 27 retained legacy snapshots on
+    every store construction — and a store is built per chat request.
+    """
+    for index in range(1, 4):
+        _write_legacy_snapshot(
+            tmp_path,
+            f"workspace_snapshot_{index}",
+            {"keep.txt": f"captured {index}\n", "sub/other.txt": "other\n"},
+        )
+    watch = _BlobHashWatch(monkeypatch, tmp_path)
+    caplog.set_level(logging.WARNING)
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    listed = store.list_snapshots()
+
+    assert [item.snapshot_id for item in listed] == [
+        "workspace_snapshot_1",
+        "workspace_snapshot_2",
+        "workspace_snapshot_3",
+    ]
+    # The header describes the snapshot well enough to list it.
+    assert [item.file_count for item in listed] == [2, 2, 2]
+    assert [item.total_bytes for item in listed] == [
+        len(b"captured 1\n") + len(b"other\n"),
+        len(b"captured 2\n") + len(b"other\n"),
+        len(b"captured 3\n") + len(b"other\n"),
+    ]
+    assert watch.hashed == []
+    assert _rehash_warnings(caplog) == []
+
+
+def test_pruning_legacy_snapshots_reads_no_blobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+):
+    """Retention runs several times a turn and must stay blob-free."""
+    for index in range(1, 4):
+        _write_legacy_snapshot(
+            tmp_path, f"workspace_snapshot_{index}", {"keep.txt": f"captured {index}\n"}
+        )
+    _write_text(tmp_path / "live.txt", "live\n")
+    watch = _BlobHashWatch(monkeypatch, tmp_path)
+    caplog.set_level(logging.WARNING)
+
+    store = WorkspaceSnapshotStore(tmp_path, max_retained_snapshots=2)
+    created = store.create_snapshot(label="fresh")
+
+    assert {item.snapshot_id for item in store.list_snapshots()} == {
+        "workspace_snapshot_3",
+        created.snapshot_id,
+    }
+    assert not _snapshot_dir(tmp_path, "workspace_snapshot_1").exists()
+    assert watch.hashed == []
+    assert _rehash_warnings(caplog) == []
+
+
+def test_diffing_one_legacy_snapshot_rehashes_only_that_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+):
+    for index in range(1, 4):
+        _write_legacy_snapshot(
+            tmp_path, f"workspace_snapshot_{index}", {"keep.txt": f"captured {index}\n"}
+        )
+    _write_text(tmp_path / "keep.txt", "current\n")
+    watch = _BlobHashWatch(monkeypatch, tmp_path)
+    caplog.set_level(logging.WARNING)
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    [diff] = store.diff_snapshot("workspace_snapshot_2")
+
+    assert diff.path == "keep.txt"
+    assert diff.status == "modified"
+    assert watch.snapshots_hashed() == {"workspace_snapshot_2"}
+    warnings = _rehash_warnings(caplog)
+    assert len(warnings) == 1
+    assert "id=workspace_snapshot_2" in warnings[0]
+
+
+def test_restoring_one_legacy_snapshot_rehashes_only_that_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+):
+    for index in range(1, 4):
+        _write_legacy_snapshot(
+            tmp_path, f"workspace_snapshot_{index}", {"keep.txt": f"captured {index}\n"}
+        )
+    _write_text(tmp_path / "keep.txt", "current\n")
+    _write_text(tmp_path / "added.txt", "added by the turn\n")
+    watch = _BlobHashWatch(monkeypatch, tmp_path)
+    caplog.set_level(logging.WARNING)
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    restored = store.restore_snapshot("workspace_snapshot_3")
+
+    assert (tmp_path / "keep.txt").read_bytes() == b"captured 3\n"
+    assert not (tmp_path / "added.txt").exists()
+    assert restored.file_count == 1
+    assert watch.snapshots_hashed() == {"workspace_snapshot_3"}
+    assert len(_rehash_warnings(caplog)) == 1
+
+
 def test_legacy_format1_manifest_still_loads_and_restores(tmp_path: Path):
     _write_text(tmp_path / "keep.txt", "current\n")
     legacy_dir = _snapshot_dir(tmp_path, "workspace_snapshot_1")
@@ -379,3 +541,53 @@ def test_legacy_format1_manifest_still_loads_and_restores(tmp_path: Path):
 
     store.restore_snapshot("workspace_snapshot_1")
     assert (tmp_path / "keep.txt").read_bytes() == b"captured\n"
+
+
+def test_incomplete_legacy_snapshot_refuses_instead_of_wiping_the_workspace(
+    tmp_path: Path,
+):
+    """A legacy snapshot that lost its blobs must not delete the workspace.
+
+    Header-only loading trusts the manifest's declared counts. If the blobs
+    later disagree (``shutil.rmtree(ignore_errors=True)`` in ``_remove_snapshot``
+    walks bottom-up, so a partial failure can remove ``files/`` while leaving
+    ``manifest.json``), reconciling the file map down to the surviving blobs
+    would make ``restore_snapshot(delete_added=True)`` protect nothing and
+    delete everything. It must raise instead.
+    """
+    from src.efp_runtime.workspace_snapshots import (
+        WorkspaceSnapshotIncompleteError,
+    )
+
+    _write_legacy_snapshot(
+        tmp_path, "workspace_snapshot_1", {"app.py": "orig\n", "README.md": "x\n"}
+    )
+    # Simulate the lost-blobs shape: manifest still declares 2 files, none remain.
+    blobs = _snapshot_dir(tmp_path, "workspace_snapshot_1") / "files"
+    for blob in list(blobs.rglob("*")):
+        if blob.is_file():
+            blob.unlink()
+
+    _write_text(tmp_path / "app.py", "current\n")
+    _write_text(tmp_path / "unrelated_new_work.py", "keep me\n")
+
+    store = WorkspaceSnapshotStore(tmp_path)
+    # Header still advertises the declared counts.
+    assert store.list_snapshots()[0].file_count == 2
+
+    with pytest.raises(WorkspaceSnapshotIncompleteError):
+        store.restore_snapshot("workspace_snapshot_1", delete_added=True)
+
+    # Nothing was touched: the workspace survives intact.
+    assert (tmp_path / "app.py").read_bytes() == b"current\n"
+    assert (tmp_path / "unrelated_new_work.py").read_bytes() == b"keep me\n"
+
+    # Repairing the blobs without rewriting the manifest must recover in this
+    # same store. A failed derived map must not remain cached by manifest mtime.
+    _write_text(blobs / "app.py", "orig\n")
+    _write_text(blobs / "README.md", "x\n")
+
+    store.restore_snapshot("workspace_snapshot_1", delete_added=False)
+
+    assert (tmp_path / "app.py").read_bytes() == b"orig\n"
+    assert (tmp_path / "unrelated_new_work.py").read_bytes() == b"keep me\n"

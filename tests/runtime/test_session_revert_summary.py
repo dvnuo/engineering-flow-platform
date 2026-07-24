@@ -723,6 +723,129 @@ async def test_revert_reports_paths_the_snapshot_could_not_capture(tmp_path: Pat
     assert not (tmp_path / "created.txt").exists()
 
 
+def _write_legacy_snapshot_on_disk(root: Path, snapshot_id: str) -> Path:
+    """A retained snapshot written by the pre-file-map code (format 1)."""
+    snapshot_dir = root / ".efp_runtime" / "workspace_snapshots" / snapshot_id
+    blob = snapshot_dir / "files" / "captured.txt"
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"captured\n")
+    (snapshot_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": snapshot_id,
+                "workspace_root": str(root),
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "label": "legacy",
+                "metadata": {},
+                "file_count": 1,
+                "total_bytes": len(b"captured\n"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return snapshot_dir
+
+
+class _SnapshotDirectoryWatch:
+    """Records reads of the workspace snapshot storage directory."""
+
+    def __init__(self, monkeypatch, root: Path) -> None:
+        from efp_runtime import workspace_snapshots
+
+        self.storage_root = (root / ".efp_runtime" / "workspace_snapshots").resolve()
+        self.listed: list[Path] = []
+        self.hashed: list[Path] = []
+
+        original_iterdir = Path.iterdir
+        original_stream_sha256 = workspace_snapshots._stream_sha256
+
+        def tracked_iterdir(directory: Path):
+            if Path(directory).resolve() == self.storage_root:
+                self.listed.append(Path(directory))
+            return original_iterdir(directory)
+
+        def tracked_stream_sha256(path: Path):
+            self.hashed.append(Path(path))
+            return original_stream_sha256(path)
+
+        monkeypatch.setattr(Path, "iterdir", tracked_iterdir)
+        monkeypatch.setattr(
+            workspace_snapshots, "_stream_sha256", tracked_stream_sha256
+        )
+
+
+@pytest.mark.asyncio
+async def test_disabled_revert_snapshots_never_read_the_snapshot_directory(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """A runtime that will not snapshot must not pay to load the store.
+
+    ``AgentRuntime`` is constructed once per chat request and building the
+    store walks every retained snapshot on the workspace volume, re-hashing
+    legacy ones. With the feature off that is pure cost, so the store is only
+    built when something actually asks for it.
+    """
+    _write_legacy_snapshot_on_disk(tmp_path, "workspace_snapshot_1")
+    watch = _SnapshotDirectoryWatch(monkeypatch, tmp_path)
+
+    runtime = AgentRuntime(
+        provider=ScriptedLLMProvider([{"content": "done"}]),
+        config=RuntimeConfig(
+            enable_session_revert_snapshots=False,
+            workspace_root=tmp_path,
+            max_iterations=2,
+            model_aware_tool_selection=False,
+        ),
+    )
+    result = await runtime.run("hey", session_id="session-no-snapshots")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert watch.listed == []
+    assert watch.hashed == []
+    assert runtime.get_session("session-no-snapshots").metadata["revert"][
+        "workspace_snapshot_id"
+    ] is None
+
+    # The store is still fully available to anything that does ask for it.
+    assert [
+        snapshot.snapshot_id for snapshot in runtime.list_workspace_snapshots()
+    ] == ["workspace_snapshot_1"]
+    assert watch.listed
+
+
+@pytest.mark.asyncio
+async def test_enabled_revert_snapshots_still_capture_and_restore(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """With the feature on, the deferred store is built and the revert works."""
+    watch = _SnapshotDirectoryWatch(monkeypatch, tmp_path)
+    runtime = AgentRuntime(
+        provider=_writing_provider("call-write-lazy", "created.txt", "created\n"),
+        config=RuntimeConfig(
+            enable_session_revert_snapshots=True,
+            workspace_root=tmp_path,
+            max_iterations=2,
+            model_aware_tool_selection=False,
+            tool_permissions={"write": "allow"},
+        ),
+    )
+
+    await runtime.run("Create a file.", session_id="session-lazy-enabled")
+
+    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "created\n"
+    assert runtime.get_session("session-lazy-enabled").metadata["revert"][
+        "workspace_snapshot_id"
+    ]
+    assert watch.listed
+
+    reverted = runtime.revert_session("session-lazy-enabled")
+
+    assert not (tmp_path / "created.txt").exists()
+    assert reverted.metadata["revert"]["workspace_restore_status"] == "restored"
+
+
 @pytest.mark.asyncio
 async def test_complete_revert_reports_no_unrestored_paths(tmp_path: Path):
     runtime = AgentRuntime(
