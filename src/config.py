@@ -230,6 +230,11 @@ class Config:
         },
         "jenkins": {
             "enabled": True,
+            "instances": True,
+            "default_instance": True,
+            # Legacy flat single-instance Jenkins fields: profiles saved before
+            # the Portal grew a multi-instance Jenkins UI still carry these and
+            # must keep merging into the effective config.
             "url": True,
             "username": True,
             "password": True,
@@ -693,10 +698,47 @@ class Config:
         for var in self.JENKINS_ENV_VARS:
             os.environ.pop(var, None)
 
+    @staticmethod
+    def _jenkins_default_instance(jenkins_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the Jenkins instance the CLI uses when no --instance is passed.
+
+        Multi-instance profiles carry ``instances`` plus an optional
+        ``default_instance`` name; the legacy flat profile shape is its own
+        single instance.
+        """
+        instances = jenkins_config.get("instances")
+        if not isinstance(instances, list):
+            return jenkins_config
+        # Must match the projection's own filter: ``_build_product_instances``
+        # drops instances without a base URL before naming a default, so
+        # selecting one here that the projection discarded would export the
+        # credentials of one controller alongside the base URL of another --
+        # the agent would then authenticate against the wrong host.
+        candidates = [
+            item
+            for item in instances
+            if isinstance(item, dict)
+            and item.get("enabled") is not False
+            and str(
+                item.get("base_url")
+                or item.get("baseUrl")
+                or item.get("url")
+                or item.get("uri")
+                or ""
+            ).strip()
+        ]
+        preferred = str(jenkins_config.get("default_instance") or "").strip()
+        if preferred:
+            for item in candidates:
+                if str(item.get("name") or "").strip() == preferred:
+                    return item
+        return candidates[0] if candidates else {}
+
     def apply_jenkins_env(self) -> None:
         jenkins_config = self.jenkins
-        username = str(jenkins_config.get("username") or "").strip() if isinstance(jenkins_config, dict) else ""
-        password = str(jenkins_config.get("password") or "").strip() if isinstance(jenkins_config, dict) else ""
+        instance = self._jenkins_default_instance(jenkins_config) if isinstance(jenkins_config, dict) else {}
+        username = str(instance.get("username") or "").strip() if isinstance(instance, dict) else ""
+        password = str(instance.get("password") or "").strip() if isinstance(instance, dict) else ""
         if isinstance(jenkins_config, dict) and jenkins_config.get("enabled") and username and password:
             os.environ["EFP_JENKINS_USERNAME"] = username
             os.environ["EFP_JENKINS_PASSWORD"] = password
