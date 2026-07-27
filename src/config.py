@@ -709,30 +709,40 @@ class Config:
         instances = jenkins_config.get("instances")
         if not isinstance(instances, list):
             return jenkins_config
-        # Must match the projection's own filter: ``_build_product_instances``
-        # drops instances without a base URL before naming a default, so
-        # selecting one here that the projection discarded would export the
-        # credentials of one controller alongside the base URL of another --
-        # the agent would then authenticate against the wrong host.
-        candidates = [
-            item
-            for item in instances
-            if isinstance(item, dict)
-            and item.get("enabled") is not False
-            and str(
-                item.get("base_url")
-                or item.get("baseUrl")
-                or item.get("url")
-                or item.get("uri")
-                or ""
-            ).strip()
-        ]
-        preferred = str(jenkins_config.get("default_instance") or "").strip()
-        if preferred:
-            for item in candidates:
-                if str(item.get("name") or "").strip() == preferred:
-                    return item
-        return candidates[0] if candidates else {}
+        # Ask the projection rather than re-deriving the choice. It filters out
+        # instances with no base URL and de-duplicates repeated/blank names
+        # (a second "ci" is projected as "ci-2"), and ``default_instance`` is
+        # matched against those *projected* names. Any second implementation
+        # drifts from it, and the drift is dangerous in one specific way: the
+        # exported EFP_JENKINS_USERNAME/PASSWORD would belong to a different
+        # controller than the exported EFP_JENKINS_DEFAULT_INSTANCE, so an
+        # agent following them authenticates against the wrong host.
+        try:
+            from src.external_cli.profile_config import (
+                _build_product_instances,
+                _default_instance_name,
+            )
+        except Exception:  # pragma: no cover - defensive, keeps boot working
+            return {}
+        projected = _build_product_instances(jenkins_config, product="jenkins")
+        if not projected:
+            return {}
+        chosen_name = _default_instance_name(jenkins_config, projected)
+        chosen = next(
+            (item for item in projected if item.get("name") == chosen_name),
+            projected[0],
+        )
+        auth = chosen.get("auth") if isinstance(chosen.get("auth"), dict) else {}
+        # Only basic password auth maps onto the flat username/password env
+        # pair, which is what this has always exported.
+        if auth.get("type") != "basic_password":
+            return {}
+        return {
+            "name": chosen.get("name", ""),
+            "url": chosen.get("base_url", ""),
+            "username": auth.get("username", ""),
+            "password": auth.get("secret", ""),
+        }
 
     def apply_jenkins_env(self) -> None:
         jenkins_config = self.jenkins

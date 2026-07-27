@@ -1788,3 +1788,29 @@ def test_flatten_config_to_env_omits_empty_and_none_and_renders_bool_false():
     }
     env = profile_config_module.flatten_config_to_env(root)
     assert env == {"EFP_AWS_ENABLED": "false", "EFP_AWS_DOMAIN": "D"}
+
+
+@pytest.mark.parametrize(
+    "jenkins,expected",
+    [
+        ({"enabled": True, "url": "https://j.example.com", "username": "u", "password": "p"}, True),
+        # No endpoint: build_tools_config_json drops the section entirely, so
+        # advertising the CLI would point the agent at something unusable.
+        ({"enabled": True, "username": "u", "password": "p"}, False),
+        # Token auth is a shape the CLI supports; requiring username+password
+        # hid it.
+        ({"enabled": True, "url": "https://j.example.com", "token": "t"}, True),
+        ({"enabled": False, "url": "https://j.example.com", "username": "u", "password": "p"}, False),
+        ({"enabled": True, "instances": [{"url": "https://j.example.com", "username": "u", "password": "p"}]}, True),
+        ({"enabled": True, "instances": [{"username": "u", "password": "p"}]}, False),
+    ],
+)
+def test_jenkins_cli_is_advertised_exactly_when_it_is_usable(jenkins, expected):
+    """The legacy flat section must be judged by the same rule as instances[].
+
+    Whether the agent is told about the jenkins CLI has to agree with whether
+    the projection actually produced a usable instance for it.
+    """
+    from src.runtime_profile_projection import _has_enabled_jenkins_config
+
+    assert _has_enabled_jenkins_config({"jenkins": jenkins}) is expected
