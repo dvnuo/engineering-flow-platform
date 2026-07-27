@@ -160,6 +160,68 @@ def test_bootstrap_exports_tools_config_env_vars_scrubs_env_and_applies_env_sect
     assert cfg.get_external_config_status()["success"] is True
 
 
+def test_bootstrap_exports_every_jenkins_instance_and_default_instance_creds(
+    tmp_path, monkeypatch, boot_state_reset
+):
+    for key in (
+        "EFP_JENKINS_USERNAME",
+        "EFP_JENKINS_PASSWORD",
+        "JENKINS_USERNAME",
+        "JENKINS_PASSWORD",
+        "EFP_JENKINS_DEFAULT_INSTANCE",
+        "EFP_JENKINS_INSTANCES_0_BASE_URL",
+        "EFP_JENKINS_INSTANCES_1_BASE_URL",
+        "EFP_JENKINS_INSTANCES_1_AUTH_PASSWORD",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setattr(
+        profile_config_module, "apply_runtime_profile_external_config", lambda *a, **k: None
+    )
+
+    _install_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "jenkins": {
+                "enabled": True,
+                "default_instance": "release",
+                "instances": [
+                    {
+                        "name": "ci",
+                        "url": "https://ci.example.test",
+                        "username": "ci-user",
+                        "password": "ci-password",
+                    },
+                    {
+                        "name": "release",
+                        "url": "https://release.example.test",
+                        "username": "release-user",
+                        "password": "release-password",
+                    },
+                ],
+            }
+        },
+    )
+
+    assert config_module.bootstrap_profile_boot() is True
+
+    # Both instances reach the Jenkins CLI through the indexed env convention.
+    assert os.environ["EFP_JENKINS_DEFAULT_INSTANCE"] == "release"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_NAME"] == "ci"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_BASE_URL"] == "https://ci.example.test"
+    assert os.environ["EFP_JENKINS_INSTANCES_0_AUTH_PASSWORD"] == "ci-password"
+    assert os.environ["EFP_JENKINS_INSTANCES_1_NAME"] == "release"
+    assert os.environ["EFP_JENKINS_INSTANCES_1_BASE_URL"] == "https://release.example.test"
+    assert os.environ["EFP_JENKINS_INSTANCES_1_AUTH_PASSWORD"] == "release-password"
+
+    # The agent-facing flat creds follow the default instance.
+    assert os.environ["JENKINS_USERNAME"] == "release-user"
+    assert os.environ["JENKINS_PASSWORD"] == "release-password"
+    assert os.environ["EFP_JENKINS_USERNAME"] == "release-user"
+    assert os.environ["EFP_JENKINS_PASSWORD"] == "release-password"
+
+
 def test_bootstrap_dev_mode_without_profile_env(tmp_path, monkeypatch, boot_state_reset):
     for key in ("EFP_CONFIG_JSON", "EFP_JIRA_INSTANCES_0_BASE_URL", "EFP_AWS_DOMAIN"):
         monkeypatch.delenv(key, raising=False)

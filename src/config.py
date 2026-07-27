@@ -230,6 +230,11 @@ class Config:
         },
         "jenkins": {
             "enabled": True,
+            "instances": True,
+            "default_instance": True,
+            # Legacy flat single-instance Jenkins fields: profiles saved before
+            # the Portal grew a multi-instance Jenkins UI still carry these and
+            # must keep merging into the effective config.
             "url": True,
             "username": True,
             "password": True,
@@ -693,10 +698,57 @@ class Config:
         for var in self.JENKINS_ENV_VARS:
             os.environ.pop(var, None)
 
+    @staticmethod
+    def _jenkins_default_instance(jenkins_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the Jenkins instance the CLI uses when no --instance is passed.
+
+        Multi-instance profiles carry ``instances`` plus an optional
+        ``default_instance`` name; the legacy flat profile shape is its own
+        single instance.
+        """
+        instances = jenkins_config.get("instances")
+        if not isinstance(instances, list):
+            return jenkins_config
+        # Ask the projection rather than re-deriving the choice. It filters out
+        # instances with no base URL and de-duplicates repeated/blank names
+        # (a second "ci" is projected as "ci-2"), and ``default_instance`` is
+        # matched against those *projected* names. Any second implementation
+        # drifts from it, and the drift is dangerous in one specific way: the
+        # exported EFP_JENKINS_USERNAME/PASSWORD would belong to a different
+        # controller than the exported EFP_JENKINS_DEFAULT_INSTANCE, so an
+        # agent following them authenticates against the wrong host.
+        try:
+            from src.external_cli.profile_config import (
+                _build_product_instances,
+                _default_instance_name,
+            )
+        except Exception:  # pragma: no cover - defensive, keeps boot working
+            return {}
+        projected = _build_product_instances(jenkins_config, product="jenkins")
+        if not projected:
+            return {}
+        chosen_name = _default_instance_name(jenkins_config, projected)
+        chosen = next(
+            (item for item in projected if item.get("name") == chosen_name),
+            projected[0],
+        )
+        auth = chosen.get("auth") if isinstance(chosen.get("auth"), dict) else {}
+        # Only basic password auth maps onto the flat username/password env
+        # pair, which is what this has always exported.
+        if auth.get("type") != "basic_password":
+            return {}
+        return {
+            "name": chosen.get("name", ""),
+            "url": chosen.get("base_url", ""),
+            "username": auth.get("username", ""),
+            "password": auth.get("secret", ""),
+        }
+
     def apply_jenkins_env(self) -> None:
         jenkins_config = self.jenkins
-        username = str(jenkins_config.get("username") or "").strip() if isinstance(jenkins_config, dict) else ""
-        password = str(jenkins_config.get("password") or "").strip() if isinstance(jenkins_config, dict) else ""
+        instance = self._jenkins_default_instance(jenkins_config) if isinstance(jenkins_config, dict) else {}
+        username = str(instance.get("username") or "").strip() if isinstance(instance, dict) else ""
+        password = str(instance.get("password") or "").strip() if isinstance(instance, dict) else ""
         if isinstance(jenkins_config, dict) and jenkins_config.get("enabled") and username and password:
             os.environ["EFP_JENKINS_USERNAME"] = username
             os.environ["EFP_JENKINS_PASSWORD"] = password

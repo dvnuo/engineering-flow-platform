@@ -1450,6 +1450,249 @@ def test_build_tools_config_json_drops_disabled_jenkins():
     ) == {}
 
 
+# ---------------------------------------------------------------------------
+# Jenkins multi-instance projection (aligned with jira/confluence)
+# ---------------------------------------------------------------------------
+
+
+LEGACY_FLAT_JENKINS_PROFILE = {
+    "enabled": True,
+    "url": "https://jenkins.example.test/",
+    "username": "jenkins-user",
+    "password": "jenkins-password",
+}
+
+# Frozen expectation captured from the pre-multi-instance Jenkins-only builder.
+# A saved profile using the flat shape must keep projecting to exactly this.
+LEGACY_FLAT_JENKINS_PROJECTION = {
+    "default_instance": "jenkins",
+    "instances": [
+        {
+            "name": "jenkins",
+            "base_url": "https://jenkins.example.test",
+            "rest_path": "",
+            "auth": {
+                "type": "basic_password",
+                "username": "jenkins-user",
+                "password": "jenkins-password",
+            },
+        }
+    ],
+}
+
+
+def test_legacy_flat_jenkins_profile_projection_is_unchanged():
+    """Backward compatibility: the flat saved shape projects exactly as before."""
+    root = profile_config_module.build_tools_config_json(
+        {"jenkins": dict(LEGACY_FLAT_JENKINS_PROFILE)}
+    )
+    assert root["jenkins"] == LEGACY_FLAT_JENKINS_PROJECTION
+    # Nothing an Atlassian-style rest_path would add: the flattened env is
+    # byte-identical to what the Jenkins CLI consumed before the change.
+    assert profile_config_module.flatten_config_to_env(root) == {
+        "EFP_JENKINS_DEFAULT_INSTANCE": "jenkins",
+        "EFP_JENKINS_INSTANCES_0_NAME": "jenkins",
+        "EFP_JENKINS_INSTANCES_0_BASE_URL": "https://jenkins.example.test",
+        "EFP_JENKINS_INSTANCES_0_AUTH_TYPE": "basic_password",
+        "EFP_JENKINS_INSTANCES_0_AUTH_USERNAME": "jenkins-user",
+        "EFP_JENKINS_INSTANCES_0_AUTH_PASSWORD": "jenkins-password",
+    }
+
+
+def test_build_tools_config_json_projects_multiple_jenkins_instances():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "ci",
+                        "url": "https://ci.example.test/",
+                        "username": "ci-user",
+                        "password": "ci-password",
+                    },
+                    {"name": "release", "url": "https://release.example.test", "token": "release-token"},
+                    {"name": "ci", "url": "https://ci2.example.test", "token": "ci2-token"},
+                    {"name": "off", "url": "https://off.example.test", "enabled": False},
+                    {"name": "no-url", "token": "ignored"},
+                ],
+            }
+        }
+    )
+    assert root["jenkins"]["instances"] == [
+        {
+            "name": "ci",
+            "base_url": "https://ci.example.test",
+            "rest_path": "",
+            "auth": {"type": "basic_password", "username": "ci-user", "password": "ci-password"},
+        },
+        {
+            "name": "release",
+            "base_url": "https://release.example.test",
+            "rest_path": "",
+            "auth": {"type": "bearer_token", "token": "release-token"},
+        },
+        {
+            "name": "ci-2",
+            "base_url": "https://ci2.example.test",
+            "rest_path": "",
+            "auth": {"type": "bearer_token", "token": "ci2-token"},
+        },
+    ]
+
+
+def test_jenkins_instances_keep_empty_rest_path_unlike_atlassian():
+    """Jenkins must never inherit the Atlassian /rest/api default."""
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {"enabled": True, "instances": [{"name": "ci", "url": "https://ci.example.test"}]},
+            "confluence": {
+                "enabled": True,
+                "instances": [{"name": "docs", "url": "https://conf.example.test"}],
+            },
+        }
+    )
+    assert root["jenkins"]["instances"][0]["rest_path"] == ""
+    assert root["confluence"]["instances"][0]["rest_path"] == "/rest/api"
+
+    env = profile_config_module.flatten_config_to_env(root)
+    assert "EFP_JENKINS_INSTANCES_0_REST_PATH" not in env
+    assert env["EFP_CONFLUENCE_INSTANCES_0_REST_PATH"] == "/rest/api"
+
+
+def test_jenkins_default_instance_falls_back_to_first_enabled_instance():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": True,
+                "instances": [
+                    {"name": "off", "url": "https://off.example.test", "enabled": False},
+                    {"name": "ci", "url": "https://ci.example.test"},
+                    {"name": "release", "url": "https://release.example.test"},
+                ],
+            }
+        }
+    )
+    assert root["jenkins"]["default_instance"] == "ci"
+
+
+def test_jenkins_explicit_default_instance_wins():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": True,
+                "default_instance": "release",
+                "instances": [
+                    {"name": "ci", "url": "https://ci.example.test"},
+                    {"name": "release", "url": "https://release.example.test"},
+                ],
+            }
+        }
+    )
+    assert root["jenkins"]["default_instance"] == "release"
+    assert profile_config_module.flatten_config_to_env(root)["EFP_JENKINS_DEFAULT_INSTANCE"] == "release"
+
+
+def test_jenkins_unknown_default_instance_falls_back_to_first():
+    root = profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": True,
+                "default_instance": "does-not-exist",
+                "instances": [
+                    {"name": "ci", "url": "https://ci.example.test"},
+                    {"name": "release", "url": "https://release.example.test"},
+                ],
+            }
+        }
+    )
+    assert root["jenkins"]["default_instance"] == "ci"
+
+
+def test_disabled_jenkins_section_drops_all_instances():
+    assert profile_config_module.build_tools_config_json(
+        {
+            "jenkins": {
+                "enabled": False,
+                "instances": [{"name": "ci", "url": "https://ci.example.test"}],
+            }
+        }
+    ) == {}
+
+
+def test_multi_instance_jenkins_survives_the_portal_managed_overlay_filter(tmp_path, monkeypatch):
+    """jenkins.instances must not be stripped by the Portal-managed field tree."""
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "jenkins": {
+                "enabled": True,
+                "default_instance": "release",
+                "instances": [
+                    {
+                        "name": "ci",
+                        "url": "https://ci.example.test",
+                        "username": "ci-user",
+                        "password": "ci-password",
+                    },
+                    {
+                        "name": "release",
+                        "url": "https://release.example.test",
+                        "username": "release-user",
+                        "password": "release-password",
+                    },
+                ],
+            }
+        },
+    )
+    effective = cfg.get_effective_config()
+    assert effective["jenkins"]["default_instance"] == "release"
+    assert [item["name"] for item in effective["jenkins"]["instances"]] == ["ci", "release"]
+
+    env = profile_config_module.flatten_config_to_env(
+        profile_config_module.build_tools_config_json(effective)
+    )
+    assert env["EFP_JENKINS_DEFAULT_INSTANCE"] == "release"
+    assert env["EFP_JENKINS_INSTANCES_1_BASE_URL"] == "https://release.example.test"
+    assert env["EFP_JENKINS_INSTANCES_1_AUTH_PASSWORD"] == "release-password"
+
+
+def test_multi_instance_jenkins_gets_external_cli_instructions(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "jenkins": {
+                "enabled": True,
+                "instances": [
+                    {
+                        "name": "ci",
+                        "url": "https://ci.example.test",
+                        "username": "ci-user",
+                        "password": "ci-password",
+                    }
+                ],
+            }
+        },
+    )
+    assert cfg.get_effective_config()["instruction_texts"] == [RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS]
+
+
+def test_multi_instance_jenkins_without_any_url_gets_no_cli_instructions(tmp_path, monkeypatch):
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "jenkins": {
+                "enabled": True,
+                "instances": [{"name": "ci", "username": "ci-user", "password": "ci-password"}],
+            }
+        },
+    )
+    assert "instruction_texts" not in cfg.get_effective_config()
+
+
 def test_flatten_config_to_env_produces_jenkins_instance_vars():
     root = profile_config_module.build_tools_config_json(
         {
@@ -1545,3 +1788,29 @@ def test_flatten_config_to_env_omits_empty_and_none_and_renders_bool_false():
     }
     env = profile_config_module.flatten_config_to_env(root)
     assert env == {"EFP_AWS_ENABLED": "false", "EFP_AWS_DOMAIN": "D"}
+
+
+@pytest.mark.parametrize(
+    "jenkins,expected",
+    [
+        ({"enabled": True, "url": "https://j.example.com", "username": "u", "password": "p"}, True),
+        # No endpoint: build_tools_config_json drops the section entirely, so
+        # advertising the CLI would point the agent at something unusable.
+        ({"enabled": True, "username": "u", "password": "p"}, False),
+        # Token auth is a shape the CLI supports; requiring username+password
+        # hid it.
+        ({"enabled": True, "url": "https://j.example.com", "token": "t"}, True),
+        ({"enabled": False, "url": "https://j.example.com", "username": "u", "password": "p"}, False),
+        ({"enabled": True, "instances": [{"url": "https://j.example.com", "username": "u", "password": "p"}]}, True),
+        ({"enabled": True, "instances": [{"username": "u", "password": "p"}]}, False),
+    ],
+)
+def test_jenkins_cli_is_advertised_exactly_when_it_is_usable(jenkins, expected):
+    """The legacy flat section must be judged by the same rule as instances[].
+
+    Whether the agent is told about the jenkins CLI has to agree with whether
+    the projection actually produced a usable instance for it.
+    """
+    from src.runtime_profile_projection import _has_enabled_jenkins_config
+
+    assert _has_enabled_jenkins_config({"jenkins": jenkins}) is expected
