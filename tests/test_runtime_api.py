@@ -106,6 +106,32 @@ def test_is_trusted_portal_request_depends_only_on_portal_source_marker():
     assert untrusted is False
 
 
+def test_is_trusted_portal_request_validates_configured_internal_token(monkeypatch):
+    from src.gateway import runtime_api
+
+    monkeypatch.setenv("PORTAL_INTERNAL_TOKEN", "runtime-token")
+
+    assert runtime_api._is_trusted_portal_request(
+        _HeaderOnlyRequest(
+            {
+                "X-Portal-Author-Source": "portal",
+                "X-Portal-Internal-Token": "runtime-token",
+            }
+        )
+    )
+    assert not runtime_api._is_trusted_portal_request(
+        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal"})
+    )
+    assert not runtime_api._is_trusted_portal_request(
+        _HeaderOnlyRequest(
+            {
+                "X-Portal-Author-Source": "portal",
+                "X-Portal-Internal-Token": "wrong-token",
+            }
+        )
+    )
+
+
 def test_extract_trusted_model_override_accepts_trimmed_value_for_trusted_request():
     from src.gateway import runtime_api
 
@@ -4654,6 +4680,24 @@ def test_user_message_metadata_persists_portal_author():
     }
 
 
+def test_user_message_metadata_does_not_pair_portal_id_with_runtime_name():
+    from src.efp_runtime.loop.runner import _user_message_metadata
+
+    metadata = _user_message_metadata(
+        {
+            "portal_user_id": "user-2",
+            "user_name": "runtime-api-user",
+        }
+    )
+
+    assert metadata == {
+        "source": "loop.user",
+        "author_type": "human",
+        "author_source": "portal",
+        "author_id": "user-2",
+    }
+
+
 @pytest.mark.asyncio
 async def test_api_chat_preserves_structured_display_blocks(monkeypatch):
     from src.gateway import runtime_api
@@ -5203,7 +5247,20 @@ async def test_api_edit_message_async_truncates_and_starts_regeneration(monkeypa
     calls = {}
 
     async def _fake_get_history(_session_id):
-        return [{"id": "u1", "role": "user", "content": "old"}, {"id": "a1", "role": "assistant", "content": "reply"}]
+        return [
+            {
+                "id": "u1",
+                "role": "user",
+                "content": "old",
+                "metadata": {
+                    "author_id": "user-2",
+                    "author_name": "Bob",
+                    "author_type": "human",
+                    "author_source": "portal",
+                },
+            },
+            {"id": "a1", "role": "assistant", "content": "reply"},
+        ]
 
     async def _fake_delete_from(session_id, message_id, wait_for_save=False):
         calls["delete"] = (session_id, message_id)
@@ -5217,7 +5274,16 @@ async def test_api_edit_message_async_truncates_and_starts_regeneration(monkeypa
     monkeypatch.setattr(runtime_api, "_run_edit_resend_in_background", _fake_background)
 
     resp = await runtime_api.api_edit_message_async(
-        _MessageEndpointRequest("s1", "u1", body={"content": "edited text", "request_id": "req-edit-1"})
+        _MessageEndpointRequest(
+            "s1",
+            "u1",
+            body={"content": "edited text", "request_id": "req-edit-1"},
+            headers={
+                "X-Portal-Author-Source": "portal",
+                "X-Portal-User-Id": "user-1",
+                "X-Portal-User-Name": "Alice",
+            },
+        )
     )
     await asyncio.sleep(0)  # let the scheduled background task run
 
@@ -5234,6 +5300,12 @@ async def test_api_edit_message_async_truncates_and_starts_regeneration(monkeypa
     assert calls["background"]["content"] == "edited text"
     assert calls["background"]["request_id"] == "req-edit-1"
     assert calls["background"]["replacement_user_message_id"] == payload["replacement_user_message_id"]
+    assert calls["background"]["user_author"] == {
+        "author_id": "user-2",
+        "author_name": "Bob",
+        "author_type": "human",
+        "author_source": "portal",
+    }
 
 
 @pytest.mark.asyncio

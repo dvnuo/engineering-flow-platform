@@ -78,8 +78,9 @@ def _user_message_metadata(run_metadata: Mapping[str, Any] | None) -> dict[str, 
 
     portal_author_name = _text("portal_user_name")
     author_id = _text("portal_user_id")
-    author_name = portal_author_name or _text("user_name")
-    metadata["author_source"] = "portal" if (author_id or portal_author_name) else "runtime"
+    has_portal_identity = bool(author_id or portal_author_name)
+    author_name = portal_author_name if has_portal_identity else _text("user_name")
+    metadata["author_source"] = "portal" if has_portal_identity else "runtime"
     if author_id:
         metadata["author_id"] = author_id
     if author_name:
