@@ -61,6 +61,33 @@ from .stream_events import bridge_llm_stream_events
 ContextMessageProvider = Callable[[Mapping[str, Any]], Iterable[Message]]
 
 
+def _user_message_metadata(run_metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Build persisted author metadata for a newly appended user message."""
+    metadata: dict[str, Any] = {
+        "source": "loop.user",
+        "author_type": "human",
+    }
+    values = run_metadata or {}
+
+    def _text(key: str) -> str | None:
+        value = values.get(key)
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    portal_author_name = _text("portal_user_name")
+    author_id = _text("portal_user_id")
+    has_portal_identity = bool(author_id or portal_author_name)
+    author_name = portal_author_name if has_portal_identity else _text("user_name")
+    metadata["author_source"] = "portal" if has_portal_identity else "runtime"
+    if author_id:
+        metadata["author_id"] = author_id
+    if author_name:
+        metadata["author_name"] = author_name
+    return metadata
+
+
 class LoopStatus:
     COMPLETED = "completed"
     ERROR = "error"
@@ -339,7 +366,7 @@ class RuntimeLoopRunner:
                 resolved_session_id,
                 role=MessageRole.USER,
                 parts=resolved_user_parts,
-                metadata={"source": "loop.user"},
+                metadata=_user_message_metadata(run_metadata),
                 status="complete",
             )
 

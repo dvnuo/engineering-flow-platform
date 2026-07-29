@@ -1133,14 +1133,52 @@ def _normalize_chat_history_message(
         return normalized_message
 
     if role == "user":
+        metadata = normalized_message.get("metadata")
+        persisted_metadata = metadata if isinstance(metadata, dict) else {}
+        for key in ("author_id", "author_name", "author_type", "author_source"):
+            if not normalized_message.get(key) and persisted_metadata.get(key):
+                normalized_message[key] = persisted_metadata[key]
+
         normalized_message.setdefault("author_type", "human")
-        if portal_user_id and not normalized_message.get("author_id"):
-            normalized_message["author_id"] = portal_user_id
-        if portal_user_name and not normalized_message.get("author_name"):
-            normalized_message["author_name"] = portal_user_name
-        if not normalized_message.get("author_source"):
-            normalized_message["author_source"] = "portal" if (portal_user_id or portal_user_name) else "runtime"
+        normalized_message.setdefault("author_source", "runtime")
+
+        # Request identity belongs to the viewer loading the session, not
+        # necessarily to the user who originally wrote a historical message.
+        # Only persisted message metadata is safe to use for attribution.
+        _ = portal_user_id, portal_user_name
     return normalized_message
+
+
+def _resolve_replacement_user_author(
+    target: Dict[str, Any],
+    *,
+    portal_user_id: Optional[str],
+    portal_user_name: Optional[str],
+) -> Dict[str, str]:
+    """Keep an edited turn's persisted author; use requester identity only if absent."""
+    metadata = target.get("metadata")
+    persisted_metadata = metadata if isinstance(metadata, dict) else {}
+    persisted: Dict[str, str] = {}
+    for key in ("author_id", "author_name", "author_type", "author_source"):
+        for value in (target.get(key), persisted_metadata.get(key)):
+            if isinstance(value, str) and value.strip():
+                persisted[key] = value.strip()
+                break
+
+    if persisted.get("author_id") or persisted.get("author_name"):
+        persisted.setdefault("author_type", "human")
+        persisted.setdefault("author_source", "runtime")
+        return persisted
+
+    author: Dict[str, str] = {
+        "author_type": "human",
+        "author_source": "portal" if (portal_user_id or portal_user_name) else "runtime",
+    }
+    if portal_user_id:
+        author["author_id"] = portal_user_id
+    if portal_user_name:
+        author["author_name"] = portal_user_name
+    return author
 
 
 async def api_chat(request: web.Request) -> web.Response:
@@ -3471,6 +3509,7 @@ async def _run_edit_resend_in_background(
     agent_name: Optional[str],
     model: Optional[str],
     execution_metadata: Dict[str, Any],
+    user_author: Dict[str, str],
 ) -> None:
     """Append the edited content as a fresh user turn and regenerate the reply.
 
@@ -3479,12 +3518,21 @@ async def _run_edit_resend_in_background(
     the new assistant message after the replacement user message.
     """
     try:
+        user_message_extra: Dict[str, Any] = {
+            "id": replacement_user_message_id,
+            "author_type": "human",
+            "author_source": "runtime",
+        }
+        for key in ("author_id", "author_name", "author_type", "author_source"):
+            value = user_author.get(key)
+            if isinstance(value, str) and value.strip():
+                user_message_extra[key] = value.strip()
         await session_manager.add_message(
             session_id,
             "user",
             content,
             wait_for_save=True,
-            extra={"id": replacement_user_message_id},
+            extra=user_message_extra,
         )
         await resume_runtime_chat(
             session_id=session_id,
@@ -3567,6 +3615,12 @@ async def api_edit_message_async(request: web.Request) -> web.Response:
         model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        portal_user_id, portal_user_name = _extract_portal_identity(request, data)
+        replacement_user_author = _resolve_replacement_user_author(
+            target,
+            portal_user_id=portal_user_id,
+            portal_user_name=portal_user_name,
+        )
         replacement_user_message_id = f"msg-{uuid.uuid4().hex}"
 
         # Truncate from the edited message (inclusive); the edited text is
@@ -3584,6 +3638,7 @@ async def api_edit_message_async(request: web.Request) -> web.Response:
                 agent_name=runtime_agent_name,
                 model=model,
                 execution_metadata=execution_metadata,
+                user_author=replacement_user_author,
             )
         )
 
