@@ -4556,7 +4556,7 @@ async def test_api_load_session_normalizes_assistant_name_from_trusted_portal_he
 
 
 @pytest.mark.asyncio
-async def test_api_load_session_backfills_user_author_from_trusted_portal_headers(monkeypatch):
+async def test_api_load_session_does_not_attribute_legacy_history_to_viewer(monkeypatch):
     from src.gateway import runtime_api
 
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
@@ -4584,9 +4584,74 @@ async def test_api_load_session_backfills_user_author_from_trusted_portal_header
     assert resp.status == 200
     payload = json.loads(resp.text)
     user_msg = payload["messages"][0]
-    assert user_msg["author_name"] == "Alice"
-    assert user_msg["author_id"] == "user-1"
+    assert "author_name" not in user_msg
+    assert "author_id" not in user_msg
     assert user_msg["author_type"] == "human"
+    assert user_msg["author_source"] == "runtime"
+
+
+@pytest.mark.asyncio
+async def test_api_load_session_uses_persisted_user_author_instead_of_viewer(monkeypatch):
+    from src.gateway import runtime_api
+
+    monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
+
+    async def _fake_get_existing_session(_session_id):
+        return {
+            "history": [
+                {
+                    "role": "user",
+                    "content": "hello from Bob",
+                    "metadata": {
+                        "author_id": "user-2",
+                        "author_name": "Bob",
+                        "author_type": "human",
+                        "author_source": "portal",
+                    },
+                },
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_existing_session", _fake_get_existing_session)
+
+    class _Request:
+        match_info = {"session_id": "s-load-user"}
+        headers = {
+            "X-Portal-Author-Source": "portal",
+            "X-Portal-User-Id": "user-1",
+            "X-Portal-User-Name": "Alice",
+        }
+        app = {}
+
+    resp = await runtime_api.api_load_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    user_msg = payload["messages"][0]
+    assert user_msg["author_name"] == "Bob"
+    assert user_msg["author_id"] == "user-2"
+    assert user_msg["author_type"] == "human"
+    assert user_msg["author_source"] == "portal"
+
+
+def test_user_message_metadata_persists_portal_author():
+    from src.efp_runtime.loop.runner import _user_message_metadata
+
+    metadata = _user_message_metadata(
+        {
+            "portal_user_id": " user-2 ",
+            "portal_user_name": " Bob ",
+            "user_name": "ignored viewer",
+        }
+    )
+
+    assert metadata == {
+        "source": "loop.user",
+        "author_type": "human",
+        "author_source": "portal",
+        "author_id": "user-2",
+        "author_name": "Bob",
+    }
 
 
 @pytest.mark.asyncio
