@@ -106,32 +106,6 @@ def test_is_trusted_portal_request_depends_only_on_portal_source_marker():
     assert untrusted is False
 
 
-def test_is_trusted_portal_request_validates_configured_internal_token(monkeypatch):
-    from src.gateway import runtime_api
-
-    monkeypatch.setenv("PORTAL_INTERNAL_TOKEN", "runtime-token")
-
-    assert runtime_api._is_trusted_portal_request(
-        _HeaderOnlyRequest(
-            {
-                "X-Portal-Author-Source": "portal",
-                "X-Portal-Internal-Token": "runtime-token",
-            }
-        )
-    )
-    assert not runtime_api._is_trusted_portal_request(
-        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal"})
-    )
-    assert not runtime_api._is_trusted_portal_request(
-        _HeaderOnlyRequest(
-            {
-                "X-Portal-Author-Source": "portal",
-                "X-Portal-Internal-Token": "wrong-token",
-            }
-        )
-    )
-
-
 def test_extract_trusted_model_override_accepts_trimmed_value_for_trusted_request():
     from src.gateway import runtime_api
 

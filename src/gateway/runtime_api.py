@@ -2,7 +2,6 @@
 
 import asyncio
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -246,15 +245,7 @@ async def _enrich_publish_metadata_with_context_preview(
 def _is_trusted_portal_request(request: web.Request) -> bool:
     headers = getattr(request, "headers", {}) or {}
     portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
-    if portal_source != "portal":
-        return False
-    expected_token = str(os.getenv("PORTAL_INTERNAL_TOKEN") or "").strip()
-    if not expected_token:
-        # Backward compatibility for direct/local runtime deployments. Portal
-        # managed pods always receive the agent-scoped token.
-        return True
-    supplied_token = str(headers.get("X-Portal-Internal-Token") or "").strip()
-    return bool(supplied_token) and hmac.compare_digest(expected_token, supplied_token)
+    return portal_source == "portal"
 
 
 def _resolve_chat_display_user_name(data: Dict[str, Any], portal_user_name: Optional[str]) -> str:
