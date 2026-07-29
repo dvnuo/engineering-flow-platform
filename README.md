@@ -105,6 +105,11 @@ server:
   jira_reconciliation_interval_seconds: 300
 ```
 
+Managed Portal deployments must also set `PORTAL_INTERNAL_TOKEN` in each
+runtime container. Portal sends the same value in
+`X-Portal-Internal-Token`; the value should be unique to that Agent and must
+not be exposed to browser clients.
+
 Reconciliation/session contract notes:
 - Jira reconciliation fallback publishes to Portal via `/api/internal/external-events/ingest` using Portal `ExternalEventIngressRequest`-compatible fields (`workflow_review_requested`, `payload_json`, `project_key`, `issue_key`, etc.).
 - Runtime session metadata publish keeps canonical keys first and supports legacy Portal aliases (`portal_group_id`, `portal_task_id`, `portal_delegation_id`, `portal_coordination_run_id`) for cross-version compatibility.
@@ -245,7 +250,13 @@ and are not loaded through `EFP_TOOLS_DIR` or `EFP_EXTERNAL_TOOLS_*`.
 - Governance/capability metadata is only applied for **trusted Portal requests**.
 - Trusted chat request requires:
   - `X-Portal-Author-Source: portal`.
+  - `X-Portal-Internal-Token` matching the runtime's
+    `PORTAL_INTERNAL_TOKEN` environment variable.
 - `portal_user_id` / `portal_user_name` are trusted identity headers only (`X-Portal-User-Id`, `X-Portal-User-Name`).
+- During migration, runtimes without `PORTAL_INTERNAL_TOKEN` configured retain
+  the source-marker behavior. Once the environment variable is set, the token
+  header is mandatory and a missing or incorrect token is treated as
+  untrusted.
 
 For complete control-plane contract details, see `docs/control_plane_contract.md`.
 
@@ -258,7 +269,9 @@ Additional runtime contracts:
 ### Portal Control-Plane Integration (Operator Minimum)
 
 1. **Portal -> EFP trusted chat**  
-   Header: `X-Portal-Author-Source: portal`.
+   Headers: `X-Portal-Author-Source: portal` and
+   `X-Portal-Internal-Token: <agent-scoped token>`. Configure that same token
+   in the runtime as `PORTAL_INTERNAL_TOKEN`.
 
 2. **Portal -> EFP internal runtime endpoints** (`/api/tasks/execute`, `/api/capabilities`)  
    The current deployment mode relies on the trusted Portal source/header contract.

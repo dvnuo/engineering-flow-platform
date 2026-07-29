@@ -7,10 +7,16 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 - Direct runtime chat is allowed without Portal.
 - Trusted Portal metadata/identity is only accepted when request is trusted:
   - `X-Portal-Author-Source: portal`
+  - `X-Portal-Internal-Token`, equal to the runtime's
+    `PORTAL_INTERNAL_TOKEN` environment variable
 - Portal identity is header-only:
   - `X-Portal-User-Id`
   - `X-Portal-User-Name`
 - Untrusted requests cannot inject governance metadata.
+- Compatibility rollout: when `PORTAL_INTERNAL_TOKEN` is not configured, the
+  runtime continues to accept the source marker alone. When it is configured,
+  a missing or mismatched token makes the request untrusted. Portal must begin
+  sending the token in the same deployment that injects it into Agent pods.
 
 ## 2) Runtime Internal Endpoints
 
@@ -27,7 +33,7 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 | Chain | EFP setting | Portal side should provide |
 |---|---|---|
 | Portal → EFP `/api/tasks/execute`, `/api/capabilities` | none | none required (currently permissive) |
-| Portal → EFP trusted chat metadata/identity | `X-Portal-Author-Source: portal` | `X-Portal-User-Id`, `X-Portal-User-Name` (optional) |
+| Portal → EFP trusted chat metadata/identity | `PORTAL_INTERNAL_TOKEN` (agent-scoped) | `X-Portal-Author-Source: portal`, matching `X-Portal-Internal-Token`, plus optional `X-Portal-User-Id` / `X-Portal-User-Name` |
 | Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_base_url` / `PORTAL_INTERNAL_BASE_URL` | internal route available at configured base URL |
 
 ## 5) Jira Reconciliation Contract (Runtime Fallback)
