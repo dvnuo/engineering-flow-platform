@@ -1152,6 +1152,8 @@ class RuntimeLoopRunner:
                 payload={
                     **event_payload,
                     "stored_message_count": len(updated_history),
+                    "stored": True,
+                    "scope": "session",
                 },
             )
         )
@@ -3078,7 +3080,14 @@ def _append_request_compaction_event(
     budget only existed for operators who configured one; now the model catalog
     supplies a budget on every run, so an unconfigured session can quietly lose
     the older two thirds of its context while the Portal transcript still shows
-    it in full. ``stored`` distinguishes this from the destructive path.
+    it in full.
+
+    This deliberately uses its own ``request_compacted`` type rather than
+    reusing ``session_compacted``: that type means the stored session was
+    rewritten, and a consumer must be able to tell whether anything on disk
+    changed. Both project to the same ``session.next.compaction.ended`` UI
+    event, and the projection carries ``stored``/``scope`` through so the
+    distinction survives.
     """
 
     prepared = request.prepared_request
@@ -3086,7 +3095,7 @@ def _append_request_compaction_event(
         return
     runtime_events.append(
         RuntimeEvent(
-            type="session_compacted",
+            type="request_compacted",
             message="Request context compacted to fit the model context budget.",
             session_id=session_id,
             payload={

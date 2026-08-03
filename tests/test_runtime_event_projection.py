@@ -180,3 +180,55 @@ def test_projector_maps_new_llm_error_and_finish_events():
         )
     )
     assert finish == []
+
+
+def test_projector_distinguishes_request_compaction_from_stored_rewrites():
+    """Both compaction kinds render the same, but must stay tellable apart.
+
+    ``session_compacted`` means the stored session was rewritten on disk;
+    ``request_compacted`` means only the outgoing request was trimmed. They
+    share a UI event so the timeline keeps rendering both, so the projected
+    ``stored``/``scope`` fields are the only signal a consumer has for whether
+    anything on disk changed.
+    """
+
+    projector = RuntimeEventProjector(request_id="req-1", model="gpt-5.6-sol")
+
+    request_only = projector.project(
+        RuntimeEvent(
+            type="request_compacted",
+            session_id="s-1",
+            payload={
+                "run_id": "run-1",
+                "iteration": 3,
+                "trigger": "context_budget",
+                "stored": False,
+                "scope": "request",
+            },
+        )
+    )
+    stored = projector.project(
+        RuntimeEvent(
+            type="session_compacted",
+            session_id="s-1",
+            payload={
+                "run_id": "run-1",
+                "trigger": "context_budget",
+                "stored": True,
+                "scope": "session",
+                "stored_message_count": 7,
+            },
+        )
+    )
+
+    assert len(request_only) == 1
+    assert len(stored) == 1
+    # Same UI event, so the Portal timeline needs no change...
+    assert request_only[0]["type"] == "session.next.compaction.ended"
+    assert stored[0]["type"] == "session.next.compaction.ended"
+    # ...but the on-disk distinction survives projection.
+    assert request_only[0]["data"]["stored"] is False
+    assert request_only[0]["data"]["scope"] == "request"
+    assert stored[0]["data"]["stored"] is True
+    assert stored[0]["data"]["scope"] == "session"
+    assert stored[0]["data"]["stored_message_count"] == 7

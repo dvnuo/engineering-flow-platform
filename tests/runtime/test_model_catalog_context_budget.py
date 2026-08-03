@@ -319,12 +319,19 @@ async def test_request_compaction_is_reported_as_a_runtime_event():
     result = await runner.run(session_id="session-event", user_text="latest request")
 
     events = [
-        event for event in result.runtime_events if event.type == "session_compacted"
+        event for event in result.runtime_events if event.type == "request_compacted"
     ]
     assert len(events) == 1
     assert events[0].payload["stored"] is False
     assert events[0].payload["scope"] == "request"
     assert events[0].payload["compacted_message_count"] > 0
+
+    # "session_compacted" means the stored session was rewritten. Render-time
+    # trimming must never claim that, or a consumer cannot tell whether
+    # anything on disk changed.
+    assert not [
+        event for event in result.runtime_events if event.type == "session_compacted"
+    ]
 
 
 @pytest.mark.asyncio
@@ -339,7 +346,9 @@ async def test_short_session_is_not_compacted_by_the_default_budget():
     assert result.status == LoopStatus.COMPLETED
     assert provider.requests[0].prepared_request.compaction_applied is False
     assert not [
-        event for event in result.runtime_events if event.type == "session_compacted"
+        event
+        for event in result.runtime_events
+        if event.type in {"session_compacted", "request_compacted"}
     ]
 
 
