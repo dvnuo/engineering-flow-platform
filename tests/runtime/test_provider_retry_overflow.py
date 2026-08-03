@@ -15,7 +15,9 @@ from efp_runtime.llm.errors import (
     ProviderFatalError,
     ProviderTransientError,
 )
+from efp_runtime.llm.events import LLMEvent, LLMEventType
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest
+from efp_runtime.loop.runner import _prefetch_async_stream
 from efp_runtime.models import Message, MessagePart, ToolCall
 from efp_runtime.session.models import Session
 from efp_runtime.session.store import InMemorySessionStore
@@ -51,6 +53,38 @@ class SequenceProvider:
         return step
 
 
+class StreamSequenceProvider:
+    """Provider whose invoke() returns an *unstarted* async generator per call.
+
+    This is the shape every streaming provider has (OpenAICompatibleProvider
+    returns ``adapter.normalize_stream(...)``), so a failure raised before the
+    first yield only reaches the runner if the runner starts the stream itself.
+    """
+
+    def __init__(self, steps):
+        self.steps = list(steps)
+        self.requests: list[RuntimeRequest] = []
+        self.message_snapshots: list[list[tuple[str, str]]] = []
+
+    def invoke(self, request: RuntimeRequest):
+        self.requests.append(request)
+        self.message_snapshots.append(
+            [
+                (message.role, message.text)
+                for message in request.provider_request.messages
+            ]
+        )
+        if not self.steps:
+            raise AssertionError("StreamSequenceProvider has no step left")
+        return self._stream(self.steps.pop(0))
+
+    async def _stream(self, step):
+        if isinstance(step, BaseException):
+            raise step
+        for event in step:
+            yield event
+
+
 def _runner(provider, **kwargs) -> RuntimeLoopRunner:
     return RuntimeLoopRunner(
         store=InMemorySessionStore(),
@@ -72,6 +106,14 @@ def _old_session(*texts: str) -> Session:
 
 def _events(result, event_type: str):
     return [event for event in result.runtime_events if event.type == event_type]
+
+
+def _stored_fingerprint(message) -> tuple:
+    return (
+        message.message_id,
+        message.role,
+        tuple(part.text for part in message.parts),
+    )
 
 
 @pytest.mark.asyncio
@@ -361,6 +403,183 @@ async def test_context_overflow_retry_preserves_pending_tool_call():
     ]
     assert calls == ["call-pending"]
     assert provider.message_snapshots[1][-1] == ("user", "latest request")
+
+
+@pytest.mark.asyncio
+async def test_stream_overflow_before_first_chunk_triggers_compacted_retry():
+    provider = StreamSequenceProvider(
+        [
+            ProviderContextOverflowError("context too long"),
+            [
+                LLMEvent(LLMEventType.STEP_START),
+                LLMEvent(LLMEventType.TEXT_DELTA, part_id="text_0", delta="Recovered."),
+                LLMEvent(LLMEventType.STEP_FINISH),
+            ],
+        ]
+    )
+    runner = _runner(provider, max_context_parts=5)
+
+    result = await runner.run(
+        session=_old_session("old 1", "old 2", "old 3", "old 4"),
+        user_text="latest request",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(provider.requests) == 2
+    assert len(_events(result, "provider.context_overflow_retry")) == 1
+    assert provider.requests[1].metadata["overflow_retry"] is True
+    assert provider.message_snapshots[1][-1] == ("user", "latest request")
+    assert result.final_assistant_message is not None
+    assert result.final_assistant_message.parts[0].text == "Recovered."
+
+
+@pytest.mark.asyncio
+async def test_stream_overflow_retry_emits_llm_events_only_for_the_served_attempt():
+    provider = StreamSequenceProvider(
+        [
+            ProviderContextOverflowError("context too long"),
+            [
+                LLMEvent(LLMEventType.STEP_START),
+                LLMEvent(LLMEventType.TEXT_DELTA, part_id="text_0", delta="Recovered."),
+                LLMEvent(LLMEventType.STEP_FINISH),
+            ],
+        ]
+    )
+    runner = _runner(provider, max_context_parts=5)
+
+    result = await runner.run(
+        session=_old_session("old 1", "old 2", "old 3", "old 4"),
+        user_text="latest request",
+    )
+
+    # The discarded first attempt must not leak llm.* events; prefetching the
+    # first chunk happens before the stream-event bridge runs.
+    assert [event.payload["delta"] for event in _events(result, "llm.text_delta")] == [
+        "Recovered."
+    ]
+    assert len(_events(result, "llm.step_finish")) == 1
+
+
+@pytest.mark.asyncio
+async def test_prefetch_replays_the_consumed_head_chunk():
+    # _prefetch_async_stream pulls the first chunk off the provider stream to
+    # surface a pre-first-yield failure. That chunk is already consumed, so the
+    # replay wrapper has to hand it back or every stream silently loses its head.
+    async def three_chunks():
+        yield "head"
+        yield "middle"
+        yield "tail"
+
+    replayed = await _prefetch_async_stream(three_chunks())
+    assert [chunk async for chunk in replayed] == ["head", "middle", "tail"]
+
+    async def no_chunks():
+        return
+        yield  # pragma: no cover - marks this an async generator
+
+    empty = await _prefetch_async_stream(no_chunks())
+    assert [chunk async for chunk in empty] == []
+
+
+@pytest.mark.asyncio
+async def test_stream_first_text_delta_survives_the_prefetch():
+    # End-to-end guard for the same head chunk: the first *normalized* event of
+    # a stream is often already a TEXT_DELTA, and dropping it would silently
+    # truncate the assistant's answer rather than fail loudly.
+    provider = StreamSequenceProvider(
+        [
+            [
+                LLMEvent(LLMEventType.TEXT_DELTA, part_id="text_0", delta="HEAD-"),
+                LLMEvent(LLMEventType.TEXT_DELTA, part_id="text_0", delta="TAIL"),
+                LLMEvent(LLMEventType.STEP_FINISH),
+            ]
+        ]
+    )
+    runner = _runner(provider)
+
+    result = await runner.run(session_id="session-stream-head", user_text="hi")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.final_assistant_message is not None
+    assert result.final_assistant_message.parts[0].text == "HEAD-TAIL"
+
+
+@pytest.mark.asyncio
+async def test_stream_transient_error_before_first_chunk_is_retried():
+    # Scope note, pinned deliberately: prefetching the first chunk makes *every*
+    # retryable provider error raised before the first yield reachable by the
+    # retry loop, not only ProviderContextOverflowError. Nothing was yielded, so
+    # no partial assistant message and no tool call can have escaped.
+    provider = StreamSequenceProvider(
+        [
+            ProviderTransientError("stream connect failed"),
+            [
+                LLMEvent(LLMEventType.STEP_START),
+                LLMEvent(LLMEventType.TEXT_DELTA, part_id="text_0", delta="Recovered."),
+                LLMEvent(LLMEventType.STEP_FINISH),
+            ],
+        ]
+    )
+    runner = _runner(provider, provider_retry_backoff_seconds=0)
+
+    result = await runner.run(session_id="session-stream-transient", user_text="hi")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(provider.requests) == 2
+    assert len(_events(result, "provider.retry")) == 1
+    assert not _events(result, "provider.context_overflow_retry")
+    assert result.final_assistant_message is not None
+    assert result.final_assistant_message.parts[0].text == "Recovered."
+
+
+_STOCK_BUDGET_TURN_TEXTS = tuple(
+    # The catalog default for the stock model leaves ~1.05M prompt chars, halved
+    # to ~528k on the overflow retry. The transcript has to exceed the halved
+    # budget or "the retry sends less" would be vacuously false.
+    "bulk turn {0} ".format(index) * 6000
+    for index in range(10)
+)
+
+
+@pytest.mark.asyncio
+async def test_overflow_retry_shrinks_request_without_rewriting_stored_history():
+    provider = SequenceProvider(
+        [
+            ProviderContextOverflowError("context too long"),
+            {"content": "Recovered without rewriting the transcript."},
+        ]
+    )
+    store = InMemorySessionStore()
+    # Stock runner: no max_context_parts/chars/tokens. The catalog-derived budget
+    # sizes the in-memory request only, so the overflow retry must compact at
+    # render time and leave the stored transcript alone.
+    runner = RuntimeLoopRunner(
+        store=store,
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+    seeded = _old_session(*_STOCK_BUDGET_TURN_TEXTS)
+    seeded_messages = [_stored_fingerprint(message) for message in seeded.messages]
+
+    result = await runner.run(session=seeded, user_text="latest request")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(provider.requests) == 2
+    assert len(_events(result, "provider.context_overflow_retry")) == 1
+
+    # The stored transcript is untouched: same ids, same text, still leading.
+    stored = store.read_history("session-provider-retry")
+    assert [
+        _stored_fingerprint(message) for message in stored[: len(seeded_messages)]
+    ] == seeded_messages
+    assert _events(result, "session_compacted") == []
+    assert _events(result, "session_compaction_started") == []
+
+    # ...and the retry still sent strictly less than the first attempt.
+    first_chars = sum(len(text) for _role, text in provider.message_snapshots[0])
+    retry_chars = sum(len(text) for _role, text in provider.message_snapshots[1])
+    assert retry_chars < first_chars
+    assert provider.requests[1].prepared_request.compaction_applied is True
 
 
 def test_provider_retry_error_import_boundary():

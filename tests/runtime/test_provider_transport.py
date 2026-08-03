@@ -5,13 +5,16 @@ import json
 import os
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 from urllib import error as urllib_error
 
 import pytest
 
 import efp_runtime.llm.provider as provider_module
+from efp_runtime.llm.errors import ProviderContextOverflowError
 from efp_runtime.llm.provider import (
+    AIPlatformHTTPTransport,
     DEFAULT_COPILOT_REASONING_EFFORT,
     DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
     GitHubCopilotHTTPTransport,
@@ -35,7 +38,8 @@ from efp_runtime.llm.request import (
     RequestToolSchema,
 )
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest
-from efp_runtime.session.models import MessagePartType, MessageRole
+from efp_runtime.models import Message
+from efp_runtime.session.models import MessagePartType, MessageRole, Session
 from efp_runtime.session.store import InMemorySessionStore
 from efp_runtime.tools.definition import ToolDef
 from efp_runtime.tools.registry import ToolRegistry
@@ -592,8 +596,21 @@ async def test_github_copilot_model_unavailable_does_not_fallback_to_gpt_5_5():
 
 
 @pytest.mark.asyncio
-async def test_github_copilot_regular_http_400_does_not_fallback():
-    transport = RecordingTransport([ProviderTransportError("HTTP 400 bad request")])
+async def test_github_copilot_regular_http_400_does_not_fallback_or_retry():
+    # Runner-level pin only: the transport hands the runner an already-built
+    # ProviderTransportError, so a payload-shape 400 must end the run instead of
+    # buying a compacted retry. The classifier itself is not exercised here - see
+    # test_github_copilot_http_transport_invalid_request_body_is_not_overflow.
+    transport = RecordingTransport(
+        [
+            ProviderTransportError(
+                "GitHub Copilot HTTP transport failed with status 400 (Bad Request) "
+                "response: "
+                '{"error":{"message":"Invalid value for tools[0].function.name",'
+                '"code":"invalid_request_body"}}'
+            )
+        ]
+    )
     provider = GitHubCopilotProvider(transport=transport, model="gpt-5.4")
     runner = RuntimeLoopRunner(
         store=InMemorySessionStore(),
@@ -609,6 +626,11 @@ async def test_github_copilot_regular_http_400_does_not_fallback():
     assert result.status == LoopStatus.ERROR
     assert len(transport.payloads) == 1
     assert transport.payloads[0]["model"] == "gpt-5.4"
+    assert not [
+        event
+        for event in result.runtime_events
+        if event.type == "provider.context_overflow_retry"
+    ]
     _assert_strict_copilot_responses_payload(transport.payloads[0])
 
 
@@ -1121,6 +1143,356 @@ async def test_github_copilot_http_transport_regular_400_is_transport_error(
     assert "invalid request" in str(exc_info.value)
 
 
+_CONTEXT_OVERFLOW_400_BODY = (
+    b'{"error":{"message":"Your input exceeds the context window of this model. '
+    b'Reduce the input for integrator secret-token and try again.",'
+    b'"code":"invalid_request_body"}}'
+)
+
+
+def _copilot_payload(*, stream: bool) -> dict:
+    return {
+        "model": "gpt-5.4",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Say ok"}]}
+        ],
+        "reasoning": {"effort": "high"},
+        "stream": stream,
+    }
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_raises_context_overflow(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(_CONTEXT_OVERFLOW_400_BODY),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderContextOverflowError) as exc_info:
+        await transport.send(_copilot_payload(stream=False))
+
+    error = exc_info.value
+    assert not isinstance(error, ProviderModelUnavailableError)
+    assert error.code == "context_overflow"
+    assert error.retryable is True
+    assert error.metadata["status_code"] == 400
+    assert "exceeds the context window" in str(error)
+    assert "[redacted]" in str(error)
+    assert "secret-token" not in str(error)
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_stream_raises_context_overflow(
+    monkeypatch,
+):
+    # The gateway builds Copilot providers with stream=True, so the streaming
+    # branch is the one production actually hits.
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(_CONTEXT_OVERFLOW_400_BODY),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    stream = await transport.send(_copilot_payload(stream=True))
+    with pytest.raises(ProviderContextOverflowError) as exc_info:
+        [chunk async for chunk in stream]
+
+    assert exc_info.value.metadata["status_code"] == 400
+    assert "secret-token" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_invalid_request_body_is_not_overflow(
+    monkeypatch,
+):
+    # "invalid_request_body" is the generic /responses payload rejection code; a
+    # tool-schema 400 must not be classified as a context overflow.
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(
+                b'{"error":{"message":"Invalid value for tools[0].function.name",'
+                b'"code":"invalid_request_body"}}'
+            ),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderTransportError) as exc_info:
+        await transport.send(_copilot_payload(stream=False))
+
+    assert not isinstance(exc_info.value, ProviderContextOverflowError)
+    assert "tools[0].function.name" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_model_unavailable_wins_over_overflow(
+    monkeypatch,
+):
+    # Both classifiers match this body; the model-unavailable check runs first
+    # because retrying a smaller prompt cannot fix an unavailable model.
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(
+                b'{"error":{"message":"The requested model is not available; its '
+                b'maximum context length is 128000 tokens. Available models: '
+                b'[gpt-5.5]","code":"context_length_exceeded"}}'
+            ),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderModelUnavailableError) as exc_info:
+        await transport.send(_copilot_payload(stream=False))
+
+    assert not isinstance(exc_info.value, ProviderContextOverflowError)
+    assert exc_info.value.available_models_text == "[gpt-5.5]"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Your input exceeds the context window of this model.",
+        "Rejected: context_length_exceeded",
+        "Context length exceeded for this request",
+        "This model's maximum context length is 128000 tokens",
+    ],
+)
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_each_overflow_marker_classifies(
+    monkeypatch, message
+):
+    # Every marker carries the classification on its own: the bodies below all
+    # ship the generic /responses code, so no other signal can stand in for one.
+    body = json.dumps(
+        {"error": {"message": message, "code": "invalid_request_body"}}
+    ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url, 400, "Bad Request", hdrs=None, fp=io.BytesIO(body)
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderContextOverflowError):
+        await transport.send(_copilot_payload(stream=False))
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_overflow_code_alone_classifies(
+    monkeypatch,
+):
+    # Mirror image of the marker test: no marker anywhere in the message, so the
+    # allowlisted error code is the only thing that can classify this body.
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(
+                b'{"error":{"message":"Request too large","code":'
+                b'"context_length_exceeded"}}'
+            ),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderContextOverflowError) as exc_info:
+        await transport.send(_copilot_payload(stream=False))
+
+    assert exc_info.value.metadata["provider_error_code"] == "context_length_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_413_without_a_marker_is_overflow(
+    monkeypatch,
+):
+    # A proxy in front of the endpoint answers an oversized POST with a bare 413
+    # and no JSON envelope. 413 on a prompt POST has no other meaning, so it must
+    # still buy the compacted retry.
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            413,
+            "Request Entity Too Large",
+            hdrs=None,
+            fp=io.BytesIO(b"<html><body>413 Request Entity Too Large</body></html>"),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderContextOverflowError) as exc_info:
+        await transport.send(_copilot_payload(stream=False))
+
+    assert exc_info.value.metadata["status_code"] == 413
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_non_json_body_marker_is_overflow(
+    monkeypatch,
+):
+    # A gateway that answers in plain text still has to be understood, so the
+    # whole body is scanned when it is not a JSON object.
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b"Bad Request: input exceeds the context window"),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderContextOverflowError):
+        await transport.send(_copilot_payload(stream=False))
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_http_transport_echoed_request_is_not_overflow(
+    monkeypatch,
+):
+    # A JSON envelope without a message key must NOT be scanned as raw text: the
+    # body echoes the rejected request, and the user's own prompt mentioning a
+    # context window would otherwise turn a validation 400 into an "overflow" -
+    # which, with an explicitly configured budget, rewrites the stored transcript.
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(
+                b'{"error":{"code":"invalid_request_body","param":"input[3].content"},'
+                b'"request":{"input":[{"text":"explain the maximum context length '
+                b'of gpt-5"}]}}'
+            ),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = GitHubCopilotHTTPTransport(token="secret-token")
+    with pytest.raises(ProviderTransportError) as exc_info:
+        await transport.send(_copilot_payload(stream=False))
+
+    assert not isinstance(exc_info.value, ProviderContextOverflowError)
+    assert "input[3].content" in str(exc_info.value)
+
+
+def _ai_platform_transport() -> AIPlatformHTTPTransport:
+    return AIPlatformHTTPTransport(
+        chat_endpoint="https://chat.test/v1/api/v1/chat/completions",
+        token="ap-secret-token",
+        trust_token_header="X-Trust",
+        tracking_prefix="EFP",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ai_platform_http_transport_raises_context_overflow(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(
+                b'{"error":{"message":"This model\'s maximum context length is '
+                b'128000 tokens","code":"context_length_exceeded"}}'
+            ),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = _ai_platform_transport()
+    with pytest.raises(ProviderContextOverflowError) as exc_info:
+        await transport.send({"model": "gpt-5.4", "messages": [], "stream": False})
+
+    error = exc_info.value
+    assert error.code == "context_overflow"
+    assert error.metadata["status_code"] == 400
+    assert error.metadata["provider_error_code"] == "context_length_exceeded"
+    assert "AI Platform" in str(error)
+
+
+@pytest.mark.asyncio
+async def test_ai_platform_http_transport_stream_raises_context_overflow(monkeypatch):
+    # The AI Platform streaming branch is a separate error path from the
+    # non-streaming one, and streaming is what the gateway builds.
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(
+                b'{"error":{"message":"This model\'s maximum context length is '
+                b'128000 tokens","code":"context_length_exceeded"}}'
+            ),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = _ai_platform_transport()
+    stream = await transport.send(
+        {"model": "gpt-5.4", "messages": [], "stream": True}
+    )
+    with pytest.raises(ProviderContextOverflowError) as exc_info:
+        [chunk async for chunk in stream]
+
+    assert exc_info.value.metadata["status_code"] == 400
+    assert "AI Platform" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_ai_platform_http_transport_unrelated_400_is_transport_error(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise urllib_error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"usercase is required"}}'),
+        )
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+
+    transport = _ai_platform_transport()
+    with pytest.raises(ProviderTransportError) as exc_info:
+        await transport.send({"model": "gpt-5.4", "messages": [], "stream": False})
+
+    assert not isinstance(exc_info.value, ProviderContextOverflowError)
+    assert "usercase is required" in str(exc_info.value)
+
+
 def test_github_copilot_provider_from_env_reads_token_and_base_url():
     provider = github_copilot_provider_from_env(
         env={
@@ -1398,6 +1770,142 @@ async def test_transport_send_error_maps_to_loop_error_status():
     assert "OpenAI-compatible transport failed" in error_part.text
     assert "network disabled" in error_part.text
     assert any(event.type == "llm.provider_error" for event in result.runtime_events)
+
+
+class _StreamingSequenceTransport:
+    """Transport whose send() returns an *unstarted* async generator per call.
+
+    Mirrors GitHubCopilotHTTPTransport._send_stream: send() resolves without
+    touching the network, and the HTTP failure only surfaces on the first
+    __anext__.
+    """
+
+    def __init__(self, steps):
+        self._steps = list(steps)
+        self.payloads: list[dict] = []
+
+    async def send(self, payload):
+        self.payloads.append(deepcopy(payload))
+        if not self._steps:
+            raise AssertionError("_StreamingSequenceTransport has no step left")
+        return self._stream(self._steps.pop(0))
+
+    async def _stream(self, step):
+        if isinstance(step, BaseException):
+            raise step
+        for chunk in step:
+            yield chunk
+
+
+def _overflow_session(session_id: str, *texts: str) -> Session:
+    return Session(
+        session_id=session_id,
+        messages=[
+            Message.from_text("user", text, message_id="msg-{0}".format(index))
+            for index, text in enumerate(texts)
+        ],
+    )
+
+
+# Long enough that dropping the old turns for a compaction summary is a net
+# reduction; a handful of short turns would be replaced by boilerplate larger
+# than the text it summarises and the anti-theatre assertion below would be
+# measuring the summary header instead of a real shrink.
+_OVERFLOW_HISTORY_TEXTS = tuple(
+    "old turn {0} ".format(index) * 400 for index in range(1, 5)
+)
+
+
+@pytest.mark.asyncio
+async def test_stream_context_overflow_reaches_runner_retry():
+    transport = _StreamingSequenceTransport(
+        [
+            ProviderContextOverflowError(
+                "GitHub Copilot rejected the request as larger than the model "
+                "context window: Your input exceeds the context window."
+            ),
+            [
+                {"choices": [{"delta": {"content": "Recovered."}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ],
+        ]
+    )
+    provider = GitHubCopilotProvider(
+        transport=transport,
+        model="gpt-5.4",
+        stream=True,
+    )
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+        max_context_parts=5,
+    )
+
+    result = await runner.run(
+        session=_overflow_session(
+            "session-stream-overflow",
+            *_OVERFLOW_HISTORY_TEXTS,
+        ),
+        user_text="latest request must survive",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(transport.payloads) == 2
+    overflow_events = [
+        event
+        for event in result.runtime_events
+        if event.type == "provider.context_overflow_retry"
+    ]
+    assert len(overflow_events) == 1
+    assert transport.payloads[1]["input"][-1]["content"][0]["text"] == (
+        "latest request must survive"
+    )
+    # Anti-theatre: the retry must actually send less, not resend the same bytes.
+    assert len(json.dumps(transport.payloads[1]["input"])) < len(
+        json.dumps(transport.payloads[0]["input"])
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_stream_context_overflow_reaches_runner_retry():
+    transport = RecordingTransport(
+        [
+            ProviderContextOverflowError(
+                "GitHub Copilot rejected the request as larger than the model "
+                "context window: Your input exceeds the context window."
+            ),
+            _responses_response("Recovered."),
+        ]
+    )
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-5.4")
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+        max_context_parts=5,
+    )
+
+    result = await runner.run(
+        session=_overflow_session(
+            "session-non-stream-overflow",
+            *_OVERFLOW_HISTORY_TEXTS,
+        ),
+        user_text="latest request must survive",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(transport.payloads) == 2
+    assert (
+        len(
+            [
+                event
+                for event in result.runtime_events
+                if event.type == "provider.context_overflow_retry"
+            ]
+        )
+        == 1
+    )
 
 
 def test_provider_transport_imports_standalone_with_pythonpath_src():

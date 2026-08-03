@@ -23,6 +23,7 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from .adapter import DefaultLLMEventAdapter, LLMEventAdapter
+from .errors import ProviderContextOverflowError
 from .models import (
     DEFAULT_MODEL_ID,
     DEFAULT_PROVIDER_ID,
@@ -94,6 +95,21 @@ GITHUB_SOURCE_TOKEN_PREFIXES = (
     "github_pat_",
 )
 _PROXY_ENDPOINT_PATTERN = re.compile(r"(?:^|[;&,\s])proxy-ep=([^;&,\s]+)")
+# Substrings that identify a provider 400/413 as "the prompt is too big". The
+# message is the primary discriminator, never the generic error code: the
+# Copilot /responses endpoint returns "invalid_request_body" for tool-schema and
+# call-id rejections too (see _sanitize_copilot_responses_payload), so matching
+# on that code would classify a malformed-tool 400 as a context overflow and send
+# the runner into a pointless compacted retry. Only the unambiguous codes in
+# _CONTEXT_OVERFLOW_ERROR_CODES below classify on their own.
+_CONTEXT_OVERFLOW_MESSAGE_MARKERS = (
+    "exceeds the context window",
+    "context_length_exceeded",
+    "context length exceeded",
+    "maximum context length",
+)
+# Secondary allowlist of provider error codes that mean overflow on their own.
+_CONTEXT_OVERFLOW_ERROR_CODES = ("context_length_exceeded",)
 
 
 class GitHubCopilotHTTPTransport:
@@ -248,6 +264,13 @@ class GitHubCopilotHTTPTransport:
             )
             if model_unavailable_error is not None:
                 raise model_unavailable_error from None
+            overflow_error = _context_overflow_error_from_http_error(
+                exc,
+                response_text=response_text,
+                token=self._token,
+            )
+            if overflow_error is not None:
+                raise overflow_error from None
             message = _format_http_error(
                 exc,
                 self._token,
@@ -321,6 +344,13 @@ class GitHubCopilotHTTPTransport:
             )
             if model_unavailable_error is not None:
                 raise model_unavailable_error from None
+            overflow_error = _context_overflow_error_from_http_error(
+                exc,
+                response_text=response_text,
+                token=self._token,
+            )
+            if overflow_error is not None:
+                raise overflow_error from None
             message = _format_http_error(
                 exc,
                 self._token,
@@ -480,6 +510,12 @@ class OpenAICompatibleProvider:
             raw_output = self.transport.send(payload)
             if inspect.isawaitable(raw_output):
                 raw_output = await raw_output
+        except ProviderContextOverflowError:
+            # A context overflow is recoverable by the runner's compacted retry,
+            # which only sees it if it stays an exception. Absorbing it into an
+            # error mapping ends the run. Deliberately narrow: every other
+            # transport failure keeps mapping to a provider error response.
+            raise
         except Exception as exc:
             return self._transport_error_response(exc)
 
@@ -766,6 +802,14 @@ class AIPlatformHTTPTransport:
                     self._ensure_token(force=True)
                     continue
                 text = _read_http_error_body(exc)
+                overflow_error = _context_overflow_error_from_http_error(
+                    exc,
+                    response_text=text,
+                    token=self._token,
+                    provider_label="AI Platform",
+                )
+                if overflow_error is not None:
+                    raise overflow_error from None
                 raise ProviderTransportError(
                     "AI Platform HTTP transport failed ({0}): {1}".format(
                         exc.code, _redact_secret(text, self._token)
@@ -796,6 +840,14 @@ class AIPlatformHTTPTransport:
                     self._ensure_token(force=True)
                     continue
                 text = _read_http_error_body(exc)
+                overflow_error = _context_overflow_error_from_http_error(
+                    exc,
+                    response_text=text,
+                    token=self._token,
+                    provider_label="AI Platform",
+                )
+                if overflow_error is not None:
+                    raise overflow_error from None
                 raise ProviderTransportError(
                     "AI Platform HTTP transport failed ({0}): {1}".format(
                         exc.code, _redact_secret(text, self._token)
@@ -1487,12 +1539,60 @@ def _model_unavailable_error_from_http_error(
     )
 
 
-def _json_error_message(response_text: str) -> str | None:
+def _context_overflow_error_from_http_error(
+    exc: urllib_error.HTTPError,
+    *,
+    response_text: str,
+    token: str,
+    provider_label: str = "GitHub Copilot",
+) -> ProviderContextOverflowError | None:
+    status = getattr(exc, "code", None)
+    if status not in (400, 413):
+        return None
+    error_message = _json_error_message(response_text)
+    error_code = _json_error_code(response_text)
+    if error_message is None and _parse_json_object(response_text) is None:
+        # Non-JSON envelope (a proxy's HTML or bare text): the whole body is the
+        # only message there is. Deliberately NOT done for a JSON object that
+        # simply lacks a message key - such a body often echoes the rejected
+        # request back, and scanning it would classify a validation 400 as an
+        # overflow whenever the user's own prompt mentions a context window.
+        error_message = response_text.strip()
+    if status == 413:
+        # 413 Payload Too Large on a JSON prompt POST has exactly one meaning,
+        # and the ingress or proxy that emits it usually sends an empty or HTML
+        # body with no marker to match. Requiring a marker here would make 413
+        # unreachable: every 413 that carries one would already match as a 400.
+        error_message = error_message or "HTTP 413 Payload Too Large"
+    elif not _is_context_overflow_message(error_message or "") and (
+        error_code not in _CONTEXT_OVERFLOW_ERROR_CODES
+    ):
+        return None
+    safe_message = _redact_secret(
+        error_message or error_code or "HTTP {0}".format(status), token
+    )
+    return ProviderContextOverflowError(
+        "{0} rejected the request as larger than the model context window: {1}".format(
+            provider_label,
+            safe_message,
+        ),
+        metadata={"status_code": status, "provider_error_code": error_code},
+    )
+
+
+def _parse_json_object(response_text: str) -> Mapping[str, Any] | None:
+    """Return ``response_text`` decoded as a JSON object, or ``None``."""
+
     try:
         data = json.loads(response_text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError, ValueError):
         return None
-    if not isinstance(data, Mapping):
+    return data if isinstance(data, Mapping) else None
+
+
+def _json_error_message(response_text: str) -> str | None:
+    data = _parse_json_object(response_text)
+    if data is None:
         return None
 
     error_value = data.get("error")
@@ -1508,6 +1608,29 @@ def _json_error_message(response_text: str) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _json_error_code(response_text: str) -> str | None:
+    data = _parse_json_object(response_text)
+    if data is None:
+        return None
+
+    error_value = data.get("error")
+    if isinstance(error_value, Mapping):
+        for key in ("code", "type"):
+            value = error_value.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for key in ("code", "type"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _is_context_overflow_message(message: str) -> bool:
+    text = message.lower()
+    return any(marker in text for marker in _CONTEXT_OVERFLOW_MESSAGE_MARKERS)
 
 
 def _is_model_unavailable_message(message: str) -> bool:

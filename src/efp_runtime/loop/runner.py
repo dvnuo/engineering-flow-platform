@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import inspect
@@ -1047,11 +1047,13 @@ class RuntimeLoopRunner:
             return _StoredCompactionOutcome(history=history)
         if not self._context_budget_enabled(budget):
             return _StoredCompactionOutcome(history=history)
-        if not overflow_retry and not self._context_budget_explicitly_configured():
-            # The catalog-derived default budget drives the in-memory request only.
-            # Rewriting stored history discards the user's transcript, so it stays
-            # gated on explicit operator config (or the last-resort overflow retry,
-            # where the alternative is a failed run).
+        if not self._context_budget_explicitly_configured():
+            # The catalog-derived default budget drives the in-memory request
+            # only. Rewriting stored history discards the user's transcript, so
+            # it stays gated on explicit operator config - including on the
+            # provider-overflow retry, which does not need it: the retry sends
+            # its halved budget through _prepare_runtime_request, and
+            # prepare_history_for_request compacts at render time.
             return _StoredCompactionOutcome(history=history)
         if not history:
             return _StoredCompactionOutcome(history=history)
@@ -1270,7 +1272,14 @@ class RuntimeLoopRunner:
 
         if inspect.isawaitable(raw_result):
             raw_result = await raw_result
-        return raw_result
+        if isinstance(raw_result, Mapping) or not isinstance(raw_result, AsyncIterable):
+            return raw_result
+        # A streaming provider returns an *unstarted* async generator, and the
+        # HTTP request only runs once it is iterated - which happens well outside
+        # this retry loop. Pull the first chunk here so a context-overflow 400
+        # surfaces as an exception the retry handler can act on. Later chunks
+        # still stream lazily to the caller.
+        return await _prefetch_async_stream(raw_result)
 
     async def _invoke_provider_with_retries(
         self,
@@ -2007,6 +2016,39 @@ async def run_runtime_loop(
         structured_output_required=structured_output_required,
         structured_output_tool_id=structured_output_tool_id,
     )
+
+
+async def _prefetch_async_stream(
+    stream: AsyncIterable[Any],
+) -> AsyncIterable[Any]:
+    """Start ``stream`` and return an equivalent stream replaying its head.
+
+    This is deliberately a plain coroutine that *returns* an async generator
+    rather than an ``async def ... yield`` generator: an async generator would
+    defer the first ``__anext__`` right back to the caller and the prefetch
+    would be a no-op.
+    """
+
+    iterator = stream.__aiter__()
+    try:
+        first = await iterator.__anext__()
+    except StopAsyncIteration:
+        return _empty_async_stream()
+    return _replay_async_stream(first, iterator)
+
+
+async def _empty_async_stream() -> AsyncIterator[Any]:
+    return
+    yield  # pragma: no cover - unreachable, marks this an async generator
+
+
+async def _replay_async_stream(
+    first: Any,
+    iterator: AsyncIterator[Any],
+) -> AsyncIterator[Any]:
+    yield first
+    async for event in iterator:
+        yield event
 
 
 def _last_assistant_message(messages: Iterable[Message]) -> Optional[Message]:
