@@ -2048,9 +2048,19 @@ async def _replay_async_stream(
     first: Any,
     iterator: AsyncIterator[Any],
 ) -> AsyncIterator[Any]:
-    yield first
-    async for event in iterator:
-        yield event
+    try:
+        yield first
+        async for event in iterator:
+            yield event
+    finally:
+        # `async for` never closes its iterator, and closing this wrapper does
+        # not cascade into `iterator` either, so forward the close by hand:
+        # otherwise abandoning the replay leaves the provider stream suspended
+        # at its own ``yield`` and its cleanup waits for GC finalization. A
+        # provider may hand back a plain async iterator with no ``aclose``.
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 def _last_assistant_message(messages: Iterable[Message]) -> Optional[Message]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import inspect
 import json
 import os
 import subprocess
@@ -479,6 +480,67 @@ async def test_prefetch_replays_the_consumed_head_chunk():
 
     empty = await _prefetch_async_stream(no_chunks())
     assert [chunk async for chunk in empty] == []
+
+
+@pytest.mark.asyncio
+async def test_closing_the_replay_wrapper_closes_the_provider_stream():
+    # `async for` does not close the iterator it drives, and closing an async
+    # generator does not cascade into the generator it was iterating. Without an
+    # explicit forward, abandoning the replay wrapper mid-stream leaves the
+    # provider stream suspended at its `yield`, so the transport's `finally`
+    # (which cancels the worker task feeding the queue) never runs until GC.
+    closed = False
+
+    async def source():
+        nonlocal closed
+        try:
+            yield "head"
+            yield "middle"
+            yield "tail"
+        finally:
+            closed = True
+
+    stream = source()  # held explicitly so refcount finalization cannot mask it
+    replayed = await _prefetch_async_stream(stream)
+
+    seen = []
+    async for chunk in replayed:
+        seen.append(chunk)
+        if len(seen) == 2:
+            break  # abandon mid-stream
+
+    assert seen == ["head", "middle"]
+    assert inspect.getasyncgenstate(stream) == "AGEN_SUSPENDED"
+
+    await replayed.aclose()
+
+    assert closed, "closing the replay wrapper must close the provider stream"
+    assert inspect.getasyncgenstate(stream) == "AGEN_CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_replay_wrapper_tolerates_a_provider_iterator_without_aclose():
+    # A provider may hand back a plain class-based async iterator (`__aiter__`
+    # returning self) which has no `aclose`. Forwarding closure must not turn
+    # that into an AttributeError raised out of the wrapper's cleanup.
+    class PlainAsyncIterator:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._chunks:
+                raise StopAsyncIteration
+            return self._chunks.pop(0)
+
+    replayed = await _prefetch_async_stream(PlainAsyncIterator(["head", "tail"]))
+    assert [chunk async for chunk in replayed] == ["head", "tail"]
+
+    replayed = await _prefetch_async_stream(PlainAsyncIterator(["head", "tail"]))
+    assert await replayed.__anext__() == "head"
+    await replayed.aclose()  # must not raise AttributeError
 
 
 @pytest.mark.asyncio
