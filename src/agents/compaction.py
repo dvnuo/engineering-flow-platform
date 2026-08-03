@@ -812,6 +812,9 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         "gpt-5.4": 400000,
         "gpt-5.4-mini": 400000,
         "gpt-5.5": 400000,
+        "gpt-5.6-luna": 328000,
+        "gpt-5.6-sol": 400000,
+        "gpt-5.6-terra": 400000,
         "gemini-2.5-pro": 128000,
         "gemini-3.5-flash": 128000,
     }

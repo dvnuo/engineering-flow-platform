@@ -837,6 +837,21 @@ DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
         "max_prompt_tokens": 272000,
         "max_output_tokens": 128000,
     },
+    "gpt-5.6-luna": {
+        "max_context_window_tokens": 328000,
+        "max_prompt_tokens": 200000,
+        "max_output_tokens": 128000,
+    },
+    "gpt-5.6-sol": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
+    "gpt-5.6-terra": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
     "gemini-2.5-pro": {
         "max_context_window_tokens": 128_000,
         "max_prompt_tokens": 128_000,

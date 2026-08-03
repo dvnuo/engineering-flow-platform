@@ -155,8 +155,12 @@ async def test_auto_compaction_persists_before_provider_and_request_includes_lat
         assert event.payload["auto"] is True
         assert event.payload["overflow"] is False
         assert event.payload["max_parts"] == 3
-        assert event.payload["max_chars"] is None
-        assert event.payload["reserve_chars"] == 0
+        # A parts-only config leaves the char budget unset, so it now comes from
+        # the model catalog (gpt-5.6-terra: 400k window - 8k safety margin, at 4
+        # chars/token) with the model's 128k reserve. max_parts stays the binding
+        # constraint here; before the catalog default these were None and 0.
+        assert event.payload["max_chars"] == 1_568_000
+        assert event.payload["reserve_chars"] == 512_000
         assert event.payload["compacted_part_count"] > 0
         assert event.payload["compacted_message_count"] > 0
     assert [event.type for event in bus.history("session-auto")[:2]] == [

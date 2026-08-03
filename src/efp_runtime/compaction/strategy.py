@@ -73,13 +73,23 @@ class _Block:
     refs: list[_PartRef]
     is_tool_pair: bool = False
 
+    def __post_init__(self) -> None:
+        # Sizes are read once per candidate selection inside the budget search
+        # loop, so compute them once instead of re-summing on every access.
+        object.__setattr__(self, "_part_count", len(self.refs))
+        object.__setattr__(
+            self,
+            "_char_count",
+            sum(_part_chars(ref.part) for ref in self.refs),
+        )
+
     @property
     def part_count(self) -> int:
-        return len(self.refs)
+        return self._part_count  # type: ignore[attr-defined]
 
     @property
     def char_count(self) -> int:
-        return sum(_part_chars(ref.part) for ref in self.refs)
+        return self._char_count  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True)
@@ -188,14 +198,32 @@ class BudgetCompactionStrategy:
         if latest_unprotected_index is not None:
             kept_indices.add(latest_unprotected_index)
 
+        # Running totals for the kept set plus a per-call memo for the summary
+        # renderer's relevant-file regex scan. Without both, each of the n loop
+        # iterations re-scanned every compacted message's text, making the search
+        # quadratic in total history size (minutes of blocking CPU on the
+        # multi-megabyte sessions this budget exists to bound).
+        kept_parts = sum(blocks[index].part_count for index in kept_indices)
+        kept_chars = sum(blocks[index].char_count for index in kept_indices)
+        path_candidate_cache: dict[int, tuple[Message, list[str]]] = {}
+
         for index in reversed(range(len(blocks))):
             if index in kept_indices:
                 continue
+            block = blocks[index]
             candidate_indices = {*kept_indices, index}
-            candidate_parts, candidate_chars = _selection_usage(blocks, candidate_indices)
+            candidate_parts, candidate_chars = _selection_usage(
+                blocks,
+                candidate_indices,
+                kept_parts=kept_parts + block.part_count,
+                kept_chars=kept_chars + block.char_count,
+                path_candidate_cache=path_candidate_cache,
+            )
             if not self._fits_budget(part_count=candidate_parts, char_count=candidate_chars):
                 continue
             kept_indices.add(index)
+            kept_parts += block.part_count
+            kept_chars += block.char_count
 
         return [blocks[index] for index in sorted(kept_indices)]
 
@@ -574,16 +602,32 @@ def _recent_char_block_indices(
     return selected
 
 
-def _selection_usage(blocks: list[_Block], kept_indices: set[int]) -> tuple[int, int]:
-    kept_blocks = [block for index, block in enumerate(blocks) if index in kept_indices]
+def _selection_usage(
+    blocks: list[_Block],
+    kept_indices: set[int],
+    *,
+    kept_parts: int,
+    kept_chars: int,
+    path_candidate_cache: dict[int, tuple[Message, list[str]]] | None = None,
+) -> tuple[int, int]:
+    """Return the (parts, chars) a selection would cost.
+
+    ``kept_parts``/``kept_chars`` are the caller's running totals for
+    ``kept_indices``; they are pure sums over the kept blocks and are passed in
+    so the budget search does not re-sum the whole selection per candidate.
+    """
+
     compacted_blocks = [
         block for index, block in enumerate(blocks) if index not in kept_indices
     ]
-    part_count = sum(block.part_count for block in kept_blocks)
-    char_count = sum(block.char_count for block in kept_blocks)
+    part_count = kept_parts
+    char_count = kept_chars
     if compacted_blocks:
         part_count += 1
-        char_count += _compaction_summary_chars(compacted_blocks)
+        char_count += _compaction_summary_chars(
+            compacted_blocks,
+            path_candidate_cache=path_candidate_cache,
+        )
     return part_count, char_count
 
 
@@ -593,6 +637,7 @@ def _build_compaction_message(
     previous_summary: str | None = None,
     tail_start_message_id: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    path_candidate_cache: dict[int, tuple[Message, list[str]]] | None = None,
 ) -> Message:
     part_count = sum(block.part_count for block in compacted_blocks)
     message_refs = {ref.message_index: ref.message for block in compacted_blocks for ref in block.refs}
@@ -610,6 +655,7 @@ def _build_compaction_message(
             "compacted_message_count": message_count,
             "compacted_tool_pair_count": tool_pair_count,
         },
+        path_candidate_cache=path_candidate_cache,
     )
     compaction_metadata = {
         "approx_compacted_chars": sum(block.char_count for block in compacted_blocks)
@@ -739,10 +785,21 @@ def _part_chars(part: MessagePart) -> int:
     return len(part.text or "")
 
 
-def _compaction_summary_chars(compacted_blocks: list[_Block]) -> int:
+def _compaction_summary_chars(
+    compacted_blocks: list[_Block],
+    *,
+    path_candidate_cache: dict[int, tuple[Message, list[str]]] | None = None,
+) -> int:
     if not compacted_blocks:
         return 0
-    return _messages_chars([_build_compaction_message(compacted_blocks)])
+    return _messages_chars(
+        [
+            _build_compaction_message(
+                compacted_blocks,
+                path_candidate_cache=path_candidate_cache,
+            )
+        ]
+    )
 
 
 def _json_chars(value: Mapping[str, Any]) -> int:

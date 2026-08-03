@@ -159,8 +159,12 @@ async def test_max_context_parts_compacts_provider_request_metadata():
     request = provider.requests[0]
     assert request.prepared_request.compaction_applied is True
     assert request.prepared_request.compaction_metadata["max_parts"] == 2
-    assert request.prepared_request.compaction_metadata["max_chars"] is None
-    assert request.prepared_request.compaction_metadata["reserve_chars"] == 0
+    # A parts-only config leaves the char budget unset, so it now comes from the
+    # model catalog (gpt-5.6-terra: 400k window - 8k safety margin, at 4
+    # chars/token) with the model's 128k reserve. max_parts stays the binding
+    # constraint here; before the catalog default these were None and 0.
+    assert request.prepared_request.compaction_metadata["max_chars"] == 1_568_000
+    assert request.prepared_request.compaction_metadata["reserve_chars"] == 512_000
     assert request.prepared_request.compaction_metadata["compacted_part_count"] == 2
     assert request.prepared_request.compaction_metadata["compacted_message_count"] == 2
     assert request.prepared_request.compaction_metadata["compacted_tool_pair_count"] == 0
