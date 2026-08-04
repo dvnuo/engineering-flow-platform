@@ -204,6 +204,10 @@ def test_projector_distinguishes_request_compaction_from_stored_rewrites():
                 "trigger": "context_budget",
                 "stored": False,
                 "scope": "request",
+                "max_chars": 1_568_000,
+                "compacted_message_count": 9,
+                "compacted_chars": 840_000,
+                "kept_chars": 1_050_000,
             },
         )
     )
@@ -229,6 +233,13 @@ def test_projector_distinguishes_request_compaction_from_stored_rewrites():
     # ...but the on-disk distinction survives projection.
     assert request_only[0]["data"]["stored"] is False
     assert request_only[0]["data"]["scope"] == "request"
+    # Both emitters spread the compaction counters flat, so the projection has
+    # to read them flat too -- otherwise the card reaches the UI with no
+    # numbers and the user cannot tell how much context was dropped.
+    assert request_only[0]["data"]["max_chars"] == 1_568_000
+    assert request_only[0]["data"]["compacted_message_count"] == 9
+    assert request_only[0]["data"]["compacted_chars"] == 840_000
+    assert request_only[0]["data"]["kept_chars"] == 1_050_000
     assert stored[0]["data"]["stored"] is True
     assert stored[0]["data"]["scope"] == "session"
     assert stored[0]["data"]["stored_message_count"] == 7
