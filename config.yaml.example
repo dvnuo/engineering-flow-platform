@@ -137,9 +137,36 @@ llm:
 # and returning `400 Bad Request / "Your input exceeds the context window"`.
 #
 # Set them only to override that default -- for example to pin a smaller
-# prompt budget, or to opt in to compaction of the STORED session history
-# (which the model-derived default deliberately does NOT do, because rewriting
-# stored history discards the user's transcript).
+# prompt budget. They size the in-memory provider request ONLY; none of them
+# touches the stored session. See `compaction_rewrite_stored_history` below.
+#
+# All three caps must be >= 1. `0` is rejected (the chat returns 400 naming the
+# field) rather than silently meaning "unlimited" or "disabled" -- it used to
+# produce a one-character budget, i.e. every request cut down to system context
+# plus the latest turn. To turn a cap off, omit the key and inherit the
+# model-catalog default.
+#
+# A value larger than the catalog PROMPT CEILING is clamped down to it. The
+# ceiling is the declared window minus the safety margin -- 392000 tokens /
+# 1568000 chars on a 400k model -- i.e. the same cap the unset path uses, NOT
+# the declared window itself. So `max_context_tokens: 400000` on a 400k model
+# is clamped to 392000 (a ~2% reduction): the margin absorbs the error in the
+# 4-chars-per-token estimate, and without it a nominally exact value still
+# reproduces the provider `400 / input exceeds the context window` this whole
+# default exists to prevent. The clamp is reported in run metadata under
+# `context_budget` as max_context_chars_clamped / _requested / _limit, so a
+# clamp of that size is visible rather than silent.
+#
+# The clamp does NOT apply to a model id absent from
+# src/efp_runtime/llm/models.py: an uncatalogued model falls back to a
+# conservative 64k guess, and an override is the only way to correct that
+# guess, so there the operator's value is honoured verbatim (_limit is null).
+#
+# Note the clamp bounds the CAP, not the final prompt: the two routes subtract
+# different reserves (see below), so a clamped `max_context_tokens` lands on the
+# same effective budget as leaving it unset, while a clamped `max_context_chars`
+# keeps its zero reserve and so allows a larger prompt -- still inside the
+# window, because the safety margin is what the ceiling holds back.
 #
 # These two are NOT the same knob and do not produce the same budget:
 #
@@ -155,9 +182,22 @@ llm:
 # context_reserve_tokens: 128000  # response headroom; overrides the model's own
 #                              # reserve for BOTH of the above
 #
-# Setting ANY of the three caps above also opts this deployment into rewriting
-# STORED session history on disk when it exceeds the budget -- the catalog
-# default deliberately does not do that. Leave them unset unless you want that.
+# compaction_rewrite_stored_history: true
+#   Rewrites the STORED session on disk -- the transcript the user reads in the
+#   Portal -- whenever it exceeds the budget above. IRREVERSIBLE: the replaced
+#   messages are gone. Off by default and NOT implied by any of the caps above;
+#   setting a cap only shrinks the request that goes to the model, which is
+#   already enough to stay inside the budget. Turn this on only if you also want
+#   old turns removed from the stored conversation. (Manual /compact is
+#   unaffected either way.) The state in force is reported in run metadata as
+#   `context_budget.stored_history_rewrite`.
+#
+#   OPERATIONAL WARNING: with this off (the default), long-lived sessions grow
+#   without bound on disk. Requests stay bounded -- the render-time compactor
+#   handles that -- but nothing trims the stored session, and the file store
+#   rewrites and re-parses the whole session file per turn, so turn latency
+#   grows with session length. If you previously relied on a size cap to keep
+#   stored sessions small, set this to `true` to keep that behaviour.
 #
 # NOTE: the `llm.context_budget` and `llm.model_limits` blocks above are read
 # by the LEGACY progressive-context stack (src/runtime/progressive_context.py,

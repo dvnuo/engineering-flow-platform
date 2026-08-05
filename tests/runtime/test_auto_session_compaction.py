@@ -107,6 +107,89 @@ def test_runtime_config_validates_auto_compaction_integers(kwargs):
 
 
 @pytest.mark.asyncio
+async def test_size_knob_alone_does_not_rewrite_stored_history():
+    """A context budget sizes the request; it must not rewrite the transcript.
+
+    Before ``compaction_rewrite_stored_history`` existed, setting any of
+    max_context_parts/chars/tokens silently also opted the deployment into
+    ``SessionStore.replace_history`` - so "I want a smaller prompt" and "please
+    rewrite my transcripts" were the same statement. The request still has to
+    come out bounded, which is the render-time compactor's job, not the stored
+    one's.
+    """
+
+    store = InMemorySessionStore()
+    _seed_history(store, "session-size-only")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        max_context_parts=3,
+        compaction_tail_turns=1,
+    )
+
+    result = await runner.run(
+        session_id="session-size-only",
+        user_text="latest request",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    # The transcript is intact: every seeded message is still there.
+    stored = store.read_history("session-size-only")
+    assert [message.message_id for message in stored[:4]] == [
+        "msg-old-0",
+        "msg-old-1",
+        "msg-old-2",
+        "msg-old-3",
+    ]
+    assert _compaction_parts(stored) == []
+    assert _replay_messages(stored) == []
+    assert _events(result, "session_compaction_started") == []
+    assert _events(result, "session_compacted") == []
+    # ...and the request was still bounded by the knob the operator set.
+    assert provider.requests[0].prepared_request.compaction_applied is True
+    assert provider.requests[0].provider_request.messages[-1].text == "latest request"
+
+
+@pytest.mark.asyncio
+async def test_rewrite_flag_alone_without_a_size_knob_rewrites_stored_history():
+    """The opt-in is sufficient on its own; it does not need a size knob too.
+
+    Requiring a second knob would make the flag silently do nothing, which is
+    the same class of surprise this separation removes. With no cap set the
+    budget is the catalog-derived one, so the history has to exceed that.
+    """
+
+    store = InMemorySessionStore()
+    store.create_session(session_id="session-flag-only")
+    for index in range(40):
+        store.append_message(
+            "session-flag-only",
+            role=MessageRole.USER if index % 2 == 0 else MessageRole.ASSISTANT,
+            parts=[MessagePart.text_part("word " * 9_000)],
+            message_id=f"msg-bulk-{index}",
+            status="complete",
+        )
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(
+        store,
+        provider,
+        compaction_rewrite_stored_history=True,
+        compaction_tail_turns=1,
+    )
+
+    result = await runner.run(
+        session_id="session-flag-only",
+        user_text="latest request",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    stored = store.read_history("session-flag-only")
+    assert _compaction_parts(stored)
+    assert len(_events(result, "session_compacted")) == 1
+
+
+@pytest.mark.asyncio
 async def test_auto_compaction_persists_before_provider_and_request_includes_latest():
     store = InMemorySessionStore()
     _seed_history(store, "session-auto")
@@ -116,6 +199,7 @@ async def test_auto_compaction_persists_before_provider_and_request_includes_lat
         store,
         provider,
         max_context_parts=3,
+        compaction_rewrite_stored_history=True,
         compaction_tail_turns=1,
         event_bus=bus,
     )
@@ -180,6 +264,7 @@ async def test_token_budget_converts_to_char_budget_for_auto_compaction():
         max_context_tokens=20,
         context_reserve_tokens=5,
         compaction_preserve_recent_tokens=20,
+        compaction_rewrite_stored_history=True,
         compaction_tail_turns=1,
     )
 
@@ -255,6 +340,7 @@ async def test_max_context_chars_takes_priority_over_token_budget():
         max_context_tokens=10,
         context_reserve_tokens=5,
         compaction_preserve_recent_tokens=20,
+        compaction_rewrite_stored_history=True,
         compaction_tail_turns=1,
     )
 
@@ -286,6 +372,7 @@ async def test_auto_compaction_tail_zero_synthetic_replays_active_user():
         store,
         provider,
         max_context_parts=1,
+        compaction_rewrite_stored_history=True,
         compaction_tail_turns=0,
     )
 
@@ -329,6 +416,9 @@ async def test_compaction_auto_false_leaves_stored_session_unchanged():
         store,
         provider,
         max_context_parts=3,
+        # Opted in to stored rewriting, so compaction_auto is provably the thing
+        # suppressing it - not the rewrite gate one check earlier.
+        compaction_rewrite_stored_history=True,
         compaction_auto=False,
     )
 
@@ -359,6 +449,9 @@ async def test_provider_only_context_messages_are_not_persisted():
         store,
         provider,
         max_context_parts=3,
+        # The claim under test is that a stored REWRITE never pulls provider-only
+        # context into the transcript, so the rewrite has to actually happen.
+        compaction_rewrite_stored_history=True,
         compaction_tail_turns=1,
     )
     provider_only = Message.from_text(
@@ -400,6 +493,7 @@ async def test_overflow_retry_persists_overflow_compaction_and_retries_once():
         store,
         provider,
         max_context_parts=10,
+        compaction_rewrite_stored_history=True,
         compaction_tail_turns=1,
     )
 
@@ -443,6 +537,7 @@ async def test_overflow_retry_request_contains_replayed_active_user():
         store,
         provider,
         max_context_parts=1,
+        compaction_rewrite_stored_history=True,
         compaction_tail_turns=0,
     )
 
@@ -479,6 +574,7 @@ async def test_compaction_replay_replaces_attachment_with_placeholder_text():
         store,
         provider,
         max_context_parts=1,
+        compaction_rewrite_stored_history=True,
         compaction_tail_turns=0,
     )
     attachment = Attachment(
@@ -526,6 +622,7 @@ async def test_resume_path_uses_auto_session_compaction():
         config=RuntimeConfig(
             max_iterations=2,
             max_context_parts=3,
+            compaction_rewrite_stored_history=True,
             compaction_tail_turns=1,
             include_default_system_prompt=False,
             include_runtime_reminders=False,
@@ -542,3 +639,59 @@ async def test_resume_path_uses_auto_session_compaction():
     stored_compactions = _compaction_parts(store.read_history("session-resume"))
     assert len(stored_compactions) == 1
     assert stored_compactions[0].compaction.metadata["trigger"] == "context_budget"
+
+
+@pytest.mark.parametrize("rewrite_stored_history", [True, False])
+@pytest.mark.asyncio
+async def test_run_path_plumbs_stored_history_rewrite_flag(rewrite_stored_history):
+    """AgentRuntime.run must hand the opt-in to the runner it builds.
+
+    ``run`` - not ``resume`` - is the only route the Portal opt-in travels in
+    production (runtime profile -> PORTAL_MANAGED_RUNTIME_FIELDS ->
+    RuntimeConfig -> AgentRuntime.run -> RuntimeLoopRunner), and sub-agents
+    reach the runner the same way. Asserting on the RuntimeConfig object is not
+    enough: dropping the kwarg from the ``run`` construction site leaves the
+    config correct and the flag dead, which is precisely the silent no-op this
+    knob exists to prevent.
+    """
+
+    session_id = f"session-run-plumbing-{rewrite_stored_history}"
+    store = InMemorySessionStore()
+    _seed_history(store, session_id)
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        store=store,
+        config=RuntimeConfig(
+            max_iterations=2,
+            max_context_parts=3,
+            compaction_rewrite_stored_history=rewrite_stored_history,
+            compaction_tail_turns=1,
+            include_default_system_prompt=False,
+            include_runtime_reminders=False,
+        ),
+    )
+
+    result = await runtime.run("latest request", session_id=session_id)
+
+    assert result.status == LoopStatus.COMPLETED
+    stored = store.read_history(session_id)
+    stored_compactions = _compaction_parts(stored)
+    if rewrite_stored_history:
+        assert len(stored_compactions) == 1
+        assert stored_compactions[0].compaction.metadata["trigger"] == "context_budget"
+        assert _events(result, "session_compacted")
+    else:
+        assert stored_compactions == []
+        assert _events(result, "session_compacted") == []
+        # The transcript survives untouched even though the size knob is set...
+        assert [message.message_id for message in stored[:4]] == [
+            "msg-old-0",
+            "msg-old-1",
+            "msg-old-2",
+            "msg-old-3",
+        ]
+        # ...and the request is still bounded, by the render-time compactor.
+        assert provider.requests[0].prepared_request.compaction_applied is True
+    # Either way the model saw the latest turn last.
+    assert provider.requests[0].provider_request.messages[-1].text == "latest request"

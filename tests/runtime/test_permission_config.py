@@ -593,6 +593,46 @@ def test_resolve_config_and_child_config_preserve_tool_permissions(tmp_path: Pat
     assert child.metadata["child"] is True
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_resolve_config_and_child_config_preserve_stored_history_rewrite(
+    tmp_path: Path,
+    enabled: bool,
+):
+    """Both builders re-materialise RuntimeConfig from hand-written field lists.
+
+    ``_resolve_config`` runs on every ``AgentRuntime(config=...)`` and
+    ``_child_config`` on every sub-agent. A field missing from either list is
+    dropped back to its default with no error - so an opt-in set by an operator
+    would silently not apply, which is exactly the class of surprise this flag
+    exists to remove. Sub-agent sessions land in the same store and are equally
+    Portal-visible, so the parent's choice has to reach them.
+    """
+
+    base = RuntimeConfig(
+        workspace_root=tmp_path,
+        compaction_rewrite_stored_history=enabled,
+    )
+
+    resolved = _resolve_config(
+        base,
+        workspace_root=None,
+        max_iterations=None,
+        max_context_parts=None,
+        max_context_chars=None,
+        context_reserve_chars=None,
+        metadata=None,
+    )
+    child = _child_config(
+        profile=AgentProfile(name="general"),
+        base_config=base,
+        workspace_root=None,
+        metadata={},
+    )
+
+    assert resolved.compaction_rewrite_stored_history is enabled
+    assert child.compaction_rewrite_stored_history is enabled
+
+
 @pytest.mark.asyncio
 async def test_permission_config_does_not_control_tool_schema_visibility(
     tmp_path: Path,

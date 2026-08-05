@@ -161,6 +161,7 @@ class AgentRuntime:
         context_reserve_chars: int | None = None,
         context_reserve_tokens: int | None = None,
         compaction_auto: bool | None = None,
+        compaction_rewrite_stored_history: bool | None = None,
         compaction_tail_turns: int | None = None,
         compaction_preserve_recent_chars: int | None = None,
         compaction_preserve_recent_tokens: int | None = None,
@@ -194,6 +195,7 @@ class AgentRuntime:
             context_reserve_chars=context_reserve_chars,
             context_reserve_tokens=context_reserve_tokens,
             compaction_auto=compaction_auto,
+            compaction_rewrite_stored_history=compaction_rewrite_stored_history,
             compaction_tail_turns=compaction_tail_turns,
             compaction_preserve_recent_chars=compaction_preserve_recent_chars,
             compaction_preserve_recent_tokens=compaction_preserve_recent_tokens,
@@ -673,6 +675,9 @@ class AgentRuntime:
                     else None
                 ),
                 compaction_auto=self.config.compaction_auto,
+                compaction_rewrite_stored_history=(
+                    self.config.compaction_rewrite_stored_history
+                ),
                 compaction_tail_turns=self.config.compaction_tail_turns,
                 compaction_preserve_recent_chars=(
                     self.config.compaction_preserve_recent_chars
@@ -901,6 +906,9 @@ class AgentRuntime:
                     else None
                 ),
                 compaction_auto=self.config.compaction_auto,
+                compaction_rewrite_stored_history=(
+                    self.config.compaction_rewrite_stored_history
+                ),
                 compaction_tail_turns=self.config.compaction_tail_turns,
                 compaction_preserve_recent_chars=(
                     self.config.compaction_preserve_recent_chars
@@ -2684,6 +2692,7 @@ def _resolve_config(
     context_reserve_tokens: int | None = None,
     metadata: Mapping[str, Any] | None,
     compaction_auto: bool | None = None,
+    compaction_rewrite_stored_history: bool | None = None,
     compaction_tail_turns: int | None = None,
     compaction_preserve_recent_chars: int | None = None,
     compaction_preserve_recent_tokens: int | None = None,
@@ -2702,6 +2711,11 @@ def _resolve_config(
             ),
             context_reserve_tokens=context_reserve_tokens,
             compaction_auto=True if compaction_auto is None else compaction_auto,
+            compaction_rewrite_stored_history=(
+                False
+                if compaction_rewrite_stored_history is None
+                else compaction_rewrite_stored_history
+            ),
             compaction_tail_turns=(
                 2 if compaction_tail_turns is None else compaction_tail_turns
             ),
@@ -2743,6 +2757,11 @@ def _resolve_config(
         enable_compaction_summarizer=config.enable_compaction_summarizer,
         compaction_auto=(
             compaction_auto if compaction_auto is not None else config.compaction_auto
+        ),
+        compaction_rewrite_stored_history=(
+            compaction_rewrite_stored_history
+            if compaction_rewrite_stored_history is not None
+            else config.compaction_rewrite_stored_history
         ),
         compaction_prune=config.compaction_prune,
         compaction_tail_turns=(

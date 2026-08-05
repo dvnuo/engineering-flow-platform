@@ -33,6 +33,7 @@ from ..llm.models import (
     ModelContextProfile,
     context_safety_margin_tokens,
     default_max_context_tokens,
+    is_catalog_model_context_profile,
     resolve_model_context_profile,
 )
 from ..permissions import ASK, DENY, PermissionMetadata
@@ -208,6 +209,7 @@ class RuntimeLoopRunner:
         tool_selection: Optional[ToolSelection] = None,
         compaction_summarizer: Optional[CompactionSummarizer] = None,
         compaction_auto: bool = True,
+        compaction_rewrite_stored_history: bool = False,
         compaction_tail_turns: int = 2,
         compaction_preserve_recent_chars: int | None = None,
         compaction_preserve_recent_tokens: int | None = None,
@@ -224,10 +226,16 @@ class RuntimeLoopRunner:
             raise ValueError("max_iterations must be at least 1")
         if doom_loop_threshold is not None and doom_loop_threshold < 2:
             raise ValueError("doom_loop_threshold must be at least 2 or None")
-        if max_context_parts is not None and max_context_parts < 1:
-            raise ValueError("max_context_parts must be at least 1")
-        if max_context_chars is not None and max_context_chars < 1:
-            raise ValueError("max_context_chars must be at least 1")
+        # Must stay acceptance-identical to RuntimeConfig.__post_init__: this is
+        # the second, hand-written entry point for the same knobs.
+        _validate_optional_positive_int(
+            max_context_parts,
+            field_name="max_context_parts",
+        )
+        _validate_optional_positive_int(
+            max_context_chars,
+            field_name="max_context_chars",
+        )
         default_provider_id = _validate_non_empty_string(
             default_provider_id,
             field_name="default_provider_id",
@@ -236,12 +244,16 @@ class RuntimeLoopRunner:
             default_model,
             field_name="default_model",
         )
-        _validate_optional_non_negative_int(
+        # Zero is rejected here too; see RuntimeConfig.__post_init__ for why it
+        # is not coerced to None.
+        _validate_optional_positive_int(
             max_context_tokens,
             field_name="max_context_tokens",
         )
-        if context_reserve_chars < 0:
-            raise ValueError("context_reserve_chars must be at least 0")
+        _validate_non_negative_int(
+            context_reserve_chars,
+            field_name="context_reserve_chars",
+        )
         _validate_optional_non_negative_int(
             context_reserve_tokens,
             field_name="context_reserve_tokens",
@@ -290,6 +302,12 @@ class RuntimeLoopRunner:
         self.tool_selection = _copy_tool_selection(tool_selection)
         self.compaction_summarizer = compaction_summarizer
         self.compaction_auto = bool(compaction_auto)
+        # Not bool(): this flag alone authorises rewriting the stored session,
+        # and bool() fails open -- the string "false" is truthy. See the same
+        # guard in RuntimeConfig.
+        if not isinstance(compaction_rewrite_stored_history, bool):
+            raise ValueError("compaction_rewrite_stored_history must be a boolean")
+        self.compaction_rewrite_stored_history = compaction_rewrite_stored_history
         self.compaction_tail_turns = compaction_tail_turns
         self.compaction_preserve_recent_chars = compaction_preserve_recent_chars
         self.compaction_preserve_recent_tokens = compaction_preserve_recent_tokens
@@ -864,20 +882,6 @@ class RuntimeLoopRunner:
         resolved = budget or self._context_budget()
         return resolved.max_parts is not None or resolved.max_chars is not None
 
-    def _context_budget_explicitly_configured(self) -> bool:
-        """Report whether an operator configured a context budget explicitly.
-
-        The model-catalog default only sizes the in-memory provider request. The
-        stored-history compactor rewrites the session on disk (and therefore the
-        Portal transcript), so it stays opt-in.
-        """
-
-        return (
-            self.max_context_parts is not None
-            or self.max_context_chars is not None
-            or self.max_context_tokens is not None
-        )
-
     def _overflow_retry_budget(
         self,
         metadata: Mapping[str, Any] | None = None,
@@ -905,12 +909,57 @@ class RuntimeLoopRunner:
             reserve_chars=current_budget.reserve_chars,
         )
 
-    def _context_budget_max_chars(self, profile: ModelContextProfile) -> int | None:
+    def _explicit_context_budget_max_chars(
+        self,
+        profile: ModelContextProfile,
+    ) -> int | None:
+        """Return the operator's char budget before clamping, or None if unset."""
+
         if self.max_context_chars is not None:
             return self.max_context_chars
         if self.max_context_tokens is not None:
             return max(1, profile.tokens_to_chars(self.max_context_tokens))
+        return None
+
+    @staticmethod
+    def _context_budget_max_chars_limit(profile: ModelContextProfile) -> int | None:
+        """Return the largest char budget this model can be asked to accept.
+
+        ``None`` means "no trustworthy ceiling exists, do not clamp". That is the
+        case for every model that missed the catalog: ``resolve_model_context_profile``
+        hands back the 64k conservative fallback, and a newly released or
+        gateway-only model needs an operator override precisely because that
+        guess is wrong about it. Clamping such an override to 64k would defeat
+        the only purpose an override has.
+
+        For a real catalog entry the ceiling is the same CAP the unset path
+        produces (declared window minus the safety margin), rather than a novel
+        third number. Clamping to the raw window instead would authorise a
+        prompt sized at 100% of it, leaving nothing for the chars/4 estimate
+        error the safety margin exists to absorb.
+
+        Note this bounds ``max_chars``, not ``effective_max_chars``: the two
+        routes subtract different reserves (see
+        ``_context_budget_reserve_chars`` and the asymmetry pinned by
+        ``test_tokens_and_chars_routes_keep_their_asymmetric_reserves``), so a
+        clamped ``max_context_tokens`` ends up on the unset path's effective
+        budget while a clamped ``max_context_chars`` keeps its zero reserve and
+        so authorises a larger prompt - still under the declared window, since
+        the safety margin is what the ceiling holds back.
+        """
+
+        if not is_catalog_model_context_profile(profile):
+            return None
         return max(1, profile.tokens_to_chars(default_max_context_tokens(profile)))
+
+    def _context_budget_max_chars(self, profile: ModelContextProfile) -> int | None:
+        explicit = self._explicit_context_budget_max_chars(profile)
+        if explicit is None:
+            return max(1, profile.tokens_to_chars(default_max_context_tokens(profile)))
+        limit = self._context_budget_max_chars_limit(profile)
+        if limit is None:
+            return explicit
+        return min(explicit, limit)
 
     def _context_budget_reserve_chars(self, profile: ModelContextProfile) -> int:
         if self.context_reserve_tokens is not None:
@@ -955,9 +1004,26 @@ class RuntimeLoopRunner:
     ) -> dict[str, Any]:
         profile = self._model_context_profile(metadata)
         resolved_budget = budget or self._context_budget(metadata)
+        requested_max_chars = self._explicit_context_budget_max_chars(profile)
+        max_chars_limit = (
+            self._context_budget_max_chars_limit(profile)
+            if requested_max_chars is not None
+            else None
+        )
+        max_chars_clamped = (
+            max_chars_limit is not None and requested_max_chars > max_chars_limit
+        )
         resolved_max_context_tokens = self.max_context_tokens
         safety_margin_tokens: int | None = None
         if self.max_context_chars is None and self.max_context_tokens is None:
+            safety_margin_tokens = context_safety_margin_tokens(profile)
+            resolved_max_context_tokens = default_max_context_tokens(profile)
+        elif max_chars_clamped:
+            # Once the clamp fires, the catalog ceiling IS the budget. Reporting
+            # the operator's rejected number as ``max_context_tokens`` next to a
+            # clamped ``max_context_chars`` would have the two disagree by the
+            # whole overshoot; the original stays visible as
+            # ``max_context_chars_requested``.
             safety_margin_tokens = context_safety_margin_tokens(profile)
             resolved_max_context_tokens = default_max_context_tokens(profile)
         preserve_recent_chars = self._compaction_preserve_recent_chars(profile)
@@ -1020,6 +1086,16 @@ class RuntimeLoopRunner:
         payload["context_budget"] = {
             **payload,
             "max_context_chars_source": max_context_chars_source,
+            "max_context_chars_requested": requested_max_chars,
+            "max_context_chars_limit": max_chars_limit,
+            "max_context_chars_clamped": max_chars_clamped,
+            # Whether exceeding this budget also rewrites the STORED session.
+            # Without it the only signal for the gate is the ABSENCE of
+            # session_compaction_started/session_compacted, which is only
+            # legible to someone who already knew to look - and the deployment
+            # this flag changes most (a size knob set, stored rewriting now off,
+            # session files growing) is exactly the one that would not know.
+            "stored_history_rewrite": self.compaction_rewrite_stored_history,
             "context_reserve_chars_source": reserve_chars_source,
             "compaction_preserve_recent_chars_source": preserve_recent_chars_source,
             "max_parts": resolved_budget.max_parts,
@@ -1047,12 +1123,14 @@ class RuntimeLoopRunner:
             return _StoredCompactionOutcome(history=history)
         if not self._context_budget_enabled(budget):
             return _StoredCompactionOutcome(history=history)
-        if not self._context_budget_explicitly_configured():
-            # The catalog-derived default budget drives the in-memory request
-            # only. Rewriting stored history discards the user's transcript, so
-            # it stays gated on explicit operator config - including on the
-            # provider-overflow retry, which does not need it: the retry sends
-            # its halved budget through _prepare_runtime_request, and
+        if not self.compaction_rewrite_stored_history:
+            # Sizing the request and rewriting the transcript are separate
+            # decisions, so they are separate knobs: a context budget - whether
+            # catalog-derived or set by an operator - drives the in-memory
+            # request only. Rewriting stored history discards the user's
+            # transcript irreversibly, so it needs its own opt-in, including on
+            # the provider-overflow retry, which does not need it: the retry
+            # sends its halved budget through _prepare_runtime_request, and
             # prepare_history_for_request compacts at render time.
             return _StoredCompactionOutcome(history=history)
         if not history:
@@ -1962,6 +2040,7 @@ async def run_runtime_loop(
     structured_output_tool_id: str = "StructuredOutput",
     compaction_summarizer: Optional[CompactionSummarizer] = None,
     compaction_auto: bool = True,
+    compaction_rewrite_stored_history: bool = False,
     compaction_tail_turns: int = 2,
     compaction_preserve_recent_chars: int | None = None,
     compaction_preserve_recent_tokens: int | None = None,
@@ -1993,6 +2072,7 @@ async def run_runtime_loop(
         tool_selection=tool_selection,
         compaction_summarizer=compaction_summarizer,
         compaction_auto=compaction_auto,
+        compaction_rewrite_stored_history=compaction_rewrite_stored_history,
         compaction_tail_turns=compaction_tail_turns,
         compaction_preserve_recent_chars=compaction_preserve_recent_chars,
         compaction_preserve_recent_tokens=compaction_preserve_recent_tokens,
@@ -2148,6 +2228,17 @@ def _validate_optional_non_negative_int(value: Any, *, field_name: str) -> None:
     if value is None:
         return
     _validate_non_negative_int(value, field_name=field_name)
+
+
+def _validate_positive_int(value: Any, *, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{field_name} must be a positive integer")
+
+
+def _validate_optional_positive_int(value: Any, *, field_name: str) -> None:
+    if value is None:
+        return
+    _validate_positive_int(value, field_name=field_name)
 
 
 def _validate_non_empty_string(value: Any, *, field_name: str) -> str:
