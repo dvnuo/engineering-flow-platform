@@ -196,6 +196,303 @@ def test_explicit_config_metadata_still_names_the_explicit_source():
     assert metadata["context_safety_margin_tokens"] is None
 
 
+def test_runner_rejects_zero_and_bool_context_size_caps():
+    """The runner constructor is a second, hand-written copy of these guards.
+
+    RuntimeConfig and RuntimeLoopRunner validate the same knobs in separate
+    code; without a mirror test here they can drift apart again.
+    """
+
+    for field in ["max_context_tokens", "max_context_chars", "max_context_parts"]:
+        for value in [0, -1, True, "5"]:
+            with pytest.raises(ValueError, match=field):
+                _runner(
+                    InMemorySessionStore(),
+                    ScriptedLLMProvider([]),
+                    **{field: value},
+                )
+
+
+# --------------------------------------------------------------------------
+# ...but an explicit budget larger than the model can take is clamped
+# --------------------------------------------------------------------------
+
+
+def test_over_window_max_context_tokens_is_clamped_to_the_catalog_ceiling():
+    """10M tokens on a 400k model reproduces the exact 400 the default prevents.
+
+    Nothing compared the explicit value against the model window, so an
+    over-window override sailed straight through to the provider.
+    """
+
+    runner = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_tokens=10_000_000,
+    )
+
+    budget = runner._context_budget()
+
+    assert budget.max_chars == SOL_MAX_CHARS  # was 40_000_000
+    assert budget.reserve_chars == SOL_RESERVE_CHARS
+    assert budget.effective_max_chars == SOL_MAX_CHARS - SOL_RESERVE_CHARS
+    # Clamping lands on the same budget as no override at all, not a third value.
+    assert budget.max_chars == _runner(
+        InMemorySessionStore(), ScriptedLLMProvider([])
+    )._context_budget().max_chars
+
+
+def test_over_window_max_context_chars_is_clamped_too():
+    """The chars route is unbounded in exactly the same way.
+
+    But the clamp bounds the CAP, not the final prompt, and the two routes hold
+    back different reserves (see
+    test_tokens_and_chars_routes_keep_their_asymmetric_reserves). So a clamped
+    max_context_chars does NOT land on the unset path's effective budget the way
+    a clamped max_context_tokens does - it keeps its zero reserve and authorises
+    the whole ceiling. That is in-spec (the ceiling already excludes the safety
+    margin, so it is still inside the declared window) but it is not parity, and
+    it is pinned here so it cannot change unnoticed.
+    """
+
+    runner = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_chars=10_000_000,
+    )
+
+    budget = runner._context_budget()
+
+    assert budget.max_chars == SOL_MAX_CHARS  # was 10_000_000
+    assert budget.reserve_chars == 0
+    assert budget.effective_max_chars == SOL_MAX_CHARS
+    # ~392_000 tokens: below the 400_000 window, above the 264_000 that the
+    # unset path and a clamped max_context_tokens both produce.
+    assert budget.effective_max_chars // 4 == SOL_WINDOW_TOKENS - SOL_SAFETY_TOKENS
+    assert budget.effective_max_chars > (SOL_MAX_CHARS - SOL_RESERVE_CHARS)
+
+
+def test_clamped_chars_route_metadata_reports_the_in_force_token_numbers():
+    """The clamp fills in two token fields the chars route otherwise leaves None.
+
+    A consumer reading ``max_context_tokens`` off a chars-configured runtime
+    gets ``None`` normally and an int once the clamp fires, because the catalog
+    ceiling - which is token-denominated - has become the budget. Pinned so the
+    type change is a decision rather than a surprise.
+    """
+
+    unclamped = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_chars=1_000_000,
+    )._model_context_budget_metadata()
+    clamped = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_chars=10_000_000,
+    )._model_context_budget_metadata()
+
+    assert unclamped["context_safety_margin_tokens"] is None
+    assert unclamped["max_context_tokens"] is None
+    assert unclamped["context_budget"]["max_context_chars_clamped"] is False
+
+    assert clamped["context_safety_margin_tokens"] == SOL_SAFETY_TOKENS
+    assert clamped["max_context_tokens"] == SOL_WINDOW_TOKENS - SOL_SAFETY_TOKENS
+    assert clamped["context_budget"]["max_context_chars_clamped"] is True
+    # The source still names the knob the operator actually set.
+    assert clamped["context_budget"]["max_context_chars_source"] == "max_context_chars"
+    assert clamped["context_budget"]["max_context_chars_requested"] == 10_000_000
+
+
+def test_a_budget_exactly_at_the_ceiling_is_not_clamped():
+    """Pins the comparison as ``>``, not ``>=``.
+
+    Otherwise the largest legal budget would report itself as clamped and drag
+    the token metadata fields along with it.
+    """
+
+    at_ceiling = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_chars=SOL_MAX_CHARS,
+    )._model_context_budget_metadata()
+
+    assert at_ceiling["context_budget"]["max_context_chars_clamped"] is False
+    assert at_ceiling["context_budget"]["max_chars"] == SOL_MAX_CHARS
+    assert at_ceiling["max_context_tokens"] is None
+
+    one_over = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_chars=SOL_MAX_CHARS + 1,
+    )._model_context_budget_metadata()
+
+    assert one_over["context_budget"]["max_context_chars_clamped"] is True
+    assert one_over["context_budget"]["max_chars"] == SOL_MAX_CHARS
+
+
+def test_clamp_uses_each_models_own_window():
+    """The ceiling is per-profile, resolved per request, not a constant."""
+
+    runner = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        default_model="gpt-5.6-luna",
+        max_context_tokens=10_000_000,
+    )
+
+    assert runner._context_budget().max_chars == (328_000 - 8_000) * 4
+
+
+def test_unknown_model_override_is_never_clamped():
+    """The required design: the fallback profile is exempt.
+
+    A newly released or gateway-only model resolves to the 64k conservative
+    fallback, and an operator override is the only way to correct that guess.
+    Clamping it to the fallback ceiling would defeat the override's only
+    purpose, so an uncatalogued model's explicit budget is honoured verbatim.
+    """
+
+    runner = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        default_model="some-unlisted-model",
+        max_context_tokens=1_000_000,
+    )
+
+    budget = runner._context_budget()
+
+    # The fallback ceiling would have been (64_000 - 3_200) * 4 == 243_200.
+    assert budget.max_chars == 4_000_000
+    assert budget.effective_max_chars == 4_000_000 - 4_000 * 4
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_max_chars"),
+    [
+        ({"max_context_tokens": 250_000}, 1_000_000),
+        ({"max_context_chars": 1_000_000}, 1_000_000),
+        ({"max_context_tokens": 50_000}, 200_000),
+        ({"max_context_chars": 100_000}, 100_000),
+    ],
+)
+def test_sub_window_explicit_budgets_are_untouched_by_the_clamp(
+    kwargs, expected_max_chars
+):
+    runner = _runner(InMemorySessionStore(), ScriptedLLMProvider([]), **kwargs)
+
+    assert runner._context_budget().max_chars == expected_max_chars
+
+
+def test_clamped_budget_metadata_records_the_clamp():
+    """A clamp must never be silent - the operator's number stops being used."""
+
+    runner = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_tokens=10_000_000,
+    )
+
+    metadata = runner._model_context_budget_metadata()
+    context_budget = metadata["context_budget"]
+
+    assert context_budget["max_context_chars_source"] == "max_context_tokens"
+    assert context_budget["max_context_chars_requested"] == 40_000_000
+    assert context_budget["max_context_chars_limit"] == SOL_MAX_CHARS
+    assert context_budget["max_context_chars_clamped"] is True
+    assert context_budget["max_chars"] == SOL_MAX_CHARS
+    # The token-denominated fields describe the budget actually in force, not
+    # the rejected request; the original stays visible as ..._requested.
+    assert metadata["context_safety_margin_tokens"] == SOL_SAFETY_TOKENS
+    assert metadata["max_context_tokens"] == SOL_WINDOW_TOKENS - SOL_SAFETY_TOKENS
+
+
+def test_unclamped_budget_metadata_reports_no_clamp():
+    runner = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_tokens=250_000,
+    )
+
+    context_budget = runner._model_context_budget_metadata()["context_budget"]
+
+    assert context_budget["max_context_chars_requested"] == 1_000_000
+    assert context_budget["max_context_chars_limit"] == SOL_MAX_CHARS
+    assert context_budget["max_context_chars_clamped"] is False
+    assert runner._model_context_budget_metadata()["max_context_tokens"] == 250_000
+
+
+def test_fallback_profile_metadata_reports_no_ceiling_at_all():
+    """An uncatalogued model advertises that no ceiling was applicable.
+
+    ``max_context_chars_limit is None`` alone does not distinguish this from
+    "nothing configured" - the unset case reports None too (see
+    test_unset_budget_metadata_has_nothing_to_clamp). The pair does: a non-null
+    ``_requested`` next to a null ``_limit`` means "an override was set and
+    deliberately not clamped", which is the state an operator debugging an
+    uncatalogued model needs to see.
+    """
+
+    runner = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        default_model="some-unlisted-model",
+        max_context_tokens=1_000_000,
+    )
+
+    context_budget = runner._model_context_budget_metadata()["context_budget"]
+
+    assert context_budget["max_context_chars_source"] == "max_context_tokens"
+    assert context_budget["max_context_chars_requested"] == 4_000_000
+    assert context_budget["max_context_chars_limit"] is None
+    assert context_budget["max_context_chars_clamped"] is False
+
+
+def test_unset_budget_metadata_has_nothing_to_clamp():
+    context_budget = _runner(
+        InMemorySessionStore(), ScriptedLLMProvider([])
+    )._model_context_budget_metadata()["context_budget"]
+
+    assert context_budget["max_context_chars_requested"] is None
+    assert context_budget["max_context_chars_limit"] is None
+    assert context_budget["max_context_chars_clamped"] is False
+
+
+def test_tokens_and_chars_routes_keep_their_asymmetric_reserves():
+    """Pins a deliberate asymmetry. Do NOT "fix" this test by equalising them.
+
+    ``max_context_tokens`` is read as a context WINDOW and has the model's
+    declared response reserve subtracted; ``max_context_chars`` is read as a
+    prompt BUDGET and has nothing subtracted. So the same nominal size yields a
+    2x different prompt. This predates the model-catalog default (it arrived
+    with the Runtime v2 baseline, #521) and both directions of changing it are
+    behaviour changes to explicitly-configured deployments, so #583 documented
+    the real numbers in config.yaml.example instead of altering them. This test
+    exists so the asymmetry cannot drift silently in either direction.
+    """
+
+    tokens_budget = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_tokens=250_000,
+    )._context_budget()
+    chars_budget = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_chars=1_000_000,
+    )._context_budget()
+
+    assert tokens_budget.max_chars == 1_000_000
+    assert tokens_budget.reserve_chars == 500_000  # 512_000 reserve, clamped to half
+    assert tokens_budget.effective_max_chars == 500_000  # ~125_000 tokens
+
+    assert chars_budget.max_chars == 1_000_000
+    assert chars_budget.reserve_chars == 0
+    assert chars_budget.effective_max_chars == 1_000_000  # ~250_000 tokens
+
+    assert chars_budget.effective_max_chars == 2 * tokens_budget.effective_max_chars
+
+
 # --------------------------------------------------------------------------
 # The reserve may never swallow the budget
 # --------------------------------------------------------------------------
@@ -332,6 +629,71 @@ async def test_request_compaction_is_reported_as_a_runtime_event():
     assert not [
         event for event in result.runtime_events if event.type == "session_compacted"
     ]
+
+
+@pytest.mark.asyncio
+async def test_over_window_override_produces_a_bounded_request_end_to_end():
+    """The clamp has to bind a real provider request, not just a private method.
+
+    Every other clamp test pokes ``_context_budget()``. This one proves the
+    clamped ceiling actually reaches ``prepare_history_for_request``: without
+    the clamp a 10M-token override sends the whole 1.8M-char history verbatim,
+    which is the provider 400 the catalog default exists to prevent.
+    """
+
+    store = InMemorySessionStore()
+    _seed_large_history(store, "session-over-window", messages=40, chars=1_800_000)
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runner = _runner(store, provider, max_context_tokens=10_000_000)
+
+    result = await runner.run(
+        session_id="session-over-window",
+        user_text="latest request",
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    assert request.prepared_request.compaction_applied is True
+    assert _request_chars(request.provider_request) < SOL_MAX_CHARS
+    assert (
+        request.prepared_request.compaction_metadata["kept_chars"]
+        <= SOL_MAX_CHARS - SOL_RESERVE_CHARS
+    )
+    # ...and the clamp is legible on the event the compaction emits.
+    events = [
+        event for event in result.runtime_events if event.type == "request_compacted"
+    ]
+    assert events[0].payload["context_budget"]["max_context_chars_clamped"] is True
+    assert events[0].payload["context_budget"]["max_context_chars_requested"] == (
+        40_000_000
+    )
+    # The size knob alone still does not touch the transcript.
+    assert not [
+        event for event in result.runtime_events if event.type == "session_compacted"
+    ]
+
+
+@pytest.mark.parametrize("rewrite_stored_history", [True, False])
+def test_budget_metadata_reports_whether_stored_history_gets_rewritten(
+    rewrite_stored_history,
+):
+    """The rewrite gate must be readable, not inferable from missing events.
+
+    Its only other signal is the ABSENCE of session_compaction_started /
+    session_compacted, which tells an operator nothing unless they already knew
+    the flag existed - and the deployment it changes most (a size knob set,
+    stored rewriting now off, session files growing) is exactly the one that
+    would not.
+    """
+
+    context_budget = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        max_context_tokens=50_000,
+        compaction_rewrite_stored_history=rewrite_stored_history,
+    )._model_context_budget_metadata()["context_budget"]
+
+    assert context_budget["stored_history_rewrite"] is rewrite_stored_history
 
 
 @pytest.mark.asyncio

@@ -644,6 +644,52 @@ async def test_overflow_retry_shrinks_request_without_rewriting_stored_history()
     assert provider.requests[1].prepared_request.compaction_applied is True
 
 
+@pytest.mark.asyncio
+async def test_overflow_retry_shrinks_request_with_a_size_knob_and_no_stored_rewrite():
+    """The sibling of the stock-runner test, but with a size cap configured.
+
+    A configured cap used to imply stored-history rewriting, which pre-shrank
+    attempt #1. Now it does not, so attempt #1 is larger than it used to be -
+    but the retry still lands on the same halved render-time budget and still
+    recovers, with the transcript intact. That is the whole argument for
+    decoupling: the size knob keeps doing its job without the disk rewrite.
+    """
+
+    provider = SequenceProvider(
+        [
+            ProviderContextOverflowError("context too long"),
+            {"content": "Recovered without rewriting the transcript."},
+        ]
+    )
+    store = InMemorySessionStore()
+    runner = RuntimeLoopRunner(
+        store=store,
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+        max_context_parts=5,
+    )
+    seeded = _old_session(*_STOCK_BUDGET_TURN_TEXTS)
+    seeded_messages = [_stored_fingerprint(message) for message in seeded.messages]
+
+    result = await runner.run(session=seeded, user_text="latest request")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert len(provider.requests) == 2
+    assert len(_events(result, "provider.context_overflow_retry")) == 1
+
+    stored = store.read_history("session-provider-retry")
+    assert [
+        _stored_fingerprint(message) for message in stored[: len(seeded_messages)]
+    ] == seeded_messages
+    assert _events(result, "session_compacted") == []
+    assert _events(result, "session_compaction_started") == []
+
+    first_chars = sum(len(text) for _role, text in provider.message_snapshots[0])
+    retry_chars = sum(len(text) for _role, text in provider.message_snapshots[1])
+    assert retry_chars < first_chars
+    assert provider.message_snapshots[1][-1] == ("user", "latest request")
+
+
 def test_provider_retry_error_import_boundary():
     code = """
 import json

@@ -8,6 +8,7 @@ from efp_runtime.llm.models import (
     ModelContextProfile,
     SUPPORTED_COPILOT_MODEL_IDS,
     canonicalize_copilot_model_id,
+    is_catalog_model_context_profile,
     resolve_model_context_profile,
     tokens_to_chars,
 )
@@ -78,6 +79,30 @@ def test_non_copilot_qualified_model_still_uses_copilot_fallback():
     assert profile.provider_id == DEFAULT_PROVIDER_ID
     assert profile.model_id == "custom-model"
     assert profile.context_window_tokens == 64_000
+
+
+@pytest.mark.parametrize(
+    "model",
+    [*SUPPORTED_COPILOT_MODEL_IDS, "github-copilot/gpt-5.6-sol", "gpt-5.6 sol"],
+)
+def test_catalog_hit_is_distinguishable_from_the_conservative_fallback(model: str):
+    assert is_catalog_model_context_profile(resolve_model_context_profile(model)) is True
+
+
+@pytest.mark.parametrize("model", ["some-new-model", "other-provider/custom-model"])
+def test_fallback_profile_is_not_reported_as_a_catalog_hit(model: str):
+    """``model_id`` alone cannot tell the two apart, and callers depend on this.
+
+    ``resolve_model_context_profile`` stamps the requested id onto a copy of the
+    conservative fallback, so a miss reports its own id next to a 64k window it
+    never declared. The context-budget clamp must not narrow an operator's
+    override on one of these.
+    """
+
+    profile = resolve_model_context_profile(model)
+
+    assert profile.context_window_tokens == 64_000
+    assert is_catalog_model_context_profile(profile) is False
 
 
 def test_tokens_to_chars_is_deterministic_and_validated():

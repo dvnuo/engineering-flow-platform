@@ -376,6 +376,11 @@ def _child_config(
         compaction_auto=(
             True if base_config is None else base_config.compaction_auto
         ),
+        compaction_rewrite_stored_history=(
+            False
+            if base_config is None
+            else base_config.compaction_rewrite_stored_history
+        ),
         compaction_prune=(
             True if base_config is None else base_config.compaction_prune
         ),

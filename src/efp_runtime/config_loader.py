@@ -84,6 +84,7 @@ _RUNTIME_CONFIG_KEYS = {
     "model_aware_tool_selection",
     "compaction",
     "compaction_auto",
+    "compaction_rewrite_stored_history",
     "compaction_prune",
     "compaction_tail_turns",
     "compaction_preserve_recent_chars",
@@ -729,6 +730,8 @@ def _model_aware_tool_selection(raw: Mapping[str, Any]) -> Any:
 
 _COMPACTION_NESTED_ALIASES = {
     "auto": "compaction_auto",
+    "rewrite_stored_history": "compaction_rewrite_stored_history",
+    "rewriteStoredHistory": "compaction_rewrite_stored_history",
     "prune": "compaction_prune",
     "tail_turns": "compaction_tail_turns",
     "tailTurns": "compaction_tail_turns",
@@ -747,6 +750,7 @@ _COMPACTION_NESTED_ALIASES = {
 
 _COMPACTION_TOP_LEVEL_FIELDS = {
     "compaction_auto",
+    "compaction_rewrite_stored_history",
     "compaction_prune",
     "compaction_tail_turns",
     "compaction_preserve_recent_chars",

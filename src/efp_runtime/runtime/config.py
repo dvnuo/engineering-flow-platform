@@ -27,6 +27,15 @@ class RuntimeConfig:
     context_reserve_chars: int = 0
     context_reserve_tokens: int | None = None
     compaction_auto: bool = True
+    # Off by default, and deliberately NOT implied by the context-budget size
+    # knobs above. A context budget sizes the in-memory provider request; the
+    # render-time compactor (context/render.py:prepare_history_for_request)
+    # keeps every request inside it on its own, with no persistence. This flag
+    # additionally rewrites the STORED session through
+    # SessionStore.replace_history - irreversibly, discarding the transcript the
+    # user reads in the Portal. "I want a smaller prompt" and "please rewrite my
+    # transcripts" are different requests, so they get different knobs.
+    compaction_rewrite_stored_history: bool = False
     compaction_prune: bool = True
     compaction_tail_turns: int = 2
     compaction_preserve_recent_chars: int | None = None
@@ -99,10 +108,17 @@ class RuntimeConfig:
             raise ValueError("max_iterations must be at least 1")
         if self.doom_loop_threshold is not None and self.doom_loop_threshold < 2:
             raise ValueError("doom_loop_threshold must be at least 2 or None")
-        if self.max_context_parts is not None and self.max_context_parts < 1:
-            raise ValueError("max_context_parts must be at least 1")
-        if self.max_context_chars is not None and self.max_context_chars < 1:
-            raise ValueError("max_context_chars must be at least 1")
+        # The three size caps are strictly positive. A bare ``< 1`` comparison
+        # let ``True`` through as a 1-part/1-char budget and raised a fieldless
+        # TypeError on a string; the shared validator names the field either way.
+        self.max_context_parts = _validate_optional_positive_int(
+            self.max_context_parts,
+            "max_context_parts",
+        )
+        self.max_context_chars = _validate_optional_positive_int(
+            self.max_context_chars,
+            "max_context_chars",
+        )
         self.default_provider_id = _validate_non_empty_string(
             self.default_provider_id,
             "default_provider_id",
@@ -111,12 +127,30 @@ class RuntimeConfig:
             self.default_model,
             "default_model",
         )
-        self.max_context_tokens = _validate_optional_non_negative_int(
+        # Zero is rejected, not coerced to None. ``max_context_chars`` already
+        # rejects it and the two knobs are interchangeable expressions of the
+        # same budget, so accepting ``max_context_tokens: 0`` - which yields a
+        # 1-character budget, i.e. every request reduced to system context plus
+        # the latest turn - would be indefensible. Coercing to None instead
+        # would need a second representation of "unset" (``max_context_chars is
+        # None`` is load-bearing in the reserve, preserve-recent and metadata
+        # branches) and would leave the config file saying 0 while the runtime
+        # silently ran the catalog default. To turn the knob off, omit the key.
+        self.max_context_tokens = _validate_optional_positive_int(
             self.max_context_tokens,
             "max_context_tokens",
         )
-        if self.context_reserve_chars < 0:
-            raise ValueError("context_reserve_chars must be at least 0")
+        # Reserves stay non-negative: 0 is meaningful and distinct from unset
+        # ("no response headroom", versus "use the model's declared reserve").
+        # The shared validator does tighten the TYPE here - a bare ``< 0`` let
+        # ``True`` and ``1000.0`` through, where the sibling
+        # ``context_reserve_tokens`` below has always rejected both. Deliberate:
+        # the two knobs feed the same arithmetic and should not disagree about
+        # what a reserve is.
+        self.context_reserve_chars = _validate_non_negative_int(
+            self.context_reserve_chars,
+            "context_reserve_chars",
+        )
         self.context_reserve_tokens = _validate_optional_non_negative_int(
             self.context_reserve_tokens,
             "context_reserve_tokens",
@@ -181,6 +215,9 @@ class RuntimeConfig:
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
         self.compaction_auto = bool(self.compaction_auto)
+        self.compaction_rewrite_stored_history = bool(
+            self.compaction_rewrite_stored_history
+        )
         self.compaction_prune = bool(self.compaction_prune)
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
         self.enable_context_overflow_retry = bool(self.enable_context_overflow_retry)
@@ -237,6 +274,18 @@ def _validate_optional_non_negative_int(value: Any, field_name: str) -> int | No
     if value is None:
         return None
     return _validate_non_negative_int(value, field_name)
+
+
+def _validate_positive_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return int(value)
+
+
+def _validate_optional_positive_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _validate_positive_int(value, field_name)
 
 
 def _validate_non_empty_string(value: Any, field_name: str) -> str:

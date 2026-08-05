@@ -45,6 +45,7 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
         "context_reserve_chars",
         "context_reserve_tokens",
         "compaction_auto",
+        "compaction_rewrite_stored_history",
         "compaction_prune",
         "compaction_tail_turns",
         "compaction_preserve_recent_chars",

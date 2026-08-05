@@ -130,6 +130,24 @@ def default_max_context_tokens(profile: ModelContextProfile) -> int:
     return max(1, profile.context_window_tokens - context_safety_margin_tokens(profile))
 
 
+def is_catalog_model_context_profile(profile: ModelContextProfile) -> bool:
+    """Report whether ``profile`` came from the catalog rather than the fallback.
+
+    ``resolve_model_context_profile`` returns
+    ``replace(_CONSERVATIVE_FALLBACK_PROFILE, model_id=model_id)`` on a miss, so
+    ``profile.model_id`` alone cannot tell a real catalog entry from a guess -
+    an uncatalogued model reports its own id next to a 64k window it never
+    declared.
+
+    Callers must not narrow an operator's explicit context budget on a profile
+    this returns ``False`` for: a newly released or gateway-only model needs an
+    override precisely because the conservative fallback is wrong about it, and
+    clamping to 64k would defeat the only purpose the override has.
+    """
+
+    return _COPILOT_PROFILES.get(profile.model_id) == profile
+
+
 def _profile(
     model_id: str,
     *,
@@ -261,6 +279,7 @@ __all__ = [
     "canonicalize_copilot_model_id",
     "context_safety_margin_tokens",
     "default_max_context_tokens",
+    "is_catalog_model_context_profile",
     "resolve_model_context_profile",
     "tokens_to_chars",
 ]

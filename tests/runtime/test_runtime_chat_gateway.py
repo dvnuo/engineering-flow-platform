@@ -357,6 +357,7 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
         "active_skills": ["review"],
         "command_directories": ["/workspace/.efp/commands"],
         "compaction_auto": False,
+        "compaction_rewrite_stored_history": True,
         "max_context_tokens": 64000,
         "system_prompt_texts": ["system"],
         "instruction_texts": ["instruction"],
@@ -397,6 +398,9 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
     assert runtime_config.active_skills == ["review"]
     assert runtime_config.command_directories == ["/workspace/.efp/commands"]
     assert runtime_config.compaction_auto is False
+    # Portal is the only route that can turn this on in production: without the
+    # allowlist entry the opt-in is unreachable and stored compaction is dead.
+    assert runtime_config.compaction_rewrite_stored_history is True
     assert runtime_config.max_context_tokens == 64000
     assert runtime_config.system_prompt_texts == ["system"]
     assert runtime_config.instruction_texts == ["instruction"]
@@ -430,6 +434,47 @@ def test_runtime_chat_ignores_untrusted_runtime_profile_metadata(monkeypatch):
 
     assert runtime_config.enabled_tools is None
     assert runtime_config.track_usage is True
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["max_context_tokens", "max_context_chars", "max_context_parts"],
+)
+def test_runtime_chat_rejects_a_zero_context_size_cap_with_a_400(monkeypatch, field):
+    """Rejecting 0 is only defensible if the operator is told which key is bad.
+
+    A stored runtime profile carrying `max_context_tokens: 0` used to produce a
+    one-character budget - every request cut down to system context plus the
+    latest turn. It now fails the chat instead, and this pins the translation
+    from RuntimeConfig's ValueError to a 400 naming the field, which is the
+    justification for rejecting rather than silently coercing.
+    """
+
+    class _FakeConfig:
+        @property
+        def session(self):
+            return {"max_iterations": 2}
+
+        def get_effective_config(self):
+            return {}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
+        runtime_chat._runtime_config(
+            "request-model",
+            track_usage=True,
+            execution_metadata={
+                "runtime_profile": {
+                    "source": "portal.runtime_profile",
+                    "config": {field: 0},
+                }
+            },
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_type == "invalid_runtime_config"
+    assert field in str(exc_info.value)
 
 
 def test_runtime_chat_uses_persisted_runtime_config_fields(monkeypatch):

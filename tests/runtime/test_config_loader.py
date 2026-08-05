@@ -564,6 +564,10 @@ def test_model_context_budget_snake_case_aliases_are_consumed(tmp_path: Path):
         {"provider_id": " "},
         {"defaultModel": ""},
         {"max_context_tokens": -1},
+        # 0 is the plausible "disable it" typo, and it used to be accepted here.
+        {"max_context_tokens": 0},
+        {"maxContextTokens": 0},
+        {"maxContextTokens": True},
         {"contextReserveTokens": -1},
         {"compaction": {"preserve_recent_tokens": -1}},
     ],
