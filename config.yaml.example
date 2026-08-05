@@ -141,10 +141,23 @@ llm:
 # (which the model-derived default deliberately does NOT do, because rewriting
 # stored history discards the user's transcript).
 #
-# max_context_tokens: 250000   # prompt budget in tokens; wins over the catalog
-# max_context_chars: 1000000   # same, in characters; wins over max_context_tokens
+# These two are NOT the same knob and do not produce the same budget:
+#
+# max_context_tokens: 250000   # CONTEXT WINDOW, not prompt budget. The model's
+#                              # declared response reserve is then subtracted
+#                              # (clamped to half), so on a 400k/128k model this
+#                              # yields ~125000 tokens of actual prompt.
+# max_context_chars: 1000000   # PROMPT BUDGET directly. No model reserve is
+#                              # subtracted -- only context_reserve_chars, which
+#                              # defaults to 0. Wins over max_context_tokens.
+#                              # 1000000 chars is ~250000 tokens at 4 chars/token.
 # max_context_parts: 200       # cap on message parts, independent of the above
-# context_reserve_tokens: 128000  # response headroom withheld from the budget
+# context_reserve_tokens: 128000  # response headroom; overrides the model's own
+#                              # reserve for BOTH of the above
+#
+# Setting ANY of the three caps above also opts this deployment into rewriting
+# STORED session history on disk when it exceeds the budget -- the catalog
+# default deliberately does not do that. Leave them unset unless you want that.
 #
 # NOTE: the `llm.context_budget` and `llm.model_limits` blocks above are read
 # by the LEGACY progressive-context stack (src/runtime/progressive_context.py,
