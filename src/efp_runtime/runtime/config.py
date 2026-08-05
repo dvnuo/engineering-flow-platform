@@ -215,8 +215,16 @@ class RuntimeConfig:
             None if self.enabled_tools is None else list(self.enabled_tools)
         )
         self.compaction_auto = bool(self.compaction_auto)
-        self.compaction_rewrite_stored_history = bool(
-            self.compaction_rewrite_stored_history
+        # Deliberately stricter than its neighbours, which all coerce with
+        # bool(). This flag alone authorises rewriting the stored session, and
+        # bool() fails OPEN: the string "false" is truthy, so a value that
+        # stringified anywhere on the way in would silently start destroying
+        # transcripts. The size caps in this same class reject rather than
+        # coerce for the weaker reason that coercion ignores what the operator
+        # wrote; that argument is strictly stronger here.
+        self.compaction_rewrite_stored_history = _validate_bool(
+            self.compaction_rewrite_stored_history,
+            "compaction_rewrite_stored_history",
         )
         self.compaction_prune = bool(self.compaction_prune)
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
@@ -286,6 +294,12 @@ def _validate_optional_positive_int(value: Any, field_name: str) -> int | None:
     if value is None:
         return None
     return _validate_positive_int(value, field_name)
+
+
+def _validate_bool(value: Any, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
 
 
 def _validate_non_empty_string(value: Any, field_name: str) -> str:

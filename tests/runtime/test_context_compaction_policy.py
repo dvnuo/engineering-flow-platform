@@ -119,6 +119,48 @@ def test_runtime_config_rejects_bool_and_non_int_context_ints(field: str, value)
         RuntimeConfig(**{field: value})
 
 
+@pytest.mark.parametrize("value", ["false", "true", 1, 0, None, "", 1.0])
+def test_runtime_config_rejects_non_bool_stored_history_rewrite(value):
+    """This flag is validated strictly while its neighbours use ``bool()``.
+
+    ``bool()`` fails OPEN here: ``bool("false")`` is ``True``, so a value that
+    stringified anywhere on the way in -- an HTML form, a Portal profile that
+    stores booleans as text -- would silently authorise rewriting the user's
+    stored transcript. Every other ``compaction_*`` flag is non-destructive on
+    its own, which is why only this one is strict.
+    """
+
+    with pytest.raises(ValueError, match="compaction_rewrite_stored_history"):
+        RuntimeConfig(compaction_rewrite_stored_history=value)
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_runtime_config_accepts_real_bool_stored_history_rewrite(value):
+    assert (
+        RuntimeConfig(compaction_rewrite_stored_history=value)
+        .compaction_rewrite_stored_history
+        is value
+    )
+
+
+@pytest.mark.parametrize("value", ["false", 1, None])
+def test_runner_rejects_non_bool_stored_history_rewrite(value):
+    """The runner takes the flag directly, so it needs its own guard."""
+
+    from efp_runtime.loop.runner import RuntimeLoopRunner
+    from efp_runtime.session.store import InMemorySessionStore
+    from efp_runtime.tools.registry import ToolRegistry
+    from efp_runtime.tools.runtime import ToolRuntime
+
+    with pytest.raises(ValueError, match="compaction_rewrite_stored_history"):
+        RuntimeLoopRunner(
+            store=InMemorySessionStore(),
+            provider=None,
+            tool_runtime=ToolRuntime(ToolRegistry()),
+            compaction_rewrite_stored_history=value,
+        )
+
+
 @pytest.mark.parametrize("field", ["default_provider_id", "default_model"])
 def test_runtime_config_rejects_blank_model_context_strings(field: str):
     with pytest.raises(ValueError, match=field):

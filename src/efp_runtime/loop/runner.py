@@ -302,7 +302,12 @@ class RuntimeLoopRunner:
         self.tool_selection = _copy_tool_selection(tool_selection)
         self.compaction_summarizer = compaction_summarizer
         self.compaction_auto = bool(compaction_auto)
-        self.compaction_rewrite_stored_history = bool(compaction_rewrite_stored_history)
+        # Not bool(): this flag alone authorises rewriting the stored session,
+        # and bool() fails open -- the string "false" is truthy. See the same
+        # guard in RuntimeConfig.
+        if not isinstance(compaction_rewrite_stored_history, bool):
+            raise ValueError("compaction_rewrite_stored_history must be a boolean")
+        self.compaction_rewrite_stored_history = compaction_rewrite_stored_history
         self.compaction_tail_turns = compaction_tail_turns
         self.compaction_preserve_recent_chars = compaction_preserve_recent_chars
         self.compaction_preserve_recent_tokens = compaction_preserve_recent_tokens
