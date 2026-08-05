@@ -279,6 +279,10 @@ class RuntimeEventProjector:
             "session_compacted",
             "session_compaction_completed",
             "overflow_retry.compaction_applied",
+            # Render-time compaction. Same UI event as the stored path so the
+            # timeline keeps rendering it, but _compaction_data carries
+            # stored/scope so consumers can tell the two apart.
+            "request_compacted",
         }:
             outputs.append(
                 self._build(
@@ -740,6 +744,20 @@ def _compaction_data(payload: Mapping[str, Any]) -> dict[str, Any]:
         "summary_preview": _first_preview(payload, "summary", "compaction_summary"),
         "stored_message_count": payload.get("stored_message_count"),
         "overflow": payload.get("overflow"),
+        # Whether the stored session was rewritten, or only this request was
+        # trimmed. Without these a consumer cannot tell from the projected
+        # event whether anything on disk changed.
+        "stored": payload.get("stored"),
+        "scope": payload.get("scope"),
+        # Both emitters spread compaction/controller._compaction_metadata flat
+        # into the payload, while "compaction" above is the nested shape only
+        # the overflow-retry path sets. Without these the projected event
+        # reaches the UI carrying no numbers at all -- not how much was
+        # dropped, kept, or budgeted.
+        "max_chars": payload.get("max_chars"),
+        "compacted_message_count": payload.get("compacted_message_count"),
+        "compacted_chars": payload.get("compacted_chars"),
+        "kept_chars": payload.get("kept_chars"),
     }
 
 

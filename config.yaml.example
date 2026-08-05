@@ -122,6 +122,36 @@ llm:
   # workspace. Edit it directly or through the Portal system prompt editor.
 
 # ============================================
+# Runtime Context Budget (OPTIONAL)
+# ============================================
+# These are TOP-LEVEL keys, not nested under `llm:`. They are the only
+# context-budget knobs the native (efp_runtime) request path reads: they are
+# lifted off the top level of the effective config by
+# src/gateway/runtime_chat.py:_runtime_config_profile_kwargs, filtered by
+# PORTAL_MANAGED_RUNTIME_FIELDS in src/config.py.
+#
+# Leave them unset and the budget is derived from the model catalog
+# (src/efp_runtime/llm/models.py): the model's declared context window minus a
+# safety margin, with the model's declared response reserve held back. That
+# default is what keeps a long conversation from growing past the model window
+# and returning `400 Bad Request / "Your input exceeds the context window"`.
+#
+# Set them only to override that default -- for example to pin a smaller
+# prompt budget, or to opt in to compaction of the STORED session history
+# (which the model-derived default deliberately does NOT do, because rewriting
+# stored history discards the user's transcript).
+#
+# max_context_tokens: 250000   # prompt budget in tokens; wins over the catalog
+# max_context_chars: 1000000   # same, in characters; wins over max_context_tokens
+# max_context_parts: 200       # cap on message parts, independent of the above
+# context_reserve_tokens: 128000  # response headroom withheld from the budget
+#
+# NOTE: the `llm.context_budget` and `llm.model_limits` blocks above are read
+# by the LEGACY progressive-context stack (src/runtime/progressive_context.py,
+# src/config.py:resolve_model_limits), NOT by the native request path. Changing
+# them will not resize a native runtime chat request.
+
+# ============================================
 # Session Configuration (OPTIONAL)
 # ============================================
 # Session persistence and caching settings

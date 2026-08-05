@@ -11,6 +11,8 @@ DEFAULT_MODEL_ID = "gpt-5.6-terra"
 DEFAULT_CHARS_PER_TOKEN = 4
 MIN_PRESERVE_RECENT_TOKENS = 2_000
 MAX_PRESERVE_RECENT_TOKENS = 8_000
+DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS = 8_000
+CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR = 20
 SUPPORTED_COPILOT_MODEL_IDS = (
     "gpt-5.4",
     "gpt-5.5",
@@ -46,14 +48,21 @@ def resolve_model_context_profile(
     *,
     provider_id: Any = DEFAULT_PROVIDER_ID,
 ) -> ModelContextProfile:
-    """Resolve a Copilot model profile with a conservative Copilot fallback."""
+    """Resolve a model context profile with a conservative fallback.
 
-    requested_provider, requested_model = _split_model_id(model)
-    fallback_provider = _normalize_identifier(provider_id) or DEFAULT_PROVIDER_ID
-    provider = requested_provider or fallback_provider
+    The catalog is keyed by model id alone: a context window is a property of
+    the model, not of the gateway serving it. ``provider_id`` is accepted (and
+    a ``provider/model`` prefix is stripped from ``model``) so callers can pass
+    a qualified id, but it does not gate the lookup - ai_platform serves
+    ``gpt-5.4`` (see ``AI_PLATFORM_MODEL_IDS``) with the same 400k window as
+    Copilot, and this profile is the default source of the native runtime's
+    context budget, so falling back to the 64k profile purely because of a
+    provider id would compact those sessions roughly seven times too early.
+    """
+
+    del provider_id  # accepted for call-site compatibility; see docstring
+    _, requested_model = _split_model_id(model)
     model_id = requested_model or DEFAULT_MODEL_ID
-    if provider != DEFAULT_PROVIDER_ID:
-        return replace(_CONSERVATIVE_FALLBACK_PROFILE, model_id=model_id)
     return _COPILOT_PROFILES.get(
         model_id,
         replace(_CONSERVATIVE_FALLBACK_PROFILE, model_id=model_id),
@@ -91,6 +100,34 @@ def tokens_to_chars(
     _validate_non_negative_int(tokens, "tokens")
     _validate_positive_int(chars_per_token, "chars_per_token")
     return int(tokens) * int(chars_per_token)
+
+
+def context_safety_margin_tokens(profile: ModelContextProfile) -> int:
+    """Return the token margin held back from a model's declared window.
+
+    Mirrors the legacy safety-margin rule in ``src/runtime/progressive_context.py``
+    (``min(configured_safety, int(context_window * 0.05))`` with a configured
+    safety of 8000 tokens). Combined with ``default_reserve_tokens`` this
+    reproduces the legacy prompt budget ``context_window - reserved - safety``;
+    the legacy path additionally clamps by a configured ``max_prompt_tokens``,
+    which has no native-runtime equivalent, and has no table entry for the
+    ``gpt-5.6-*`` models at all.
+    """
+
+    return min(
+        DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS,
+        profile.context_window_tokens // CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR,
+    )
+
+
+def default_max_context_tokens(profile: ModelContextProfile) -> int:
+    """Return the catalog-derived prompt budget for a model, in tokens.
+
+    The model's response headroom (``default_reserve_tokens``) is NOT subtracted
+    here; callers subtract it separately via ``ContextBudget.reserve_chars``.
+    """
+
+    return max(1, profile.context_window_tokens - context_safety_margin_tokens(profile))
 
 
 def _profile(
@@ -212,7 +249,9 @@ def _validate_positive_int(value: Any, field_name: str) -> None:
 
 
 __all__ = [
+    "CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR",
     "DEFAULT_CHARS_PER_TOKEN",
+    "DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS",
     "DEFAULT_MODEL_ID",
     "DEFAULT_PROVIDER_ID",
     "MAX_PRESERVE_RECENT_TOKENS",
@@ -220,6 +259,8 @@ __all__ = [
     "ModelContextProfile",
     "SUPPORTED_COPILOT_MODEL_IDS",
     "canonicalize_copilot_model_id",
+    "context_safety_margin_tokens",
+    "default_max_context_tokens",
     "resolve_model_context_profile",
     "tokens_to_chars",
 ]

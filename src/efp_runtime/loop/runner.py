@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import inspect
@@ -31,6 +31,8 @@ from ..llm.models import (
     DEFAULT_MODEL_ID,
     DEFAULT_PROVIDER_ID,
     ModelContextProfile,
+    context_safety_margin_tokens,
+    default_max_context_tokens,
     resolve_model_context_profile,
 )
 from ..permissions import ASK, DENY, PermissionMetadata
@@ -57,6 +59,11 @@ from ..usage import (
 from .provider import LLMProvider, ProviderOutput, ProviderResult, RuntimeRequest
 from .stream_events import bridge_llm_stream_events
 
+
+# The context reserve is response headroom; it may never claim more than
+# 1/MAX_RESERVE_BUDGET_DIVISOR of the prompt budget. See
+# RuntimeLoopRunner._clamp_reserve_chars.
+MAX_RESERVE_BUDGET_DIVISOR = 2
 
 ContextMessageProvider = Callable[[Mapping[str, Any]], Iterable[Message]]
 
@@ -549,6 +556,13 @@ class RuntimeLoopRunner:
                 request,
                 compaction_outcome.replay,
             )
+            _append_request_compaction_event(
+                runtime_events,
+                request=request,
+                session_id=resolved_session_id,
+                run_id=run_id,
+                iteration=iteration,
+            )
             runtime_events.append(
                 RuntimeEvent(
                     type="iteration_start",
@@ -817,15 +831,52 @@ class RuntimeLoopRunner:
 
     def _context_budget(self, metadata: Mapping[str, Any] | None = None) -> ContextBudget:
         profile = self._model_context_profile(metadata)
+        max_chars = self._context_budget_max_chars(profile)
+        reserve_chars = self._clamp_reserve_chars(
+            self._context_budget_reserve_chars(profile),
+            max_chars=max_chars,
+        )
         return ContextBudget(
             max_parts=self.max_context_parts,
-            max_chars=self._context_budget_max_chars(profile),
-            reserve_chars=self._context_budget_reserve_chars(profile),
+            max_chars=max_chars,
+            reserve_chars=reserve_chars,
         )
+
+    @staticmethod
+    def _clamp_reserve_chars(reserve_chars: int, *, max_chars: int | None) -> int:
+        """Keep the reserve from swallowing the whole prompt budget.
+
+        ``ContextBudget.effective_max_chars`` is ``max_chars - reserve_chars``
+        clamped at 0, and nothing else checks the two against each other. Before
+        the catalog default, ``max_chars`` was ``None`` on an unconfigured
+        runtime so the reserve knobs were inert; now they are always live, and a
+        portal-managed ``context_reserve_tokens``/``compaction_reserved_chars``
+        larger than the window would silently reduce every request to the system
+        prompt plus the latest turn. The reserve is response headroom, so more
+        than half the budget is never meaningful.
+        """
+
+        if max_chars is None:
+            return reserve_chars
+        return min(reserve_chars, max_chars // MAX_RESERVE_BUDGET_DIVISOR)
 
     def _context_budget_enabled(self, budget: Optional[ContextBudget] = None) -> bool:
         resolved = budget or self._context_budget()
         return resolved.max_parts is not None or resolved.max_chars is not None
+
+    def _context_budget_explicitly_configured(self) -> bool:
+        """Report whether an operator configured a context budget explicitly.
+
+        The model-catalog default only sizes the in-memory provider request. The
+        stored-history compactor rewrites the session on disk (and therefore the
+        Portal transcript), so it stays opt-in.
+        """
+
+        return (
+            self.max_context_parts is not None
+            or self.max_context_chars is not None
+            or self.max_context_tokens is not None
+        )
 
     def _overflow_retry_budget(
         self,
@@ -837,8 +888,16 @@ class RuntimeLoopRunner:
         if max_parts is not None:
             max_parts = max(1, min(max_parts, 2))
         if max_chars is not None:
-            max_chars = max(1, max_chars // 2)
+            # Halve the *effective* budget, not the raw cap. Halving max_chars
+            # directly does nothing once the reserve is a large share of it (the
+            # retry would re-send an identically sized prompt), and can drive
+            # effective_max_chars to 0, which compacts the whole conversation
+            # away.
+            effective = current_budget.effective_max_chars or max_chars
+            max_chars = current_budget.reserve_chars + max(1, effective // 2)
         if max_parts is None and max_chars is None:
+            # Unreachable from _context_budget, which always derives max_chars
+            # from the model catalog; kept for hand-built budgets in tests.
             max_parts = 8
         return ContextBudget(
             max_parts=max_parts,
@@ -849,20 +908,16 @@ class RuntimeLoopRunner:
     def _context_budget_max_chars(self, profile: ModelContextProfile) -> int | None:
         if self.max_context_chars is not None:
             return self.max_context_chars
-        if self.max_context_tokens is None:
-            return None
-        return max(1, profile.tokens_to_chars(self.max_context_tokens))
+        if self.max_context_tokens is not None:
+            return max(1, profile.tokens_to_chars(self.max_context_tokens))
+        return max(1, profile.tokens_to_chars(default_max_context_tokens(profile)))
 
     def _context_budget_reserve_chars(self, profile: ModelContextProfile) -> int:
         if self.context_reserve_tokens is not None:
             return profile.tokens_to_chars(self.context_reserve_tokens)
         if self.compaction_reserved_chars is not None:
             return self.compaction_reserved_chars
-        if (
-            self.max_context_chars is None
-            and self.max_context_tokens is not None
-            and self.context_reserve_chars == 0
-        ):
+        if self.max_context_chars is None and self.context_reserve_chars == 0:
             return profile.tokens_to_chars(profile.default_reserve_tokens)
         return self.context_reserve_chars
 
@@ -888,7 +943,7 @@ class RuntimeLoopRunner:
             return profile.tokens_to_chars(self.compaction_preserve_recent_tokens)
         if self.compaction_preserve_recent_chars is not None:
             return self.compaction_preserve_recent_chars
-        if self.max_context_chars is None and self.max_context_tokens is not None:
+        if self.max_context_chars is None:
             return profile.tokens_to_chars(profile.default_preserve_recent_tokens)
         return None
 
@@ -900,12 +955,16 @@ class RuntimeLoopRunner:
     ) -> dict[str, Any]:
         profile = self._model_context_profile(metadata)
         resolved_budget = budget or self._context_budget(metadata)
+        resolved_max_context_tokens = self.max_context_tokens
+        safety_margin_tokens: int | None = None
+        if self.max_context_chars is None and self.max_context_tokens is None:
+            safety_margin_tokens = context_safety_margin_tokens(profile)
+            resolved_max_context_tokens = default_max_context_tokens(profile)
         preserve_recent_chars = self._compaction_preserve_recent_chars(profile)
         reserve_tokens = self.context_reserve_tokens
         if (
             reserve_tokens is None
             and self.max_context_chars is None
-            and self.max_context_tokens is not None
             and self.compaction_reserved_chars is None
             and self.context_reserve_chars == 0
         ):
@@ -916,7 +975,6 @@ class RuntimeLoopRunner:
             and preserve_recent_chars is not None
             and self.compaction_preserve_recent_chars is None
             and self.max_context_chars is None
-            and self.max_context_tokens is not None
         ):
             preserve_recent_tokens = profile.default_preserve_recent_tokens
         max_context_chars_source = (
@@ -924,7 +982,7 @@ class RuntimeLoopRunner:
             if self.max_context_chars is not None
             else "max_context_tokens"
             if self.max_context_tokens is not None
-            else None
+            else "profile_context_window_tokens"
         )
         reserve_chars_source = (
             "context_reserve_tokens"
@@ -934,7 +992,6 @@ class RuntimeLoopRunner:
             else "profile_default_reserve_tokens"
             if reserve_tokens == profile.default_reserve_tokens
             and self.max_context_chars is None
-            and self.max_context_tokens is not None
             else "context_reserve_chars"
         )
         preserve_recent_chars_source = (
@@ -945,14 +1002,14 @@ class RuntimeLoopRunner:
             else "profile_default_preserve_recent_tokens"
             if preserve_recent_tokens == profile.default_preserve_recent_tokens
             and self.max_context_chars is None
-            and self.max_context_tokens is not None
             else None
         )
         payload = {
             "provider_id": profile.provider_id,
             "model_id": profile.model_id,
             "context_window_tokens": profile.context_window_tokens,
-            "max_context_tokens": self.max_context_tokens,
+            "context_safety_margin_tokens": safety_margin_tokens,
+            "max_context_tokens": resolved_max_context_tokens,
             "context_reserve_tokens": reserve_tokens,
             "compaction_preserve_recent_tokens": preserve_recent_tokens,
             "chars_per_token": profile.chars_per_token,
@@ -989,6 +1046,14 @@ class RuntimeLoopRunner:
         if not self.compaction_auto:
             return _StoredCompactionOutcome(history=history)
         if not self._context_budget_enabled(budget):
+            return _StoredCompactionOutcome(history=history)
+        if not self._context_budget_explicitly_configured():
+            # The catalog-derived default budget drives the in-memory request
+            # only. Rewriting stored history discards the user's transcript, so
+            # it stays gated on explicit operator config - including on the
+            # provider-overflow retry, which does not need it: the retry sends
+            # its halved budget through _prepare_runtime_request, and
+            # prepare_history_for_request compacts at render time.
             return _StoredCompactionOutcome(history=history)
         if not history:
             return _StoredCompactionOutcome(history=history)
@@ -1087,6 +1152,8 @@ class RuntimeLoopRunner:
                 payload={
                     **event_payload,
                     "stored_message_count": len(updated_history),
+                    "stored": True,
+                    "scope": "session",
                 },
             )
         )
@@ -1207,7 +1274,14 @@ class RuntimeLoopRunner:
 
         if inspect.isawaitable(raw_result):
             raw_result = await raw_result
-        return raw_result
+        if isinstance(raw_result, Mapping) or not isinstance(raw_result, AsyncIterable):
+            return raw_result
+        # A streaming provider returns an *unstarted* async generator, and the
+        # HTTP request only runs once it is iterated - which happens well outside
+        # this retry loop. Pull the first chunk here so a context-overflow 400
+        # surfaces as an exception the retry handler can act on. Later chunks
+        # still stream lazily to the caller.
+        return await _prefetch_async_stream(raw_result)
 
     async def _invoke_provider_with_retries(
         self,
@@ -1944,6 +2018,49 @@ async def run_runtime_loop(
         structured_output_required=structured_output_required,
         structured_output_tool_id=structured_output_tool_id,
     )
+
+
+async def _prefetch_async_stream(
+    stream: AsyncIterable[Any],
+) -> AsyncIterable[Any]:
+    """Start ``stream`` and return an equivalent stream replaying its head.
+
+    This is deliberately a plain coroutine that *returns* an async generator
+    rather than an ``async def ... yield`` generator: an async generator would
+    defer the first ``__anext__`` right back to the caller and the prefetch
+    would be a no-op.
+    """
+
+    iterator = stream.__aiter__()
+    try:
+        first = await iterator.__anext__()
+    except StopAsyncIteration:
+        return _empty_async_stream()
+    return _replay_async_stream(first, iterator)
+
+
+async def _empty_async_stream() -> AsyncIterator[Any]:
+    return
+    yield  # pragma: no cover - unreachable, marks this an async generator
+
+
+async def _replay_async_stream(
+    first: Any,
+    iterator: AsyncIterator[Any],
+) -> AsyncIterator[Any]:
+    try:
+        yield first
+        async for event in iterator:
+            yield event
+    finally:
+        # `async for` never closes its iterator, and closing this wrapper does
+        # not cascade into `iterator` either, so forward the close by hand:
+        # otherwise abandoning the replay leaves the provider stream suspended
+        # at its own ``yield`` and its cleanup waits for GC finalization. A
+        # provider may hand back a plain async iterator with no ``aclose``.
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 def _last_assistant_message(messages: Iterable[Message]) -> Optional[Message]:
@@ -2956,6 +3073,52 @@ def _apply_compaction_replay_request_metadata(
         compaction_payload = {}
     compaction_payload.update(replay_metadata)
     metadata["compaction"] = compaction_payload
+
+
+def _append_request_compaction_event(
+    runtime_events: list[RuntimeEvent],
+    *,
+    request: RuntimeRequest,
+    session_id: str,
+    run_id: str,
+    iteration: int,
+) -> None:
+    """Report render-time compaction, which never touches stored history.
+
+    The stored-history compactor emits session_compaction_started/session_compacted,
+    but request rendering dropped messages silently. That was tolerable while a
+    budget only existed for operators who configured one; now the model catalog
+    supplies a budget on every run, so an unconfigured session can quietly lose
+    the older two thirds of its context while the Portal transcript still shows
+    it in full.
+
+    This deliberately uses its own ``request_compacted`` type rather than
+    reusing ``session_compacted``: that type means the stored session was
+    rewritten, and a consumer must be able to tell whether anything on disk
+    changed. Both project to the same ``session.next.compaction.ended`` UI
+    event, and the projection carries ``stored``/``scope`` through so the
+    distinction survives.
+    """
+
+    prepared = request.prepared_request
+    if not prepared.compaction_applied:
+        return
+    runtime_events.append(
+        RuntimeEvent(
+            type="request_compacted",
+            message="Request context compacted to fit the model context budget.",
+            session_id=session_id,
+            payload={
+                "run_id": run_id,
+                "iteration": iteration,
+                "trigger": "context_budget",
+                "auto": True,
+                "stored": False,
+                "scope": "request",
+                **dict(prepared.compaction_metadata),
+            },
+        )
+    )
 
 
 def _apply_compaction_replay_metadata_to_request(

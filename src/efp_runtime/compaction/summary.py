@@ -117,8 +117,13 @@ def render_anchored_compaction_summary(
     kept_messages: Iterable[Message] = (),
     previous_summary: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    path_candidate_cache: dict[int, tuple[Message, list[str]]] | None = None,
 ) -> str:
-    """Render a conservative deterministic summary with stable anchors."""
+    """Render a conservative deterministic summary with stable anchors.
+
+    ``path_candidate_cache`` is an optional per-caller memo for the relevant-file
+    regex scan; see :func:`extract_relevant_files`.
+    """
 
     compacted = list(compacted_messages)
     kept = list(kept_messages)
@@ -131,7 +136,10 @@ def render_anchored_compaction_summary(
     )
     tool_pair_count = int(request_metadata.get("compacted_tool_pair_count") or 0)
     source_message_ids = _source_message_ids(compacted)
-    relevant_files = extract_relevant_files([*compacted, *kept])
+    relevant_files = extract_relevant_files(
+        [*compacted, *kept],
+        candidate_cache=path_candidate_cache,
+    )
     previous_context = _bounded_previous_summary(previous_summary)
     critical_items = [
         (
@@ -186,22 +194,58 @@ def latest_compaction_summary(messages: Iterable[Message]) -> str | None:
     return latest
 
 
-def extract_relevant_files(messages: Iterable[Message]) -> list[str]:
-    """Extract obvious workspace paths from message text and tool payloads."""
+def message_path_candidates(message: Message) -> list[str]:
+    """Return every path-shaped token in one message, in order, without dedup.
+
+    Split out of :func:`extract_relevant_files` so callers that re-extract over
+    overlapping message sets (the compaction budget search) can scan each
+    message's text with the regex exactly once. Dedup and the
+    ``RELEVANT_FILE_LIMIT`` cutoff stay in the caller because both are global
+    across the message sequence.
+    """
+
+    candidates: list[str] = []
+    for part in message.parts:
+        for text in _part_text_sources(part):
+            for match in _PATH_PATTERN.findall(text):
+                path = match.rstrip(".,;)]}'\"")
+                if "://" in path:
+                    continue
+                candidates.append(path)
+    return candidates
+
+
+def extract_relevant_files(
+    messages: Iterable[Message],
+    *,
+    candidate_cache: dict[int, tuple[Message, list[str]]] | None = None,
+) -> list[str]:
+    """Extract obvious workspace paths from message text and tool payloads.
+
+    ``candidate_cache`` memoizes the per-message regex scan. It is keyed by
+    ``id(message)`` and stores the message alongside its candidates so the
+    object stays alive and the id cannot be recycled while the cache lives.
+    """
 
     paths: list[str] = []
     seen: set[str] = set()
     for message in messages:
-        for part in message.parts:
-            for text in _part_text_sources(part):
-                for match in _PATH_PATTERN.findall(text):
-                    path = match.rstrip(".,;)]}'\"")
-                    if "://" in path or path in seen:
-                        continue
-                    seen.add(path)
-                    paths.append(path)
-                    if len(paths) >= RELEVANT_FILE_LIMIT:
-                        return paths
+        if candidate_cache is None:
+            candidates = message_path_candidates(message)
+        else:
+            cached = candidate_cache.get(id(message))
+            if cached is None:
+                candidates = message_path_candidates(message)
+                candidate_cache[id(message)] = (message, candidates)
+            else:
+                candidates = cached[1]
+        for path in candidates:
+            if path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+            if len(paths) >= RELEVANT_FILE_LIMIT:
+                return paths
     return paths
 
 
@@ -409,5 +453,6 @@ __all__ = [
     "build_compaction_prompt",
     "extract_relevant_files",
     "latest_compaction_summary",
+    "message_path_candidates",
     "render_anchored_compaction_summary",
 ]
