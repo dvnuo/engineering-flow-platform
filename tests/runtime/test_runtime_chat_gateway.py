@@ -170,6 +170,48 @@ def test_build_github_copilot_provider_prefers_env_reasoning(monkeypatch):
     assert provider.reasoning_effort == "low"
 
 
+def test_request_reasoning_override_wins_over_container_environment(monkeypatch):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", "low")
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", "reasoning_effort": "medium", "api_key": "container-secret"}},
+        raising=False,
+    )
+    metadata = {
+        "runtime_profile": {
+            "source": "portal.runtime_profile",
+            "config": {
+                "llm": {
+                    "reasoning_effort": "xhigh",
+                    "api_key": "must-not-override-container-secret",
+                }
+            },
+        }
+    }
+
+    request_config = runtime_chat._request_llm_config(metadata)
+
+    assert runtime_chat._resolve_reasoning_effort(request_config) == "xhigh"
+    assert request_config["api_key"] == "container-secret"
+
+
+def test_request_reasoning_override_ignores_untrusted_metadata(monkeypatch):
+    monkeypatch.setenv("EFP_GITHUB_COPILOT_REASONING_EFFORT", "low")
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", "reasoning_effort": "medium"}},
+        raising=False,
+    )
+    metadata = {"runtime_profile": {"config": {"llm": {"reasoning_effort": "xhigh"}}}}
+
+    request_config = runtime_chat._request_llm_config(metadata)
+
+    assert "_request_reasoning_effort" not in request_config
+    assert runtime_chat._resolve_reasoning_effort(request_config) == "low"
+
+
 def test_build_github_copilot_provider_rejects_invalid_reasoning(monkeypatch):
     monkeypatch.setenv("EFP_GITHUB_COPILOT_TOKEN", "env-token")
     _clear_timeout_env(monkeypatch)

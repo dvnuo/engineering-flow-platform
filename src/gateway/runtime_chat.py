@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import inspect
 import math
 import os
 from pathlib import Path
@@ -96,7 +97,7 @@ async def run_runtime_chat(
 ) -> dict[str, Any]:
     """Run the production chat loop through ``efp_runtime.runtime.AgentRuntime``."""
 
-    provider, runtime_model = _build_llm_provider(model)
+    provider, runtime_model = _build_llm_provider(model, execution_metadata=execution_metadata)
     event_bus = RuntimeEventBus()
     runtime = AgentRuntime(
         provider=provider,
@@ -216,7 +217,7 @@ async def resume_runtime_chat(
 ) -> dict[str, Any]:
     """Resume an existing native runtime session without appending a new user message."""
 
-    provider, runtime_model = _build_llm_provider(model)
+    provider, runtime_model = _build_llm_provider(model, execution_metadata=execution_metadata)
     event_bus = RuntimeEventBus()
     runtime = AgentRuntime(
         provider=provider,
@@ -494,8 +495,27 @@ def _resolve_model(model: str | None = None) -> str:
         ) from exc
 
 
-def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
-    llm_config = config.llm if isinstance(config.llm, dict) else {}
+def _request_llm_config(execution_metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    llm_config = dict(config.llm) if isinstance(config.llm, dict) else {}
+    profile_config = _trusted_runtime_profile_config(execution_metadata)
+    profile_llm = profile_config.get("llm") if isinstance(profile_config, Mapping) else None
+    if isinstance(profile_llm, Mapping):
+        # Request metadata is accepted only from the trusted Portal runtime
+        # profile path. Overlay the inference knobs without changing transport
+        # credentials/endpoints owned by the running container.
+        for key in ("reasoning_effort",):
+            if key in profile_llm:
+                llm_config[key] = profile_llm[key]
+                llm_config["_request_reasoning_effort"] = profile_llm[key]
+    return llm_config
+
+
+def _build_github_copilot_provider(
+    model: str,
+    *,
+    execution_metadata: Mapping[str, Any] | None = None,
+) -> GitHubCopilotProvider:
+    llm_config = _request_llm_config(execution_metadata)
     provider_key = str(llm_config.get("provider") or "").strip()
     normalized_provider = provider_key.lower()
     if normalized_provider not in SUPPORTED_PROVIDER_KEYS:
@@ -557,8 +577,12 @@ def _resolve_ai_platform_model(model: str | None) -> str:
     return DEFAULT_AI_PLATFORM_MODEL
 
 
-def _build_ai_platform_provider(model: str) -> AIPlatformProvider:
-    llm_config = config.llm if isinstance(config.llm, dict) else {}
+def _build_ai_platform_provider(
+    model: str,
+    *,
+    execution_metadata: Mapping[str, Any] | None = None,
+) -> AIPlatformProvider:
+    llm_config = _request_llm_config(execution_metadata)
     ap = llm_config.get("ai_platform") if isinstance(llm_config.get("ai_platform"), dict) else {}
     chat = ap.get("chat") if isinstance(ap.get("chat"), dict) else {}
     ib2b = ap.get("ib2b") if isinstance(ap.get("ib2b"), dict) else {}
@@ -598,20 +622,40 @@ def _build_ai_platform_provider(model: str) -> AIPlatformProvider:
     )
 
 
-def _build_llm_provider(model: str | None):
+def _build_llm_provider(
+    model: str | None,
+    *,
+    execution_metadata: Mapping[str, Any] | None = None,
+):
     """Dispatch to the configured provider; returns (provider, runtime_model)."""
     llm_config = config.llm if isinstance(config.llm, dict) else {}
     provider = str(llm_config.get("provider") or "").strip().lower()
     if provider in {"ai_platform", "ai-platform"}:
         runtime_model = _resolve_ai_platform_model(model)
-        return _build_ai_platform_provider(runtime_model), runtime_model
+        return _call_provider_builder(_build_ai_platform_provider, runtime_model, execution_metadata), runtime_model
     runtime_model = _resolve_model(model)
-    return _build_github_copilot_provider(runtime_model), runtime_model
+    return _call_provider_builder(_build_github_copilot_provider, runtime_model, execution_metadata), runtime_model
+
+
+def _call_provider_builder(builder, model: str, execution_metadata: Mapping[str, Any] | None):
+    """Keep test/extension builders with the historical one-argument shape working."""
+    try:
+        parameters = inspect.signature(builder).parameters.values()
+    except (TypeError, ValueError):
+        parameters = ()
+    supports_metadata = any(
+        parameter.name == "execution_metadata" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    if supports_metadata:
+        return builder(model, execution_metadata=execution_metadata)
+    return builder(model)
 
 
 def _resolve_reasoning_effort(llm_config: Mapping[str, Any]) -> str:
     raw = (
-        _env_string("EFP_GITHUB_COPILOT_REASONING_EFFORT")
+        _config_string(llm_config, "_request_reasoning_effort")
+        or _env_string("EFP_GITHUB_COPILOT_REASONING_EFFORT")
         or _env_string("EFP_LLM_REASONING_EFFORT")
         or _config_string(llm_config, "reasoning_effort")
         or DEFAULT_COPILOT_REASONING_EFFORT
