@@ -909,6 +909,9 @@ class AIPlatformProvider(OpenAICompatibleProvider):
 
     def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
         payload = super().build_payload(request)
+        # The AI Platform chat endpoint rejects the EFP/OpenAI-compatible
+        # extension field even though it is useful for other providers.
+        payload.pop("metadata", None)
         if self.reasoning_effort:
             payload.setdefault("reasoning_effort", self.reasoning_effort)
         if self._usercase:
