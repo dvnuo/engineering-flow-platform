@@ -5,7 +5,14 @@ import json
 import pytest
 
 from src.efp_runtime.llm import provider as provider_mod
-from src.efp_runtime.llm.provider import AIPlatformHTTPTransport, ProviderTransportError
+from src.efp_runtime.llm.provider import (
+    AIPlatformHTTPTransport,
+    AIPlatformProvider,
+    ProviderTransportError,
+    RecordingTransport,
+)
+from src.efp_runtime.llm.request import ProviderRequest
+from src.efp_runtime.loop import RuntimeRequest
 
 
 class _FakeResp:
@@ -143,6 +150,34 @@ def test_build_llm_provider_dispatches_to_ai_platform(monkeypatch):
     provider, model = rc._build_llm_provider(None)
     assert isinstance(provider, AIPlatformProvider)
     assert model == "gpt-5.4"
+
+
+def test_ai_platform_provider_removes_metadata_from_payload():
+    provider = AIPlatformProvider(
+        transport=RecordingTransport([]),
+        model="gpt-5.4",
+        metadata={"trace_id": "trace-1"},
+        reasoning_effort="high",
+        usercase="uc",
+    )
+    request = RuntimeRequest(
+        session_id="session-1",
+        messages=[],
+        iteration=1,
+        max_iterations=1,
+        metadata={"request_id": "request-1"},
+        provider_request=ProviderRequest(
+            messages=[],
+            metadata={"request_id": "request-1"},
+        ),
+    )
+
+    payload = provider.build_payload(request)
+
+    assert "metadata" not in payload
+    assert payload["model"] == "gpt-5.4"
+    assert payload["reasoning_effort"] == "high"
+    assert payload["user"] == "uc"
 
 
 def test_build_ai_platform_provider_requires_chat_host(monkeypatch):
