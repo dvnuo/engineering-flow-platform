@@ -685,9 +685,9 @@ async def test_github_copilot_http_transport_posts_json_headers_and_returns_raw(
     assert headers["authorization"] == "Bearer secret-token"
     assert headers["content-type"] == "application/json"
     assert headers["accept"] == "application/vnd.github.copilot-chat-preview+json"
-    assert headers["user-agent"] == "GitHubCopilotChat/0.35.0"
-    assert headers["editor-version"] == "vscode/1.107.0"
-    assert headers["editor-plugin-version"] == "copilot-chat/0.35.0"
+    assert headers["user-agent"] == "GitHubCopilotChat/0.41.0"
+    assert headers["editor-version"] == "vscode/1.133.0"
+    assert headers["editor-plugin-version"] == "copilot-chat/0.41.0"
     assert headers["copilot-integration-id"] == "vscode-chat"
     assert headers["openai-intent"] == "conversation-edits"
     assert headers["x-initiator"] == "agent"
@@ -815,9 +815,9 @@ async def test_github_source_token_exchange_uses_copilot_plugin_headers_and_pars
     exchange_headers = _request_headers(exchange_request)
     assert exchange_headers["authorization"] == "Bearer ghp_source123"
     assert exchange_headers["accept"] == "application/json"
-    assert exchange_headers["user-agent"] == "GitHubCopilotChat/0.35.0"
-    assert exchange_headers["editor-version"] == "vscode/1.107.0"
-    assert exchange_headers["editor-plugin-version"] == "copilot-chat/0.35.0"
+    assert exchange_headers["user-agent"] == "GitHubCopilotChat/0.41.0"
+    assert exchange_headers["editor-version"] == "vscode/1.133.0"
+    assert exchange_headers["editor-plugin-version"] == "copilot-chat/0.41.0"
     assert exchange_headers["copilot-integration-id"] == "vscode-chat"
     assert "openai-intent" not in exchange_headers
     assert "x-initiator" not in exchange_headers
