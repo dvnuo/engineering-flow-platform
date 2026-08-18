@@ -140,9 +140,9 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
     exchange_headers = _request_headers(exchange_request)
     assert exchange_headers["authorization"] == "Bearer ghp_configtoken123"
     assert exchange_headers["accept"] == "application/json"
-    assert exchange_headers["user-agent"] == "GitHubCopilotChat/0.35.0"
-    assert exchange_headers["editor-version"] == "vscode/1.107.0"
-    assert exchange_headers["editor-plugin-version"] == "copilot-chat/0.35.0"
+    assert exchange_headers["user-agent"] == "GitHubCopilotChat/0.41.0"
+    assert exchange_headers["editor-version"] == "vscode/1.133.0"
+    assert exchange_headers["editor-plugin-version"] == "copilot-chat/0.41.0"
     assert exchange_headers["copilot-integration-id"] == "vscode-chat"
     assert "openai-intent" not in exchange_headers
     assert "x-initiator" not in exchange_headers

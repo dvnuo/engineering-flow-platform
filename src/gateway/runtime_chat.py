@@ -524,7 +524,7 @@ def _build_github_copilot_provider(model: str) -> GitHubCopilotProvider:
         token=token,
         base_url=_env_string("EFP_GITHUB_COPILOT_BASE_URL") or _config_string(llm_config, "api_base"),
         timeout=_resolve_github_copilot_timeout(llm_config),
-        user_agent="GitHubCopilotChat/0.35.0",
+        user_agent="GitHubCopilotChat/0.41.0",
         initiator="agent",
     )
     return GitHubCopilotProvider(
