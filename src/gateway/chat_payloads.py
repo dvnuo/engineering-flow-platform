@@ -158,6 +158,7 @@ def build_runtime_response_payload(result: Optional[Dict[str, Any]], session_id:
         "user_message_id",
         "events",
         "context_state",
+        "context_usage",
         "runtime_events",
         "status",
         "error",

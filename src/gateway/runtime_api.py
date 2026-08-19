@@ -10,7 +10,7 @@ import uuid
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -61,6 +61,11 @@ from src.efp_runtime.session.gateway_facade import (
     resolve_session_display_name,
     runtime_session_manager as session_manager,
 )
+from src.efp_runtime.context.render import render_history
+from src.efp_runtime.context.usage import build_context_usage_snapshot
+from src.efp_runtime.llm.models import resolve_model_context_profile
+from src.efp_runtime.loop.provider import ScriptedLLMProvider
+from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from src.sessions.usage import usage_tracker
 from src.workspace_defaults import resolve_runtime_workspace
 
@@ -1472,6 +1477,9 @@ async def api_chat(request: web.Request) -> web.Response:
             if isinstance(context_state, dict):
                 chatlog_data["context_state"] = context_state
                 chatlog_data.setdefault("metadata", {})["context_state"] = context_state
+            context_usage = response_data.get("context_usage")
+            if isinstance(context_usage, dict):
+                chatlog_data["context_usage"] = context_usage
             if llm_debug:
                 chatlog_data["llm_debug"] = llm_debug
             # Add skill mode info if present
@@ -3340,6 +3348,306 @@ async def api_session_chatlog(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+def _session_chatlog_path(session_id: str) -> str:
+    return os.path.join(
+        runtime_session_artifacts.storage_dir,
+        "chatlogs",
+        f"{session_id}.json",
+    )
+
+
+def _context_usage_from_chatlog(session_id: str) -> Optional[Dict[str, Any]]:
+    chatlog_file = _session_chatlog_path(session_id)
+    if not os.path.exists(chatlog_file):
+        return None
+    try:
+        with open(chatlog_file, "r") as handle:
+            chatlog = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return None
+    direct = chatlog.get("context_usage") if isinstance(chatlog, dict) else None
+    if isinstance(direct, dict):
+        return dict(direct)
+    for event_key in ("runtime_events", "events"):
+        events = chatlog.get(event_key) if isinstance(chatlog, dict) else None
+        if not isinstance(events, list):
+            continue
+        for event in reversed(events):
+            if not isinstance(event, dict) or event.get("type") != "context_usage":
+                continue
+            payload = event.get("payload") or event.get("data")
+            if isinstance(payload, dict):
+                return dict(payload)
+    return None
+
+
+def _category_map(snapshot: Mapping[str, Any] | None) -> Dict[str, int]:
+    result: Dict[str, int] = {}
+    if not isinstance(snapshot, Mapping):
+        return result
+    categories = snapshot.get("categories")
+    if not isinstance(categories, list):
+        return result
+    for category in categories:
+        if not isinstance(category, Mapping):
+            continue
+        category_id = str(category.get("id") or "").strip()
+        try:
+            tokens = max(0, int(category.get("tokens") or 0))
+        except (TypeError, ValueError):
+            tokens = 0
+        if category_id:
+            result[category_id] = tokens
+    return result
+
+
+def _percentage(numerator: int, denominator: int | None) -> Optional[float]:
+    if not denominator or denominator <= 0:
+        return None
+    return round((numerator / denominator) * 100.0, 1)
+
+
+def _current_native_context_usage(
+    session_id: str,
+    *,
+    baseline: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    session = session_manager.store.get_session(session_id)
+    baseline_model = baseline.get("model") if isinstance(baseline, Mapping) else None
+    baseline_model = baseline_model if isinstance(baseline_model, Mapping) else {}
+    model_id = str(
+        baseline_model.get("model_id")
+        or global_config.llm.get("model")
+        or DEFAULT_LLM_MODEL
+    ).strip()
+    provider_id = str(
+        baseline_model.get("provider_id")
+        or global_config.llm.get("provider")
+        or "github-copilot"
+    ).strip()
+    profile = resolve_model_context_profile(model_id, provider_id=provider_id)
+    current = build_context_usage_snapshot(
+        render_history(
+            session.messages,
+            metadata={
+                "provider_id": provider_id,
+                "model_id": model_id,
+                "context_window_tokens": (
+                    baseline_model.get("context_window_tokens")
+                    or profile.context_window_tokens
+                ),
+                "chars_per_token": profile.chars_per_token,
+            },
+        )
+    )
+    current_categories = _category_map(current)
+    baseline_categories = _category_map(baseline)
+    # System/runtime instructions and tool definitions are assembled per
+    # request rather than persisted in session history, so carry their latest
+    # coarse estimates forward until the next real model request refreshes them.
+    current_categories["instructions"] = baseline_categories.get("instructions", 0)
+    current_categories["tool_definitions"] = baseline_categories.get("tool_definitions", 0)
+    labels = {
+        "instructions": "Instructions",
+        "tool_definitions": "Tool definitions",
+        "conversation": "Conversation",
+        "tool_activity": "Tool activity",
+    }
+    used_tokens = sum(current_categories.get(category_id, 0) for category_id in labels)
+    context_window_tokens = current.get("context_window_tokens")
+    categories = [
+        {
+            "id": category_id,
+            "label": label,
+            "tokens": current_categories.get(category_id, 0),
+            "percent_of_used": _percentage(
+                current_categories.get(category_id, 0), used_tokens
+            ),
+            "percent_of_window": _percentage(
+                current_categories.get(category_id, 0), context_window_tokens
+            ),
+        }
+        for category_id, label in labels.items()
+    ]
+    current.update(
+        {
+            "scope": "current_estimate",
+            "measurement_method": "persisted_history_plus_last_request_overhead_estimate",
+            "used_tokens": used_tokens,
+            "usage_percent": _percentage(used_tokens, context_window_tokens),
+            "categories": categories,
+        }
+    )
+    return current
+
+
+def _context_usage_with_compact_state(
+    snapshot: Mapping[str, Any],
+    *,
+    session_id: str,
+    message_count: int,
+    runtime_status: str,
+) -> Dict[str, Any]:
+    result = dict(snapshot)
+    in_progress = runtime_status in {"running", "accepted", "queued", "in_progress"}
+    eligible = message_count > 1 and not in_progress
+    reason = None
+    if in_progress:
+        reason = "A response is currently running."
+    elif message_count <= 1:
+        reason = "There is not enough conversation history to compact."
+    result.update(
+        {
+            "success": True,
+            "session_id": session_id,
+            "compact": {
+                "supported": True,
+                "in_progress": in_progress,
+                "eligible": eligible,
+                "reason": reason,
+            },
+        }
+    )
+    return result
+
+
+async def api_session_context_usage(request: web.Request) -> web.Response:
+    """Return total context use and four coarse content categories."""
+
+    try:
+        if not session_manager._initialized:
+            await session_manager.initialize()
+        session_id = request.match_info.get("session_id", "")
+        if not session_id:
+            return web.json_response({"error": "Session ID required"}, status=400)
+        session_info = await session_manager.get_existing_session(session_id)
+        if session_info is None:
+            return web.json_response({"error": "Session not found"}, status=404)
+        metadata = session_info.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        stored_snapshot = metadata.get("context_usage")
+        snapshot = dict(stored_snapshot) if isinstance(stored_snapshot, dict) else None
+        if snapshot is None:
+            snapshot = _context_usage_from_chatlog(session_id)
+        if snapshot is None:
+            snapshot = _current_native_context_usage(session_id)
+        result = _context_usage_with_compact_state(
+            snapshot,
+            session_id=session_id,
+            message_count=len(session_info.get("history") or []),
+            runtime_status=str(metadata.get("last_runtime_status") or "").strip().lower(),
+        )
+        return web.json_response(result)
+    except Exception as exc:
+        logger.error("Error loading context usage: %s", exc, exc_info=True)
+        return web.json_response({"error": str(exc)}, status=500)
+
+
+async def api_compact_session(request: web.Request) -> web.Response:
+    """Persistently compact a native session after creating a checkpoint."""
+
+    try:
+        if not session_manager._initialized:
+            await session_manager.initialize()
+        session_id = request.match_info.get("session_id", "")
+        if not session_id:
+            return web.json_response({"error": "Session ID required"}, status=400)
+        session_info = await session_manager.get_existing_session(session_id)
+        if session_info is None:
+            return web.json_response({"error": "Session not found"}, status=404)
+        metadata = session_info.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        runtime_status = str(metadata.get("last_runtime_status") or "").strip().lower()
+        if runtime_status in {"running", "accepted", "queued", "in_progress"}:
+            return web.json_response(
+                {"error": "Cannot compact while a response is running."},
+                status=409,
+            )
+        before_count = len(session_info.get("history") or [])
+        if before_count <= 1:
+            return web.json_response(
+                {"error": "There is not enough conversation history to compact."},
+                status=422,
+            )
+
+        stored_before_usage = metadata.get("context_usage")
+        before_usage = (
+            dict(stored_before_usage)
+            if isinstance(stored_before_usage, dict)
+            else _context_usage_from_chatlog(session_id)
+        )
+        if before_usage is None:
+            before_usage = _current_native_context_usage(session_id)
+        checkpoint = session_manager.store.create_checkpoint(
+            session_id,
+            label="Before manual compact",
+            metadata={"source": "portal", "operation": "manual_compact"},
+        )
+        model_id = str(global_config.llm.get("model") or DEFAULT_LLM_MODEL).strip()
+        runtime = AgentRuntime(
+            provider=ScriptedLLMProvider([]),
+            store=session_manager.store,
+            config=RuntimeConfig(default_model=model_id),
+        )
+        compacted = await runtime.compact_session(
+            session_id,
+            metadata={"source": "portal.context_panel"},
+            force=True,
+        )
+        after_usage = _current_native_context_usage(session_id, baseline=before_usage)
+        after_count = len(compacted.messages)
+        await session_manager.merge_metadata(
+            session_id,
+            {
+                "last_manual_compact_at": datetime.utcnow().isoformat() + "Z",
+                "last_manual_compact_checkpoint_id": checkpoint.checkpoint_id,
+                "context_usage": after_usage,
+            },
+        )
+        chatlog_file = _session_chatlog_path(session_id)
+        try:
+            chatlog = {}
+            if os.path.exists(chatlog_file):
+                with open(chatlog_file, "r") as handle:
+                    loaded = json.load(handle)
+                if isinstance(loaded, dict):
+                    chatlog = loaded
+            chatlog["context_usage"] = after_usage
+            chatlog["manual_compact"] = {
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "before_message_count": before_count,
+                "after_message_count": after_count,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+            os.makedirs(os.path.dirname(chatlog_file), exist_ok=True)
+            with open(chatlog_file, "w") as handle:
+                json.dump(chatlog, handle, indent=2)
+        except Exception:
+            logger.warning("Failed to persist post-compact context usage", exc_info=True)
+
+        return web.json_response(
+            {
+                "success": True,
+                "session_id": session_id,
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "before_message_count": before_count,
+                "after_message_count": after_count,
+                "before": before_usage,
+                "after": _context_usage_with_compact_state(
+                    after_usage,
+                    session_id=session_id,
+                    message_count=after_count,
+                    runtime_status="completed",
+                ),
+            }
+        )
+    except KeyError:
+        return web.json_response({"error": "Session not found"}, status=404)
+    except Exception as exc:
+        logger.error("Error compacting session: %s", exc, exc_info=True)
+        return web.json_response({"error": str(exc)}, status=500)
+
+
 async def api_usage(request: web.Request) -> web.Response:
     """Get usage statistics."""
     try:
@@ -3718,6 +4026,8 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/rename', api_rename_session)
     app.router.add_delete('/api/sessions/{session_id}', api_delete_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
+    app.router.add_get('/api/sessions/{session_id}/context-usage', api_session_context_usage)
+    app.router.add_post('/api/sessions/{session_id}/compact', api_compact_session)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit', api_edit_message)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit/async', api_edit_message_async)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)

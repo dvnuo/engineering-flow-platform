@@ -18,6 +18,7 @@ from ..compaction.strategy import (
     TailTurnCompactionStrategy,
 )
 from ..context.render import prepare_history_for_request
+from ..context.usage import build_context_usage_snapshot
 from ..event_bus import RuntimeEventBus
 from ..events import RuntimeEvent
 from ..llm.adapter import DefaultLLMEventAdapter, LLMEventAdapter
@@ -580,6 +581,17 @@ class RuntimeLoopRunner:
                 session_id=resolved_session_id,
                 run_id=run_id,
                 iteration=iteration,
+            )
+            runtime_events.append(
+                RuntimeEvent(
+                    type="context_usage",
+                    session_id=resolved_session_id,
+                    payload={
+                        **build_context_usage_snapshot(request.provider_request),
+                        "run_id": run_id,
+                        "iteration": iteration,
+                    },
+                )
             )
             runtime_events.append(
                 RuntimeEvent(

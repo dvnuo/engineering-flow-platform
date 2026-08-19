@@ -505,6 +505,15 @@ class RuntimeSessionManager:
         runtime_status = getattr(result, "status", None)
         metadata["last_runtime_status"] = runtime_status
         metadata["last_runtime_updated_at"] = _now_iso()
+        runtime_events = getattr(result, "runtime_events", None)
+        if isinstance(runtime_events, list):
+            for event in reversed(runtime_events):
+                if getattr(event, "type", None) != "context_usage":
+                    continue
+                payload = getattr(event, "payload", None)
+                if isinstance(payload, Mapping):
+                    metadata["context_usage"] = deepcopy(dict(payload))
+                    break
         normalized_status = str(runtime_status or "").strip().lower()
         if normalized_status in {"success", "completed", "complete", "ok"}:
             metadata["latest_event_type"] = "chat.completed"
