@@ -27,9 +27,9 @@ from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
 
 
-SOL_WINDOW_TOKENS = 400_000
+SOL_WINDOW_TOKENS = 1_000_000
 SOL_SAFETY_TOKENS = 8_000
-SOL_MAX_CHARS = (SOL_WINDOW_TOKENS - SOL_SAFETY_TOKENS) * 4  # 1_568_000
+SOL_MAX_CHARS = (SOL_WINDOW_TOKENS - SOL_SAFETY_TOKENS) * 4  # 3_968_000
 SOL_RESERVE_CHARS = 128_000 * 4  # 512_000
 
 
@@ -92,10 +92,10 @@ def test_default_budget_leaves_room_for_the_declared_response_reserve():
 @pytest.mark.parametrize(
     ("model", "expected_window"),
     [
-        ("gpt-5.6-sol", 400_000),
-        ("gpt-5.6-terra", 400_000),
-        ("gpt-5.6-luna", 328_000),
-        ("gpt-5.4", 400_000),
+        ("gpt-5.6-sol", 1_000_000),
+        ("gpt-5.6-terra", 1_000_000),
+        ("gpt-5.6-luna", 1_000_000),
+        ("gpt-5.4", 1_000_000),
     ],
 )
 def test_catalog_models_all_produce_a_budget(model, expected_window):
@@ -113,7 +113,7 @@ def test_catalog_models_all_produce_a_budget(model, expected_window):
 
 
 def test_catalog_lookup_is_by_model_id_not_provider_id():
-    """ai_platform serves gpt-5.4 with the same 400k window as Copilot.
+    """ai_platform serves gpt-5.4 with the same 1M window as Copilot.
 
     Resolving by provider id sent those runtimes to the 64k conservative
     profile, which now binds as a real budget and would compact them roughly
@@ -219,7 +219,7 @@ def test_runner_rejects_zero_and_bool_context_size_caps():
 
 
 def test_over_window_max_context_tokens_is_clamped_to_the_catalog_ceiling():
-    """10M tokens on a 400k model reproduces the exact 400 the default prevents.
+    """10M tokens on a 1M model reproduces the exact 400 the default prevents.
 
     Nothing compared the explicit value against the model window, so an
     over-window override sailed straight through to the provider.
@@ -266,8 +266,8 @@ def test_over_window_max_context_chars_is_clamped_too():
     assert budget.max_chars == SOL_MAX_CHARS  # was 10_000_000
     assert budget.reserve_chars == 0
     assert budget.effective_max_chars == SOL_MAX_CHARS
-    # ~392_000 tokens: below the 400_000 window, above the 264_000 that the
-    # unset path and a clamped max_context_tokens both produce.
+    # ~992_000 tokens: below the 1_000_000 window and above the prompt budget
+    # left after the response reserve on the token route.
     assert budget.effective_max_chars // 4 == SOL_WINDOW_TOKENS - SOL_SAFETY_TOKENS
     assert budget.effective_max_chars > (SOL_MAX_CHARS - SOL_RESERVE_CHARS)
 
@@ -341,7 +341,7 @@ def test_clamp_uses_each_models_own_window():
         max_context_tokens=10_000_000,
     )
 
-    assert runner._context_budget().max_chars == (328_000 - 8_000) * 4
+    assert runner._context_budget().max_chars == (1_000_000 - 8_000) * 4
 
 
 def test_unknown_model_override_is_never_clamped():
@@ -501,7 +501,7 @@ def test_tokens_and_chars_routes_keep_their_asymmetric_reserves():
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"context_reserve_tokens": 400_000},
+        {"context_reserve_tokens": 600_000},
         {"compaction_reserved_chars": 2_000_000},
         {"context_reserve_chars": 4_000_000},
     ],
@@ -562,7 +562,7 @@ def test_overflow_retry_halves_the_effective_budget():
 @pytest.mark.asyncio
 async def test_long_session_request_is_bounded_by_the_default_budget():
     store = InMemorySessionStore()
-    _seed_large_history(store, "session-big", messages=40, chars=1_800_000)
+    _seed_large_history(store, "session-big", messages=40, chars=4_500_000)
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runner = _runner(store, provider)
 
@@ -571,7 +571,7 @@ async def test_long_session_request_is_bounded_by_the_default_budget():
     assert result.status == LoopStatus.COMPLETED
     request = provider.requests[0]
     assert request.prepared_request.compaction_applied is True
-    assert _request_chars(request.provider_request) < 1_800_000
+    assert _request_chars(request.provider_request) < 4_500_000
     assert (
         request.prepared_request.compaction_metadata["kept_chars"]
         <= runner._context_budget().effective_max_chars
@@ -587,7 +587,7 @@ async def test_default_budget_never_rewrites_stored_history():
     """
 
     store = InMemorySessionStore()
-    _seed_large_history(store, "session-keep", messages=40, chars=1_800_000)
+    _seed_large_history(store, "session-keep", messages=40, chars=4_500_000)
     before = len(store.read_history("session-keep"))
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runner = _runner(store, provider)
@@ -609,7 +609,7 @@ async def test_default_budget_never_rewrites_stored_history():
 @pytest.mark.asyncio
 async def test_request_compaction_is_reported_as_a_runtime_event():
     store = InMemorySessionStore()
-    _seed_large_history(store, "session-event", messages=40, chars=1_800_000)
+    _seed_large_history(store, "session-event", messages=40, chars=4_500_000)
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runner = _runner(store, provider)
 
@@ -637,12 +637,12 @@ async def test_over_window_override_produces_a_bounded_request_end_to_end():
 
     Every other clamp test pokes ``_context_budget()``. This one proves the
     clamped ceiling actually reaches ``prepare_history_for_request``: without
-    the clamp a 10M-token override sends the whole 1.8M-char history verbatim,
+    the clamp a 10M-token override sends the whole 4.5M-char history verbatim,
     which is the provider 400 the catalog default exists to prevent.
     """
 
     store = InMemorySessionStore()
-    _seed_large_history(store, "session-over-window", messages=40, chars=1_800_000)
+    _seed_large_history(store, "session-over-window", messages=40, chars=4_500_000)
     provider = ScriptedLLMProvider([{"content": "Done."}])
     runner = _runner(store, provider, max_context_tokens=10_000_000)
 
@@ -725,7 +725,7 @@ def test_budget_search_scans_each_message_once(monkeypatch):
     The budget search re-derives the compaction summary for every candidate
     selection, and rendering that summary scans every compacted message's text
     with the relevant-file regex. Without a per-call memo that is O(blocks x
-    history chars): a 3 MB / 600 block history took ~170 s of synchronous,
+    history chars): a multi-megabyte / 600 block history took ~170 s of synchronous,
     event-loop-blocking CPU per LLM iteration - on the exact long conversations
     this budget exists to bound.
 
@@ -757,7 +757,7 @@ def test_budget_search_scans_each_message_once(monkeypatch):
     messages = [
         Message(
             role=MessageRole.USER if index % 2 == 0 else MessageRole.ASSISTANT,
-            parts=[MessagePart.text_part("word " * 1_000)],
+            parts=[MessagePart.text_part("word " * 1_500)],
         )
         for index in range(message_count)
     ]

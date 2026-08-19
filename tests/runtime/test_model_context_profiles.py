@@ -36,10 +36,10 @@ def test_github_copilot_profile_resolution(model: str, expected_model: str):
     assert profile.provider_id == DEFAULT_PROVIDER_ID
     assert profile.model_id == expected_model
     if expected_model == "gpt-5.6-luna":
-        assert profile.context_window_tokens == 328_000
+        assert profile.context_window_tokens == 1_000_000
         assert profile.default_reserve_tokens == 128_000
     else:
-        assert profile.context_window_tokens == 400_000
+        assert profile.context_window_tokens == 1_000_000
         assert profile.default_reserve_tokens == 128_000
     assert profile.default_preserve_recent_tokens == 8_000
     assert profile.tokens_to_chars(100) == 400
