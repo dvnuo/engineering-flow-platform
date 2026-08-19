@@ -921,6 +921,16 @@ def _result_payload(
             }
         },
     }
+    context_usage = next(
+        (
+            dict(event.payload)
+            for event in reversed(result.runtime_events)
+            if event.type == "context_usage" and isinstance(event.payload, Mapping)
+        ),
+        None,
+    )
+    if context_usage is not None:
+        payload["context_usage"] = context_usage
     if error_message:
         payload["error"] = error_message
         payload["error_type"] = _runtime_error_type(runtime_events)
