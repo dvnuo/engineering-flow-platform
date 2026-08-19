@@ -54,7 +54,7 @@ def resolve_model_context_profile(
     the model, not of the gateway serving it. ``provider_id`` is accepted (and
     a ``provider/model`` prefix is stripped from ``model``) so callers can pass
     a qualified id, but it does not gate the lookup - ai_platform serves
-    ``gpt-5.4`` (see ``AI_PLATFORM_MODEL_IDS``) with the same 400k window as
+    ``gpt-5.4`` (see ``AI_PLATFORM_MODEL_IDS``) with the same 1M window as
     Copilot, and this profile is the default source of the native runtime's
     context budget, so falling back to the 64k profile purely because of a
     provider id would compact those sessions roughly seven times too early.
@@ -183,27 +183,27 @@ def _default_preserve_recent_tokens(
 _COPILOT_PROFILES = {
     "gpt-5.4": _profile(
         "gpt-5.4",
-        context_window_tokens=400_000,
+        context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
     ),
     "gpt-5.5": _profile(
         "gpt-5.5",
-        context_window_tokens=400_000,
+        context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
     ),
     "gpt-5.6-luna": _profile(
         "gpt-5.6-luna",
-        context_window_tokens=328_000,
+        context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
     ),
     "gpt-5.6-sol": _profile(
         "gpt-5.6-sol",
-        context_window_tokens=400_000,
+        context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
     ),
     "gpt-5.6-terra": _profile(
         "gpt-5.6-terra",
-        context_window_tokens=400_000,
+        context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
     ),
 }

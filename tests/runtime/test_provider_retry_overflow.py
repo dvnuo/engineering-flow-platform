@@ -598,7 +598,7 @@ _STOCK_BUDGET_TURN_TEXTS = tuple(
     # The catalog default for the stock model leaves ~1.05M prompt chars, halved
     # to ~528k on the overflow retry. The transcript has to exceed the halved
     # budget or "the retry sends less" would be vacuously false.
-    "bulk turn {0} ".format(index) * 6000
+    "bulk turn {0} ".format(index) * 30_000
     for index in range(10)
 )
 

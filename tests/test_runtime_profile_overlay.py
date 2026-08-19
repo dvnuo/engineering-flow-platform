@@ -466,7 +466,12 @@ def test_boot_projection_adds_cli_instructions_and_keeps_canonical_llm(tmp_path,
         tmp_path,
         monkeypatch,
         {
-            "llm": {"provider": "github_copilot", "model": "gpt-5.4"},
+            "llm": {
+                "provider": "github_copilot",
+                "model": "gpt-5.4",
+                "reasoning_effort": "max",
+                "max_context_tokens": 1_000_000,
+            },
             "jira": {
                 "enabled": True,
                 "instances": [
@@ -481,6 +486,9 @@ def test_boot_projection_adds_cli_instructions_and_keeps_canonical_llm(tmp_path,
     # native keeps the canonical github_copilot provider and the bare model.
     assert effective["llm"]["provider"] == "github_copilot"
     assert effective["llm"]["model"] == "gpt-5.4"
+    assert effective["llm"]["reasoning_effort"] == "max"
+    assert "max_context_tokens" not in effective["llm"]
+    assert effective["max_context_tokens"] == 1_000_000
 
 
 def test_boot_projection_omits_cli_instructions_when_no_tools_enabled(tmp_path, monkeypatch):

@@ -302,7 +302,19 @@ def test_github_copilot_supported_models_and_reasoning_are_exact():
         "medium",
         "high",
         "xhigh",
+        "max",
     )
+
+
+def test_github_copilot_accepts_max_reasoning_effort():
+    provider = GitHubCopilotProvider(
+        transport=RecordingTransport([]),
+        reasoning_effort="max",
+    )
+
+    payload = provider.build_payload(_runtime_request_with_metadata({}))
+
+    assert payload["reasoning"] == {"effort": "max"}
 
 
 def test_github_copilot_injects_noop_when_tool_history_exists_without_tools():

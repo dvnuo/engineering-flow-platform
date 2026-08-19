@@ -166,7 +166,7 @@ async def test_rewrite_flag_alone_without_a_size_knob_rewrites_stored_history():
         store.append_message(
             "session-flag-only",
             role=MessageRole.USER if index % 2 == 0 else MessageRole.ASSISTANT,
-            parts=[MessagePart.text_part("word " * 9_000)],
+                parts=[MessagePart.text_part("word " * 22_000)],
             message_id=f"msg-bulk-{index}",
             status="complete",
         )
@@ -240,10 +240,10 @@ async def test_auto_compaction_persists_before_provider_and_request_includes_lat
         assert event.payload["overflow"] is False
         assert event.payload["max_parts"] == 3
         # A parts-only config leaves the char budget unset, so it now comes from
-        # the model catalog (gpt-5.6-terra: 400k window - 8k safety margin, at 4
+        # the model catalog (gpt-5.6-terra: 1M window - 8k safety margin, at 4
         # chars/token) with the model's 128k reserve. max_parts stays the binding
         # constraint here; before the catalog default these were None and 0.
-        assert event.payload["max_chars"] == 1_568_000
+        assert event.payload["max_chars"] == 3_968_000
         assert event.payload["reserve_chars"] == 512_000
         assert event.payload["compacted_part_count"] > 0
         assert event.payload["compacted_message_count"] > 0
@@ -278,7 +278,7 @@ async def test_token_budget_converts_to_char_budget_for_auto_compaction():
     request_metadata = provider.requests[0].provider_request.metadata
     assert request_metadata["provider_id"] == "github-copilot"
     assert request_metadata["model_id"] == "gpt-5.6-terra"
-    assert request_metadata["context_window_tokens"] == 400_000
+    assert request_metadata["context_window_tokens"] == 1_000_000
     assert request_metadata["max_context_tokens"] == 20
     assert request_metadata["max_context_chars"] == 80
     assert request_metadata["context_reserve_tokens"] == 5
