@@ -56,6 +56,7 @@ from src.gateway.runtime_request_contracts import (
 )
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
+from src.gateway.personalization import load_personalization
 from src.efp_runtime.session.gateway_facade import (
     RuntimeSessionArtifacts,
     resolve_session_display_name,
@@ -2985,6 +2986,195 @@ async def api_task_question_respond(request: web.Request) -> web.Response:
         clear_log_context()
 
 
+async def _session_pending_input(session_id: str) -> Dict[str, Any]:
+    """Read whichever user input the session is currently blocked on.
+
+    The pending request lives in session metadata rather than in a run record,
+    so the chat UI can rebuild the question card after a page refresh or a
+    dropped stream instead of leaving the run silently stuck.
+    """
+    try:
+        session = await session_manager.get_existing_session(session_id)
+    except Exception:
+        logger.debug("Failed to read session while resolving pending input", exc_info=True)
+        session = None
+    if not isinstance(session, dict):
+        return {"session_id": session_id, "question_request": None, "permission_request": None}
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    question = metadata.get("pending_question_request")
+    permission = metadata.get("pending_permission_request")
+    return {
+        "session_id": session_id,
+        "question_request": question if isinstance(question, dict) else None,
+        "permission_request": permission if isinstance(permission, dict) else None,
+        "last_execution_id": metadata.get("last_execution_id"),
+    }
+
+
+async def api_personalization(request: web.Request) -> web.Response:
+    """GET /api/personalization
+
+    Serves the greeting and starter cards from the agents-repo branch this
+    assistant booted with, so Portal never has to clone that repo itself.
+    """
+    _ = request
+    try:
+        config_data = global_config.get_effective_config()
+    except Exception:
+        config_data = getattr(global_config, "_config", {}) or {}
+    workspace_root = resolve_runtime_workspace(config_data)
+    try:
+        payload = load_personalization(workspace_root)
+    except Exception:
+        logger.warning("Failed to load assistant personalization", exc_info=True)
+        payload = {"welcome": None, "cards": []}
+    return web.json_response(payload)
+
+
+async def api_session_pending_input(request: web.Request) -> web.Response:
+    """GET /api/sessions/{session_id}/pending-input"""
+
+    session_id = str(request.match_info.get("session_id") or "").strip()
+    if not session_id:
+        return web.json_response({"error": "session_id is required"}, status=400)
+    return web.json_response(await _session_pending_input(session_id))
+
+
+async def _resume_chat_after_user_input(
+    request: web.Request,
+    *,
+    session_id: str,
+    execution_metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Continue a blocked chat turn once the user has supplied their input.
+
+    Uses ``resume_runtime_chat`` so the answer continues the existing turn
+    instead of appending a synthetic user message that would show up in the
+    transcript as something the person never typed.
+    """
+    agent_id, agent_name = _resolve_runtime_agent_identity(request)
+    request_id = f"chat-resume-{uuid.uuid4()}"
+    chat_run_registry.start(session_id=session_id, request_id=request_id, engine="native")
+    await session_manager.mark_runtime_running(session_id, request_id=request_id)
+
+    async def _run() -> None:
+        try:
+            await resume_runtime_chat(
+                session_id=session_id,
+                request_path="/api/sessions/user-input/resume",
+                execution_metadata=execution_metadata,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                request_id=request_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "[user_input_resume] resume failed | session_id=%s request_id=%s error=%s",
+                session_id,
+                request_id,
+                sanitize_exception_message(exc),
+                exc_info=True,
+            )
+            try:
+                await _persist_chat_failure_state(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    request_id=request_id,
+                    user_message=sanitize_exception_message(exc),
+                    error_type=type(exc).__name__,
+                )
+            except Exception:
+                logger.debug("Failed to persist chat failure state after resume", exc_info=True)
+
+    asyncio.create_task(_run())
+    return {"ok": True, "session_id": session_id, "request_id": request_id, "state": "running"}
+
+
+async def api_session_question_respond(request: web.Request) -> web.Response:
+    """POST /api/sessions/{session_id}/question/respond"""
+
+    session_id = str(request.match_info.get("session_id") or "").strip()
+    if not session_id:
+        return web.json_response({"error": "session_id is required"}, status=400)
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, ContentTypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not isinstance(data, dict):
+        return web.json_response({"error": "Request body must be a JSON object"}, status=400)
+
+    pending_state = await _session_pending_input(session_id)
+    pending = pending_state.get("question_request")
+    if not isinstance(pending, dict):
+        return web.json_response({"error": "Session is not waiting for a question response"}, status=409)
+
+    request_id = str(data.get("request_id") or data.get("id") or "").strip() or None
+    if not _pending_request_matches(pending, request_id):
+        return web.json_response({"error": "question_request_id_mismatch"}, status=409)
+
+    if "answers" in data:
+        answers = data.get("answers")
+    elif "answer" in data:
+        answers = data.get("answer")
+    else:
+        return web.json_response({"error": "answers is required"}, status=400)
+
+    execution_metadata = _metadata_with_question_response(
+        _extract_trusted_control_plane_metadata(request, data),
+        pending_request=pending,
+        answers=answers,
+    )
+    payload = await _resume_chat_after_user_input(
+        request,
+        session_id=session_id,
+        execution_metadata=execution_metadata,
+    )
+    return web.json_response(payload, status=202)
+
+
+async def api_session_permission_respond(request: web.Request) -> web.Response:
+    """POST /api/sessions/{session_id}/permission/respond"""
+
+    session_id = str(request.match_info.get("session_id") or "").strip()
+    if not session_id:
+        return web.json_response({"error": "session_id is required"}, status=400)
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, ContentTypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not isinstance(data, dict):
+        return web.json_response({"error": "Request body must be a JSON object"}, status=400)
+
+    pending_state = await _session_pending_input(session_id)
+    pending = pending_state.get("permission_request")
+    if not isinstance(pending, dict):
+        return web.json_response({"error": "Session is not waiting for permission"}, status=409)
+
+    request_id = str(data.get("request_id") or data.get("id") or "").strip() or None
+    if not _pending_request_matches(pending, request_id):
+        return web.json_response({"error": "permission_request_id_mismatch"}, status=409)
+
+    decision = _permission_response_decision(data.get("decision") or data.get("action") or data.get("reply"))
+    try:
+        execution_metadata = _metadata_with_permission_response(
+            _extract_trusted_control_plane_metadata(request, data),
+            pending_request=pending,
+            decision=decision,
+            always=bool(data.get("always")),
+            reason=str(data.get("reason")).strip() if data.get("reason") is not None else None,
+        )
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+    payload = await _resume_chat_after_user_input(
+        request,
+        session_id=session_id,
+        execution_metadata=execution_metadata,
+    )
+    payload["decision"] = decision
+    return web.json_response(payload, status=202)
+
+
 def _runtime_task_persistence_storage_dir() -> Optional[Path]:
     enabled = str(os.getenv("EFP_RUNTIME_TASKS_PERSISTENCE", "true")).strip().lower()
     if enabled in {"0", "false", "no", "off"}:
@@ -4032,6 +4222,10 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit/async', api_edit_message_async)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/usage', api_usage)
+    app.router.add_get('/api/sessions/{session_id}/pending-input', api_session_pending_input)
+    app.router.add_post('/api/sessions/{session_id}/question/respond', api_session_question_respond)
+    app.router.add_post('/api/sessions/{session_id}/permission/respond', api_session_permission_respond)
+    app.router.add_get('/api/personalization', api_personalization)
     app.router.add_get('/api/skills', api_skills)
     setup_server_files_routes(app)
 
