@@ -1,0 +1,128 @@
+"""Assistant personalization loaded from the agents repository.
+
+The Portal clones the agents repo into the workspace at boot, so the branch an
+admin picked for an assistant type is already on disk. Reading it here — rather
+than having Portal clone it a second time — keeps one source of truth and
+guarantees what a member sees matches the branch the assistant actually booted
+with.
+
+Expected layout at the workspace root, alongside the existing AGENTS.md and
+instructions/ that the personalization contract already defines:
+
+    portal/welcome.md    greeting shown when a chat has no messages yet
+    portal/cards.yaml    starter prompts offered as clickable cards
+
+Both files are optional. A branch without them simply has no personalization,
+and Portal falls back to its generic welcome.
+"""
+from __future__ import annotations
+
+from collections.abc import Mapping
+import logging
+from pathlib import Path
+from typing import Any
+
+from ruamel.yaml import YAML
+
+logger = logging.getLogger(__name__)
+
+# The repository declares ruamel.yaml, not PyYAML. Importing `yaml` here raised
+# ModuleNotFoundError in a clean container, which the broad handler below then
+# swallowed -- every valid cards.yaml became an empty list and the feature was
+# silently dead outside development.
+_yaml = YAML(typ="safe")
+
+PORTAL_PERSONALIZATION_DIRNAME = "portal"
+WELCOME_FILENAME = "welcome.md"
+CARDS_FILENAME = "cards.yaml"
+
+# A greeting is prose, not a document, and cards are a short menu. Both are
+# capped so a mistaken commit in the agents repo degrades the panel instead of
+# flooding the chat pane.
+MAX_WELCOME_CHARS = 4000
+MAX_CARDS = 12
+MAX_CARD_FIELD_CHARS = 500
+MAX_PROMPT_CHARS = 4000
+
+
+def load_personalization(workspace_root: Path) -> dict[str, Any]:
+    """Return {"welcome": str|None, "cards": list} for one workspace."""
+
+    portal_dir = Path(workspace_root) / PORTAL_PERSONALIZATION_DIRNAME
+    return {
+        "welcome": _load_welcome(portal_dir / WELCOME_FILENAME),
+        "cards": _load_cards(portal_dir / CARDS_FILENAME),
+    }
+
+
+def _load_welcome(path: Path) -> str | None:
+    text = _read_text(path)
+    if not text:
+        return None
+    return text[:MAX_WELCOME_CHARS]
+
+
+def _load_cards(path: Path) -> list[dict[str, Any]]:
+    text = _read_text(path)
+    if not text:
+        return []
+    try:
+        parsed = _yaml.load(text)
+    except Exception:
+        logger.warning("Ignoring unreadable personalization cards at %s", path, exc_info=True)
+        return []
+
+    # ruamel returns a CommentedMap, which is a Mapping but not necessarily
+    # caught by an isinstance(dict) check depending on the loader.
+    raw_cards = parsed.get("cards") if isinstance(parsed, Mapping) else parsed
+    if not isinstance(raw_cards, list):
+        return []
+
+    cards: list[dict[str, Any]] = []
+    for raw in raw_cards[:MAX_CARDS]:
+        card = _normalize_card(raw)
+        if card is not None:
+            cards.append(card)
+    return cards
+
+
+def _normalize_card(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    title = _clean(raw.get("title"), MAX_CARD_FIELD_CHARS)
+    prompt = _clean(raw.get("prompt"), MAX_PROMPT_CHARS)
+    # A card with no title has nothing to click; one with no prompt does
+    # nothing when clicked. Either way it is not worth rendering.
+    if not title or not prompt:
+        return None
+
+    card: dict[str, Any] = {
+        "title": title,
+        "description": _clean(raw.get("description"), MAX_CARD_FIELD_CHARS),
+        "icon": _clean(raw.get("icon"), 64) or "sparkles",
+        "prompt": prompt,
+    }
+
+    raw_input = raw.get("input")
+    if isinstance(raw_input, Mapping):
+        card["input"] = {
+            "label": _clean(raw_input.get("label"), MAX_CARD_FIELD_CHARS) or "Details",
+            "placeholder": _clean(raw_input.get("placeholder"), MAX_CARD_FIELD_CHARS),
+        }
+    return card
+
+
+def _clean(value: Any, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()[:limit]
+
+
+def _read_text(path: Path) -> str:
+    try:
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        logger.debug("Could not read personalization file %s", path, exc_info=True)
+        return ""

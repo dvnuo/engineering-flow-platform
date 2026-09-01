@@ -46,7 +46,10 @@ class RuntimeConfig:
     compaction_prune_protect_chars: int = 40000
     enable_compaction_summarizer: bool = False
     provider_max_retries: int = 2
-    provider_retry_backoff_seconds: float = 0.0
+    # Non-zero so a retry after a transient upstream failure does not land in
+    # the same instant the provider is still failing. With the 2.0 multiplier
+    # and 2 retries this waits ~0.5s then ~1.0s before giving up.
+    provider_retry_backoff_seconds: float = 0.5
     provider_retry_backoff_multiplier: float = 2.0
     enable_context_overflow_retry: bool = True
     # Off by default: the workspace snapshot it drives is the single most

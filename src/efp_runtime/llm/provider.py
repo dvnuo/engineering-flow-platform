@@ -23,7 +23,10 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from .adapter import DefaultLLMEventAdapter, LLMEventAdapter
-from .errors import ProviderContextOverflowError
+from .errors import (
+    ProviderContextOverflowError,
+    ProviderTransientError,
+)
 from .models import (
     DEFAULT_MODEL_ID,
     DEFAULT_PROVIDER_ID,
@@ -56,6 +59,45 @@ class ProviderTransport(Protocol):
 
 class ProviderTransportError(RuntimeError):
     """Raised by transports or helpers when provider transport fails."""
+
+
+# Statuses where the request was fine and the far side was not: retrying the
+# same request is the correct response. Anything else (400, 401 after a token
+# refresh, 403, 404, 422) will fail again identically.
+RETRYABLE_TRANSPORT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
+
+class ProviderTransportTransientError(ProviderTransportError, ProviderTransientError):
+    """A transport failure worth retrying.
+
+    Inherits from both so it lands in the loop's ``except ProviderTransientError``
+    branch and still matches the ``except ProviderTransportError`` handlers at
+    the gateway boundary once retries are exhausted.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        code: str | None = None,
+    ) -> None:
+        ProviderTransientError.__init__(
+            self,
+            message,
+            retryable=True,
+            code=code or "transport_transient",
+            metadata={"status_code": status_code} if status_code is not None else {},
+        )
+        self.status_code = status_code
+
+
+def _transport_error_for_http_status(message: str, status_code: int | None) -> ProviderTransportError:
+    """Pick the retryable or fatal transport error for an HTTP status."""
+
+    if status_code in RETRYABLE_TRANSPORT_STATUS_CODES:
+        return ProviderTransportTransientError(message, status_code=status_code)
+    return ProviderTransportError(message)
 
 
 class ProviderModelUnavailableError(ProviderTransportError):
@@ -247,11 +289,11 @@ class GitHubCopilotHTTPTransport:
                         str(getattr(retry_exc, "reason", retry_exc)),
                         self._token,
                     )
-                    raise ProviderTransportError(
+                    raise ProviderTransportTransientError(
                         "GitHub Copilot HTTP transport failed: {0}".format(reason)
                     ) from None
                 except TimeoutError:
-                    raise ProviderTransportError(
+                    raise ProviderTransportTransientError(
                         _format_timeout_message(
                             "GitHub Copilot HTTP transport",
                             self.timeout,
@@ -276,14 +318,15 @@ class GitHubCopilotHTTPTransport:
                 self._token,
                 response_text=response_text,
             )
-            raise ProviderTransportError(message) from None
+            raise _transport_error_for_http_status(message, getattr(exc, "code", None)) from None
         except urllib_error.URLError as exc:
             reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
-            raise ProviderTransportError(
+            # The connection never completed, so nothing was consumed upstream.
+            raise ProviderTransportTransientError(
                 "GitHub Copilot HTTP transport failed: {0}".format(reason)
             ) from None
         except TimeoutError:
-            raise ProviderTransportError(
+            raise ProviderTransportTransientError(
                 _format_timeout_message("GitHub Copilot HTTP transport", self.timeout)
             ) from None
 
@@ -810,18 +853,19 @@ class AIPlatformHTTPTransport:
                 )
                 if overflow_error is not None:
                     raise overflow_error from None
-                raise ProviderTransportError(
+                raise _transport_error_for_http_status(
                     "AI Platform HTTP transport failed ({0}): {1}".format(
                         exc.code, _redact_secret(text, self._token)
-                    )
+                    ),
+                    getattr(exc, "code", None),
                 ) from None
             except urllib_error.URLError as exc:
                 reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
-                raise ProviderTransportError(
+                raise ProviderTransportTransientError(
                     "AI Platform HTTP transport failed: {0}".format(reason)
                 ) from None
             except TimeoutError:
-                raise ProviderTransportError(
+                raise ProviderTransportTransientError(
                     _format_timeout_message("AI Platform HTTP transport", self.timeout)
                 ) from None
 
@@ -848,18 +892,19 @@ class AIPlatformHTTPTransport:
                 )
                 if overflow_error is not None:
                     raise overflow_error from None
-                raise ProviderTransportError(
+                raise _transport_error_for_http_status(
                     "AI Platform HTTP transport failed ({0}): {1}".format(
                         exc.code, _redact_secret(text, self._token)
-                    )
+                    ),
+                    getattr(exc, "code", None),
                 ) from None
             except urllib_error.URLError as exc:
                 reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
-                raise ProviderTransportError(
+                raise ProviderTransportTransientError(
                     "AI Platform HTTP transport failed: {0}".format(reason)
                 ) from None
             except TimeoutError:
-                raise ProviderTransportError(
+                raise ProviderTransportTransientError(
                     _format_timeout_message("AI Platform HTTP transport", self.timeout)
                 ) from None
         raise ProviderTransportError("AI Platform HTTP transport exhausted retries")
