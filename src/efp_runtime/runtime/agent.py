@@ -101,6 +101,9 @@ if TYPE_CHECKING:
     from ..agents.registry import AgentRegistry
 
 
+# Matches the default `tool_id` of `create_question_tool`.
+QUESTION_TOOL_ID = "question"
+
 PLAN_MODE_MUTATING_TOOLS = {
     "apply_patch",
     "bash",
@@ -668,6 +671,7 @@ class AgentRuntime:
                         if structured_output_active
                         else None
                     ),
+                    question_tool_id=self._registered_question_tool_id(),
                 ),
                 compaction_summarizer=(
                     self.compaction_summarizer
@@ -899,6 +903,7 @@ class AgentRuntime:
                         if structured_output_active
                         else None
                     ),
+                    question_tool_id=self._registered_question_tool_id(),
                 ),
                 compaction_summarizer=(
                     self.compaction_summarizer
@@ -1085,6 +1090,15 @@ class AgentRuntime:
             _question_request_to_dict(request)
             for request in self.question_broker.pending()
         ]
+
+    def _registered_question_tool_id(self) -> str | None:
+        """The question tool's id, but only when this runtime really has it.
+
+        Asked of the registry rather than of `enable_question_tool`, because the
+        registry is what tool selection validates against: naming a tool it does
+        not hold raises instead of quietly doing nothing.
+        """
+        return QUESTION_TOOL_ID if self.tool_runtime.registry.get(QUESTION_TOOL_ID) else None
 
     def drain_background_tasks(
         self,
@@ -3227,6 +3241,7 @@ def _config_tool_selection(
     config: RuntimeConfig,
     *,
     structured_output_tool_id: str | None = None,
+    question_tool_id: str | None = None,
 ) -> ToolSelection:
     forced_disabled = (
         set(PLAN_MODE_MUTATING_TOOLS)
@@ -3236,6 +3251,15 @@ def _config_tool_selection(
     enabled = None if config.enabled_tools is None else set(config.enabled_tools)
     if enabled is not None and structured_output_tool_id is not None:
         enabled.add(structured_output_tool_id)
+    # `enabled_tools` chooses what the model is shown; `enable_question_tool`
+    # chooses whether the tool exists. A profile that sets both and omits
+    # `question` from the list registers a tool nothing can reach, so the run
+    # cannot ask about a decision even though it was told it could. The tool
+    # only puts a card in front of the member, so admitting it does not widen
+    # what an allowlisted assistant may touch. The caller passes the id only
+    # when the registry really holds it.
+    if enabled is not None and question_tool_id is not None:
+        enabled.add(question_tool_id)
     return ToolSelection(
         enabled=enabled,
         disabled=set(config.disabled_tools),

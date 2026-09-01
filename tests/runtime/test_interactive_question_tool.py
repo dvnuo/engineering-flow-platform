@@ -77,6 +77,56 @@ def test_a_managed_overlay_also_wins(monkeypatch, configured):
     assert _config(interactive=True).enable_question_tool is configured
 
 
+async def _tools_offered_to_the_model(config) -> set[str]:
+    """The tool ids in the request the loop actually sends the provider."""
+    from efp_runtime.loop import ScriptedLLMProvider
+    from efp_runtime.runtime import AgentRuntime
+
+    provider = ScriptedLLMProvider([{"content": "done"}])
+    await AgentRuntime(provider=provider, config=config).run("hi", session_id="s1")
+
+    return {tool.id for tool in provider.requests[0].tools}
+
+
+@pytest.mark.asyncio
+async def test_an_allowlist_that_omits_question_still_gets_it(monkeypatch, tmp_path):
+    # `enabled_tools` chooses what the model is shown; `enable_question_tool`
+    # chooses whether the tool exists. Registering it and then leaving it out of
+    # the list means chat is told it can ask and then cannot.
+    monkeypatch.setattr(runtime_chat, "_runtime_workspace_root", lambda: tmp_path)
+
+    offered = await _tools_offered_to_the_model(
+        _config(interactive=True, runtime_profile_config={"enabled_tools": ["read"]})
+    )
+
+    assert offered == {"read", "question"}
+
+
+@pytest.mark.asyncio
+async def test_an_allowlist_is_not_widened_when_questions_are_off(monkeypatch, tmp_path):
+    monkeypatch.setattr(runtime_chat, "_runtime_workspace_root", lambda: tmp_path)
+
+    offered = await _tools_offered_to_the_model(
+        _config(runtime_profile_config={"enabled_tools": ["read"]})
+    )
+
+    assert offered == {"read"}
+
+
+@pytest.mark.asyncio
+async def test_a_profile_that_turns_questions_off_keeps_them_out_of_the_allowlist(monkeypatch, tmp_path):
+    monkeypatch.setattr(runtime_chat, "_runtime_workspace_root", lambda: tmp_path)
+
+    offered = await _tools_offered_to_the_model(
+        _config(
+            interactive=True,
+            runtime_profile_config={"enabled_tools": ["read"], "enable_question_tool": False},
+        )
+    )
+
+    assert offered == {"read"}
+
+
 def test_the_flag_actually_puts_the_tool_in_front_of_the_model(monkeypatch, tmp_path):
     # The config field is only worth setting if it survives the whole way to the
     # registry the loop offers. Everything else here asserts on the flag.
