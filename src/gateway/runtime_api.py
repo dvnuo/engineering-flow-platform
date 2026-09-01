@@ -1023,6 +1023,9 @@ async def _run_chat_via_execution_bus(
         agent_id=agent_id,
         agent_name=agent_name,
         model=model,
+        # Only api_chat and api_chat_stream reach this helper, and both have a
+        # member watching the transcript who can answer.
+        interactive=True,
     )
 
 
@@ -3089,6 +3092,9 @@ async def _resume_chat_after_user_input(
                 agent_id=agent_id,
                 agent_name=agent_name,
                 request_id=request_id,
+                # The member just answered a card; a follow-up question is as
+                # answerable as the one they cleared.
+                interactive=True,
             )
             # Without this the registry entry stays "running" until the stale
             # timeout, so a poll of /api/chat/runs/{id} never learns the resume
@@ -4097,6 +4103,7 @@ async def _run_edit_resend_in_background(
             agent_name=agent_name,
             request_id=request_id,
             model=model,
+            interactive=True,
         )
     except Exception as exc:
         logger.error(

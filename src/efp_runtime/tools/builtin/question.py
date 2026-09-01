@@ -69,7 +69,22 @@ def create_question_tool(
 
     return ToolDef(
         id=tool_id,
-        description="Ask the user one or more questions and wait for their answers.",
+        description=(
+            "Ask the user to decide something, and pause the run until they answer.\n"
+            "\n"
+            "Reach for this when the next step turns on a choice that is genuinely "
+            "the user's to make: which of several viable approaches to take, which "
+            "environment or account to act against, or which reading of an ambiguous "
+            "request is the right one. Each option is rendered as a labelled choice "
+            "the user clicks, so give every option a short `label` and a `description` "
+            "saying what picking it leads to. A free-text box stays available beside "
+            "the options unless you set `custom` to false.\n"
+            "\n"
+            "Do not use it for anything you can settle yourself -- a question the code "
+            "already answers, or a choice with a conventional default. Ask once, "
+            "carrying every open question in a single call, rather than stopping the "
+            "run several times in a row."
+        ),
         input_schema={
             "type": "object",
             "required": ["questions"],

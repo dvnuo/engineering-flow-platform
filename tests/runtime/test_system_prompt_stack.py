@@ -404,7 +404,7 @@ def test_runtime_reminders_can_be_enabled_and_disabled():
     assert reminder.metadata["source"] == "runtime_reminders"
     assert "close-bounded by max_iterations=3" in reminder.parts[0].text
     assert "avoid extra provider or tool loops" in reminder.parts[0].text
-    assert "only when truly blocked after reading relevant context" in reminder.parts[0].text
+    assert "offer it through the tool as named options" in reminder.parts[0].text
     assert "output_path" in reminder.parts[0].text
     assert "saved output metadata" in reminder.parts[0].text
     assert "ranged read or grep" in reminder.parts[0].text
@@ -422,7 +422,7 @@ def test_runtime_reminders_can_be_enabled_and_disabled():
     )
     assert len(unbounded) == 1
     assert "close-bounded by max_iterations" not in unbounded[0].parts[0].text
-    assert "only when truly blocked after reading relevant context" in unbounded[0].parts[0].text
+    assert "offer it through the tool as named options" in unbounded[0].parts[0].text
 
     disabled = SystemPromptBuilder(
         workspace_root=None,
