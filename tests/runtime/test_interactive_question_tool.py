@@ -77,6 +77,24 @@ def test_a_managed_overlay_also_wins(monkeypatch, configured):
     assert _config(interactive=True).enable_question_tool is configured
 
 
+def test_the_flag_actually_puts_the_tool_in_front_of_the_model(monkeypatch, tmp_path):
+    # The config field is only worth setting if it survives the whole way to the
+    # registry the loop offers. Everything else here asserts on the flag.
+    from efp_runtime.loop import ScriptedLLMProvider
+    from efp_runtime.runtime import AgentRuntime
+
+    monkeypatch.setattr(runtime_chat, "_runtime_workspace_root", lambda: tmp_path)
+
+    def _registry(**kwargs):
+        return AgentRuntime(
+            provider=ScriptedLLMProvider([]),
+            config=_config(**kwargs),
+        ).tool_runtime.registry
+
+    assert _registry(interactive=True).get("question") is not None
+    assert _registry().get("question") is None
+
+
 @pytest.mark.asyncio
 async def test_the_chat_endpoints_ask_for_an_answerable_run(monkeypatch):
     captured: dict = {}
