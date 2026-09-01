@@ -37,6 +37,9 @@ jobs:
             "tests/test_p3_docs_contract.py",
             "tests/test_logger.py",
             "tests/test_docker_runtime_contract.py",
+            "tests/test_skill_repo_path.py",
+            "tests/runtime/test_interactive_question_tool.py",
+            "tests/runtime/test_system_prompt_stack.py",
           ]
           missing = [p for p in tests if not Path(p).exists()]
           if missing:
@@ -53,7 +56,7 @@ jobs:
             tests/test_runtime_observability_contract.py \
             tests/test_p3_docs_contract.py \
             tests/test_logger.py \
-            tests/test_docker_runtime_contract.py
+            tests/test_docker_runtime_contract.py             tests/test_skill_repo_path.py             tests/runtime/test_interactive_question_tool.py             tests/runtime/test_system_prompt_stack.py
 
   native-runtime-docker-smoke:
     runs-on: ubuntu-latest
