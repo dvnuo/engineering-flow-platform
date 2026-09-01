@@ -2986,6 +2986,29 @@ async def api_task_question_respond(request: web.Request) -> web.Response:
         clear_log_context()
 
 
+# Strong references to detached resume tasks; asyncio only holds weak ones.
+_RESUME_TASKS: set = set()
+
+# Pending requests already handed to a resume. A double-submitted response
+# would otherwise pass the match check twice and run the same continuation
+# twice against one session.
+_CLAIMED_PENDING_REQUESTS: set = set()
+
+
+def _claim_pending_request(session_id: str, request_id: str | None) -> bool:
+    """Take exclusive ownership of one pending request. False if already taken."""
+
+    key = (session_id, str(request_id or ""))
+    if key in _CLAIMED_PENDING_REQUESTS:
+        return False
+    _CLAIMED_PENDING_REQUESTS.add(key)
+    return True
+
+
+def _release_pending_claim(session_id: str, request_id: str | None) -> None:
+    _CLAIMED_PENDING_REQUESTS.discard((session_id, str(request_id or "")))
+
+
 async def _session_pending_input(session_id: str) -> Dict[str, Any]:
     """Read whichever user input the session is currently blocked on.
 
@@ -3059,7 +3082,7 @@ async def _resume_chat_after_user_input(
 
     async def _run() -> None:
         try:
-            await resume_runtime_chat(
+            payload = await resume_runtime_chat(
                 session_id=session_id,
                 request_path="/api/sessions/user-input/resume",
                 execution_metadata=execution_metadata,
@@ -3067,6 +3090,10 @@ async def _resume_chat_after_user_input(
                 agent_name=agent_name,
                 request_id=request_id,
             )
+            # Without this the registry entry stays "running" until the stale
+            # timeout, so a poll of /api/chat/runs/{id} never learns the resume
+            # finished.
+            chat_run_registry.complete(request_id, final_payload=payload)
         except Exception as exc:
             logger.error(
                 "[user_input_resume] resume failed | session_id=%s request_id=%s error=%s",
@@ -3075,6 +3102,13 @@ async def _resume_chat_after_user_input(
                 sanitize_exception_message(exc),
                 exc_info=True,
             )
+            try:
+                chat_run_registry.fail(
+                    request_id,
+                    {"error": sanitize_exception_message(exc), "error_type": type(exc).__name__},
+                )
+            except Exception:
+                logger.debug("Failed to mark the resumed chat run failed", exc_info=True)
             try:
                 await _persist_chat_failure_state(
                     agent_id=agent_id,
@@ -3086,7 +3120,12 @@ async def _resume_chat_after_user_input(
             except Exception:
                 logger.debug("Failed to persist chat failure state after resume", exc_info=True)
 
-    asyncio.create_task(_run())
+    task = asyncio.create_task(_run())
+    # Attached so a cancel can reach it, and held locally because asyncio keeps
+    # only a weak reference to a detached task.
+    chat_run_registry.attach_task(request_id, task)
+    _RESUME_TASKS.add(task)
+    task.add_done_callback(_RESUME_TASKS.discard)
     return {"ok": True, "session_id": session_id, "request_id": request_id, "state": "running"}
 
 
@@ -3119,16 +3158,23 @@ async def api_session_question_respond(request: web.Request) -> web.Response:
     else:
         return web.json_response({"error": "answers is required"}, status=400)
 
-    execution_metadata = _metadata_with_question_response(
-        _extract_trusted_control_plane_metadata(request, data),
-        pending_request=pending,
-        answers=answers,
-    )
-    payload = await _resume_chat_after_user_input(
-        request,
-        session_id=session_id,
-        execution_metadata=execution_metadata,
-    )
+    if not _claim_pending_request(session_id, request_id):
+        return web.json_response({"error": "question_already_answered"}, status=409)
+
+    try:
+        execution_metadata = _metadata_with_question_response(
+            _extract_trusted_control_plane_metadata(request, data),
+            pending_request=pending,
+            answers=answers,
+        )
+        payload = await _resume_chat_after_user_input(
+            request,
+            session_id=session_id,
+            execution_metadata=execution_metadata,
+        )
+    except Exception:
+        _release_pending_claim(session_id, request_id)
+        raise
     return web.json_response(payload, status=202)
 
 
@@ -3154,8 +3200,12 @@ async def api_session_permission_respond(request: web.Request) -> web.Response:
     if not _pending_request_matches(pending, request_id):
         return web.json_response({"error": "permission_request_id_mismatch"}, status=409)
 
-    decision = _permission_response_decision(data.get("decision") or data.get("action") or data.get("reply"))
     try:
+        # Parsed inside the try: an omitted or unsupported decision is a routine
+        # bad request, and raising outside would surface it as a 500.
+        decision = _permission_response_decision(
+            data.get("decision") or data.get("action") or data.get("reply")
+        )
         execution_metadata = _metadata_with_permission_response(
             _extract_trusted_control_plane_metadata(request, data),
             pending_request=pending,
@@ -3166,11 +3216,18 @@ async def api_session_permission_respond(request: web.Request) -> web.Response:
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=400)
 
-    payload = await _resume_chat_after_user_input(
-        request,
-        session_id=session_id,
-        execution_metadata=execution_metadata,
-    )
+    if not _claim_pending_request(session_id, request_id):
+        return web.json_response({"error": "permission_already_answered"}, status=409)
+
+    try:
+        payload = await _resume_chat_after_user_input(
+            request,
+            session_id=session_id,
+            execution_metadata=execution_metadata,
+        )
+    except Exception:
+        _release_pending_claim(session_id, request_id)
+        raise
     payload["decision"] = decision
     return web.json_response(payload, status=202)
 

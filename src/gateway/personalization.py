@@ -17,11 +17,20 @@ and Portal falls back to its generic welcome.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 from pathlib import Path
 from typing import Any
 
+from ruamel.yaml import YAML
+
 logger = logging.getLogger(__name__)
+
+# The repository declares ruamel.yaml, not PyYAML. Importing `yaml` here raised
+# ModuleNotFoundError in a clean container, which the broad handler below then
+# swallowed -- every valid cards.yaml became an empty list and the feature was
+# silently dead outside development.
+_yaml = YAML(typ="safe")
 
 PORTAL_PERSONALIZATION_DIRNAME = "portal"
 WELCOME_FILENAME = "welcome.md"
@@ -58,14 +67,14 @@ def _load_cards(path: Path) -> list[dict[str, Any]]:
     if not text:
         return []
     try:
-        import yaml
-
-        parsed = yaml.safe_load(text)
+        parsed = _yaml.load(text)
     except Exception:
         logger.warning("Ignoring unreadable personalization cards at %s", path, exc_info=True)
         return []
 
-    raw_cards = parsed.get("cards") if isinstance(parsed, dict) else parsed
+    # ruamel returns a CommentedMap, which is a Mapping but not necessarily
+    # caught by an isinstance(dict) check depending on the loader.
+    raw_cards = parsed.get("cards") if isinstance(parsed, Mapping) else parsed
     if not isinstance(raw_cards, list):
         return []
 
@@ -78,7 +87,7 @@ def _load_cards(path: Path) -> list[dict[str, Any]]:
 
 
 def _normalize_card(raw: Any) -> dict[str, Any] | None:
-    if not isinstance(raw, dict):
+    if not isinstance(raw, Mapping):
         return None
     title = _clean(raw.get("title"), MAX_CARD_FIELD_CHARS)
     prompt = _clean(raw.get("prompt"), MAX_PROMPT_CHARS)
@@ -95,7 +104,7 @@ def _normalize_card(raw: Any) -> dict[str, Any] | None:
     }
 
     raw_input = raw.get("input")
-    if isinstance(raw_input, dict):
+    if isinstance(raw_input, Mapping):
         card["input"] = {
             "label": _clean(raw_input.get("label"), MAX_CARD_FIELD_CHARS) or "Details",
             "placeholder": _clean(raw_input.get("placeholder"), MAX_CARD_FIELD_CHARS),

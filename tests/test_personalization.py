@@ -20,6 +20,34 @@ def _write_portal(root: Path, *, welcome: str | None = None, cards: str | None =
         (portal / "cards.yaml").write_text(cards, encoding="utf-8")
 
 
+def test_cards_are_parsed_with_the_declared_yaml_library(tmp_path):
+    # The repository declares ruamel.yaml, not PyYAML. `import yaml` raised
+    # ModuleNotFoundError in a clean container, and the broad handler in
+    # _load_cards swallowed it -- every cards.yaml silently became empty.
+    source = Path("src/gateway/personalization.py").read_text(encoding="utf-8")
+
+    assert "import yaml" not in source
+    assert "from ruamel.yaml import YAML" in source
+
+    requirements = Path("requirements.txt").read_text(encoding="utf-8").lower()
+    assert "ruamel.yaml" in requirements
+    assert "pyyaml" not in requirements, (
+        "if PyYAML is ever declared, say so here rather than relying on it "
+        "being pulled in transitively"
+    )
+
+
+def test_a_commented_map_from_ruamel_is_accepted(tmp_path):
+    # ruamel returns CommentedMap rather than dict, so an isinstance(dict)
+    # check would drop every card.
+    _write_portal(
+        tmp_path,
+        cards="cards:\n  - title: T   # trailing comment\n    prompt: P\n",
+    )
+
+    assert [card["title"] for card in load_personalization(tmp_path)["cards"]] == ["T"]
+
+
 def test_missing_portal_directory_yields_empty_personalization(tmp_path):
     result = load_personalization(tmp_path)
     assert result == {"welcome": None, "cards": []}
