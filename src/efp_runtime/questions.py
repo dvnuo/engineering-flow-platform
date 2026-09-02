@@ -100,7 +100,6 @@ class QuestionBroker:
             session_id=session_id,
             tool_call_id=tool_call_id,
             questions=resolved_questions,
-            metadata=request_metadata,
         )
         existing = self._pending.get(request_id)
         if existing is not None:
@@ -187,13 +186,26 @@ def _make_request_id(
     session_id: Optional[str],
     tool_call_id: Optional[str],
     questions: Iterable[QuestionPrompt],
-    metadata: Mapping[str, Any],
 ) -> str:
+    """Identify a question by what it asks, not by the run that asked it.
+
+    An unanswered question is re-raised on every subsequent run: the loop
+    replays pending tool calls before anything else, and the tool has no answer
+    to consume yet. Hashing the request metadata made each of those a different
+    id, because the metadata carries `run_id` -- fresh per run -- and an
+    `iteration` that is present on the first raise and absent on every replay.
+
+    Downstream that read as a new question each time. Portal rebuilt its answer
+    card, discarding whatever the member had typed into it, and `pending-input`
+    named an id that no longer matched the one they were looking at.
+
+    `tool_call_id` already identifies the call uniquely within the session, so
+    the metadata was never carrying identity -- only noise.
+    """
     payload = {
         "session_id": session_id,
         "tool_call_id": tool_call_id,
         "questions": [question.to_dict() for question in questions],
-        "metadata": dict(metadata),
     }
     digest = hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
     return f"question_{digest[:24]}"
