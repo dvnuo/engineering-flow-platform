@@ -360,6 +360,24 @@ class SkillRegistry:
 
         return summarize_skill_references(skill)
     
+    def repo_relative_path(self, skill: Skill) -> str:
+        """Path of the skill's definition file within the skills repository.
+
+        Portal turns this into a link to the branch the assistant actually
+        booted with, so it must be relative to the checkout root and never an
+        absolute container path. A skill from the user override directory has
+        no counterpart in the repository, so it gets no path rather than a link
+        that would 404.
+        """
+        source = str(getattr(skill, "source_file", "") or "")
+        if not source:
+            return ""
+        try:
+            relative = Path(source).resolve().relative_to(self.project_skills_dir.resolve())
+        except (ValueError, OSError):
+            return ""
+        return relative.as_posix()
+
     def get_all_skill_summaries(self) -> List[Dict]:
         """Get summary of all skills for runtime clients."""
         return [
@@ -370,6 +388,7 @@ class SkillRegistry:
                 "owner": s.owner,
                 "triggers": s.triggers[:3],  # First 3 triggers
                 "tool_count": len(s.tools),
+                "repo_path": self.repo_relative_path(s),
             }
             for s in self.list_active_skills()
         ]

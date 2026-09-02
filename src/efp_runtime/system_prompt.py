@@ -23,7 +23,7 @@ Core operating rules:
 - Preserve user changes. Do not revert unrelated work or overwrite changes you did not make.
 - Run focused tests or validation when practical; report what you ran, and say when validation could not be run.
 - Do not commit changes unless the user explicitly asks.
-- If a question is truly blocking after reading relevant context and the question tool is enabled, use it instead of guessing.
+- When the next step turns on a decision that is the user's to make and the question tool is enabled, call it with the concrete options rather than guessing or asking in prose; settle anything the code already answers yourself.
 - When citing code, prefer path:line references.
 
 Runtime CLI tools:
@@ -220,7 +220,7 @@ class SystemPromptBuilder:
                 )
             if _metadata_bool(metadata, "enable_question_tool"):
                 lines.append(
-                    "- Use the question tool only when truly blocked after reading relevant context; otherwise make a supported decision."
+                    "- The question tool is enabled: when a decision is the user's to make, offer it through the tool as named options with a one-line description each, instead of asking in prose. Settle anything the context already answers yourself."
                 )
         if _metadata_value(metadata, "runtime_mode") == "plan":
             lines.append(

@@ -94,6 +94,7 @@ async def run_runtime_chat(
     request_id: str | None = None,
     model: str | None = None,
     track_usage: bool = True,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """Run the production chat loop through ``efp_runtime.runtime.AgentRuntime``."""
 
@@ -105,6 +106,7 @@ async def run_runtime_chat(
             runtime_model,
             track_usage=track_usage,
             execution_metadata=execution_metadata,
+            interactive=interactive,
         ),
         store=get_runtime_session_store(),
         event_bus=event_bus,
@@ -214,6 +216,7 @@ async def resume_runtime_chat(
     request_id: str | None = None,
     model: str | None = None,
     track_usage: bool = True,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """Resume an existing native runtime session without appending a new user message."""
 
@@ -225,6 +228,7 @@ async def resume_runtime_chat(
             runtime_model,
             track_usage=track_usage,
             execution_metadata=execution_metadata,
+            interactive=interactive,
         ),
         store=get_runtime_session_store(),
         event_bus=event_bus,
@@ -360,6 +364,7 @@ def _runtime_config(
     track_usage: bool,
     execution_metadata: Mapping[str, Any] | None = None,
     runtime_profile_config: Mapping[str, Any] | None = None,
+    interactive: bool = False,
 ) -> RuntimeConfig:
     managed_overlay_config = _active_managed_overlay_runtime_config()
     profile_config = (
@@ -391,6 +396,16 @@ def _runtime_config(
         or _mapping_has_key(profile_config, "track_usage")
     ):
         kwargs["track_usage"] = track_usage
+    # The question tool parks the run until somebody answers, so it is only
+    # safe where a person is watching the transcript and Portal can draw the
+    # answer card. Background tasks, the Jira handler, and sub-agents share this
+    # builder and have nobody to ask, which is why this is opt-in rather than a
+    # default: a task path added later inherits "off" instead of stalling.
+    if interactive and not (
+        _mapping_has_key(managed_overlay_config, "enable_question_tool")
+        or _mapping_has_key(profile_config, "enable_question_tool")
+    ):
+        kwargs["enable_question_tool"] = True
 
     try:
         return RuntimeConfig(**kwargs)
