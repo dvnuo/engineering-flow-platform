@@ -209,6 +209,10 @@ class AgentRuntime:
         self.adapter = adapter
         self.compaction_summarizer = compaction_summarizer
         self.question_broker = question_broker or QuestionBroker()
+        # Only when the broker has none of its own: an injected broker may
+        # already know where to look.
+        if getattr(self.question_broker, "answer_lookup", None) is None:
+            self.question_broker.answer_lookup = self._persisted_question_answer
         self.store = store or InMemorySessionStore()
         # Materialised on first use only: see ``workspace_snapshot_store``.
         self._workspace_snapshot_store: WorkspaceSnapshotStore | None = None
@@ -1084,6 +1088,37 @@ class AgentRuntime:
 
     def answer_question(self, request_id: str, answers):
         return self.question_broker.answer(request_id, answers)
+
+    def _persisted_question_answer(
+        self,
+        session_id: Optional[str],
+        tool_call_id: Optional[str],
+    ) -> Any:
+        """The answer this session is holding for a question call, if any.
+
+        The question a run stops on is durable twice over -- an unpaired tool
+        call in history, and `pending_question_request` in session metadata --
+        so every later run replays it. The answer was not: it lived in one
+        broker, in one `AgentRuntime`, seeded from the one request that carried
+        it. Any run that was not that request found nothing, re-raised the
+        identical question, and returned without reaching the model.
+
+        The broker calls this only when a question call is actually replayed
+        with no answer already in hand, so a run with nothing pending -- which
+        is nearly all of them -- never reads the session for it.
+        """
+        if not session_id or not tool_call_id:
+            return None
+        try:
+            metadata = self.store.get_session(session_id).metadata
+        except Exception:
+            return None
+        held = metadata.get("pending_question_answer")
+        if not isinstance(held, Mapping):
+            return None
+        if held.get("tool_call_id") != tool_call_id:
+            return None
+        return held.get("answers")
 
     def pending_questions(self) -> list[dict[str, Any]]:
         return [

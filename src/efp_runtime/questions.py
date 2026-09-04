@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -83,9 +83,16 @@ class QuestionRequest:
 class QuestionBroker:
     """Stateful broker for model-initiated questions waiting on user input."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        answer_lookup: Optional[Callable[[Optional[str], Optional[str]], Any]] = None,
+    ) -> None:
         self._pending: dict[str, QuestionRequest] = {}
         self._answers: dict[Tuple[Optional[str], Optional[str]], list[list[str]]] = {}
+        # Consulted only when a question call is replayed with no answer in
+        # hand, so an answer that outlived the run it arrived in is still
+        # found. Nothing is read until a question actually needs answering.
+        self.answer_lookup = answer_lookup
 
     def ask(
         self,
@@ -134,12 +141,9 @@ class QuestionBroker:
         tool_call_id: Optional[str],
         answers: Iterable[AnswerValue],
     ) -> None:
-        answer_items: Iterable[AnswerValue]
-        if isinstance(answers, str):
-            answer_items = [answers]
-        else:
-            answer_items = answers
-        normalized_answers = [_normalize_answer(answer) for answer in answer_items]
+        normalized_answers = normalize_answers(answers)
+        if normalized_answers is None:
+            raise ValueError(f"unusable answers value: {type(answers).__name__}")
         self._answers[(session_id, tool_call_id)] = normalized_answers
 
     def consume_answer(
@@ -147,7 +151,19 @@ class QuestionBroker:
         session_id: Optional[str],
         tool_call_id: Optional[str],
     ) -> Optional[list[list[str]]]:
-        return self._answers.pop((session_id, tool_call_id), None)
+        held = self._answers.pop((session_id, tool_call_id), None)
+        if held is not None:
+            return held
+        if self.answer_lookup is None:
+            return None
+        try:
+            raw = self.answer_lookup(session_id, tool_call_id)
+        except Exception:
+            return None
+        # A shape this cannot read is treated as no answer at all. It reaches
+        # here from storage, which nothing validates on write, and raising
+        # would take down every run of the session rather than one request.
+        return normalize_answers(raw)
 
 
 def _normalize_option(option: Union[QuestionOption, Mapping[str, Any]]) -> QuestionOption:
@@ -179,6 +195,34 @@ def _normalize_answer(answer: AnswerValue) -> list[str]:
     if isinstance(answer, str):
         return [answer]
     return [str(item) for item in answer]
+
+
+def normalize_answers(answers: Any) -> Optional[list[list[str]]]:
+    """The answers as the tool wants them, or None if this is not an answer.
+
+    What arrives here is a JSON body somebody posted, so the shapes that are
+    not answers matter as much as the ones that are. Two used to get through:
+    anything not iterable raised `TypeError` out of the run it was seeded
+    into, and a mapping iterated to its *keys*, so posting the natural
+    `{"label": "EFP"}` told the model the member had chosen "label". Both are
+    now "not an answer", which the callers report rather than act on.
+    """
+    if answers is None or isinstance(answers, Mapping):
+        return None
+    if isinstance(answers, str):
+        return [[answers]]
+    if not isinstance(answers, (list, tuple)):
+        return None
+    normalized: list[list[str]] = []
+    for answer in answers:
+        if isinstance(answer, str):
+            normalized.append([answer])
+            continue
+        if isinstance(answer, (list, tuple)) and all(isinstance(item, str) for item in answer):
+            normalized.append(list(answer))
+            continue
+        return None
+    return normalized
 
 
 def _make_request_id(
@@ -220,6 +264,7 @@ def _json_safe(value: Any) -> Any:
 
 
 __all__ = [
+    "normalize_answers",
     "QuestionBroker",
     "QuestionOption",
     "QuestionPrompt",

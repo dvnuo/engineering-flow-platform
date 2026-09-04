@@ -16,6 +16,9 @@ RUNTIME_FORK_METADATA_KEYS = frozenset(
         "last_runtime_updated_at",
         "pending_permission_request",
         "pending_question_request",
+        # Dropped with the question it answers: a fork does not inherit the
+        # pending call, so an answer for it would only sit there stale.
+        "pending_question_answer",
         "pending_tool_calls",
     }
 )
