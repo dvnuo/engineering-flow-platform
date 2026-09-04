@@ -252,6 +252,70 @@ async def test_pending_question_state_is_recorded_on_runtime_session(tmp_path: P
     facade = await manager.get_session("question-session")
     assert facade["metadata"]["pending_question_request"]["id"] == "question-1"
 
+    # The run has ended, and it ended waiting on the member. Matching none of
+    # the terminal branches used to leave these on the values `mark_runtime_running`
+    # wrote, so Portal read a parked run as one still in flight.
+    assert metadata["latest_event_state"] == "blocked"
+    assert metadata["completion_state"] == "blocked"
+    assert metadata["latest_event_type"] == "chat.completed"
+
+
+@pytest.mark.asyncio
+async def test_a_parked_run_does_not_stay_looking_like_a_running_one(tmp_path: Path):
+    """`mark_runtime_running` writes chat.started/running before the run.
+
+    A run that parks on a question matched none of the terminal branches, so
+    all three of those stayed exactly as the start of the run left them.
+    Portal reads `latest_event_type == "chat.started"` with a request id as a
+    run still going, and went into recovery -- reconnecting, then reloading the
+    whole transcript -- every time somebody answered a question.
+    """
+    (tmp_path / "workspace").mkdir()
+    store = FileSessionStore(tmp_path / "store")
+    manager = RuntimeSessionManager(store=store)
+
+    async def ask_user(args: dict[str, Any], context: ToolContext) -> ToolResult:
+        return ToolResult(
+            call_id=context.tool_call_id or "call-question",
+            tool_name="ask_user",
+            status="question_requested",
+            success=False,
+            content="Need clarification.",
+            metadata={"question_request": {"id": "question-1", "prompt": "Continue?"}},
+        )
+
+    runtime = AgentRuntime(
+        provider=ScriptedLLMProvider([{"tool_calls": [_tool_call("call-question", "ask_user", {})]}]),
+        config=RuntimeConfig(workspace_root=tmp_path / "workspace", max_iterations=2),
+        store=store,
+        tool_runtime=ToolRuntime(
+            ToolRegistry(
+                [
+                    ToolDef(
+                        id="ask_user",
+                        description="Ask a question",
+                        input_schema={"type": "object", "properties": {}},
+                        execute=ask_user,
+                    )
+                ]
+            )
+        ),
+    )
+
+    await manager.mark_runtime_running("parked-session", request_id="req-parked")
+    running = store.get_session("parked-session").metadata
+    assert running["latest_event_type"] == "chat.started"
+
+    result = await runtime.run("Ask before continuing.", session_id="parked-session")
+    await manager.record_runtime_result("parked-session", result, request_id="req-parked")
+
+    parked = store.get_session("parked-session").metadata
+    assert parked["latest_event_type"] != "chat.started"
+    assert parked["latest_event_state"] == "blocked"
+    assert parked["completion_state"] == "blocked"
+    # And it is not mistaken for a failure either.
+    assert parked["last_runtime_status"] == LoopStatus.WAITING_FOR_QUESTION
+
 
 @pytest.mark.asyncio
 async def test_delete_session_uses_injected_file_context_cleanup(tmp_path: Path):

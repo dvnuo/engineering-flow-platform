@@ -61,7 +61,11 @@ def _normalized_state(status: Optional[str], *, fallback: str) -> str:
         return "success"
     if normalized in {"error", "failed", "failure"}:
         return "error"
-    if normalized in {"blocked", "denied"}:
+    # A run that stopped to ask something has not finished and has not failed.
+    # Without these two, `waiting_for_question` matched nothing and fell through
+    # to the caller's fallback -- which is "success" on every chat path, so a run
+    # parked on a question was reported to Portal as one that completed fine.
+    if normalized in {"blocked", "denied", "waiting_for_question", "waiting_for_permission"}:
         return "blocked"
     if normalized in {"queued", "started", "running", "in_progress"}:
         return "running"

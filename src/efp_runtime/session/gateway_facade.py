@@ -527,6 +527,15 @@ class RuntimeSessionManager:
             metadata["latest_event_type"] = "chat.cancelled"
             metadata["latest_event_state"] = "cancelled"
             metadata["completion_state"] = "cancelled"
+        elif normalized_status in {"waiting_for_question", "waiting_for_permission"}:
+            # The run ended, and it ended waiting on the member. Matching none of
+            # the branches above left `latest_event_type` on the "chat.started"
+            # that opened the run, so Portal read a parked run as one still in
+            # flight and went into recovery -- reconnecting, then reloading the
+            # whole transcript -- for what is ordinary behaviour.
+            metadata["latest_event_type"] = "chat.completed"
+            metadata["latest_event_state"] = "blocked"
+            metadata["completion_state"] = "blocked"
         pending_permission = getattr(result, "pending_permission_request", None)
         pending_question = getattr(result, "pending_question_request", None)
         if pending_permission is not None:
