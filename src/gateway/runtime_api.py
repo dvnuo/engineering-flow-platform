@@ -3083,7 +3083,41 @@ async def _resume_chat_after_user_input(
     chat_run_registry.start(session_id=session_id, request_id=request_id, engine="native")
     await session_manager.mark_runtime_running(session_id, request_id=request_id)
 
+    # A run started by an answer has no client attached, so it was resumed with
+    # no stream callback -- and with no callback nothing subscribes to the run's
+    # events, nothing projects them, and nothing hands them to the gateway bus
+    # or the run registry. Portal follows this run by request id over the
+    # events socket, and the socket drops every event that does not carry that
+    # id; the reconnect stream can only replay what the registry recorded. So a
+    # joined viewer saw an empty spinner, and when the run stopped on a second
+    # question, the question.requested event that raises the card never
+    # arrived. This is the drain the streaming endpoint runs, minus the SSE
+    # write.
+    event_queue: asyncio.Queue = asyncio.Queue()
+    projector = RuntimeEventProjector(
+        request_id=request_id,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        model=global_config.llm.get("model", DEFAULT_LLM_MODEL),
+    )
+
+    async def _drain(run_done: asyncio.Event) -> None:
+        while not run_done.is_set() or not event_queue.empty():
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
+            except asyncio.TimeoutError:
+                continue
+            if isinstance(event, dict) and is_projected_runtime_event(event):
+                event_payloads = [event]
+            else:
+                event_payloads = projector.project(event)
+            for event_payload in event_payloads:
+                await _emit_gateway_runtime_event(event_payload)
+                chat_run_registry.record_event(request_id, event_payload)
+
     async def _run() -> None:
+        run_done = asyncio.Event()
+        drain = asyncio.create_task(_drain(run_done))
         try:
             payload = await resume_runtime_chat(
                 session_id=session_id,
@@ -3092,15 +3126,26 @@ async def _resume_chat_after_user_input(
                 agent_id=agent_id,
                 agent_name=agent_name,
                 request_id=request_id,
+                stream_callback=event_queue,
                 # The member just answered a card; a follow-up question is as
                 # answerable as the one they cleared.
                 interactive=True,
             )
+            # Everything the run said has to be on the bus and in the registry
+            # before the registry calls it finished: record_event ignores a
+            # terminal record, and a viewer that sees "completed" stops reading.
+            run_done.set()
+            await drain
             # Without this the registry entry stays "running" until the stale
             # timeout, so a poll of /api/chat/runs/{id} never learns the resume
             # finished.
             chat_run_registry.complete(request_id, final_payload=payload)
         except Exception as exc:
+            run_done.set()
+            try:
+                await drain
+            except Exception:
+                logger.debug("Resume event drain failed", exc_info=True)
             logger.error(
                 "[user_input_resume] resume failed | session_id=%s request_id=%s error=%s",
                 session_id,
