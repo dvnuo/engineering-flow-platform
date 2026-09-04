@@ -269,3 +269,51 @@ def test_build_session_metadata_payload_preserves_active_skill_preview_keys():
     assert "active_skill_activation_reason" in metadata_json
     assert "active_skill_tool_policy_declared" in metadata_json
     assert "active_skill_session" not in metadata_json
+
+
+@pytest.mark.parametrize("status", ["waiting_for_question", "waiting_for_permission"])
+def test_a_run_parked_on_the_member_is_published_as_blocked_not_success(status):
+    """A run that stops to ask has not finished and has not failed.
+
+    Neither waiting status matched any branch, so both fell through to the
+    caller's fallback -- and every chat path passes `default_state="success"`.
+    Portal was told the run completed fine, then found no response text in it,
+    and reported `completion_state: incomplete` for ordinary behaviour.
+    """
+    result = make_execution_result(
+        request_id="exec-parked",
+        status=status,
+        output_payload={},
+        artifacts={},
+        runtime_events=[],
+    )
+
+    extracted = extract_session_metadata_publish_fields(
+        result,
+        metadata={},
+        default_event_type="chat.completed",
+        default_state="success",
+    )
+
+    assert extracted["latest_event_state"] == "blocked"
+
+
+def test_an_unrecognised_status_still_falls_back():
+    # The fallback is what carries every status this does not name; parking is
+    # now named, and nothing else changed.
+    result = make_execution_result(
+        request_id="exec-odd",
+        status="something_new",
+        output_payload={},
+        artifacts={},
+        runtime_events=[],
+    )
+
+    extracted = extract_session_metadata_publish_fields(
+        result,
+        metadata={},
+        default_event_type="chat.completed",
+        default_state="success",
+    )
+
+    assert extracted["latest_event_state"] == "success"
