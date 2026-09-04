@@ -546,6 +546,10 @@ class RuntimeSessionManager:
             metadata["pending_question_request"] = deepcopy(pending_question)
         else:
             metadata.pop("pending_question_request", None)
+            # The answer outlives only the question it was given for. Once
+            # nothing is pending it has been consumed, and leaving it behind
+            # would hand it to whatever asks next.
+            metadata.pop("pending_question_answer", None)
         pending_tool_calls = _pending_tool_call_payloads(self.store.read_history(session_id))
         if pending_tool_calls:
             metadata["pending_tool_calls"] = pending_tool_calls

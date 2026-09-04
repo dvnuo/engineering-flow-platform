@@ -691,6 +691,7 @@ class AgentRuntime:
                 ),
                 compaction_reserved_chars=self.config.compaction_reserved_chars,
             )
+            self._seed_persisted_question_answer(resolved_session_id)
             result = await runner.run(
                 user_text=user_text_for_request,
                 user_parts=user_parts,
@@ -923,6 +924,7 @@ class AgentRuntime:
                 ),
                 compaction_reserved_chars=self.config.compaction_reserved_chars,
             )
+            self._seed_persisted_question_answer(session_id)
             result = await runner.run(
                 user_text="",
                 session_id=session_id,
@@ -1084,6 +1086,37 @@ class AgentRuntime:
 
     def answer_question(self, request_id: str, answers):
         return self.question_broker.answer(request_id, answers)
+
+    def _seed_persisted_question_answer(self, session_id: str) -> None:
+        """Hand the broker any answer the session is holding for this run.
+
+        The question a run stops on is durable twice over -- an unpaired tool
+        call in history, and `pending_question_request` in session metadata --
+        so every later run replays it. The answer used to live only in this
+        object's broker, seeded from the metadata of the one request that
+        carried it, and `consume_answer` pops it. Any run that was not that
+        request found no answer, re-raised the identical question, and never
+        reached the model; the member's messages reached the transcript and
+        nothing else. Reading it back from the session gives the two the same
+        lifetime.
+        """
+        try:
+            metadata = self.store.get_session(session_id).metadata
+        except KeyError:
+            return
+        held = metadata.get("pending_question_answer")
+        if not isinstance(held, Mapping):
+            return
+        tool_call_id = held.get("tool_call_id")
+        answers = held.get("answers")
+        if not isinstance(tool_call_id, str) or not tool_call_id.strip() or answers is None:
+            return
+        answer_session_id = held.get("session_id")
+        self.question_broker.seed_answer(
+            answer_session_id if isinstance(answer_session_id, str) else session_id,
+            tool_call_id,
+            answers,
+        )
 
     def pending_questions(self) -> list[dict[str, Any]]:
         return [

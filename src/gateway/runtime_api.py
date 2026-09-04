@@ -2894,6 +2894,39 @@ def _metadata_with_question_response(
     return merged
 
 
+async def _record_pending_question_answer(
+    session_id: str,
+    *,
+    pending_request: Dict[str, Any],
+    answers: Any,
+) -> None:
+    """Keep the answer on the session, where the question already lives."""
+    tool_call_id = pending_request.get("tool_call_id")
+    if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+        metadata = pending_request.get("metadata")
+        if isinstance(metadata, Mapping):
+            candidate = metadata.get("tool_call_id")
+            tool_call_id = candidate if isinstance(candidate, str) else None
+    if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+        return
+    try:
+        await session_manager.merge_metadata(
+            session_id,
+            {
+                "pending_question_answer": {
+                    "request_id": _pending_request_id(pending_request),
+                    "session_id": pending_request.get("session_id") or session_id,
+                    "tool_call_id": tool_call_id,
+                    "answers": answers,
+                }
+            },
+        )
+    except Exception:
+        # The run about to start still carries the answer in its execution
+        # metadata; this only makes it survive that run.
+        logger.warning("Failed to record the pending question answer", exc_info=True)
+
+
 def _resume_runtime_task_after_user_input(record: Any, *, metadata: Dict[str, Any]) -> Any:
     merged_input_payload = dict(record.merged_input_payload or {})
     merged_input_payload["_runtime_resume"] = True
@@ -3229,6 +3262,13 @@ async def api_session_question_respond(request: web.Request) -> web.Response:
         return web.json_response({"error": "question_already_answered"}, status=409)
 
     try:
+        # Written to the session before the run that consumes it starts. The
+        # execution metadata below reaches only this one run; if that run does
+        # not get as far as replaying the tool call -- a restart, a failure, or
+        # the member sending something else first -- the answer would be gone
+        # while the question it answers stays on disk, and every later run
+        # would raise the identical question without ever reaching the model.
+        await _record_pending_question_answer(session_id, pending_request=pending, answers=answers)
         execution_metadata = _metadata_with_question_response(
             _extract_trusted_control_plane_metadata(request, data),
             pending_request=pending,
