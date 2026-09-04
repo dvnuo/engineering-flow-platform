@@ -62,6 +62,7 @@ from src.efp_runtime.session.gateway_facade import (
     resolve_session_display_name,
     runtime_session_manager as session_manager,
 )
+from src.efp_runtime.questions import normalize_answers
 from src.efp_runtime.context.render import render_history
 from src.efp_runtime.context.usage import build_context_usage_snapshot
 from src.efp_runtime.llm.models import resolve_model_context_profile
@@ -2894,32 +2895,63 @@ def _metadata_with_question_response(
     return merged
 
 
+# A question answer is a line or two the member picked or typed. The body cap
+# is ~30MB, and anything stored here is re-read and deep-copied on every
+# session load, so an answer far past this is not an answer.
+_MAX_QUESTION_ANSWER_CHARS = 64 * 1024
+
+
+def _pending_question_tool_call_id(pending_request: Mapping[str, Any]) -> Optional[str]:
+    """The tool call a pending question belongs to, wherever it is spelled."""
+    tool_call_id = pending_request.get("tool_call_id")
+    if isinstance(tool_call_id, str) and tool_call_id.strip():
+        return tool_call_id
+    metadata = pending_request.get("metadata")
+    if isinstance(metadata, Mapping):
+        candidate = metadata.get("tool_call_id")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate
+    return None
+
+
+def _question_answers_error(answers: Any) -> Optional[str]:
+    """Why this cannot be an answer, or None if it can.
+
+    Checked here rather than left to the runtime: an unusable value used to
+    cost one failed run, and now that the answer is persisted it would be
+    re-read by every later run of the session instead.
+    """
+    normalized = normalize_answers(answers)
+    if normalized is None:
+        return "answers must be a string, a list of strings, or a list of lists of strings"
+    if not normalized:
+        return "answers must not be empty"
+    if sum(len(value) for answer in normalized for value in answer) > _MAX_QUESTION_ANSWER_CHARS:
+        return f"answers must be under {_MAX_QUESTION_ANSWER_CHARS} characters"
+    return None
+
+
 async def _record_pending_question_answer(
     session_id: str,
     *,
-    pending_request: Dict[str, Any],
+    pending_request: Mapping[str, Any],
     answers: Any,
 ) -> None:
-    """Keep the answer on the session, where the question already lives."""
-    tool_call_id = pending_request.get("tool_call_id")
-    if not isinstance(tool_call_id, str) or not tool_call_id.strip():
-        metadata = pending_request.get("metadata")
-        if isinstance(metadata, Mapping):
-            candidate = metadata.get("tool_call_id")
-            tool_call_id = candidate if isinstance(candidate, str) else None
-    if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+    """Keep the answer on the session, where the question already lives.
+
+    The execution metadata that also carries it reaches only the run started
+    below. If that run does not get as far as replaying the tool call -- a
+    restart, a failure, a cancel -- the answer would be gone while the question
+    stays on disk, and every later run would raise the identical question
+    without ever reaching the model.
+    """
+    tool_call_id = _pending_question_tool_call_id(pending_request)
+    if not tool_call_id or not session_id:
         return
     try:
         await session_manager.merge_metadata(
             session_id,
-            {
-                "pending_question_answer": {
-                    "request_id": _pending_request_id(pending_request),
-                    "session_id": pending_request.get("session_id") or session_id,
-                    "tool_call_id": tool_call_id,
-                    "answers": answers,
-                }
-            },
+            {"pending_question_answer": {"tool_call_id": tool_call_id, "answers": answers}},
         )
     except Exception:
         # The run about to start still carries the answer in its execution
@@ -3007,6 +3039,16 @@ async def api_task_question_respond(request: web.Request) -> web.Response:
             answers = data.get("answer")
         else:
             return web.json_response({"error": "answers is required"}, status=400)
+        answers_error = _question_answers_error(answers)
+        if answers_error:
+            return web.json_response({"error": answers_error}, status=400)
+        # The task resumes through the same runtime session, so its answer
+        # needs the same durability as one given through the session endpoint.
+        task_session_id = pending.get("session_id")
+        if isinstance(task_session_id, str) and task_session_id:
+            await _record_pending_question_answer(
+                task_session_id, pending_request=pending, answers=answers
+            )
         metadata = _metadata_with_question_response(
             record.metadata,
             pending_request=pending,
@@ -3104,6 +3146,7 @@ async def _resume_chat_after_user_input(
     *,
     session_id: str,
     execution_metadata: Dict[str, Any],
+    release_claim: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Continue a blocked chat turn once the user has supplied their input.
 
@@ -3219,6 +3262,13 @@ async def _resume_chat_after_user_input(
                 # answer.
                 run_done.set()
                 drain.cancel()
+            # The claim exists to stop a second answer landing while this run
+            # is in flight. It was only ever released when the endpoint itself
+            # failed, so a successful answer held it for the life of the
+            # process -- and since a re-raised question keeps its id, the
+            # member could never answer it again.
+            if release_claim is not None:
+                _release_pending_claim(session_id, release_claim)
 
     task = asyncio.create_task(_run())
     # Attached so a cancel can reach it, and held locally because asyncio keeps
@@ -3258,16 +3308,14 @@ async def api_session_question_respond(request: web.Request) -> web.Response:
     else:
         return web.json_response({"error": "answers is required"}, status=400)
 
+    answers_error = _question_answers_error(answers)
+    if answers_error:
+        return web.json_response({"error": answers_error}, status=400)
+
     if not _claim_pending_request(session_id, request_id):
         return web.json_response({"error": "question_already_answered"}, status=409)
 
     try:
-        # Written to the session before the run that consumes it starts. The
-        # execution metadata below reaches only this one run; if that run does
-        # not get as far as replaying the tool call -- a restart, a failure, or
-        # the member sending something else first -- the answer would be gone
-        # while the question it answers stays on disk, and every later run
-        # would raise the identical question without ever reaching the model.
         await _record_pending_question_answer(session_id, pending_request=pending, answers=answers)
         execution_metadata = _metadata_with_question_response(
             _extract_trusted_control_plane_metadata(request, data),
@@ -3278,6 +3326,7 @@ async def api_session_question_respond(request: web.Request) -> web.Response:
             request,
             session_id=session_id,
             execution_metadata=execution_metadata,
+            release_claim=request_id,
         )
     except Exception:
         _release_pending_claim(session_id, request_id)

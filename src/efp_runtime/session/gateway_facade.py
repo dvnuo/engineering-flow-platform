@@ -546,15 +546,12 @@ class RuntimeSessionManager:
             metadata["pending_question_request"] = deepcopy(pending_question)
         else:
             metadata.pop("pending_question_request", None)
-            # The answer outlives only the question it was given for. Once
-            # nothing is pending it has been consumed, and leaving it behind
-            # would hand it to whatever asks next.
-            metadata.pop("pending_question_answer", None)
         pending_tool_calls = _pending_tool_call_payloads(self.store.read_history(session_id))
         if pending_tool_calls:
             metadata["pending_tool_calls"] = pending_tool_calls
         else:
             metadata.pop("pending_tool_calls", None)
+        _drop_answered_question_answer(metadata, pending_tool_calls)
         self.store.update_session(session_id, metadata=metadata, replace_metadata=True)
 
     async def recover_session_state(self, session_id: str) -> dict[str, Any]:
@@ -803,6 +800,29 @@ def _compaction_to_legacy(compaction: CompactionPart) -> dict[str, Any]:
         "tool_pair_count": compaction.tool_pair_count,
         "metadata": deepcopy(compaction.metadata),
     }
+
+
+def _drop_answered_question_answer(
+    metadata: dict[str, Any],
+    pending_tool_calls: list[dict[str, Any]],
+) -> None:
+    """Keep a held answer only while the call it answers is still unpaired.
+
+    "The result carried no pending question" is not the same as "the answer
+    was consumed": a run cancelled before the replay reaches the question tool
+    ends that way with the call still unpaired, and dropping the answer there
+    threw away one the member had already given -- the very failure the answer
+    is persisted to prevent. Whether the call has a result is the fact that
+    actually settles it, and it also retires an answer left behind when the
+    run went on to ask something else.
+    """
+    held = metadata.get("pending_question_answer")
+    if not isinstance(held, Mapping):
+        metadata.pop("pending_question_answer", None)
+        return
+    unpaired = {str(call.get("call_id") or "") for call in pending_tool_calls}
+    if str(held.get("tool_call_id") or "") not in unpaired:
+        metadata.pop("pending_question_answer", None)
 
 
 def _pending_tool_call_payloads(history: Iterable[Message]) -> list[dict[str, Any]]:
