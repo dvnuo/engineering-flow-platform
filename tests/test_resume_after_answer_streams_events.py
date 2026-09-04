@@ -104,3 +104,36 @@ def test_a_resumed_run_that_fails_still_stops_draining(api, monkeypatch):
     started = asyncio.run(run())
     record = api.chat_run_registry.get(started["request_id"])
     assert record is not None and record.state == "failed"
+
+
+def test_cancelling_a_resumed_run_does_not_leave_the_drain_running(api, monkeypatch):
+    # CancelledError is not an Exception, so neither the success nor the
+    # failure branch used to reach the drain: it looped on an empty queue
+    # for the life of the process, one task and one queue per cancelled answer.
+    async def fake_emit(*_a, **_k):
+        return None
+
+    async def fake_resume(**kwargs):
+        await asyncio.sleep(10)
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(api, "emit_agent_event", fake_emit)
+    monkeypatch.setattr(api, "resume_runtime_chat", fake_resume)
+    monkeypatch.setattr(api, "global_config", types.SimpleNamespace(llm={"model": "test-model"}))
+    monkeypatch.setattr(api, "session_manager", types.SimpleNamespace(mark_runtime_running=noop))
+    monkeypatch.setattr(api, "_resolve_runtime_agent_identity", lambda _r: ("agent-1", "Agent"))
+
+    async def run():
+        before = {t for t in asyncio.all_tasks()}
+        started = await api._resume_chat_after_user_input(object(), session_id="s3", execution_metadata={})
+        record = api.chat_run_registry.get(started["request_id"])
+        await asyncio.sleep(0.05)
+        record.task.cancel()
+        await asyncio.gather(record.task, return_exceptions=True)
+        await asyncio.sleep(0.4)  # longer than the drain's poll interval
+        leftover = {t for t in asyncio.all_tasks() if t not in before and not t.done()}
+        return [t.get_coro().__qualname__ for t in leftover]
+
+    assert asyncio.run(run()) == []

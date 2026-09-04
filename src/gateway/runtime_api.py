@@ -3115,6 +3115,15 @@ async def _resume_chat_after_user_input(
                 await _emit_gateway_runtime_event(event_payload)
                 chat_run_registry.record_event(request_id, event_payload)
 
+    async def _stop_drain(run_done: asyncio.Event, drain: asyncio.Task) -> None:
+        # Let the drain flush what the run had already said, then wait for it.
+        run_done.set()
+        try:
+            await asyncio.shield(drain)
+        except BaseException:
+            drain.cancel()
+            raise
+
     async def _run() -> None:
         run_done = asyncio.Event()
         drain = asyncio.create_task(_drain(run_done))
@@ -3134,16 +3143,14 @@ async def _resume_chat_after_user_input(
             # Everything the run said has to be on the bus and in the registry
             # before the registry calls it finished: record_event ignores a
             # terminal record, and a viewer that sees "completed" stops reading.
-            run_done.set()
-            await drain
+            await _stop_drain(run_done, drain)
             # Without this the registry entry stays "running" until the stale
             # timeout, so a poll of /api/chat/runs/{id} never learns the resume
             # finished.
             chat_run_registry.complete(request_id, final_payload=payload)
         except Exception as exc:
-            run_done.set()
             try:
-                await drain
+                await _stop_drain(run_done, drain)
             except Exception:
                 logger.debug("Resume event drain failed", exc_info=True)
             logger.error(
@@ -3170,6 +3177,15 @@ async def _resume_chat_after_user_input(
                 )
             except Exception:
                 logger.debug("Failed to persist chat failure state after resume", exc_info=True)
+        finally:
+            if not run_done.is_set():
+                # Only a cancellation gets here with the drain still going:
+                # CancelledError is not an Exception, so neither branch above
+                # saw it, and the drain used to loop on an empty queue for the
+                # life of the process -- one task and one queue per cancelled
+                # answer.
+                run_done.set()
+                drain.cancel()
 
     task = asyncio.create_task(_run())
     # Attached so a cancel can reach it, and held locally because asyncio keeps
