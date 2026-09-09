@@ -10,6 +10,10 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 - Portal identity is header-only:
   - `X-Portal-User-Id`
   - `X-Portal-User-Name`
+- Trusted Portal chat metadata may also carry `portal_user` (`{id, username, display_name}`), the structured
+  form of the identity headers. EFP renders it (or, failing that, the header values) into a `Session user:`
+  system message with identity rules, so the model treats `jira myself` / `currentUser()` as the shared service
+  account and filters "my" requests by the session user explicitly. Untrusted requests cannot set it.
 - Untrusted requests cannot inject governance metadata.
 
 ## 2) Runtime Internal Endpoints
