@@ -683,3 +683,85 @@ def _write_skill(
         encoding="utf-8",
     )
     return skill_dir
+
+
+def _session_message_text(message) -> str:
+    return "".join(str(getattr(part, "text", "") or "") for part in message.parts)
+
+
+def test_session_user_message_from_structured_portal_user(tmp_path: Path):
+    builder = SystemPromptBuilder(workspace_root=tmp_path)
+
+    messages = builder.build_messages(
+        {
+            "portal_user": {"id": 77, "username": "runtime-user", "display_name": "Runtime User"},
+            "portal_user_name": "header-name-ignored-when-structured",
+        }
+    )
+
+    assert len(messages) == 1
+    text = _session_message_text(messages[0])
+    assert text.startswith("Session user:\n")
+    assert "- display name: Runtime User" in text
+    assert "- username: runtime-user" in text
+    assert "- portal user id: 77" in text
+    assert "header-name-ignored" not in text
+    assert "shared service account" in text
+    assert "`currentUser()`" in text
+    assert 'assignee = "<username>"' in text
+    assert messages[0].metadata["source"] == "session_user_context"
+    assert messages[0].metadata["kind"] == "session_user_context"
+    assert messages[0].metadata["portal_user_id"] == "77"
+
+
+def test_session_user_message_falls_back_to_header_identity_fields(tmp_path: Path):
+    builder = SystemPromptBuilder(workspace_root=tmp_path)
+
+    messages = builder.build_messages({"portal_user_id": " 12 ", "portal_user_name": "Header  User"})
+
+    assert len(messages) == 1
+    header, _rules = _session_message_text(messages[0]).split("Identity rules:", 1)
+    assert "- display name: Header User" in header
+    assert "- portal user id: 12" in header
+    assert "- username:" not in header
+
+
+def test_session_user_message_absent_without_trusted_identity(tmp_path: Path):
+    builder = SystemPromptBuilder(workspace_root=tmp_path)
+
+    assert builder.build_messages({}) == []
+    assert builder.build_messages({"user_name": "untrusted-direct-caller"}) == []
+    assert builder.build_messages({"portal_user": {"id": "  ", "username": None}}) == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_places_session_user_after_environment_and_before_instructions(
+    tmp_path: Path,
+):
+    (tmp_path / "AGENTS.md").write_text("Project instructions.", encoding="utf-8")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=2,
+            include_environment_context=True,
+        ),
+    )
+
+    result = await runtime.run(
+        "Which tickets are assigned to me?",
+        session_id="session-session-user",
+        metadata={"portal_user": {"id": "77", "username": "runtime-user", "display_name": "Runtime User"}},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    messages = request.provider_request.messages
+    environment_index = _message_index(messages, "Environment:")
+    session_user_index = _message_index(messages, "Session user:")
+    instruction_index = _message_index(messages, "Instructions from:")
+    assert environment_index < session_user_index < instruction_index
+    assert "- username: runtime-user" in messages[session_user_index].text
+    assert request.metadata["system_prompt_context_count"] == 2
+    assert request.metadata["environment_context_count"] == 1

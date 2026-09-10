@@ -37,6 +37,11 @@ Runtime CLI tools:
 
 _TRUNCATION_NOTICE = "[System prompt content truncated to {kept} of {original} chars.]"
 
+SESSION_USER_IDENTITY_RULES = """Identity rules:
+- The jira, confluence, gh, jenkins, and aws CLIs may authenticate with a shared service account configured by the runtime profile rather than with this user's own account. `jira myself`, `confluence myself`, JQL/CQL `currentUser()`, and similar "current user" lookups describe that service account, never the session user.
+- When the user says "my", "mine", "me", "assigned to me", "my pages", or otherwise refers to themselves, filter explicitly by the session user identity above, for example JQL `assignee = "<username>"` or CQL `creator = "<username>"`. If the external system needs an account id, look the user up by username or display name first.
+- If the session user cannot be resolved in the external system, ask which account to use instead of silently falling back to the service account."""
+
 
 @dataclass(frozen=True)
 class SystemPromptSource:
@@ -92,6 +97,10 @@ class SystemPromptBuilder:
             environment = self._environment_context_message(runtime_metadata)
             if environment is not None:
                 messages.append(environment)
+
+        session_user = self._session_user_message(runtime_metadata)
+        if session_user is not None:
+            messages.append(session_user)
 
         for index, text in enumerate(self.system_prompt_texts):
             content = str(text)
@@ -194,6 +203,52 @@ class SystemPromptBuilder:
         }
         if workspace_root is not None:
             source_metadata["workspace_root"] = str(workspace_root)
+        source = SystemPromptSource(
+            path=None,
+            content=content,
+            truncated=False,
+            original_chars=len(content),
+            metadata=source_metadata,
+        )
+        return _system_text_message(source)
+
+    def _session_user_message(
+        self,
+        metadata: Mapping[str, Any],
+    ) -> Message | None:
+        """Describe the Portal user behind this run so "my"/"me" can be resolved.
+
+        Portal forwards the signed-in member as trusted chat metadata; without
+        this block the model only knows the shared CLI credentials, so "my
+        tickets" silently becomes the service account's tickets.
+        """
+        identity = resolve_session_user(metadata)
+        if identity is None:
+            return None
+
+        fields: list[tuple[str, str]] = []
+        display_name = identity.get("display_name")
+        if display_name:
+            fields.append(("display name", display_name))
+        username = identity.get("username")
+        if username:
+            fields.append(("username", username))
+        user_id = identity.get("id")
+        if user_id:
+            fields.append(("portal user id", user_id))
+
+        content = (
+            "Session user:\n"
+            + "\n".join(f"- {label}: {value}" for label, value in fields)
+            + "\n\n"
+            + SESSION_USER_IDENTITY_RULES
+        )
+        source_metadata: dict[str, Any] = {
+            "source": "session_user_context",
+            "kind": "session_user_context",
+        }
+        if user_id:
+            source_metadata["portal_user_id"] = user_id
         source = SystemPromptSource(
             path=None,
             content=content,
@@ -325,6 +380,41 @@ def _read_text_file(path: Path) -> str | None:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def resolve_session_user(metadata: Mapping[str, Any] | None) -> dict[str, str] | None:
+    """Return the Portal user identity carried by run metadata, if any.
+
+    ``portal_user`` is the structured object Portal places in trusted chat
+    metadata; ``portal_user_id`` / ``portal_user_name`` are the older header
+    derived fields and act as a fallback so identity still reaches the prompt
+    when only the headers were sent.
+    """
+    if not isinstance(metadata, Mapping):
+        return None
+    identity: dict[str, str] = {}
+    structured = metadata.get("portal_user")
+    if isinstance(structured, Mapping):
+        for key in ("id", "username", "display_name"):
+            value = _clean_identity_value(structured.get(key))
+            if value:
+                identity[key] = value
+    if not identity.get("id"):
+        value = _clean_identity_value(metadata.get("portal_user_id"))
+        if value:
+            identity["id"] = value
+    if not identity.get("display_name") and not identity.get("username"):
+        value = _clean_identity_value(metadata.get("portal_user_name"))
+        if value:
+            identity["display_name"] = value
+    return identity or None
+
+
+def _clean_identity_value(value: Any) -> str:
+    if value is None or isinstance(value, bool):
+        return ""
+    text = str(value).strip()
+    return " ".join(text.split())
 
 
 def _metadata_value(metadata: Mapping[str, Any], key: str) -> Any:

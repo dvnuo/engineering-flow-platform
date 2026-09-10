@@ -246,6 +246,7 @@ and are not loaded through `EFP_TOOLS_DIR` or `EFP_EXTERNAL_TOOLS_*`.
 - Trusted chat request requires:
   - `X-Portal-Author-Source: portal`.
 - `portal_user_id` / `portal_user_name` are trusted identity headers only (`X-Portal-User-Id`, `X-Portal-User-Name`).
+- Trusted chat `metadata.portal_user` (`{id, username, display_name}`) is the structured form of the same identity. The runtime renders it as a `Session user:` system message so the model can resolve "my"/"me" against the signed-in Portal member instead of the shared CLI service account; the header fields are the fallback when Portal sends no structured object.
 
 For complete control-plane contract details, see `docs/control_plane_contract.md`.
 
