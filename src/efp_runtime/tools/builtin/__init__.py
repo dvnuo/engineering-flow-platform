@@ -25,6 +25,7 @@ from .task import (
     TaskToolRunner,
     create_task_tool,
 )
+from .browser import create_browser_tool
 from .todo import create_todowrite_tool
 from .websearch import WebSearchRequest, WebSearchRunner, create_websearch_tool
 
@@ -37,6 +38,7 @@ __all__ = [
     "DEFAULT_STRUCTURED_OUTPUT_TOOL_ID",
     "create_apply_patch_tool",
     "create_bash_tool",
+    "create_browser_tool",
     "create_core_tool_registry",
     "create_edit_tool",
     "create_webfetch_tool",

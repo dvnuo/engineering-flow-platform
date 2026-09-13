@@ -45,7 +45,9 @@ from ..permissions import (
     normalize_agent_permission_overlay,
 )
 from ..prompt import resolve_prompt_references
+from ..connector_bridge import ConnectorBridgeBroker, get_connector_bridge_broker
 from ..questions import QuestionBroker
+from ..tools.builtin.browser import create_browser_tool
 from ..session.protocol import SessionStore
 from ..session.checkpoint import SessionCheckpoint
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
@@ -103,6 +105,8 @@ if TYPE_CHECKING:
 
 # Matches the default `tool_id` of `create_question_tool`.
 QUESTION_TOOL_ID = "question"
+# Matches the default `tool_id` of `create_browser_tool`.
+BROWSER_TOOL_ID = "browser"
 
 PLAN_MODE_MUTATING_TOOLS = {
     "apply_patch",
@@ -187,6 +191,7 @@ class AgentRuntime:
         lsp_client: LSPClient | None = None,
         agent_registry: "AgentRegistry | None" = None,
         default_agent: str | None = None,
+        connector_bridge: ConnectorBridgeBroker | None = None,
     ) -> None:
         self.config = _resolve_config(
             config,
@@ -222,6 +227,9 @@ class AgentRuntime:
         )
         self.agent_registry = agent_registry
         self.default_agent = _normalize_optional_name(default_agent)
+        # Process-wide by default so the gateway's connectors/respond endpoint,
+        # which never sees this runtime instance, can still resolve the wait.
+        self.connector_bridge = connector_bridge or get_connector_bridge_broker()
         self.tool_runtime = _resolve_tool_runtime(
             provider=provider,
             workspace_root=self.config.workspace_root,
@@ -234,6 +242,8 @@ class AgentRuntime:
             question_broker=self.question_broker,
             lsp_client=lsp_client,
             agent_registry=self.agent_registry,
+            connector_bridge=self.connector_bridge,
+            connector_event_publisher=self._publish_runtime_event,
         )
         self._todo_store = (
             _find_session_todo_store(self.tool_runtime.registry)
@@ -676,6 +686,7 @@ class AgentRuntime:
                         else None
                     ),
                     question_tool_id=self._registered_question_tool_id(),
+                    browser_tool_id=self._registered_browser_tool_id(),
                 ),
                 compaction_summarizer=(
                     self.compaction_summarizer
@@ -908,6 +919,7 @@ class AgentRuntime:
                         else None
                     ),
                     question_tool_id=self._registered_question_tool_id(),
+                    browser_tool_id=self._registered_browser_tool_id(),
                 ),
                 compaction_summarizer=(
                     self.compaction_summarizer
@@ -1134,6 +1146,18 @@ class AgentRuntime:
         not hold raises instead of quietly doing nothing.
         """
         return QUESTION_TOOL_ID if self.tool_runtime.registry.get(QUESTION_TOOL_ID) else None
+
+    def _registered_browser_tool_id(self) -> str | None:
+        """The browser tool's id, but only when this runtime really has it."""
+        return BROWSER_TOOL_ID if self.tool_runtime.registry.get(BROWSER_TOOL_ID) else None
+
+    def _publish_runtime_event(self, event: RuntimeEvent) -> None:
+        """Publish an event on this runtime's bus while a tool is still running.
+
+        The bus is assigned after the tool registry is built, so tools receive
+        this bound method rather than the bus itself.
+        """
+        self.event_bus.publish(event)
 
     def drain_background_tasks(
         self,
@@ -1631,6 +1655,7 @@ class AgentRuntime:
         run_metadata["runtime_mode"] = self.config.runtime_mode
         run_metadata["plan_mode_read_only"] = self.config.plan_mode_read_only
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
+        run_metadata["enable_browser_tool"] = self.config.enable_browser_tool
         run_metadata["default_provider_id"] = self.config.default_provider_id
         run_metadata["default_model"] = self.config.default_model
         run_metadata["model_aware_tool_selection_enabled"] = (
@@ -2854,6 +2879,7 @@ def _resolve_config(
         enable_plan_tool=config.enable_plan_tool,
         plan_mode_read_only=config.plan_mode_read_only,
         enable_question_tool=config.enable_question_tool,
+        enable_browser_tool=config.enable_browser_tool,
         enable_lsp_tool=config.enable_lsp_tool,
         inject_background_task_results=config.inject_background_task_results,
         structured_output_schema=(
@@ -2923,6 +2949,8 @@ def _resolve_tool_runtime(
     question_broker: QuestionBroker,
     lsp_client: LSPClient | None,
     agent_registry: "AgentRegistry | None",
+    connector_bridge: ConnectorBridgeBroker | None = None,
+    connector_event_publisher: Any = None,
 ) -> ToolRuntime:
     if tool_runtime is not None:
         if tool_registry is not None and tool_registry is not tool_runtime.registry:
@@ -2957,6 +2985,9 @@ def _resolve_tool_runtime(
                 max_skill_sidecar_chars=config.max_skill_sidecar_chars,
                 question_broker=question_broker,
                 include_question_tool=config.enable_question_tool,
+                include_browser_tool=config.enable_browser_tool,
+                connector_bridge=connector_bridge,
+                connector_event_publisher=connector_event_publisher,
                 instruction_resolver=instruction_resolver,
                 lsp_client=lsp_client,
                 include_lsp_tool=config.enable_lsp_tool,
@@ -2971,6 +3002,13 @@ def _resolve_tool_runtime(
                 registry.register(create_plan_exit_tool())
             if config.enable_question_tool:
                 registry.register(create_question_tool(question_broker))
+            if config.enable_browser_tool:
+                registry.register(
+                    create_browser_tool(
+                        connector_bridge,
+                        event_publisher=connector_event_publisher,
+                    )
+                )
             if skill_discovery is not None:
                 registry.register(
                     build_skill_tool(
@@ -3277,6 +3315,7 @@ def _config_tool_selection(
     *,
     structured_output_tool_id: str | None = None,
     question_tool_id: str | None = None,
+    browser_tool_id: str | None = None,
 ) -> ToolSelection:
     forced_disabled = (
         set(PLAN_MODE_MUTATING_TOOLS)
@@ -3295,6 +3334,10 @@ def _config_tool_selection(
     # when the registry really holds it.
     if enabled is not None and question_tool_id is not None:
         enabled.add(question_tool_id)
+    # Same reasoning for the browser tool: Portal only injects the connector
+    # for members who enabled it, so the allowlist should not silently hide it.
+    if enabled is not None and browser_tool_id is not None:
+        enabled.add(browser_tool_id)
     return ToolSelection(
         enabled=enabled,
         disabled=set(config.disabled_tools),

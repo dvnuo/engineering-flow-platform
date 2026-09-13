@@ -75,6 +75,7 @@ class RuntimeConfig:
     enable_plan_tool: bool | None = None
     plan_mode_read_only: bool = True
     enable_question_tool: bool = False
+    enable_browser_tool: bool = False
     enable_lsp_tool: bool = False
     inject_background_task_results: bool = True
     structured_output_schema: dict[str, Any] | None = None
@@ -244,6 +245,7 @@ class RuntimeConfig:
         self.model_aware_tool_selection = bool(self.model_aware_tool_selection)
         self.plan_mode_read_only = bool(self.plan_mode_read_only)
         self.enable_question_tool = bool(self.enable_question_tool)
+        self.enable_browser_tool = bool(self.enable_browser_tool)
         self.enable_lsp_tool = bool(self.enable_lsp_tool)
         self.inject_background_task_results = bool(
             self.inject_background_task_results

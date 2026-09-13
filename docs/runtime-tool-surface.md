@@ -11,6 +11,7 @@ when covered by EFP runtime implementation and tests.
 | Tools: bash/read/write/edit/apply_patch/grep/glob/webfetch/todowrite | Implemented | These are model-facing built-ins in the default registry. Removed aliases are not registered. |
 | Tools: task | Implemented with injected runner | `task` is present by default; production behavior depends on injected runtime collaborators. Background task persistence is intentionally process-local. |
 | Tools: question | Conditional | Available only when enabled through runtime config or registry construction. |
+| Tools: browser | Conditional | Registered when `enable_browser_tool` is set, which the gateway does for interactive chats whose trusted metadata carries an enabled `connectors.local_browser` block (see the Portal `CONNECTORS_CONTRACT.md`). The tool publishes `tool.connector_requested`, waits on the process-wide `ConnectorBridgeBroker`, and returns what the Portal page posts to `/api/sessions/{id}/connectors/respond`. |
 | Tools: websearch | Conditional | Available only when a provider-neutral runner is injected. No concrete search provider is bundled. |
 | Tools: lsp | Conditional | Available only with an injected LSP client or explicit enable flag. The runtime does not start language servers. |
 | Skills discovery/activation/commands | Implemented | Skill discovery reads `skill.md`/`SKILL.md`, `/skill` activates provider-only context, the `skill` tool loads bounded context, and eligible skills can appear as slash commands. Python sidecars are never executed. |

@@ -107,3 +107,23 @@ Each capability item includes at least:
 ## Test Fixture
 
 `tests/fixtures/runtime_contract` is the deterministic fixture used by native runtime contract tests.
+
+## Connectors (Portal-side capabilities)
+
+- Portal may inject `metadata.connectors` (a map keyed by connector type) into
+  trusted chat metadata, plus `enable_browser_tool: true` when
+  `connectors.local_browser` is present. The gateway registers the `browser`
+  tool only for interactive chats that carry that block; background tasks,
+  Jira/GitHub handlers, and sub-agents never see it.
+- The `browser` tool publishes `tool.connector_requested` on the runtime event
+  bus while it waits (projected to `connector.request` on `/api/events`, with
+  `data.session_id`, `data.request_id`, `data.connector_type`, and
+  `data.connector_request.{id, action, params, target_client_id, timeout_seconds}`),
+  then blocks on the process-wide `ConnectorBridgeBroker`.
+- The Portal page answers with
+  `POST /api/sessions/{session_id}/connectors/respond`
+  `{request_id, client_id, ok, result | error}` → `202`; an unknown, foreign,
+  timed-out, or already answered id → `409 connector_request_not_pending`.
+  `GET /api/sessions/{session_id}/connectors/pending` lists what a session is
+  still waiting on. The full wire contract lives in the Portal repository as
+  `docs/CONNECTORS_CONTRACT.md`.

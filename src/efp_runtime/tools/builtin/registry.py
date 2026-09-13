@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ...connector_bridge import ConnectorBridgeBroker
 from ...instructions import ReadInstructionResolver
 from ...lsp import LSPClient
 from ...permissions import ALLOW, PermissionMetadata
@@ -15,6 +16,7 @@ from ...skills.discovery import SkillDiscovery
 from ...skills.tool import build_skill_tool
 from ..registry import ToolRegistry
 from .apply_patch import create_apply_patch_tool
+from .browser import create_browser_tool
 from .edit import create_edit_tool
 from .fetch import create_webfetch_tool
 from .filesystem import (
@@ -65,6 +67,9 @@ def create_core_tool_registry(
     include_plan_tool: bool = False,
     include_repository_tools: bool = False,
     todo_store: SessionTodoStore | None = None,
+    include_browser_tool: bool = False,
+    connector_bridge: ConnectorBridgeBroker | None = None,
+    connector_event_publisher: Any = None,
 ) -> ToolRegistry:
     """Create a registry containing EFP runtime core built-in tools."""
 
@@ -120,6 +125,13 @@ def create_core_tool_registry(
         )
     if include_question_tool:
         registry.register(create_question_tool(question_broker))
+    if include_browser_tool:
+        registry.register(
+            create_browser_tool(
+                connector_bridge,
+                event_publisher=connector_event_publisher,
+            )
+        )
     resolved_todo_store = todo_store or SessionTodoStore()
     registry.register(create_todowrite_tool(todo_store=resolved_todo_store))
     if include_plan_tool:
