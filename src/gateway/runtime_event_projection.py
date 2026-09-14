@@ -261,6 +261,52 @@ class RuntimeEventProjector:
             )
             return outputs
 
+        if raw_type == "tool.connector_requested":
+            connector_request = _mapping_or_empty(payload.get("connector_request"))
+            connector_type = payload.get("connector_type") or connector_request.get("connector_type")
+            outputs.append(
+                self._build(
+                    raw_event,
+                    payload,
+                    "connector.request",
+                    state="pending",
+                    summary=f"Connector request: {connector_request.get('action') or connector_type or 'unknown'}",
+                    created_at=created_at,
+                    data={
+                        **_tool_data(payload),
+                        "connector_type": connector_type,
+                        "connector_request": _redacted(connector_request),
+                        "connector_request_id": connector_request.get("id") or connector_request.get("request_id"),
+                        "action": connector_request.get("action"),
+                        "target_client_id": payload.get("target_client_id") or connector_request.get("target_client_id"),
+                    },
+                )
+            )
+            return outputs
+
+        if raw_type == "tool.connector_responded":
+            ok = bool(payload.get("ok"))
+            outputs.append(
+                self._build(
+                    raw_event,
+                    payload,
+                    "connector.responded",
+                    state="success" if ok else "error",
+                    summary=f"Connector {'completed' if ok else 'failed'}: {payload.get('action') or 'unknown'}",
+                    created_at=created_at,
+                    data={
+                        **_tool_data(payload),
+                        "connector_type": payload.get("connector_type"),
+                        "connector_request_id": payload.get("connector_request_id"),
+                        "action": payload.get("action"),
+                        "ok": ok,
+                        "duration_ms": payload.get("duration_ms"),
+                        "error_code": payload.get("error_code"),
+                    },
+                )
+            )
+            return outputs
+
         if raw_type in {"session_compaction_started", "provider.context_overflow_retry"}:
             outputs.append(
                 self._build(
@@ -618,7 +664,15 @@ def is_projected_runtime_event(event: Mapping[str, Any]) -> bool:
         isinstance(event_type, str)
         and (
             event_type.startswith("session.next.")
-            or event_type in {"permission.requested", "question.requested", "usage.updated", "runtime.iteration.started", "runtime.event"}
+            or event_type in {
+                "permission.requested",
+                "question.requested",
+                "connector.request",
+                "connector.responded",
+                "usage.updated",
+                "runtime.iteration.started",
+                "runtime.event",
+            }
         )
         and isinstance(event.get("data"), Mapping)
         and isinstance(event.get("properties"), Mapping)

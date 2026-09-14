@@ -8,7 +8,7 @@ import os
 import re
 import uuid
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from aiohttp import web, ContentTypeError
@@ -56,6 +56,7 @@ from src.gateway.runtime_request_contracts import (
 )
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
+from src.efp_runtime.connector_bridge import get_connector_bridge_broker
 from src.gateway.personalization import load_personalization
 from src.efp_runtime.session.gateway_facade import (
     RuntimeSessionArtifacts,
@@ -3279,6 +3280,67 @@ async def _resume_chat_after_user_input(
     return {"ok": True, "session_id": session_id, "request_id": request_id, "state": "running"}
 
 
+_MAX_CONNECTOR_RESPONSE_BYTES = 2 * 1024 * 1024
+
+
+async def api_session_connectors_pending(request: web.Request) -> web.Response:
+    """GET /api/sessions/{session_id}/connectors/pending"""
+
+    session_id = str(request.match_info.get("session_id") or "").strip()
+    if not session_id:
+        return web.json_response({"error": "session_id is required"}, status=400)
+    broker = get_connector_bridge_broker()
+    pending = [item.to_dict() for item in broker.pending(session_id)]
+    return web.json_response({"session_id": session_id, "requests": pending})
+
+
+async def api_session_connectors_respond(request: web.Request) -> web.Response:
+    """POST /api/sessions/{session_id}/connectors/respond
+
+    The Portal page posts the local bridge's answer here; the waiting
+    ``browser`` tool receives it through the process-wide connector broker.
+    See docs/CONNECTORS_CONTRACT.md §5.
+    """
+
+    session_id = str(request.match_info.get("session_id") or "").strip()
+    if not session_id:
+        return web.json_response({"error": "session_id is required"}, status=400)
+    content_length = request.content_length
+    if content_length is not None and content_length > _MAX_CONNECTOR_RESPONSE_BYTES:
+        return web.json_response({"error": "connector_response_too_large"}, status=413)
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, ContentTypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    if not isinstance(data, dict):
+        return web.json_response({"error": "Request body must be a JSON object"}, status=400)
+
+    request_id = str(data.get("request_id") or data.get("id") or "").strip()
+    if not request_id:
+        return web.json_response({"error": "request_id is required"}, status=400)
+
+    broker = get_connector_bridge_broker()
+    pending = broker.get(request_id)
+    if pending is None or (pending.session_id and pending.session_id != session_id):
+        return web.json_response({"error": "connector_request_not_pending", "request_id": request_id}, status=409)
+
+    ok = data.get("ok") is True
+    error = data.get("error") if isinstance(data.get("error"), dict) else None
+    if not ok and error is None:
+        error = {"code": "connector_error", "message": "The bridge reported a failure."}
+    payload: Dict[str, Any] = {
+        "ok": ok,
+        "request_id": request_id,
+        "client_id": str(data.get("client_id") or "") or None,
+        "result": data.get("result") if ok else None,
+        "error": None if ok else error,
+        "responded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    if not broker.resolve(request_id, payload):
+        return web.json_response({"error": "connector_request_not_pending", "request_id": request_id}, status=409)
+    return web.json_response({"ok": True, "session_id": session_id, "request_id": request_id}, status=202)
+
+
 async def api_session_question_respond(request: web.Request) -> web.Response:
     """POST /api/sessions/{session_id}/question/respond"""
 
@@ -4439,6 +4501,8 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_get('/api/sessions/{session_id}/pending-input', api_session_pending_input)
     app.router.add_post('/api/sessions/{session_id}/question/respond', api_session_question_respond)
     app.router.add_post('/api/sessions/{session_id}/permission/respond', api_session_permission_respond)
+    app.router.add_get('/api/sessions/{session_id}/connectors/pending', api_session_connectors_pending)
+    app.router.add_post('/api/sessions/{session_id}/connectors/respond', api_session_connectors_respond)
     app.router.add_get('/api/personalization', api_personalization)
     app.router.add_get('/api/skills', api_skills)
     setup_server_files_routes(app)
