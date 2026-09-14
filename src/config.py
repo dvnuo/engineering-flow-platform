@@ -1010,7 +1010,7 @@ def bootstrap_profile_boot() -> bool:
     src.gateway.server (Gateway() executes at import). Steps:
 
     1. Project gh/aws/git external CLI config from the overlay via real CLIs.
-       Jira/Confluence/Jenkins/mobile-auto/visual reach the Go CLIs through
+       Jira/Confluence/Jenkins/mobile-auto reach the Go CLIs through
        the EFP_-prefixed tools config env vars only.
     2. Export the tools config env vars (EFP_-prefixed indexed vars flattened
        from the tools RootConfig-shaped subset of the effective config, e.g.
