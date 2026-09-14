@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import inspect
+import logging
 import math
 import os
 from pathlib import Path
@@ -12,6 +13,12 @@ from typing import Any, Mapping, Optional
 
 from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
 from src.gateway.runtime_event_projection import RuntimeEventProjector
+from src.gateway.workspace_deliverables import (
+    attach_deliverable_blocks,
+    build_deliverable_display_blocks,
+    persist_deliverable_blocks,
+    snapshot_deliverables,
+)
 from src.workspace_defaults import resolve_runtime_workspace
 from src.efp_runtime.event_bus import RuntimeEventBus
 from src.efp_runtime.events import RuntimeEvent
@@ -40,6 +47,8 @@ from src.efp_runtime.session.models import MessagePartType
 from src.efp_runtime.skills.discovery import default_skill_directories
 from src.utils.redaction import sanitize_exception_message
 
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_PROVIDER_KEYS = {"github_copilot", "github-copilot", "copilot"}
 PORTAL_RUNTIME_PROFILE_SOURCE = "portal.runtime_profile"
@@ -157,6 +166,8 @@ async def run_runtime_chat(
         attached_images=attached_images,
     )
 
+    deliverables_workspace = _deliverables_workspace_root()
+    deliverables_before = snapshot_deliverables(deliverables_workspace)
     try:
         result = await runtime.run(
             prompt,
@@ -186,6 +197,13 @@ async def run_runtime_chat(
         result,
         request_id=request_id,
         model=runtime_model,
+    )
+    _attach_deliverables(
+        payload,
+        result,
+        workspace_root=deliverables_workspace,
+        before=deliverables_before,
+        session_id=session_id,
     )
     if result.status == LoopStatus.ERROR:
         raise RuntimeChatError(
@@ -275,6 +293,8 @@ async def resume_runtime_chat(
         model=runtime_model,
     )
 
+    deliverables_workspace = _deliverables_workspace_root()
+    deliverables_before = snapshot_deliverables(deliverables_workspace)
     try:
         result = await runtime.resume(
             session_id=session_id,
@@ -302,6 +322,13 @@ async def resume_runtime_chat(
         result,
         request_id=request_id,
         model=runtime_model,
+    )
+    _attach_deliverables(
+        payload,
+        result,
+        workspace_root=deliverables_workspace,
+        before=deliverables_before,
+        session_id=session_id,
     )
     if result.status == LoopStatus.ERROR:
         raise RuntimeChatError(
@@ -357,6 +384,42 @@ def _runtime_workspace_root() -> Path:
     except Exception:
         config_data = getattr(config, "_config", None)
     return resolve_runtime_workspace(config_data).resolve()
+
+
+def _deliverables_workspace_root() -> Path | None:
+    """Workspace watched for deliverables; None when it cannot be resolved (never fails a turn)."""
+    try:
+        return _runtime_workspace_root()
+    except Exception as exc:
+        logger.debug("Deliverables detection disabled: workspace root unavailable (%s)", exc)
+        return None
+
+
+def _attach_deliverables(
+    payload: dict[str, Any],
+    result: RuntimeLoopResult,
+    *,
+    workspace_root: Path | None,
+    before: Mapping[str, tuple[int, int]],
+    session_id: str,
+) -> None:
+    """Surface files this turn wrote under output/ as download cards, now and in history."""
+    if workspace_root is None:
+        return
+    file_blocks = build_deliverable_display_blocks(workspace_root, before)
+    if not file_blocks:
+        return
+    attach_deliverable_blocks(payload, file_blocks)
+    message = result.final_assistant_message
+    message_id = getattr(message, "message_id", None) if message is not None else None
+    if not message_id:
+        return
+    try:
+        store = get_runtime_session_store()
+    except Exception as exc:
+        logger.warning("Deliverables: session store unavailable, file cards will not survive a reload (%s)", exc)
+        return
+    persist_deliverable_blocks(store, session_id, message_id, file_blocks)
 
 
 def _runtime_config(

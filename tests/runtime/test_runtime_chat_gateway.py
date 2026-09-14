@@ -711,3 +711,140 @@ def _request_headers(request):
     for source in (request.headers, request.unredirected_hdrs):
         headers.update({key.lower(): value for key, value in source.items()})
     return headers
+
+
+def _deliverables_fixture(monkeypatch, tmp_path):
+    """A real session store plus a fake runtime whose run writes into output/."""
+    from src.efp_runtime.session.file_store import FileSessionStore
+    from src.efp_runtime.session.gateway_facade import RuntimeSessionManager
+
+    workspace = tmp_path / "workspace"
+    (workspace / "output").mkdir(parents=True)
+    (workspace / "output" / "stale.txt").write_text("already there", encoding="utf-8")
+    store = FileSessionStore(tmp_path / "store")
+    manager = RuntimeSessionManager(store=store)
+    store.create_session(session_id="s-deliverables")
+
+    monkeypatch.setattr(runtime_chat, "_build_github_copilot_provider", lambda model: object())
+    monkeypatch.setattr(runtime_chat, "get_runtime_session_manager", lambda: manager)
+    monkeypatch.setattr(runtime_chat, "get_runtime_session_store", lambda: store)
+    monkeypatch.setattr(runtime_chat, "_runtime_workspace_root", lambda: workspace)
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": "github_copilot", "api_key": "copilot-config-token", "model": "gpt-5-mini"}},
+        raising=False,
+    )
+    return workspace, store, manager
+
+
+def _completed_reply(store, session_id: str, text: str) -> RuntimeLoopResult:
+    from src.efp_runtime.session.models import MessagePart
+
+    message = store.append_message(
+        session_id,
+        role="assistant",
+        parts=[MessagePart.text_part(text)],
+        status="completed",
+    )
+    return RuntimeLoopResult(
+        session_id=session_id,
+        final_assistant_message=message,
+        iterations=1,
+        status=LoopStatus.COMPLETED,
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_chat_reports_files_written_under_output_as_file_blocks(monkeypatch, tmp_path):
+    workspace, store, manager = _deliverables_fixture(monkeypatch, tmp_path)
+
+    class _FakeRuntime:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run(self, _prompt, *, session_id, metadata=None, attached_images=None):
+            (workspace / "output" / "q3-review.pptx").write_bytes(b"pptx-bytes")
+            return _completed_reply(store, session_id, "Here is the deck.")
+
+    monkeypatch.setattr(runtime_chat, "AgentRuntime", _FakeRuntime)
+
+    payload = await runtime_chat.run_runtime_chat(
+        message="make the deck",
+        session_id="s-deliverables",
+        request_id="req-deliverables",
+        model="gpt-5.6 terra",
+        track_usage=False,
+    )
+
+    blocks = payload["display_blocks"]
+    assert blocks[0] == {"type": "markdown", "content": "Here is the deck."}
+    assert [(block["type"], block["path"], block["action"]) for block in blocks[1:]] == [
+        ("file", "output/q3-review.pptx", "created")
+    ]
+    assert blocks[1]["name"] == "q3-review.pptx"
+    assert blocks[1]["size"] == len(b"pptx-bytes")
+    assert blocks[1]["content_type"].endswith("presentationml.presentation")
+
+    # A reload of the session shows the same cards: the blocks were persisted on
+    # the assistant message and the facade rebuilds them from there.
+    session_info = await manager.get_existing_session("s-deliverables")
+    assistant = [item for item in session_info["history"] if item["role"] == "assistant"][-1]
+    assert assistant["display_blocks"][0] == {"type": "markdown", "content": "Here is the deck."}
+    assert assistant["display_blocks"][1]["path"] == "output/q3-review.pptx"
+    assert assistant["metadata"]["deliverable_blocks"][0]["name"] == "q3-review.pptx"
+
+
+@pytest.mark.asyncio
+async def test_runtime_chat_leaves_display_blocks_alone_when_nothing_was_written(monkeypatch, tmp_path):
+    _workspace, store, manager = _deliverables_fixture(monkeypatch, tmp_path)
+
+    class _FakeRuntime:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run(self, _prompt, *, session_id, metadata=None, attached_images=None):
+            return _completed_reply(store, session_id, "Nothing to download.")
+
+    monkeypatch.setattr(runtime_chat, "AgentRuntime", _FakeRuntime)
+
+    payload = await runtime_chat.run_runtime_chat(
+        message="just talk",
+        session_id="s-deliverables",
+        request_id="req-none",
+        model="gpt-5.6 terra",
+        track_usage=False,
+    )
+
+    assert "display_blocks" not in payload
+    session_info = await manager.get_existing_session("s-deliverables")
+    assistant = [item for item in session_info["history"] if item["role"] == "assistant"][-1]
+    assert "display_blocks" not in assistant
+
+
+@pytest.mark.asyncio
+async def test_resumed_runtime_chat_also_reports_deliverables(monkeypatch, tmp_path):
+    workspace, store, _manager = _deliverables_fixture(monkeypatch, tmp_path)
+
+    class _FakeRuntime:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def resume(self, *, session_id, metadata=None):
+            (workspace / "output" / "stale.txt").write_text("rewritten after the question", encoding="utf-8")
+            return _completed_reply(store, session_id, "Updated the notes.")
+
+    monkeypatch.setattr(runtime_chat, "AgentRuntime", _FakeRuntime)
+    monkeypatch.setattr(runtime_chat, "_seed_runtime_question_response", lambda *_args, **_kwargs: None)
+
+    payload = await runtime_chat.resume_runtime_chat(
+        session_id="s-deliverables",
+        request_id="req-resume",
+        model="gpt-5.6 terra",
+        track_usage=False,
+    )
+
+    assert [(block["type"], block.get("path"), block.get("action")) for block in payload["display_blocks"]] == [
+        ("markdown", None, None),
+        ("file", "output/stale.txt", "updated"),
+    ]
