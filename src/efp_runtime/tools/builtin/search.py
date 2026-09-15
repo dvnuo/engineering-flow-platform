@@ -7,7 +7,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -15,19 +15,36 @@ from typing import Any
 from ...permissions import ALLOW, PermissionMetadata
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
-from .filesystem import normalize_workspace_root, resolve_workspace_path, workspace_relative_path
+from .filesystem import (
+    normalize_read_roots,
+    normalize_workspace_root,
+    resolve_workspace_path,
+    workspace_relative_path,
+)
 
 DEFAULT_SEARCH_MATCHES = 100
 MAX_DISPLAY_LINE_LENGTH = 2000
 RG_GIT_EXCLUDES = ("!.git/*", "!**/.git/**")
 
 
-def create_grep_tool(workspace_root: str | Path) -> ToolDef:
+def _search_tool_description(base: str, read_roots: tuple[Path, ...]) -> str:
+    if not read_roots:
+        return base
+    listed = ", ".join(str(path) for path in read_roots)
+    return f"{base} Also searches these read-only directories when path is absolute: {listed}."
+
+
+def create_grep_tool(
+    workspace_root: str | Path,
+    *,
+    read_roots: Iterable[str | Path] | None = None,
+) -> ToolDef:
     root = normalize_workspace_root(workspace_root)
+    roots = normalize_read_roots(root, read_roots)
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         pattern = args["pattern"]
-        base_path = resolve_workspace_path(root, args.get("path") or ".")
+        base_path = resolve_workspace_path(root, args.get("path") or ".", read_roots=roots)
         include = args.get("include")
         include_patterns = _expand_include_patterns(include)
         include_root = base_path if base_path.is_dir() else base_path.parent
@@ -35,9 +52,14 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
         max_matches = DEFAULT_SEARCH_MATCHES
 
         if not base_path.exists():
-            raise FileNotFoundError(f"Search path does not exist: {workspace_relative_path(root, base_path)}")
+            raise FileNotFoundError(
+                f"Search path does not exist: {workspace_relative_path(root, base_path, read_roots=roots)}"
+            )
         if not base_path.is_file() and not base_path.is_dir():
-            raise ValueError(f"Search path is not a file or directory: {workspace_relative_path(root, base_path)}")
+            raise ValueError(
+                "Search path is not a file or directory: "
+                f"{workspace_relative_path(root, base_path, read_roots=roots)}"
+            )
 
         search_result = await _grep_with_rg(
             root,
@@ -46,6 +68,7 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
             include_patterns=include_patterns,
             include_root=include_root,
             case_sensitive=case_sensitive,
+            read_roots=roots,
         )
         if search_result is None:
             search_result = _grep_with_python(
@@ -55,6 +78,7 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
                 include_patterns=include_patterns,
                 include_root=include_root,
                 case_sensitive=case_sensitive,
+                read_roots=roots,
             )
 
         matches = search_result["matches"]
@@ -72,7 +96,7 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
         )
         output = {
             "pattern": pattern,
-            "path": workspace_relative_path(root, base_path),
+            "path": workspace_relative_path(root, base_path, read_roots=roots),
             "matches": visible_matches,
             "files_searched": files_searched,
             "truncated": truncated,
@@ -96,7 +120,9 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
 
     return ToolDef(
         id="grep",
-        description="Search workspace files with a regular expression.",
+        description=_search_tool_description(
+            "Search workspace files with a regular expression.", roots
+        ),
         input_schema={
             "type": "object",
             "required": ["pattern"],
@@ -117,8 +143,13 @@ def create_grep_tool(workspace_root: str | Path) -> ToolDef:
     )
 
 
-def create_glob_tool(workspace_root: str | Path) -> ToolDef:
+def create_glob_tool(
+    workspace_root: str | Path,
+    *,
+    read_roots: Iterable[str | Path] | None = None,
+) -> ToolDef:
     root = normalize_workspace_root(workspace_root)
+    roots = normalize_read_roots(root, read_roots)
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         pattern = args["pattern"]
@@ -127,20 +158,24 @@ def create_glob_tool(workspace_root: str | Path) -> ToolDef:
         if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
             raise ValueError("Glob pattern must stay inside the workspace root.")
 
-        base_path = resolve_workspace_path(root, args.get("path") or ".")
+        base_path = resolve_workspace_path(root, args.get("path") or ".", read_roots=roots)
         if not base_path.exists():
-            raise FileNotFoundError(f"Glob path does not exist: {workspace_relative_path(root, base_path)}")
+            raise FileNotFoundError(
+                f"Glob path does not exist: {workspace_relative_path(root, base_path, read_roots=roots)}"
+            )
         if not base_path.is_dir():
-            raise NotADirectoryError(f"Glob path is not a directory: {workspace_relative_path(root, base_path)}")
+            raise NotADirectoryError(
+                f"Glob path is not a directory: {workspace_relative_path(root, base_path, read_roots=roots)}"
+            )
 
         max_matches = DEFAULT_SEARCH_MATCHES
 
-        all_matches = await _sorted_glob_matches(root, base_path, pattern)
+        all_matches = await _sorted_glob_matches(root, base_path, pattern, read_roots=roots)
         truncated = len(all_matches) > max_matches
         matches = all_matches[:max_matches]
         output = {
             "pattern": pattern,
-            "path": workspace_relative_path(root, base_path),
+            "path": workspace_relative_path(root, base_path, read_roots=roots),
             "matches": matches,
             "paths": matches,
             "truncated": truncated,
@@ -164,7 +199,9 @@ def create_glob_tool(workspace_root: str | Path) -> ToolDef:
 
     return ToolDef(
         id="glob",
-        description="Find workspace paths matching a glob pattern.",
+        description=_search_tool_description(
+            "Find workspace paths matching a glob pattern.", roots
+        ),
         input_schema={
             "type": "object",
             "required": ["pattern"],
@@ -184,30 +221,40 @@ def create_glob_tool(workspace_root: str | Path) -> ToolDef:
     )
 
 
-def _iter_search_files(workspace_root: Path, base_path: Path) -> Iterator[Path]:
+def _iter_search_files(
+    workspace_root: Path,
+    base_path: Path,
+    *,
+    read_roots: tuple[Path, ...] = (),
+) -> Iterator[Path]:
     if not base_path.exists():
-        raise FileNotFoundError(f"Search path does not exist: {workspace_relative_path(workspace_root, base_path)}")
-    if _is_git_path(workspace_root, base_path):
+        raise FileNotFoundError(
+            f"Search path does not exist: {workspace_relative_path(workspace_root, base_path, read_roots=read_roots)}"
+        )
+    if _is_git_path(workspace_root, base_path, read_roots):
         return
     if base_path.is_file():
         yield base_path
         return
     if not base_path.is_dir():
-        raise ValueError(f"Search path is not a file or directory: {workspace_relative_path(workspace_root, base_path)}")
+        raise ValueError(
+            "Search path is not a file or directory: "
+            f"{workspace_relative_path(workspace_root, base_path, read_roots=read_roots)}"
+        )
 
     for dirpath, dirnames, filenames in os.walk(base_path, topdown=True, followlinks=False):
         current = Path(dirpath)
         dirnames[:] = [
             dirname
             for dirname in sorted(dirnames, key=lambda value: (value.casefold(), value))
-            if _is_contained(workspace_root, current / dirname)
-            and not _is_git_path(workspace_root, current / dirname)
+            if _is_contained(workspace_root, current / dirname, read_roots)
+            and not _is_git_path(workspace_root, current / dirname, read_roots)
         ]
         for filename in sorted(filenames, key=lambda value: (value.casefold(), value)):
             file_path = current / filename
-            if not _is_contained(workspace_root, file_path):
+            if not _is_contained(workspace_root, file_path, read_roots):
                 continue
-            if _is_git_path(workspace_root, file_path):
+            if _is_git_path(workspace_root, file_path, read_roots):
                 continue
             if file_path.is_file():
                 yield file_path.resolve(strict=False)
@@ -302,11 +349,13 @@ async def _sorted_glob_matches(
     workspace_root: Path,
     base_path: Path,
     pattern: str,
+    *,
+    read_roots: tuple[Path, ...] = (),
 ) -> list[str]:
-    rg_matches = await _glob_with_rg(workspace_root, base_path, pattern)
+    rg_matches = await _glob_with_rg(workspace_root, base_path, pattern, read_roots=read_roots)
     if rg_matches is not None:
         return rg_matches
-    return _glob_with_python(workspace_root, base_path, pattern)
+    return _glob_with_python(workspace_root, base_path, pattern, read_roots=read_roots)
 
 
 async def _grep_with_rg(
@@ -317,6 +366,7 @@ async def _grep_with_rg(
     include_patterns: list[str],
     include_root: Path,
     case_sensitive: bool,
+    read_roots: tuple[Path, ...] = (),
 ) -> dict[str, Any] | None:
     cwd = base_path if base_path.is_dir() else base_path.parent
     targets = ["."] if base_path.is_dir() else [base_path.name]
@@ -354,7 +404,7 @@ async def _grep_with_rg(
         row_type = row.get("type")
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
         if row_type == "match":
-            match_path = _rg_workspace_path(workspace_root, cwd, data)
+            match_path = _rg_workspace_path(workspace_root, cwd, data, read_roots=read_roots)
             if match_path is None:
                 continue
             relative_path, full_path = match_path
@@ -382,6 +432,7 @@ async def _grep_with_rg(
         base_path,
         include_patterns=include_patterns,
         include_root=include_root,
+        read_roots=read_roots,
     )
     return {
         "matches": matches,
@@ -396,9 +447,10 @@ def _count_search_files(
     *,
     include_patterns: list[str],
     include_root: Path,
+    read_roots: tuple[Path, ...] = (),
 ) -> int:
     count = 0
-    for file_path in _iter_search_files(workspace_root, base_path):
+    for file_path in _iter_search_files(workspace_root, base_path, read_roots=read_roots):
         if include_patterns and not _matches_include(
             file_path,
             include_root=include_root,
@@ -419,6 +471,7 @@ def _grep_with_python(
     include_patterns: list[str],
     include_root: Path,
     case_sensitive: bool,
+    read_roots: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     flags = 0 if case_sensitive else re.IGNORECASE
     try:
@@ -429,7 +482,7 @@ def _grep_with_python(
     matches: list[dict[str, Any]] = []
     mtimes: dict[str, int] = {}
     files_searched = 0
-    for file_path in _iter_search_files(workspace_root, base_path):
+    for file_path in _iter_search_files(workspace_root, base_path, read_roots=read_roots):
         if include_patterns and not _matches_include(
             file_path,
             include_root=include_root,
@@ -440,7 +493,7 @@ def _grep_with_python(
         if text is None:
             continue
         files_searched += 1
-        relative_path = workspace_relative_path(workspace_root, file_path)
+        relative_path = workspace_relative_path(workspace_root, file_path, read_roots=read_roots)
         mtimes[relative_path] = _safe_mtime_ns(file_path)
         for line_number, line in enumerate(text.splitlines(), start=1):
             for match in compiled.finditer(line):
@@ -464,6 +517,8 @@ async def _glob_with_rg(
     workspace_root: Path,
     base_path: Path,
     pattern: str,
+    *,
+    read_roots: tuple[Path, ...] = (),
 ) -> list[str] | None:
     args = ["--no-config", "--files", "--hidden", "--no-messages"]
     for exclude in RG_GIT_EXCLUDES:
@@ -480,13 +535,13 @@ async def _glob_with_rg(
     matches: dict[str, int] = {}
     for line in stdout.splitlines():
         full_path = _resolve_rg_file_path(base_path, line)
-        if not _is_contained(workspace_root, full_path):
+        if not _is_contained(workspace_root, full_path, read_roots):
             continue
-        if _is_git_path(workspace_root, full_path):
+        if _is_git_path(workspace_root, full_path, read_roots):
             continue
         if not full_path.exists():
             continue
-        relative_path = workspace_relative_path(workspace_root, full_path)
+        relative_path = workspace_relative_path(workspace_root, full_path, read_roots=read_roots)
         matches[relative_path] = _safe_mtime_ns(full_path)
     return [
         path
@@ -501,12 +556,14 @@ def _glob_with_python(
     workspace_root: Path,
     base_path: Path,
     pattern: str,
+    *,
+    read_roots: tuple[Path, ...] = (),
 ) -> list[str]:
     matches = {
-        workspace_relative_path(workspace_root, match): _safe_mtime_ns(match)
+        workspace_relative_path(workspace_root, match, read_roots=read_roots): _safe_mtime_ns(match)
         for match in _iter_glob_matches(base_path, pattern)
-        if _is_contained(workspace_root, match)
-        and not _is_git_path(workspace_root, match)
+        if _is_contained(workspace_root, match, read_roots)
+        and not _is_git_path(workspace_root, match, read_roots)
         and match.exists()
     }
     return [
@@ -571,6 +628,8 @@ def _rg_workspace_path(
     workspace_root: Path,
     cwd: Path,
     data: dict[str, Any],
+    *,
+    read_roots: tuple[Path, ...] = (),
 ) -> tuple[str, Path] | None:
     path_data = data.get("path")
     if not isinstance(path_data, dict):
@@ -579,11 +638,11 @@ def _rg_workspace_path(
     if not path_text:
         return None
     full_path = _resolve_rg_file_path(cwd, path_text)
-    if not _is_contained(workspace_root, full_path):
+    if not _is_contained(workspace_root, full_path, read_roots):
         return None
-    if _is_git_path(workspace_root, full_path):
+    if _is_git_path(workspace_root, full_path, read_roots):
         return None
-    return workspace_relative_path(workspace_root, full_path), full_path
+    return workspace_relative_path(workspace_root, full_path, read_roots=read_roots), full_path
 
 
 def _resolve_rg_file_path(cwd: Path, value: str) -> Path:
@@ -652,17 +711,28 @@ def _looks_like_regex_error(stderr: str) -> bool:
     return "regex parse error" in stderr or "error parsing regexp" in stderr
 
 
-def _is_contained(workspace_root: Path, path: Path) -> bool:
-    try:
-        path.resolve(strict=False).relative_to(workspace_root)
-    except ValueError:
-        return False
-    return True
+def _containing_root(
+    workspace_root: Path,
+    path: Path,
+    read_roots: tuple[Path, ...] = (),
+) -> Path | None:
+    """The workspace root or read-only root a path resolves under, if any."""
+    resolved = path.resolve(strict=False)
+    for root in (workspace_root, *read_roots):
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        return root
+    return None
 
 
-def _is_git_path(workspace_root: Path, path: Path) -> bool:
-    try:
-        relative = path.resolve(strict=False).relative_to(workspace_root)
-    except ValueError:
+def _is_contained(workspace_root: Path, path: Path, read_roots: tuple[Path, ...] = ()) -> bool:
+    return _containing_root(workspace_root, path, read_roots) is not None
+
+
+def _is_git_path(workspace_root: Path, path: Path, read_roots: tuple[Path, ...] = ()) -> bool:
+    root = _containing_root(workspace_root, path, read_roots)
+    if root is None:
         return False
-    return ".git" in relative.parts
+    return ".git" in path.resolve(strict=False).relative_to(root).parts
