@@ -22,6 +22,7 @@ from .fetch import create_webfetch_tool
 from .filesystem import (
     create_read_tool,
     create_write_tool,
+    normalize_read_roots,
     normalize_workspace_root,
 )
 from .invalid import create_invalid_tool
@@ -70,8 +71,14 @@ def create_core_tool_registry(
     include_browser_tool: bool = False,
     connector_bridge: ConnectorBridgeBroker | None = None,
     connector_event_publisher: Any = None,
+    read_roots: Iterable[str | Path] | None = None,
 ) -> ToolRegistry:
-    """Create a registry containing EFP runtime core built-in tools."""
+    """Create a registry containing EFP runtime core built-in tools.
+
+    Skill directories (and any explicit ``read_roots``) become read-only roots
+    for ``read``, ``glob`` and ``grep``: a skill may keep whatever layout it
+    likes outside the workspace, and the model can still open its files.
+    """
 
     root = normalize_workspace_root(workspace_root)
     resolved_skill_discovery = _resolve_skill_discovery(
@@ -79,6 +86,7 @@ def create_core_tool_registry(
         skill_directories=skill_directories,
         include_skill_tool=include_skill_tool,
     )
+    resolved_read_roots = _resolve_read_roots(root, read_roots, resolved_skill_discovery)
     registry = ToolRegistry()
     registry.register(create_apply_patch_tool(root, permission=write_permission))
     registry.register(create_edit_tool(root, permission=write_permission))
@@ -95,11 +103,15 @@ def create_core_tool_registry(
             )
         )
     registry.register(
-        create_read_tool(root, instruction_resolver=instruction_resolver)
+        create_read_tool(
+            root,
+            instruction_resolver=instruction_resolver,
+            read_roots=resolved_read_roots,
+        )
     )
     registry.register(create_write_tool(root, permission=write_permission))
-    registry.register(create_glob_tool(root))
-    registry.register(create_grep_tool(root))
+    registry.register(create_glob_tool(root, read_roots=resolved_read_roots))
+    registry.register(create_grep_tool(root, read_roots=resolved_read_roots))
     registry.register(create_invalid_tool())
     if include_repository_tools:
         registry.register(create_repo_clone_tool(root))
@@ -160,6 +172,19 @@ async def _missing_task_runner(request: TaskToolRequest) -> TaskToolResult:
         state="error",
         metadata={"configured": False},
     )
+
+
+def _resolve_read_roots(
+    workspace_root: Path,
+    read_roots: Iterable[str | Path] | None,
+    skill_discovery: SkillDiscovery | None,
+) -> tuple[Path, ...]:
+    """Explicit read roots plus every configured skill directory that exists."""
+
+    candidates: list[str | Path] = list(read_roots or [])
+    if skill_discovery is not None:
+        candidates.extend(skill_discovery.directories)
+    return normalize_read_roots(workspace_root, candidates)
 
 
 def _resolve_skill_discovery(

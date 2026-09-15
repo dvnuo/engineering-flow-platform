@@ -181,3 +181,49 @@ def test_normalize_fallback_markdown_preserves_indented_code_whitespace():
     blocks = mod.normalize_display_blocks(None, raw_markdown)
 
     assert blocks == [{"type": "markdown", "content": raw_markdown}]
+
+
+def test_normalize_file_block_keeps_download_fields_and_derives_name():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks([
+        {
+            "type": "file",
+            "path": "output/deck.pptx",
+            "size": 60794,
+            "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "action": "created",
+            "modified_at": "2026-09-14T08:00:00+00:00",
+            "unknown": "dropped",
+        }
+    ])
+
+    assert blocks == [
+        {
+            "type": "file",
+            "path": "output/deck.pptx",
+            "name": "deck.pptx",
+            "size": 60794,
+            "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "modified_at": "2026-09-14T08:00:00+00:00",
+            "action": "created",
+        }
+    ]
+
+
+def test_normalize_file_block_requires_a_path_and_ignores_bad_sizes():
+    mod = _load_display_blocks_module()
+
+    assert mod.normalize_display_blocks([{"type": "file", "name": "deck.pptx"}], fallback_text="hi") == [
+        {"type": "markdown", "content": "hi"}
+    ]
+
+    blocks = mod.normalize_display_blocks([
+        {"type": "file", "path": "output/a.txt", "name": "custom.txt", "size": True},
+        {"type": "file", "path": "output/b.txt", "size": -1},
+    ])
+
+    assert blocks == [
+        {"type": "file", "path": "output/a.txt", "name": "custom.txt"},
+        {"type": "file", "path": "output/b.txt", "name": "b.txt"},
+    ]

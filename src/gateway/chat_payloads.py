@@ -106,8 +106,32 @@ def _normalize_display_block(block: dict[str, Any]) -> dict[str, Any] | None:
             normalized_block["content"] = content
         return normalized_block
 
+    if normalized_type == "file":
+        return _normalize_file_block(block)
+
     content = _text_value(block)
     return {"type": normalized_type, "content": content} if content else None
+
+
+def _normalize_file_block(block: dict[str, Any]) -> dict[str, Any] | None:
+    """A downloadable workspace file; ``path`` is workspace-relative and required."""
+    path = _first_text_value(block, ("path", "file_path", "workspace_path")).strip()
+    if not path:
+        return None
+    normalized_block: dict[str, Any] = {"type": "file", "path": path}
+    name = _first_text_value(block, ("name", "filename", "file_name")).strip()
+    normalized_block["name"] = name or path.rstrip("/").rsplit("/", 1)[-1]
+    size = block.get("size")
+    if isinstance(size, (int, float)) and not isinstance(size, bool) and size >= 0:
+        normalized_block["size"] = int(size)
+    for key in ("content_type", "modified_at", "action", "title"):
+        value = _first_text_value(block, (key,))
+        if value:
+            normalized_block[key] = value
+    description = _text_value(block)
+    if description:
+        normalized_block["content"] = description
+    return normalized_block
 
 
 def normalize_display_blocks(raw_blocks: Optional[Any], fallback_text: str = "") -> list[dict[str, Any]]:

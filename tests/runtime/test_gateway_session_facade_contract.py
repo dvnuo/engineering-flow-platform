@@ -404,3 +404,29 @@ class _AskOnceEvaluator:
                 )
             )
         return PermissionDecision.allow()
+
+
+def test_message_to_legacy_rebuilds_display_blocks_for_deliverables():
+    from efp_runtime.session.gateway_facade import _message_to_legacy
+    from efp_runtime.session.models import Message, MessagePart, MessageRole
+
+    file_block = {"type": "file", "path": "output/deck.pptx", "name": "deck.pptx", "size": 3}
+    reply = Message(
+        role=MessageRole.ASSISTANT,
+        session_id="s1",
+        parts=[MessagePart.text_part("Here is the deck.")],
+        metadata={"deliverable_blocks": [file_block]},
+    )
+
+    legacy = _message_to_legacy(reply)
+
+    assert legacy["display_blocks"] == [{"type": "markdown", "content": "Here is the deck."}, file_block]
+    assert legacy["metadata"]["deliverable_blocks"] == [file_block]
+
+    # Only assistant replies carry download cards, and only when files were recorded.
+    user = Message(role=MessageRole.USER, parts=[MessagePart.text_part("hi")], metadata={"deliverable_blocks": [file_block]})
+    assert "display_blocks" not in _message_to_legacy(user)
+    plain = Message(role=MessageRole.ASSISTANT, parts=[MessagePart.text_part("no files")])
+    assert "display_blocks" not in _message_to_legacy(plain)
+    files_only = Message(role=MessageRole.ASSISTANT, metadata={"deliverable_blocks": [file_block]})
+    assert _message_to_legacy(files_only)["display_blocks"] == [file_block]

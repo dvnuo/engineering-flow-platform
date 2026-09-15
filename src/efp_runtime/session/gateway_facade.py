@@ -724,7 +724,35 @@ def _message_to_legacy(message: Message) -> dict[str, Any]:
         item["tool_name"] = tool_results[0].tool_name
     if any(part.type is MessagePartType.COMPACTION for part in message.parts):
         item["type"] = "compaction_summary"
+    display_blocks = _deliverable_display_blocks(message, content)
+    if display_blocks:
+        item["display_blocks"] = display_blocks
     return item
+
+
+# Key under which src.gateway.workspace_deliverables records the files a turn
+# produced on the assistant message. Kept as a literal here so the runtime
+# session layer does not import the gateway.
+_DELIVERABLE_BLOCKS_METADATA_KEY = "deliverable_blocks"
+
+
+def _deliverable_display_blocks(message: Message, content: str) -> list[dict[str, Any]]:
+    """Rebuild the display blocks of an assistant reply that produced files.
+
+    The live response carried ``[markdown, file...]``; history must render the
+    same cards, so the markdown block is recomposed from the stored text rather
+    than duplicated in metadata.
+    """
+    if str(getattr(message.role, "value", message.role)) != "assistant":
+        return []
+    deliverables = message.metadata.get(_DELIVERABLE_BLOCKS_METADATA_KEY)
+    if not isinstance(deliverables, list) or not deliverables:
+        return []
+    blocks: list[dict[str, Any]] = []
+    if content.strip():
+        blocks.append({"type": "markdown", "content": content})
+    blocks.extend(deepcopy(dict(block)) for block in deliverables if isinstance(block, Mapping))
+    return blocks
 
 
 def _part_to_legacy(part: MessagePart) -> dict[str, Any]:
