@@ -12,12 +12,32 @@ from ..types import SkillPackage
 from .discovery import SkillDiscovery
 
 
-DEFAULT_SKILL_FILE_SAMPLE_LIMIT = 10
+# A skill is listed with its documentation first, so the files that explain
+# how to use it never hide behind a directory of images or fixtures. Files that
+# do not fit are summarized by directory instead of being dropped silently.
+DEFAULT_SKILL_FILE_SAMPLE_LIMIT = 40
+# Only this many of the listed files carry their text when sidecar content is
+# requested; the rest stay a listing the model can read on demand.
+DEFAULT_SKILL_FILE_CONTENT_LIMIT = 10
+DOCUMENT_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".rst", ".adoc"})
+DATA_SUFFIXES = frozenset({".json", ".yaml", ".yml", ".toml", ".csv", ".ini", ".cfg", ".xml"})
+CODE_SUFFIXES = frozenset(
+    {".py", ".sh", ".bash", ".js", ".ts", ".rb", ".go", ".java", ".ps1", ".sql"}
+)
 RELATIVE_PATH_GUIDANCE = (
     "Relative paths in this skill (e.g., scripts/, reference/) are relative to "
     "this base directory."
 )
+SKILL_FILE_ACCESS_GUIDANCE = (
+    "The base directory is read-only: open its files with the read tool or "
+    "search it with glob and grep using absolute paths, or call the skill tool "
+    "with file=<relative path> for one file; run its scripts with bash."
+)
 SAMPLED_FILE_NOTE = "Note: file list is sampled."
+OMITTED_FILES_NOTE = (
+    "Documentation is listed first; files that did not fit are summarized by "
+    "directory at the end of the list."
+)
 AVAILABLE_SKILLS_GUIDANCE = (
     "Skills provide specialized instructions and workflows for specific tasks.",
     "Use the skill tool to load a skill when a task matches its description.",
@@ -163,18 +183,24 @@ def _render_skill_context_text(
             "",
             f"Base directory for this skill: {_file_uri(skill.root)}",
             RELATIVE_PATH_GUIDANCE,
+            SKILL_FILE_ACCESS_GUIDANCE,
             SAMPLED_FILE_NOTE,
+            OMITTED_FILES_NOTE,
             "<skill_files>",
         ]
     )
-    for path in _sample_sidecar_files(skill.sidecar_files):
+    sampled = _sample_sidecar_files(skill.sidecar_files, root=skill.root)
+    for index, path in enumerate(sampled):
         lines.extend(
             _render_skill_file_lines(
                 path,
-                include_content=include_sidecar_content,
+                include_content=(
+                    include_sidecar_content and index < DEFAULT_SKILL_FILE_CONTENT_LIMIT
+                ),
                 max_chars=max_sidecar_chars,
             )
         )
+    lines.extend(_render_omitted_file_groups(skill.sidecar_files, sampled, root=skill.root))
     lines.extend(
         [
             "</skill_files>",
@@ -227,14 +253,78 @@ def _render_skill_file_lines(
     return content_lines
 
 
+def _file_priority(path: Path) -> int:
+    suffix = path.suffix.lower()
+    if suffix in DOCUMENT_SUFFIXES:
+        return 0
+    if suffix in DATA_SUFFIXES:
+        return 1
+    if suffix in CODE_SUFFIXES:
+        return 2
+    return 3
+
+
+def _relative_to_root(path: Path, root: Path | None) -> Path:
+    if root is None:
+        return path
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
+
+
 def _sample_sidecar_files(
     sidecar_files: Iterable[Path],
     *,
+    root: Path | None = None,
     limit: int = DEFAULT_SKILL_FILE_SAMPLE_LIMIT,
 ) -> list[Path]:
+    """Documentation first, then data, code and everything else; shallow before deep."""
+
+    files = list(sidecar_files)
+
+    def sort_key(path: Path) -> tuple[int, int, str]:
+        relative = _relative_to_root(path, root)
+        return (_file_priority(path), len(relative.parts), relative.as_posix())
+
+    ordered = sorted(files, key=sort_key)
     if limit < 0:
-        return list(sidecar_files)
-    return list(sidecar_files)[:limit]
+        return ordered
+    return ordered[:limit]
+
+
+def _render_omitted_file_groups(
+    sidecar_files: Iterable[Path],
+    sampled: Iterable[Path],
+    *,
+    root: Path | None,
+    max_groups: int = 20,
+) -> list[str]:
+    """Summarize the files that did not make the listing, one line per directory."""
+
+    listed = set(sampled)
+    omitted = [path for path in sidecar_files if path not in listed]
+    if not omitted:
+        return []
+    groups: dict[str, tuple[int, set[str]]] = {}
+    for path in omitted:
+        relative = _relative_to_root(path, root)
+        directory = relative.parent.as_posix() if relative.parent != Path(".") else "."
+        count, suffixes = groups.get(directory, (0, set()))
+        suffixes = set(suffixes)
+        suffixes.add(path.suffix.lower() or "(none)")
+        groups[directory] = (count + 1, suffixes)
+    lines = [f'<omitted_files count="{len(omitted)}">']
+    for index, (directory, (count, suffixes)) in enumerate(sorted(groups.items())):
+        if index >= max_groups:
+            lines.append(f'  <more_directories count="{len(groups) - max_groups}"/>')
+            break
+        types = escape(" ".join(sorted(suffixes)), quote=True)
+        lines.append(
+            f'  <directory path="{escape(directory, quote=True)}" files="{count}" types="{types}"/>'
+        )
+    lines.append("</omitted_files>")
+    return lines
 
 
 def _read_sidecar_text(path: Path, *, max_chars: int) -> dict[str, Any]:

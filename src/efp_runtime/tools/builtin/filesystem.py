@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import stat
 from pathlib import Path
 from typing import Any
@@ -37,44 +38,113 @@ def normalize_workspace_root(workspace_root: str | Path) -> Path:
     return root
 
 
-def resolve_workspace_path(workspace_root: str | Path, path_value: str | Path) -> Path:
-    """Resolve a user path and reject anything outside the workspace root."""
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def normalize_read_roots(
+    workspace_root: str | Path,
+    read_roots: Iterable[str | Path] | None,
+) -> tuple[Path, ...]:
+    """Existing directories outside the workspace that read-only tools may open.
+
+    Skill packages live outside the workspace (Portal mounts them at
+    ``/app/skills``) and their layout is the skill author's, not the runtime's.
+    ``read``, ``glob`` and ``grep`` accept paths under these roots; the tools
+    that write never do. Roots inside the workspace are dropped because they
+    are reachable already.
+    """
+
+    root = normalize_workspace_root(workspace_root)
+    roots: list[Path] = []
+    for raw in read_roots or ():
+        try:
+            candidate = Path(raw).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError):
+            continue
+        if not candidate.is_dir() or _is_relative_to(candidate, root):
+            continue
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
+def resolve_workspace_path(
+    workspace_root: str | Path,
+    path_value: str | Path,
+    *,
+    read_roots: Iterable[Path] = (),
+) -> Path:
+    """Resolve a user path; reject anything outside the workspace root or the read-only roots."""
 
     root = normalize_workspace_root(workspace_root)
     raw_path = Path(path_value)
     candidate = raw_path if raw_path.is_absolute() else root / raw_path
     resolved = candidate.resolve(strict=False)
-    try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("Path escapes workspace root.") from exc
-    return resolved
+    if _is_relative_to(resolved, root):
+        return resolved
+    allowed = tuple(Path(extra) for extra in read_roots)
+    if any(_is_relative_to(resolved, extra) for extra in allowed):
+        return resolved
+    if allowed:
+        readable = ", ".join(str(extra) for extra in allowed)
+        raise ValueError(
+            f"Path escapes workspace root. Read-only directories also allowed: {readable}"
+        )
+    raise ValueError("Path escapes workspace root.")
 
 
-def workspace_relative_path(workspace_root: str | Path, path: str | Path) -> str:
-    """Return a stable POSIX-style path relative to the workspace root."""
+def workspace_relative_path(
+    workspace_root: str | Path,
+    path: str | Path,
+    *,
+    read_roots: Iterable[Path] = (),
+) -> str:
+    """Return a stable POSIX-style path: relative inside the workspace, absolute under a read-only root."""
 
     root = normalize_workspace_root(workspace_root)
     path_obj = Path(path)
     try:
         relative = path_obj.relative_to(root)
     except ValueError:
-        relative = path_obj.resolve(strict=False).relative_to(root)
+        resolved = path_obj.resolve(strict=False)
+        if not _is_relative_to(resolved, root) and any(
+            _is_relative_to(resolved, Path(extra)) for extra in read_roots
+        ):
+            return resolved.as_posix()
+        relative = resolved.relative_to(root)
     text = relative.as_posix()
     return text or "."
+
+
+def _read_tool_description(read_roots: tuple[Path, ...]) -> str:
+    description = "Read a workspace file by filePath, or list a workspace directory."
+    if read_roots:
+        listed = ", ".join(str(path) for path in read_roots)
+        description += (
+            " Files under these read-only directories are readable too when "
+            f"filePath is absolute: {listed}."
+        )
+    return description
 
 
 def create_read_tool(
     workspace_root: str | Path,
     *,
     instruction_resolver: ReadInstructionResolver | None = None,
+    read_roots: Iterable[str | Path] | None = None,
 ) -> ToolDef:
     root = normalize_workspace_root(workspace_root)
+    roots = normalize_read_roots(root, read_roots)
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
-        path = resolve_workspace_path(root, args["filePath"])
+        path = resolve_workspace_path(root, args["filePath"], read_roots=roots)
         if not path.exists():
-            raise FileNotFoundError(_missing_path_message(root, path))
+            raise FileNotFoundError(_missing_path_message(root, path, read_roots=roots))
 
         if path.is_file():
             return _read_workspace_file(
@@ -83,19 +153,21 @@ def create_read_tool(
                 args=args,
                 context=context,
                 instruction_resolver=instruction_resolver,
+                read_roots=roots,
             )
         if path.is_dir():
-            return _read_workspace_directory(root, path, args=args, context=context)
+            return _read_workspace_directory(
+                root, path, args=args, context=context, read_roots=roots
+            )
 
         raise ValueError(
-            f"Path is not a file or directory: {workspace_relative_path(root, path)}"
+            "Path is not a file or directory: "
+            f"{workspace_relative_path(root, path, read_roots=roots)}"
         )
 
     return ToolDef(
         id="read",
-        description=(
-            "Read a workspace file by filePath, or list a workspace directory."
-        ),
+        description=_read_tool_description(roots),
         input_schema={
             "type": "object",
             "required": ["filePath"],
@@ -173,10 +245,11 @@ def _read_workspace_file(
     args: dict[str, Any],
     context: ToolContext,
     instruction_resolver: ReadInstructionResolver | None,
+    read_roots: tuple[Path, ...] = (),
 ) -> ToolResult:
-    relative_path = workspace_relative_path(workspace_root, path)
+    relative_path = workspace_relative_path(workspace_root, path, read_roots=read_roots)
     encoding = "utf-8"
-    data, text = _read_text_file_strict(workspace_root, path, encoding)
+    data, text = _read_text_file_strict(workspace_root, path, encoding, read_roots=read_roots)
     offset = args.get("offset", 1)
     default_limit_applied = "limit" not in args
     limit = args.get("limit", READ_DEFAULT_LIMIT)
@@ -312,8 +385,10 @@ def _read_text_file_strict(
     workspace_root: Path,
     path: Path,
     encoding: str,
+    *,
+    read_roots: tuple[Path, ...] = (),
 ) -> tuple[bytes, str]:
-    relative_path = workspace_relative_path(workspace_root, path)
+    relative_path = workspace_relative_path(workspace_root, path, read_roots=read_roots)
     data = path.read_bytes()
     if _looks_binary(data[:READ_BINARY_SAMPLE_BYTES]):
         raise ValueError(f"File is binary and cannot be read as text: {relative_path}")
@@ -343,9 +418,14 @@ def _looks_binary(sample: bytes) -> bool:
     return non_printable / len(sample) > 0.3
 
 
-def _missing_path_message(workspace_root: Path, path: Path) -> str:
-    relative_path = workspace_relative_path(workspace_root, path)
-    suggestions = _missing_path_suggestions(workspace_root, path)
+def _missing_path_message(
+    workspace_root: Path,
+    path: Path,
+    *,
+    read_roots: tuple[Path, ...] = (),
+) -> str:
+    relative_path = workspace_relative_path(workspace_root, path, read_roots=read_roots)
+    suggestions = _missing_path_suggestions(workspace_root, path, read_roots=read_roots)
     if not suggestions:
         return f"Path does not exist: {relative_path}"
     return (
@@ -355,13 +435,17 @@ def _missing_path_message(workspace_root: Path, path: Path) -> str:
     )
 
 
-def _missing_path_suggestions(workspace_root: Path, path: Path) -> list[str]:
+def _missing_path_suggestions(
+    workspace_root: Path,
+    path: Path,
+    *,
+    read_roots: tuple[Path, ...] = (),
+) -> list[str]:
     parent = path.parent
-    try:
-        parent.relative_to(workspace_root)
-    except ValueError:
-        return []
-    if not parent.is_dir():
+    contained = _is_relative_to(parent, workspace_root) or any(
+        _is_relative_to(parent, extra) for extra in read_roots
+    )
+    if not contained or not parent.is_dir():
         return []
 
     needle = path.name.casefold()
@@ -369,7 +453,9 @@ def _missing_path_suggestions(workspace_root: Path, path: Path) -> list[str]:
     for entry in sorted(parent.iterdir(), key=_sort_key):
         name = entry.name.casefold()
         if needle in name or name in needle:
-            suggestions.append(workspace_relative_path(workspace_root, entry))
+            suggestions.append(
+                workspace_relative_path(workspace_root, entry, read_roots=read_roots)
+            )
             if len(suggestions) >= 3:
                 break
     return suggestions
@@ -386,13 +472,14 @@ def _read_workspace_directory(
     *,
     args: dict[str, Any],
     context: ToolContext,
+    read_roots: tuple[Path, ...] = (),
 ) -> ToolResult:
-    relative_path = workspace_relative_path(workspace_root, path)
+    relative_path = workspace_relative_path(workspace_root, path, read_roots=read_roots)
     offset = args.get("offset", 1)
     default_limit_applied = "limit" not in args
     limit = args.get("limit", READ_DEFAULT_LIMIT)
     all_entries = [
-        _directory_entry(workspace_root, entry)
+        _directory_entry(workspace_root, entry, read_roots=read_roots)
         for entry in sorted(path.iterdir(), key=_sort_key)
     ]
     entries, metadata = _slice_directory_entries(
@@ -572,7 +659,12 @@ def create_write_tool(
     )
 
 
-def _directory_entry(workspace_root: Path, path: Path) -> dict[str, Any]:
+def _directory_entry(
+    workspace_root: Path,
+    path: Path,
+    *,
+    read_roots: tuple[Path, ...] = (),
+) -> dict[str, Any]:
     file_stat = path.lstat()
     mode = file_stat.st_mode
     if stat.S_ISDIR(mode):
@@ -586,7 +678,7 @@ def _directory_entry(workspace_root: Path, path: Path) -> dict[str, Any]:
 
     return {
         "name": path.name,
-        "path": workspace_relative_path(workspace_root, path),
+        "path": workspace_relative_path(workspace_root, path, read_roots=read_roots),
         "type": entry_type,
         "size": file_stat.st_size if entry_type == "file" else None,
     }

@@ -26,6 +26,8 @@ DEFAULT_SKILL_PERMISSION = PermissionMetadata(
     risk="low",
     data={"subject_arg": "name"},
 )
+# Cap for a single skill file returned through ``skill(name, file=...)``.
+DEFAULT_MAX_SKILL_FILE_CHARS = 60_000
 
 
 
@@ -79,6 +81,20 @@ class SkillTool:
                             "when include_sidecar_content is true."
                         ),
                     },
+                    "file": {
+                        "type": "string",
+                        "description": (
+                            "Path relative to the skill's base directory. When given, "
+                            "the tool returns that file's text instead of the skill overview."
+                        ),
+                    },
+                    "max_file_chars": {
+                        "type": "integer",
+                        "description": (
+                            "Maximum characters to return for `file` "
+                            f"(default {DEFAULT_MAX_SKILL_FILE_CHARS})."
+                        ),
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -105,6 +121,17 @@ class SkillTool:
                 f"Available skills: {_available_skill_names_text(available)}"
             )
 
+        requested_file = args.get("file")
+        if isinstance(requested_file, str) and requested_file.strip():
+            max_file_chars = int(args.get("max_file_chars") or DEFAULT_MAX_SKILL_FILE_CHARS)
+            return _skill_file_result(
+                skill,
+                requested_file.strip(),
+                max_chars=max_file_chars,
+                context=context,
+                tool_id=self.tool_id,
+            )
+
         include_sidecar_content = bool(
             args.get("include_sidecar_content", self.include_sidecar_content)
         )
@@ -126,6 +153,58 @@ class SkillTool:
             output=output,
             metadata=metadata,
         )
+
+
+def _skill_file_result(
+    skill: SkillPackage,
+    requested: str,
+    *,
+    max_chars: int,
+    context: ToolContext,
+    tool_id: str,
+) -> ToolResult:
+    """Return one file from inside the skill directory, whatever the skill's layout."""
+
+    root = skill.root.resolve()
+    candidate = Path(requested)
+    target = (candidate if candidate.is_absolute() else root / candidate).resolve(strict=False)
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"File is outside the skill directory: {requested}") from exc
+    if not target.is_file():
+        raise FileNotFoundError(f"Skill file not found: {relative.as_posix()}")
+    sidecar = _read_sidecar_text(target, max_chars=max_chars)
+    if sidecar["content_type"] != "text":
+        raise ValueError(
+            f"Skill file is binary: {relative.as_posix()} ({target.stat().st_size} bytes). "
+            "Use bash to process it."
+        )
+    truncated = bool(sidecar["truncated"])
+    header = (
+        f'<skill_file name="{escape(skill.name, quote=True)}" '
+        f'path="{escape(str(target), quote=True)}" truncated="{str(truncated).lower()}">'
+    )
+    content = "\n".join([header, str(sidecar["content"]), "</skill_file>"])
+    return ToolResult(
+        call_id=context.tool_call_id or "",
+        tool_name=context.tool_name or tool_id,
+        content=content,
+        output={
+            "name": skill.name,
+            "path": str(target),
+            "relative_path": relative.as_posix(),
+            "content": sidecar["content"],
+            "truncated": truncated,
+            "original_chars": sidecar.get("original_chars"),
+        },
+        metadata={
+            "name": skill.name,
+            "skill_file": str(skill.skill_file),
+            "file": relative.as_posix(),
+            "truncated": truncated,
+        },
+    )
 
 
 def build_skill_tool(
@@ -232,7 +311,7 @@ def skill_package_to_context(
     sidecars = []
     for path in skill.sidecar_files:
         entry: dict[str, Any] = {
-            "path": str(path.relative_to(skill.root)),
+            "path": path.relative_to(skill.root).as_posix(),
             "size": path.stat().st_size,
         }
         if include_sidecar_content:
@@ -260,7 +339,8 @@ def _skill_tool_description(
 ) -> str:
     lines = [
         "Load a specialized skill by name: skill({name}) returns its full "
-        "model-readable <skill_content> context.",
+        "model-readable <skill_content> context. skill({name, file}) returns one "
+        "file from the skill's directory by relative path.",
         "",
         "<available_skills>",
     ]

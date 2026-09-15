@@ -482,7 +482,7 @@ async def test_skill_tool_returns_skill_content_and_sidecar_context_without_pyth
 @pytest.mark.asyncio
 async def test_skill_tool_file_list_is_sampled_and_stable_without_skill_file(tmp_path):
     skill_dir = _write_skill(tmp_path, "sampled-skill")
-    for index in range(12):
+    for index in range(45):
         (skill_dir / f"{index:02}.md").write_text(
             f"sidecar {index}",
             encoding="utf-8",
@@ -498,10 +498,13 @@ async def test_skill_tool_file_list_is_sampled_and_stable_without_skill_file(tmp
         line for line in result.content.splitlines() if line.startswith("<file>")
     ]
     assert file_lines == [
-        f"<file>{skill_dir / f'{index:02}.md'}</file>" for index in range(10)
+        f"<file>{skill_dir / f'{index:02}.md'}</file>" for index in range(40)
     ]
-    assert f"<file>{skill_dir / '10.md'}</file>" not in result.content
+    assert f"<file>{skill_dir / '40.md'}</file>" not in result.content
     assert f"<file>{skill_dir / 'SKILL.md'}</file>" not in result.content
+    # What did not fit is summarized rather than dropped silently.
+    assert '<omitted_files count="5">' in result.content
+    assert '<directory path="." files="5" types=".md"/>' in result.content
 
 
 @pytest.mark.asyncio
