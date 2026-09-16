@@ -23,6 +23,16 @@ from .models import (
 )
 
 from .validators import (
+    BINARY_EXTENSION_MIME_TYPES,
+    DEFAULT_UPLOAD_EXTENSIONS,
+    TEXT_EXTENSION_MIME_TYPES,
+    UPLOAD_EXTENSIONS_ENV,
+    allowed_upload_extensions,
+    file_extension,
+    is_supported_upload_mime,
+    is_upload_extension_allowed,
+    parse_upload_extensions,
+    resolve_max_upload_mb,
     validate_file_size,
     validate_content_type,
     validate_image_for_llm,
@@ -89,32 +99,54 @@ async def upload_file(
     content: bytes,
     filename: str,
     session_id: str = None,
-    max_size_mb: int = 10
+    max_size_mb: int = None
 ) -> FileMetadata:
-    """Upload a file.
-    
+    """Upload a chat attachment.
+
     Args:
         content: File content bytes
         filename: Original filename
         session_id: Session ID
-        max_size_mb: Max file size in MB
-        
+        max_size_mb: Max file size in MB (default: EFP_MAX_UPLOAD_MB, 25)
+
     Returns:
         FileMetadata
-        
+
     Raises:
         FileTooLargeError: If file exceeds size limit
-        UnsupportedFileTypeError: If file type not allowed
+        UnsupportedFileTypeError: If the extension is not on the configured
+            allowlist (EFP_CHAT_UPLOAD_EXTENSIONS) or the bytes are not a
+            format the runtime can hand to the model
     """
+    if max_size_mb is None:
+        max_size_mb = resolve_max_upload_mb()
+
     # Validate size
     if not validate_file_size(len(content), max_size_mb):
         raise FileTooLargeError(f"File exceeds {max_size_mb}MB limit")
-    
-    # Validate type
+
+    # Validate extension against the configured allowlist first so the user
+    # gets the same answer the Portal file picker gave them.
+    allowed = allowed_upload_extensions()
+    ext = file_extension(filename)
+    if not ext:
+        raise UnsupportedFileTypeError(
+            f"Files without an extension are not allowed. Allowed: {', '.join(allowed)}"
+        )
+    if ext not in allowed:
+        raise UnsupportedFileTypeError(
+            f"File type .{ext} is not allowed. Allowed: {', '.join(allowed)}"
+        )
+
+    # Then validate the bytes: the type is decided by content, not by the name,
+    # so a renamed binary is still rejected.
     mime_type = _detect_mime_type(content, filename)
-    if not validate_content_type(mime_type):
-        raise UnsupportedFileTypeError(f"File type {mime_type} not allowed")
-    
+    if not is_supported_upload_mime(mime_type):
+        raise UnsupportedFileTypeError(
+            f"The content of {filename} is not a supported .{ext} file "
+            "(expected an image, pdf, docx, xlsx, csv or UTF-8 text)"
+        )
+
     # Save (pass detected MIME type to avoid re-detection)
     return await save_uploaded_file(content, filename, session_id, mime_type)
 
@@ -275,17 +307,20 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
     except zipfile.BadZipFile:
         pass
     
-    # Text-based formats
-    if ext in {".txt", ".csv"}:
+    # Text-based formats: anything on the allowlist that is not a known binary
+    # format must decode as UTF-8; the extension only picks the text MIME type.
+    bare_ext = ext.lstrip(".")
+    if bare_ext and bare_ext not in BINARY_EXTENSION_MIME_TYPES and bare_ext in allowed_upload_extensions():
         try:
             header.decode("utf-8")
         except UnicodeDecodeError:
-            return "application/octet-stream"
-        # If extension is .csv and file decodes as text, treat as CSV
-        if ext == ".csv":
-            return "text/csv"
-        return "text/plain"
-    
+            # A multi-byte character may straddle the 4KB header boundary.
+            try:
+                header[:-4].decode("utf-8")
+            except UnicodeDecodeError:
+                return "application/octet-stream"
+        return TEXT_EXTENSION_MIME_TYPES.get(bare_ext, "text/plain")
+
     # Fallback: unknown content, treat as generic binary
     # Don't rely on extension to avoid accepting renamed malware
     return "application/octet-stream"
@@ -322,6 +357,16 @@ __all__ = [
     "sanitize_filename",
     "is_image_file",
     "get_mime_type",
+    # Chat attachment allowlist
+    "DEFAULT_UPLOAD_EXTENSIONS",
+    "TEXT_EXTENSION_MIME_TYPES",
+    "UPLOAD_EXTENSIONS_ENV",
+    "allowed_upload_extensions",
+    "file_extension",
+    "is_supported_upload_mime",
+    "is_upload_extension_allowed",
+    "parse_upload_extensions",
+    "resolve_max_upload_mb",
     # Storage
     "init_storage",
     "get_file_path",

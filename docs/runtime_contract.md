@@ -23,6 +23,11 @@ Native runtime must support:
 - `POST /api/tasks/{task_id}/cancel`
 - `GET /api/usage`
 - `GET /api/sessions`
+- `POST /api/files/upload` and `POST /api/files/parse` (chatbox attachments;
+  `GET /api/files/{file_id}/preview`, `GET /api/files/{file_id}` and
+  `DELETE /api/files/{file_id}` complete the set). The accepted extensions
+  come from `EFP_CHAT_UPLOAD_EXTENSIONS` and the size cap from
+  `EFP_MAX_UPLOAD_MB`; the Portal sets both on the pod from its own settings.
 
 ## Runtime Profile Boot Contract
 

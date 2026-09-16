@@ -16,7 +16,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.file_parser.storage import init_storage, StoredFileNotFoundError, get_metadata
 init_storage()
-from src.utils.file_parser import parse_file
+from src.utils.file_parser import (
+    FileTooLargeError,
+    UnsupportedFileTypeError,
+    delete_file,
+    get_file_path,
+    parse_file,
+    preview_file,
+    upload_file,
+)
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
 from src.utils.logger import clear_log_context, set_log_context
@@ -4467,6 +4475,256 @@ async def api_skills(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e), 'skills': []}, status=500)
 
 
+# ===== Chat attachment API =====
+#
+# File-id based, one-shot attachments for the Portal chatbox: the composer
+# uploads (and optionally parses) each file here, sends the returned ids in
+# the chat request's ``attachments`` array, and the chat handlers delete the
+# files once the run finishes (_cleanup_one_shot_attachments). Path-based
+# workspace browsing is a different API under /api/server-files.
+
+def _attachment_session_id(request: web.Request, payload: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    candidates = [
+        request.query.get("session_id"),
+        request.headers.get("X-Session-ID"),
+        (payload or {}).get("session_id") if isinstance(payload, dict) else None,
+    ]
+    for value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _attachment_owned_by_session(metadata: Any, session_id: Optional[str]) -> bool:
+    """A file bound to a session is only visible with that session id."""
+    bound = str(getattr(metadata, "session_id", "") or "")
+    if not bound:
+        return True
+    return bool(session_id) and bound == session_id
+
+
+def _attachment_error_response(error: str, status: int) -> web.Response:
+    return web.json_response({"success": False, "error": error}, status=status)
+
+
+async def api_files_upload(request: web.Request) -> web.Response:
+    """Upload a chat attachment.
+
+    POST /api/files/upload?session_id=...
+    Content-Type: multipart/form-data with a ``file`` part
+
+    Returns:
+        201: {"success": true, "file_id": "...", "filename": "...", "content_type": "...", "size": N, ...}
+        400: no/invalid multipart body
+        413: file larger than EFP_MAX_UPLOAD_MB
+        415: extension not on EFP_CHAT_UPLOAD_EXTENSIONS or content not a supported format
+    """
+    from src.gateway.server_files import _multipart_upload
+
+    session_id = _attachment_session_id(request)
+    try:
+        upload, fields = await _multipart_upload(request)
+    except ValueError as exc:
+        return _attachment_error_response(str(exc), 400)
+    if upload is None:
+        return _attachment_error_response("No file provided", 400)
+    if not upload.filename:
+        return _attachment_error_response("Filename is required", 400)
+    if not session_id:
+        session_id = str(fields.get("session_id") or "").strip() or None
+
+    try:
+        metadata = await upload_file(content=upload.data, filename=upload.filename, session_id=session_id)
+    except FileTooLargeError as exc:
+        return _attachment_error_response(str(exc), 413)
+    except UnsupportedFileTypeError as exc:
+        return _attachment_error_response(str(exc), 415)
+    except Exception as exc:
+        logger.error("File upload error: %s", sanitize_exception_message(exc), exc_info=True)
+        return _attachment_error_response("Upload failed", 500)
+
+    logger.info(
+        "[api_files_upload] session_id=%s file_id=%s filename=%s content_type=%s size=%d",
+        safe_log_field(session_id or "", 120),
+        metadata.file_id,
+        safe_preview(metadata.original_filename, 120),
+        metadata.content_type,
+        metadata.size,
+    )
+    return web.json_response(
+        {
+            "success": True,
+            "file_id": metadata.file_id,
+            "filename": metadata.original_filename,
+            "content_type": metadata.content_type,
+            "size": metadata.size,
+            "uploaded_at": metadata.uploaded_at,
+            "session_id": metadata.session_id,
+        },
+        status=201,
+    )
+
+
+async def api_files_parse(request: web.Request) -> web.Response:
+    """Parse an uploaded attachment into the session file context.
+
+    POST /api/files/parse?session_id=...
+    Body: {"file_id": "...", "options": {...}}
+
+    Returns:
+        200: {"success": true, "markdown": "...", "blocks": [...], ...}
+        400: missing file_id / parse failure
+        404: unknown file or file bound to another session
+    """
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return _attachment_error_response("Invalid JSON body", 400)
+    if not isinstance(payload, dict):
+        return _attachment_error_response("JSON body must be an object", 400)
+
+    file_id = str(payload.get("file_id") or "").strip()
+    if not file_id:
+        return _attachment_error_response("file_id is required", 400)
+    session_id = _attachment_session_id(request, payload)
+
+    try:
+        metadata = get_metadata(file_id)
+    except StoredFileNotFoundError:
+        return _attachment_error_response("File not found", 404)
+    if not _attachment_owned_by_session(metadata, session_id):
+        return _attachment_error_response("File not found", 404)
+    if not session_id:
+        session_id = metadata.session_id or "default"
+
+    options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+    try:
+        parse_ctx = await _parse_file_into_file_context(session_id=session_id, file_id=file_id, options=options)
+    except StoredFileNotFoundError:
+        return _attachment_error_response("File not found", 404)
+    except Exception as exc:
+        try:
+            file_context_storage.update_file_status(session_id, file_id, status="failed", error=str(exc))
+        except Exception:
+            logger.exception("Failed to persist file_context failure state for %s/%s", session_id, file_id)
+        logger.error("File parse error: %s", sanitize_exception_message(exc), exc_info=True)
+        return _attachment_error_response("Parse failed", 500)
+
+    if not parse_ctx.get("success"):
+        return _attachment_error_response(str(parse_ctx.get("error") or "Parse failed"), 400)
+    result = parse_ctx["result"]
+    return web.json_response(
+        {
+            "success": True,
+            "content_type": result.content_type,
+            "file_id": result.file_id,
+            "filename": result.filename,
+            "markdown": result.markdown,
+            "blocks": [b.model_dump(by_alias=True, exclude_none=True) for b in result.blocks],
+            "json": result.json,
+            "parse_time_ms": result.parse_time_ms,
+            "saved_chunks": parse_ctx.get("saved_chunks", 0),
+            "total_chars": parse_ctx.get("total_chars", 0),
+        }
+    )
+
+
+async def api_files_preview(request: web.Request) -> web.Response:
+    """Return the first ``max_chars`` characters of the parsed attachment.
+
+    GET /api/files/{file_id}/preview?max_chars=5000&session_id=...
+    """
+    file_id = str(request.match_info.get("file_id") or "").strip()
+    if not file_id:
+        return _attachment_error_response("file_id is required", 400)
+    try:
+        max_chars = int(request.query.get("max_chars", "5000"))
+    except (TypeError, ValueError):
+        return _attachment_error_response("max_chars must be an integer", 400)
+    max_chars = max(0, min(max_chars, 20000))
+
+    try:
+        metadata = get_metadata(file_id)
+    except StoredFileNotFoundError:
+        return _attachment_error_response("File not found", 404)
+    if not _attachment_owned_by_session(metadata, _attachment_session_id(request)):
+        return _attachment_error_response("File not found", 404)
+
+    try:
+        result = await preview_file(file_id, max_chars)
+    except StoredFileNotFoundError:
+        return _attachment_error_response("File not found", 404)
+    except Exception as exc:
+        logger.error("File preview error: %s", sanitize_exception_message(exc), exc_info=True)
+        return _attachment_error_response("Preview failed", 500)
+    if not result.get("success"):
+        return web.json_response(result, status=400)
+    return web.json_response(result)
+
+
+async def api_files_get(request: web.Request) -> web.Response:
+    """Serve the raw attachment inline (images in the transcript).
+
+    GET /api/files/{file_id}?session_id=...
+    """
+    file_id = str(request.match_info.get("file_id") or "").strip()
+    if not file_id:
+        return _attachment_error_response("file_id is required", 400)
+    try:
+        metadata = get_metadata(file_id)
+        file_path = get_file_path(file_id)
+    except StoredFileNotFoundError:
+        return _attachment_error_response("File not found", 404)
+    if not _attachment_owned_by_session(metadata, _attachment_session_id(request)):
+        return _attachment_error_response("File not found", 404)
+
+    body = await asyncio.to_thread(file_path.read_bytes)
+    safe_name = re.sub(r'[\r\n"\\]', "_", str(metadata.original_filename or file_id))
+    return web.Response(
+        body=body,
+        content_type=metadata.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+    )
+
+
+async def api_files_delete(request: web.Request) -> web.Response:
+    """Delete an attachment and its session file context.
+
+    DELETE /api/files/{file_id}?session_id=...
+    """
+    file_id = str(request.match_info.get("file_id") or "").strip()
+    if not file_id:
+        return _attachment_error_response("file_id is required", 400)
+    session_id = _attachment_session_id(request)
+
+    try:
+        metadata = get_metadata(file_id)
+    except StoredFileNotFoundError:
+        metadata = None
+    if metadata is not None and not _attachment_owned_by_session(metadata, session_id):
+        return _attachment_error_response("File not found", 404)
+
+    context_removed = False
+    cleanup_session = session_id or (metadata.session_id if metadata is not None else None)
+    if cleanup_session:
+        try:
+            context_removed = bool(file_context_storage.remove_file_from_session(cleanup_session, file_id))
+            if context_removed:
+                retrieval_engine.rebuild_index(cleanup_session)
+        except Exception:
+            logger.warning("Best-effort file_context delete cleanup failed for %s/%s", cleanup_session, file_id, exc_info=True)
+
+    try:
+        deleted = delete_file(file_id)
+    except Exception as exc:
+        logger.error("File delete error: %s", sanitize_exception_message(exc), exc_info=True)
+        return _attachment_error_response("Delete failed", 500)
+    if not deleted and not context_removed:
+        return _attachment_error_response("File not found", 404)
+    return web.json_response({"success": True})
+
+
 def setup_runtime_api_routes(app: web.Application):
     """Register API-only runtime routes used by Portal and runtime clients."""
     from src.gateway.server_files import setup_server_files_routes
@@ -4505,6 +4763,14 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/connectors/respond', api_session_connectors_respond)
     app.router.add_get('/api/personalization', api_personalization)
     app.router.add_get('/api/skills', api_skills)
+    # Chat attachments (file-id based, one-shot per chat request). The legacy
+    # path-based /api/files and /api/files/read browse aliases stay removed;
+    # workspace browsing is /api/server-files.
+    app.router.add_post('/api/files/upload', api_files_upload)
+    app.router.add_post('/api/files/parse', api_files_parse)
+    app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
+    app.router.add_get('/api/files/{file_id}', api_files_get)
+    app.router.add_delete('/api/files/{file_id}', api_files_delete)
     setup_server_files_routes(app)
 
     logger.info("Runtime API routes registered:")
@@ -4519,6 +4785,11 @@ def setup_runtime_api_routes(app: web.Application):
     logger.info("  DELETE /api/sessions/{id} - Delete existing session")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  GET  /api/skills  - Get available skills")
+    logger.info("  POST /api/files/upload - Upload chat attachment (one-shot)")
+    logger.info("  POST /api/files/parse - Parse chat attachment into session file context")
+    logger.info("  GET  /api/files/{file_id}/preview - Preview parsed chat attachment")
+    logger.info("  GET  /api/files/{file_id} - Serve chat attachment inline")
+    logger.info("  DELETE /api/files/{file_id} - Delete chat attachment")
     logger.info("  GET  /api/server-files - Browse workspace server files")
     logger.info("  GET  /api/server-files/read - Read workspace text file")
     logger.info("  GET  /api/server-files/content - Stream workspace file content")

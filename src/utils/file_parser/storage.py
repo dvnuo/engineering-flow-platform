@@ -313,6 +313,12 @@ def _mime_to_extension(mime_type: str) -> str:
         Safe extension with dot
     """
     mime_to_ext = {
+        "text/markdown": ".md",
+        "text/tab-separated-values": ".tsv",
+        "text/html": ".html",
+        "application/json": ".json",
+        "application/yaml": ".yaml",
+        "application/xml": ".xml",
         "image/jpeg": ".jpg",
         "image/png": ".png",
         "image/gif": ".gif",

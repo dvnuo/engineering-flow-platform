@@ -288,6 +288,27 @@ Additional runtime contracts:
 
 ## Chat Attachments
 
+### Uploading Attachments
+
+The Portal chatbox uploads each attached file to the runtime before sending the
+message; the ids come back in the chat request. Attachments are one-shot: the
+chat handlers delete them once the run finishes.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/files/upload?session_id=...` | multipart `file` part → `201 {"success": true, "file_id", "filename", "content_type", "size", "uploaded_at", "session_id"}`; `413` over the size cap, `415` when the extension is not allowed or the bytes are not a supported format |
+| `POST /api/files/parse?session_id=...` | body `{"file_id": "..."}` → parses the file into the session file context (`markdown`, `blocks`); the chat handlers also parse on demand |
+| `GET /api/files/{file_id}/preview?max_chars=N` | first `N` characters of the parsed text |
+| `GET /api/files/{file_id}` | raw bytes, inline |
+| `DELETE /api/files/{file_id}` | remove the file and its session context |
+
+A file bound to a session is only visible with that `session_id` (query, `X-Session-ID` header, or JSON body).
+
+| Env | Purpose | Default |
+|-----|---------|---------|
+| `EFP_CHAT_UPLOAD_EXTENSIONS` | Comma-separated extensions the upload endpoint accepts (case-insensitive, leading dots optional). The Portal sets the same value on every agent pod from its own config, so the file picker and the runtime agree. Images (`jpg`, `jpeg`, `png`, `webp`, `gif`) go to the model as images; `pdf`, `docx`, `xlsx`, `csv` and any UTF-8 text format (`txt`, `md`, `json`, `yaml`, `xml`, `log`, source files, ...) are projected to text. A listed extension whose bytes the runtime cannot parse is still rejected with `415`. | `jpg,jpeg,png,webp,gif,pdf,docx,xlsx,csv,txt` |
+| `EFP_MAX_UPLOAD_MB` | Per-file cap (same value the Portal enforces); the aiohttp `client_max_size` adds transport headroom on top | `25` |
+
 ### Sending Attachments
 
 Portal can pass runtime-known transient attachment ids in the `attachments` array:
