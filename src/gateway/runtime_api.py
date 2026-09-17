@@ -3656,6 +3656,39 @@ async def _resume_runtime_tasks_on_startup(_app: web.Application) -> None:
     await resume_persisted_runtime_tasks()
 
 
+UPLOAD_RETENTION_DAYS_ENV = "EFP_CHAT_UPLOAD_RETENTION_DAYS"
+DEFAULT_UPLOAD_RETENTION_DAYS = 30
+
+
+def _upload_retention_days() -> int:
+    raw = os.getenv(UPLOAD_RETENTION_DAYS_ENV, str(DEFAULT_UPLOAD_RETENTION_DAYS))
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return DEFAULT_UPLOAD_RETENTION_DAYS
+
+
+async def _sweep_expired_attachments_on_startup(_app: web.Application) -> None:
+    """Drop chat attachments older than EFP_CHAT_UPLOAD_RETENTION_DAYS (0 keeps everything).
+
+    Attachments live with their session so the transcript can open them, but
+    a session nobody deletes would otherwise hoard uploads on the volume
+    forever; this is the safety valve.
+    """
+    from src.utils.file_parser.storage import sweep_expired_files
+
+    days = _upload_retention_days()
+    if days <= 0:
+        return
+    try:
+        removed = await asyncio.to_thread(sweep_expired_files, days)
+    except Exception:
+        logger.warning("Attachment retention sweep failed", exc_info=True)
+        return
+    if removed:
+        logger.info("Attachment retention sweep removed %d upload(s) older than %d day(s)", removed, days)
+
+
 async def _sweep_interrupted_chat_sessions_on_startup(_app: web.Application) -> None:
     """Chat runs do not survive restarts; expire their persisted running state.
 
@@ -4763,12 +4796,30 @@ async def api_files_get(request: web.Request) -> web.Response:
         return _attachment_error_response("File not found", 404)
 
     body = await asyncio.to_thread(file_path.read_bytes)
-    disposition = "attachment" if str(request.query.get("download", "")).strip().lower() in {"1", "true", "yes"} else "inline"
+    content_type = str(metadata.content_type or "application/octet-stream")
+    wants_download = str(request.query.get("download", "")).strip().lower() in {"1", "true", "yes"}
+    # Markup a browser would execute or style is never rendered inline from
+    # the Portal's origin: html, svg and xml always download.
+    active_markup = content_type.split(";")[0].strip().lower() in ACTIVE_MARKUP_CONTENT_TYPES
+    disposition = "attachment" if wants_download or active_markup else "inline"
     return web.Response(
         body=body,
-        content_type=metadata.content_type or "application/octet-stream",
-        headers={"Content-Disposition": _attachment_content_disposition(str(metadata.original_filename or file_id), disposition)},
+        content_type=content_type,
+        headers={
+            "Content-Disposition": _attachment_content_disposition(str(metadata.original_filename or file_id), disposition),
+            "X-Content-Type-Options": "nosniff",
+        },
     )
+
+
+# Types a browser would run scripts or styles from when shown inline.
+ACTIVE_MARKUP_CONTENT_TYPES = frozenset({
+    "text/html",
+    "application/xhtml+xml",
+    "image/svg+xml",
+    "application/xml",
+    "text/xml",
+})
 
 
 def _attachment_content_disposition(filename: str, disposition: str) -> str:
@@ -4824,6 +4875,8 @@ def setup_runtime_api_routes(app: web.Application):
         app.on_startup.append(_resume_runtime_tasks_on_startup)
     if not any(handler is _sweep_interrupted_chat_sessions_on_startup for handler in app.on_startup):
         app.on_startup.append(_sweep_interrupted_chat_sessions_on_startup)
+    if not any(handler is _sweep_expired_attachments_on_startup for handler in app.on_startup):
+        app.on_startup.append(_sweep_expired_attachments_on_startup)
 
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)

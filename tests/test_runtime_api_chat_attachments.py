@@ -354,6 +354,72 @@ async def test_attachment_bytes_outlive_the_run_and_go_with_the_session(isolated
 
 
 @pytest.mark.asyncio
+async def test_markup_attachments_never_render_inline(isolated_attachment_storage, monkeypatch):
+    """An uploaded page must not execute under the Portal's origin when a chip opens it."""
+    monkeypatch.setenv("EFP_CHAT_UPLOAD_EXTENSIONS", "html,svg,txt")
+    client = await _client()
+    try:
+        page = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("page.html", b"<html><script>alert(1)</script></html>", "text/html"),
+        )
+        assert page.status == 201, await page.text()
+        page_id = (await page.json())["file_id"]
+        assert (await page.json())["content_type"] == "text/html"
+
+        served = await client.get(f"/api/files/{page_id}", params={"session_id": "s1"})
+        assert served.status == 200
+        assert served.headers["Content-Disposition"].startswith("attachment;")
+        assert served.headers["X-Content-Type-Options"] == "nosniff"
+
+        note = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("note.txt", b"plain", "text/plain"),
+        )
+        note_id = (await note.json())["file_id"]
+        served_text = await client.get(f"/api/files/{note_id}", params={"session_id": "s1"})
+        assert served_text.headers["Content-Disposition"].startswith("inline;")
+        assert served_text.headers["X-Content-Type-Options"] == "nosniff"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_retention_sweep_drops_old_uploads_only(isolated_attachment_storage, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from src.gateway import runtime_api
+    from src.utils.file_parser.storage import sweep_expired_files
+
+    client = await _client()
+    try:
+        old = await client.post("/api/files/upload", params={"session_id": "s1"}, data=_file_form("old.txt", b"old", "text/plain"))
+        fresh = await client.post("/api/files/upload", params={"session_id": "s1"}, data=_file_form("new.txt", b"new", "text/plain"))
+        old_id = (await old.json())["file_id"]
+        fresh_id = (await fresh.json())["file_id"]
+
+        storage_namespace = runtime_api.get_metadata.__globals__
+        storage_namespace["_file_metadata"][old_id].uploaded_at = (datetime.utcnow() - timedelta(days=40)).isoformat() + "Z"
+
+        assert sweep_expired_files(0) == 0  # disabled
+        assert sweep_expired_files(30) == 1
+        assert (await client.get(f"/api/files/{old_id}", params={"session_id": "s1"})).status == 404
+        assert (await client.get(f"/api/files/{fresh_id}", params={"session_id": "s1"})).status == 200
+
+        # The startup hook reads the env; a non-positive value keeps everything.
+        monkeypatch.setenv("EFP_CHAT_UPLOAD_RETENTION_DAYS", "0")
+        assert runtime_api._upload_retention_days() == 0
+        await runtime_api._sweep_expired_attachments_on_startup(None)
+        assert (await client.get(f"/api/files/{fresh_id}", params={"session_id": "s1"})).status == 200
+        monkeypatch.setenv("EFP_CHAT_UPLOAD_RETENTION_DAYS", "garbage")
+        assert runtime_api._upload_retention_days() == 30
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_display_attachments_describe_each_file_for_the_transcript(isolated_attachment_storage, monkeypatch):
     from src.gateway import runtime_api
 
