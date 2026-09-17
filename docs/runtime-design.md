@@ -98,7 +98,14 @@ is only a build input for PATH binaries.
 
 `efp_runtime.runtime.AgentRuntime` builds provider requests from:
 
-1. Provider-only system prompt and runtime reminders.
+1. Provider-only system prompt and runtime reminders. This layer carries the
+   `Environment:` block (model, working directory, workspace root, git,
+   platform, today's date with its weekday, and the time zone), which is on by
+   default so the model can resolve "recent" or "this week" against the real
+   calendar instead of its training cutoff. The zone comes from run metadata
+   `timezone`, then `EFP_TIMEZONE`, then `TZ`; an unknown name falls back to
+   the process zone, which is UTC in the runtime image. Turn the block off with
+   `include_environment_context: false`.
 2. Workspace instruction files and configured instruction text.
 3. Available-skill and active-skill context.
 4. Persisted session history.

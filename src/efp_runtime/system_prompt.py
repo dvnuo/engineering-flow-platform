@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
+import os
 import subprocess
 import sys
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .session.models import Message, MessagePart, MessageRole
 
@@ -188,7 +190,7 @@ class SystemPromptBuilder:
         model_id = _environment_model_id(metadata)
         git_repository = _is_git_repository(workspace_root)
         platform_id = sys.platform
-        current_date = _current_local_date_iso()
+        now = _environment_now(metadata)
 
         fields: list[tuple[str, str]] = [("model", model_id)]
         if working_directory is not None:
@@ -199,7 +201,8 @@ class SystemPromptBuilder:
             [
                 ("git repository", str(git_repository).lower()),
                 ("platform", platform_id),
-                ("date", current_date),
+                ("date", _format_environment_date(now)),
+                ("timezone", _format_environment_timezone(now)),
             ]
         )
         if not fields:
@@ -555,8 +558,51 @@ def _is_git_repository(workspace_root: Path | None) -> bool:
         return False
 
 
-def _current_local_date_iso() -> str:
-    return date.today().isoformat()
+ENVIRONMENT_TIMEZONE_ENV_VARS = ("EFP_TIMEZONE", "TZ")
+_WEEKDAY_NAMES = (
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+)
+
+
+def _environment_now(metadata: Mapping[str, Any]) -> datetime:
+    """Return "now" in the zone the user works in, for the Environment block.
+
+    The zone comes from run metadata (``timezone``, so Portal can forward a
+    member's own zone), then ``EFP_TIMEZONE``, then ``TZ``. Anything unknown
+    falls back to the process-local zone, which is UTC in the runtime image:
+    that fallback is what used to make "today" a day early for everyone east
+    of UTC until eight in the morning.
+    """
+    zone = _resolve_environment_timezone(_metadata_string(metadata, "timezone"))
+    if zone is not None:
+        return datetime.now(zone)
+    return datetime.now().astimezone()
+
+
+def _resolve_environment_timezone(requested: str | None) -> tzinfo | None:
+    candidates = [requested, *(os.environ.get(name) for name in ENVIRONMENT_TIMEZONE_ENV_VARS)]
+    for candidate in candidates:
+        name = (candidate or "").strip()
+        if not name:
+            continue
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            continue
+    return None
+
+
+def _format_environment_date(now: datetime) -> str:
+    return f"{now:%Y-%m-%d} ({_WEEKDAY_NAMES[now.weekday()]})"
+
+
+def _format_environment_timezone(now: datetime) -> str:
+    name = getattr(now.tzinfo, "key", None) or now.tzname() or "local"
+    offset = now.utcoffset() or timedelta(0)
+    minutes = int(offset.total_seconds() // 60)
+    sign = "+" if minutes >= 0 else "-"
+    hours, remainder = divmod(abs(minutes), 60)
+    return f"{name} (UTC{sign}{hours:02d}:{remainder:02d})"
 
 
 def _metadata_bool(metadata: Mapping[str, Any], *keys: str) -> bool:

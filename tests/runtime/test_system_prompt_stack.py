@@ -5,7 +5,9 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -41,7 +43,7 @@ def test_default_system_prompt_contains_coding_agent_operating_rules():
 
 
 @pytest.mark.asyncio
-async def test_default_runtime_injects_only_agents_instruction_before_skills(
+async def test_default_runtime_injects_environment_and_agents_instruction_before_skills(
     tmp_path: Path,
 ):
     (tmp_path / "AGENTS.md").write_text("Project instructions.", encoding="utf-8")
@@ -65,24 +67,24 @@ async def test_default_runtime_injects_only_agents_instruction_before_skills(
     assert result.status == LoopStatus.COMPLETED
     request = provider.requests[0]
     messages = request.provider_request.messages
-    assert [message.role for message in messages] == ["system", "system", "system", "user"]
-    assert messages[0].text.startswith("Instructions from:")
-    assert "Project instructions." in messages[0].text
+    assert [message.role for message in messages] == ["system", "system", "system", "system", "user"]
+    assert messages[0].text.startswith("Environment:")
+    assert messages[1].text.startswith("Instructions from:")
+    assert "Project instructions." in messages[1].text
     assert "Claude instructions." not in "\n".join(message.text for message in messages)
     assert "Context instructions." not in "\n".join(message.text for message in messages)
     assert DEFAULT_SYSTEM_PROMPT.strip() not in "\n".join(message.text for message in messages)
-    assert "Environment:" not in "\n".join(message.text for message in messages)
     assert "Runtime reminders:" not in "\n".join(message.text for message in messages)
-    assert "<available_skills>" in messages[1].text
-    assert messages[2].text.startswith('<skill_content name="review-pr">')
-    assert messages[3].text == "Inspect this."
-    assert request.metadata["system_prompt_context_count"] == 0
-    assert request.metadata["environment_context_count"] == 0
+    assert "<available_skills>" in messages[2].text
+    assert messages[3].text.startswith('<skill_content name="review-pr">')
+    assert messages[4].text == "Inspect this."
+    assert request.metadata["system_prompt_context_count"] == 1
+    assert request.metadata["environment_context_count"] == 1
     assert request.metadata["instruction_context_count"] == 1
     assert request.metadata["available_skill_context_count"] == 1
     assert request.metadata["skill_context_count"] == 1
-    assert request.provider_request.metadata["system_prompt_context_count"] == 0
-    assert request.provider_request.metadata["environment_context_count"] == 0
+    assert request.provider_request.metadata["system_prompt_context_count"] == 1
+    assert request.provider_request.metadata["environment_context_count"] == 1
     assert request.provider_request.metadata["instruction_context_count"] == 1
     assert request.provider_request.metadata["available_skill_context_count"] == 1
     assert request.provider_request.metadata["skill_context_count"] == 1
@@ -536,7 +538,8 @@ def test_environment_context_builder_contains_runtime_environment(tmp_path: Path
     assert f"- workspace root: {tmp_path.resolve()}" in text
     assert "- git repository: true" in text
     assert f"- platform: {sys.platform}" in text
-    assert re.search(r"- date: \d{4}-\d{2}-\d{2}", text)
+    assert re.search(r"^- date: \d{4}-\d{2}-\d{2} \((?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\)$", text, re.MULTILINE)
+    assert re.search(r"^- timezone: \S.* \(UTC[+-]\d{2}:\d{2}\)$", text, re.MULTILINE)
 
 
 @pytest.mark.asyncio
@@ -765,3 +768,63 @@ async def test_runtime_places_session_user_after_environment_and_before_instruct
     assert "- username: runtime-user" in messages[session_user_index].text
     assert request.metadata["system_prompt_context_count"] == 2
     assert request.metadata["environment_context_count"] == 1
+
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _environment_text(tmp_path: Path, **metadata) -> str:
+    messages = SystemPromptBuilder(
+        workspace_root=tmp_path,
+        include_default_system_prompt=False,
+        include_environment_context=True,
+        include_runtime_reminders=False,
+    ).build_messages(metadata={"requested_model": "github-copilot/gpt-5.4", **metadata})
+    assert len(messages) == 1
+    return messages[0].parts[0].text
+
+
+def _date_line(moment: datetime) -> str:
+    return f"- date: {moment:%Y-%m-%d} ({_WEEKDAYS[moment.weekday()]})"
+
+
+def test_environment_context_renders_today_in_efp_timezone(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("EFP_TIMEZONE", "Asia/Shanghai")
+    monkeypatch.setenv("TZ", "America/Phoenix")
+    zone = ZoneInfo("Asia/Shanghai")
+
+    before = datetime.now(zone)
+    text = _environment_text(tmp_path)
+    after = datetime.now(zone)
+
+    assert "- timezone: Asia/Shanghai (UTC+08:00)" in text
+    # Two candidates so a midnight rollover during the call cannot flake.
+    assert _date_line(before) in text or _date_line(after) in text
+
+
+def test_environment_context_falls_back_to_tz_env(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("EFP_TIMEZONE", raising=False)
+    monkeypatch.setenv("TZ", "America/Phoenix")
+
+    assert "- timezone: America/Phoenix (UTC-07:00)" in _environment_text(tmp_path)
+
+
+def test_environment_context_prefers_run_metadata_timezone(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("EFP_TIMEZONE", "UTC")
+
+    text = _environment_text(tmp_path, timezone="Asia/Kolkata")
+
+    assert "- timezone: Asia/Kolkata (UTC+05:30)" in text
+
+
+def test_environment_context_skips_unknown_timezones(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("EFP_TIMEZONE", "UTC")
+
+    assert "- timezone: UTC (UTC+00:00)" in _environment_text(tmp_path, timezone="Mars/Olympus_Mons")
+
+    monkeypatch.setenv("EFP_TIMEZONE", "Mars/Olympus_Mons")
+    monkeypatch.delenv("TZ", raising=False)
+    text = _environment_text(tmp_path)
+
+    assert re.search(r"^- date: \d{4}-\d{2}-\d{2} \(\w+day\)$", text, re.MULTILINE)
+    assert re.search(r"^- timezone: \S.* \(UTC[+-]\d{2}:\d{2}\)$", text, re.MULTILINE)
