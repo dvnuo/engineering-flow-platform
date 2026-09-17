@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .models import Block, ParseResult
+from .validators import decode_text_bytes
 
 
 def _split_paragraphs(text: str, max_block_chars: int = 1200) -> list[str]:
@@ -32,7 +33,8 @@ def _split_paragraphs(text: str, max_block_chars: int = 1200) -> list[str]:
 
 async def parse_text_file(path: str, *, file_id: str, filename: str, content_type: str) -> ParseResult:
     raw = Path(path).read_bytes()
-    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    decoded, encoding = decode_text_bytes(raw)
+    text = decoded.replace("\r\n", "\n").replace("\r", "\n")
     blocks = []
     for idx, para in enumerate(_split_paragraphs(text), 1):
         blocks.append(
@@ -54,4 +56,5 @@ async def parse_text_file(path: str, *, file_id: str, filename: str, content_typ
         filename=filename,
         markdown=text,
         blocks=blocks,
+        json={"encoding": encoding, "chars": len(text)},
     )

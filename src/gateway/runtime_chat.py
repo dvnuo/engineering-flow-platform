@@ -94,6 +94,7 @@ async def run_runtime_chat(
     portal_user_name: str | None = None,
     attached_images: list[str] | None = None,
     attachments: list[str] | None = None,
+    display_attachments: list[dict[str, Any]] | None = None,
     transient_model_message: str | None = None,
     reasoning_replay: bool | None = None,
     stream_callback: Any = None,
@@ -159,6 +160,8 @@ async def run_runtime_chat(
         agent_id=agent_id,
         agent_name=agent_name,
         model=runtime_model,
+        original_user_message=_display_user_message(message),
+        display_attachments=display_attachments,
     )
     prompt = _compose_user_prompt(
         message=message,
@@ -918,6 +921,8 @@ def _run_metadata(
     agent_id: str | None,
     agent_name: str | None,
     model: str,
+    original_user_message: str | None = None,
+    display_attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     metadata = dict(execution_metadata or {})
     metadata.update(
@@ -936,9 +941,23 @@ def _run_metadata(
             "agent_id": agent_id,
             "agent_name": agent_name,
             "requested_model": model,
+            # What the transcript shows for this turn. The model gets the
+            # composed prompt (attachment context first); the member sees
+            # their own words and the files they attached.
+            "original_user_message": original_user_message,
+            "display_attachments": list(display_attachments or []) or None,
+            "internal_model_content_hidden": True if transient_model_message else None,
         }
     )
     return {key: value for key, value in metadata.items() if value is not None}
+
+
+def _display_user_message(message: str | None) -> str:
+    """The member's own words for the transcript; placeholders show as nothing."""
+    text = (message or "").strip()
+    if text in {"[attachment]", "[image]"}:
+        return ""
+    return text
 
 
 def _compose_user_prompt(

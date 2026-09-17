@@ -47,7 +47,26 @@ class TestRuntimeApiRoutes:
         assert '/api/server-files/upload' in routes
         assert '/api/server-files/delete' in routes
         assert '/api/server-files/download' in routes
-        assert not any(path == '/api/files' or path.startswith('/api/files/') for path in routes)
+        # Chat attachments are file-id based (Portal chatbox uploads); the
+        # legacy path-based /api/files browse aliases must stay gone.
+        assert '/api/files/upload' in routes
+        assert '/api/files/parse' in routes
+        assert '/api/files/{file_id}/preview' in routes
+        assert '/api/files/{file_id}' in routes
+        assert '/api/files' not in routes
+        assert '/api/files/read' not in routes
+        attachment_routes = {
+            (r.method, r.resource.canonical)
+            for r in app.router.routes()
+            if r.resource and r.resource.canonical.startswith('/api/files')
+        }
+        assert {
+            ('POST', '/api/files/upload'),
+            ('POST', '/api/files/parse'),
+            ('GET', '/api/files/{file_id}/preview'),
+            ('GET', '/api/files/{file_id}'),
+            ('DELETE', '/api/files/{file_id}'),
+        }.issubset(attachment_routes)
 
         delete_routes = [
             r for r in app.router.routes()

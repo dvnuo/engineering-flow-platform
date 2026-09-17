@@ -94,6 +94,20 @@ def _user_message_metadata(run_metadata: Mapping[str, Any] | None) -> dict[str, 
         metadata["author_id"] = author_id
     if author_name:
         metadata["author_name"] = author_name
+
+    # When the model saw an expanded prompt (attachment context injected ahead
+    # of the question), the transcript still shows the member's own words and
+    # the files they attached; the gateway hands both over in run metadata.
+    original = values.get("original_user_message")
+    if isinstance(original, str):
+        metadata["original_user_message"] = original
+    display_attachments = values.get("display_attachments")
+    if isinstance(display_attachments, list):
+        cleaned = [dict(item) for item in display_attachments if isinstance(item, Mapping)]
+        if cleaned:
+            metadata["display_attachments"] = cleaned
+    if values.get("internal_model_content_hidden") is True:
+        metadata["internal_model_content_hidden"] = True
     return metadata
 
 
