@@ -23,6 +23,14 @@ Native runtime must support:
 - `POST /api/tasks/{task_id}/cancel`
 - `GET /api/usage`
 - `GET /api/sessions`
+- `POST /api/files/upload` and `POST /api/files/parse` (chatbox attachments;
+  `GET /api/files/{file_id}/preview`, `GET /api/files/{file_id}` and
+  `DELETE /api/files/{file_id}` complete the set). The accepted extensions
+  come from `EFP_CHAT_UPLOAD_EXTENSIONS` (default
+  `pdf,docx,xlsx,csv,txt,log,pptx,zip,md,yaml,yml,json,xml`; images are
+  supported but only offered when a deployment adds them for a model with
+  vision) and the size cap from `EFP_MAX_UPLOAD_MB`; the Portal sets both
+  on the pod from its own settings.
 
 ## Runtime Profile Boot Contract
 
@@ -65,6 +73,8 @@ Portal-triggered restart with a new Secret.
 - EFP runtime native mode supports GitHub Copilot only. Configure `llm.provider: github_copilot` plus `llm.api_key` or `EFP_GITHUB_COPILOT_TOKEN`.
 - Runtime tool surface comes from the EFP-owned runtime built-in registry only (`src.__init__.get_tools_schema()`).
 - Model-visible tool ids include `bash`, `read`, `write`, `edit`, `grep`, `glob`, `webfetch`, `todowrite`, and `apply_patch`.
+- Interactive chats also get `session_search`, which searches and reads the assistant's other stored sessions under the runtime session root (member and assistant text only). It scopes to the Portal member from trusted metadata by default (`scope=mine`, matched against the `author_id` stamped on member turns) and to the whole agent on request (`scope=agent`). A runtime profile can disable it with `enable_session_search: false`.
+- Interactive chats also get `memory`, which keeps up to 50 one-sentence standing notes per Portal member under `<session root>/memory/<member>.json` and renders them into the system prompt as "Member notes". Notes are written only when the model calls `remember`, never extracted automatically; the tool refuses without a member identity. A runtime profile can disable it with `enable_member_memory: false`.
 - Legacy Python tool packages such as `src.bash_tools` are not present, and Jira/GitHub/Confluence/Git Python tools are not exposed as LLM tools.
 - The runtime image may include prebuilt `engineering-flow-platform-tools` CLI binaries on `PATH` in `/usr/local/bin`. Current binaries include `jira`, `confluence`, `browser`, and `mobile-auto`; future binaries are discovered from `cmd/<tool>` in that repo.
 - Agents use those CLIs through the model-visible `bash` built-in in the workspace-full-access runtime workspace. They should run `<tool> commands --json`, then `<tool> schema <command> --json`, prefer `--json`, use `--dry-run` before writes, and pass `--yes` for destructive operations.

@@ -84,6 +84,8 @@ PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
         "enable_question_tool",
         "enable_browser_tool",
         "enable_lsp_tool",
+        "enable_session_search",
+        "enable_member_memory",
         "inject_background_task_results",
         "model_aware_tool_selection",
         "structured_output_schema",

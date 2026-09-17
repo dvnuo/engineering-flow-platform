@@ -96,6 +96,7 @@ async def run_runtime_chat(
     portal_user_name: str | None = None,
     attached_images: list[str] | None = None,
     attachments: list[str] | None = None,
+    display_attachments: list[dict[str, Any]] | None = None,
     transient_model_message: str | None = None,
     reasoning_replay: bool | None = None,
     stream_callback: Any = None,
@@ -161,6 +162,8 @@ async def run_runtime_chat(
         agent_id=agent_id,
         agent_name=agent_name,
         model=runtime_model,
+        original_user_message=_display_user_message(message),
+        display_attachments=display_attachments,
     )
     prompt = _compose_user_prompt(
         message=message,
@@ -480,6 +483,23 @@ def _runtime_config(
         or _mapping_has_key(profile_config, "enable_browser_tool")
     ):
         kwargs["enable_browser_tool"] = True
+    # session_search only reads this assistant's own stored sessions and scopes
+    # them to the member Portal identified, so every interactive chat gets it
+    # unless a profile says otherwise. Background tasks, the Jira handler, and
+    # sub-agents have no member to scope it to and inherit "off".
+    if interactive and not (
+        _mapping_has_key(managed_overlay_config, "enable_session_search")
+        or _mapping_has_key(profile_config, "enable_session_search")
+    ):
+        kwargs["enable_session_search"] = True
+    # The memory tool keeps one-sentence notes per Portal member, next to the
+    # sessions on the agent volume, and only writes when the model is asked to.
+    # Same interactive-only rule as session_search, for the same reason.
+    if interactive and not (
+        _mapping_has_key(managed_overlay_config, "enable_member_memory")
+        or _mapping_has_key(profile_config, "enable_member_memory")
+    ):
+        kwargs["enable_member_memory"] = True
 
     try:
         return RuntimeConfig(**kwargs)
@@ -920,6 +940,8 @@ def _run_metadata(
     agent_id: str | None,
     agent_name: str | None,
     model: str,
+    original_user_message: str | None = None,
+    display_attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     metadata = dict(execution_metadata or {})
     metadata.update(
@@ -939,6 +961,12 @@ def _run_metadata(
             "agent_id": agent_id,
             "agent_name": agent_name,
             "requested_model": model,
+            # What the transcript shows for this turn. The model gets the
+            # composed prompt (attachment context first); the member sees
+            # their own words and the files they attached.
+            "original_user_message": original_user_message,
+            "display_attachments": list(display_attachments or []) or None,
+            "internal_model_content_hidden": True if transient_model_message else None,
         }
     )
     return {key: value for key, value in metadata.items() if value is not None}
@@ -953,6 +981,14 @@ def _current_time_text() -> str:
     """
     now = datetime.now(ENVIRONMENT_TIMEZONE)
     return f"{now:%Y-%m-%d %H:%M:%S} {ENVIRONMENT_TIMEZONE_LABEL}"
+
+
+def _display_user_message(message: str | None) -> str:
+    """The member's own words for the transcript; placeholders show as nothing."""
+    text = (message or "").strip()
+    if text in {"[attachment]", "[image]"}:
+        return ""
+    return text
 
 
 def _compose_user_prompt(

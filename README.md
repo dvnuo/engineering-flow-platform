@@ -298,6 +298,35 @@ Additional runtime contracts:
 
 ## Chat Attachments
 
+### Uploading Attachments
+
+The Portal chatbox uploads each attached file to the runtime before sending the
+message; the ids come back in the chat request. A file feeds the model only for
+the request that attached it (its retrieval context is released when the run
+ends), but the bytes stay until the session is deleted so the transcript's
+attachment chips can open them again. The persisted user turn keeps the
+member's own words (`metadata.original_user_message`) and the attached files
+(`metadata.display_attachments`) next to the composed model prompt, and
+`GET /api/sessions/{id}` surfaces them as `display_content` and `attachments`.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/files/upload?session_id=...` | multipart `file` part → `201 {"success": true, "file_id", "filename", "content_type", "size", "uploaded_at", "session_id"}`; `413` over the size cap, `415` when the extension is not allowed or the bytes are not a supported format |
+| `POST /api/files/parse?session_id=...` | body `{"file_id": "..."}` → parses the file into the session file context (`markdown`, `blocks`); the chat handlers also parse on demand |
+| `GET /api/files/{file_id}/preview?max_chars=N` | first `N` characters of the parsed text |
+| `GET /api/files/{file_id}` | raw bytes, inline; `?download=1` sends it as a download (UTF-8 filename preserved) |
+| `DELETE /api/files/{file_id}` | remove the file and its session context (`DELETE /api/sessions/{id}` removes every file of that session) |
+
+A file bound to a session is only visible with that `session_id` (query, `X-Session-ID` header, or JSON body).
+
+| Env | Purpose | Default |
+|-----|---------|---------|
+| `EFP_CHAT_UPLOAD_EXTENSIONS` | Comma-separated extensions the upload endpoint accepts (case-insensitive, leading dots optional). The Portal sets the same value on every agent pod from its own config, so the file picker and the runtime agree. The default is non-visual because the default model has no vision; a deployment whose model can see adds `jpg,jpeg,png,webp,gif` and they go to the model as images. `pdf`, `docx`, `xlsx`, `pptx`, `csv` go through their parsers, a `zip` is projected as its listing plus the text files inside (bounded: 200 files, 20k chars each, 200k total; binary members and nested archives are listed only), and any text format (`txt`, `md`, `log`, `json`, `yaml`, `xml`, source files, ...; UTF-8 or GB18030/GBK) is projected as text. A listed extension whose bytes the runtime cannot parse is still rejected with `415`. | `pdf,docx,xlsx,csv,txt,log,pptx,zip,md,yaml,yml,json,xml` |
+| `EFP_MAX_UPLOAD_MB` | Per-file cap (same value the Portal enforces); the aiohttp `client_max_size` adds transport headroom on top | `25` |
+| `EFP_CHAT_UPLOAD_RETENTION_DAYS` | Attachments live with their session so the transcript can open them; on startup the runtime also drops uploads older than this many days (`0` keeps everything) | `30` |
+
+`GET /api/files/{id}` serves text, pdf and images inline and everything else as a download; html, svg and xml always download and every response carries `X-Content-Type-Options: nosniff`, so an uploaded page can never run under the Portal's origin.
+
 ### Sending Attachments
 
 Portal can pass runtime-known transient attachment ids in the `attachments` array:

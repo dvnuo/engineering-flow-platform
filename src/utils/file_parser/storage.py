@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.workspace_defaults import DEFAULT_RUNTIME_WORKSPACE
 
@@ -206,6 +206,40 @@ def delete_file(file_id: str) -> bool:
     return True
 
 
+def _parse_uploaded_at(value: object) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1]
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+
+
+def sweep_expired_files(max_age_days: int, *, now: Optional[datetime] = None) -> int:
+    """Delete uploads older than ``max_age_days`` (0 disables); returns how many went.
+
+    Metadata without a readable timestamp is left alone rather than guessed at.
+    """
+    if max_age_days <= 0:
+        return 0
+    cutoff = (now or datetime.utcnow()) - timedelta(days=max_age_days)
+    removed = 0
+    for file_id, metadata in list(_file_metadata.items()):
+        uploaded_at = _parse_uploaded_at(metadata.uploaded_at)
+        if uploaded_at is None or uploaded_at > cutoff:
+            continue
+        try:
+            if delete_file(file_id):
+                removed += 1
+        except Exception:
+            logger.warning("Retention sweep could not delete %s", file_id, exc_info=True)
+    return removed
+
+
 async def save_uploaded_file(
     content: bytes,
     original_filename: str,
@@ -313,6 +347,14 @@ def _mime_to_extension(mime_type: str) -> str:
         Safe extension with dot
     """
     mime_to_ext = {
+        "text/markdown": ".md",
+        "text/tab-separated-values": ".tsv",
+        "text/html": ".html",
+        "application/json": ".json",
+        "application/yaml": ".yaml",
+        "application/xml": ".xml",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+        "application/zip": ".zip",
         "image/jpeg": ".jpg",
         "image/png": ".png",
         "image/gif": ".gif",

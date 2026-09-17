@@ -9,8 +9,11 @@ from typing import TYPE_CHECKING, Any
 from ...connector_bridge import ConnectorBridgeBroker
 from ...instructions import ReadInstructionResolver
 from ...lsp import LSPClient
+from ...member_memory import InMemoryMemberNotesStore, MemberNotesStore
 from ...permissions import ALLOW, PermissionMetadata
 from ...questions import QuestionBroker
+from ...session.protocol import SessionStore
+from ...session.store import InMemorySessionStore
 from ...session.todo import SessionTodoStore
 from ...skills.discovery import SkillDiscovery
 from ...skills.tool import build_skill_tool
@@ -27,10 +30,12 @@ from .filesystem import (
 )
 from .invalid import create_invalid_tool
 from .lsp import create_lsp_tool
+from .memory import create_memory_tool
 from .plan import create_plan_exit_tool
 from .question import create_question_tool
 from .repository import create_repo_clone_tool, create_repo_overview_tool
 from .search import create_glob_tool, create_grep_tool
+from .session_search import create_session_search_tool
 from .shell import create_bash_tool
 from .task import TaskToolRequest, TaskToolResult, TaskToolRunner, create_task_tool
 from .todo import create_todowrite_tool
@@ -72,12 +77,23 @@ def create_core_tool_registry(
     connector_bridge: ConnectorBridgeBroker | None = None,
     connector_event_publisher: Any = None,
     read_roots: Iterable[str | Path] | None = None,
+    include_session_search_tool: bool = False,
+    session_store: SessionStore | None = None,
+    session_search_permission: PermissionMetadata | None = None,
+    include_memory_tool: bool = False,
+    member_notes_store: MemberNotesStore | None = None,
+    memory_permission: PermissionMetadata | None = None,
 ) -> ToolRegistry:
     """Create a registry containing EFP runtime core built-in tools.
 
     Skill directories (and any explicit ``read_roots``) become read-only roots
     for ``read``, ``glob`` and ``grep``: a skill may keep whatever layout it
     likes outside the workspace, and the model can still open its files.
+
+    ``session_search`` reads the sessions of ``session_store``; production
+    callers pass the runtime's own store so the tool sees the same sessions the
+    gateway lists. Without one it falls back to an empty in-memory store. The
+    same holds for ``memory`` and ``member_notes_store``.
     """
 
     root = normalize_workspace_root(workspace_root)
@@ -146,6 +162,20 @@ def create_core_tool_registry(
         )
     resolved_todo_store = todo_store or SessionTodoStore()
     registry.register(create_todowrite_tool(todo_store=resolved_todo_store))
+    if include_session_search_tool:
+        registry.register(
+            create_session_search_tool(
+                session_store if session_store is not None else InMemorySessionStore(),
+                permission=session_search_permission,
+            )
+        )
+    if include_memory_tool:
+        registry.register(
+            create_memory_tool(
+                member_notes_store if member_notes_store is not None else InMemoryMemberNotesStore(),
+                permission=memory_permission,
+            )
+        )
     if include_plan_tool:
         registry.register(create_plan_exit_tool())
     if resolved_skill_discovery is not None:
