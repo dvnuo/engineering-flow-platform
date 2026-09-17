@@ -151,9 +151,11 @@ async def test_unparsed_upload_is_parsed_on_demand_by_the_chat_handlers(isolated
 
 
 @pytest.mark.asyncio
-async def test_image_upload_is_sent_to_the_model_as_an_image(isolated_attachment_storage):
+async def test_image_upload_is_sent_to_the_model_as_an_image(isolated_attachment_storage, monkeypatch):
     from src.gateway import runtime_api
 
+    # A deployment whose model can see adds image types to the allowlist.
+    monkeypatch.setenv("EFP_CHAT_UPLOAD_EXTENSIONS", "png,jpg,pdf")
     client = await _client()
     try:
         upload = await client.post(
@@ -179,6 +181,122 @@ async def test_image_upload_is_sent_to_the_model_as_an_image(isolated_attachment
     images = await runtime_api._collect_attached_images(session_id="s1", message="", attachments=[file_id])
     assert len(images) == 1
     assert images[0].startswith("data:image/png;base64,")
+
+
+def _sample_pptx_bytes() -> bytes:
+    import io
+
+    from pptx import Presentation
+
+    prs = Presentation()
+    title_slide = prs.slides.add_slide(prs.slide_layouts[1])
+    title_slide.shapes.title.text = "Quarterly review"
+    title_slide.placeholders[1].text_frame.text = "Revenue grew 12%"
+    title_slide.placeholders[1].text_frame.add_paragraph().text = "Churn fell to 3%"
+    title_slide.notes_slide.notes_text_frame.text = "Mention the onboarding flow"
+
+    table_slide = prs.slides.add_slide(prs.slide_layouts[5])
+    table_slide.shapes.title.text = "Numbers"
+    shape = table_slide.shapes.add_table(2, 2, 0, 0, 100, 100)
+    shape.table.cell(0, 0).text = "Region"
+    shape.table.cell(0, 1).text = "Revenue"
+    shape.table.cell(1, 0).text = "EMEA"
+    shape.table.cell(1, 1).text = "1.2M"
+
+    buffer = io.BytesIO()
+    prs.save(buffer)
+    return buffer.getvalue()
+
+
+def _sample_zip_bytes() -> bytes:
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("project/README.md", "# Demo project\n\nRuns the nightly export.\n")
+        zf.writestr("project/config.json", '{"retries": 3}')
+        zf.writestr("project/bin/tool.exe", b"MZ\x90\x00\x00\x00binary")
+        zf.writestr("project/vendor.zip", b"PK\x03\x04nested")
+        zf.writestr("__MACOSX/._README.md", b"junk")
+    return buffer.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_pptx_upload_is_projected_to_slide_text(isolated_attachment_storage):
+    from src.gateway import runtime_api
+
+    client = await _client()
+    try:
+        upload = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("review.pptx", _sample_pptx_bytes(), "application/octet-stream"),
+        )
+        assert upload.status == 201, await upload.text()
+        uploaded = await upload.json()
+        assert uploaded["content_type"] == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        file_id = uploaded["file_id"]
+
+        parsed = await client.post("/api/files/parse", params={"session_id": "s1"}, json={"file_id": file_id})
+        assert parsed.status == 200, await parsed.text()
+        body = await parsed.json()
+        assert body["success"] is True
+        markdown = body["markdown"]
+        assert "## Slide 1: Quarterly review" in markdown
+        assert "Revenue grew 12%" in markdown
+        assert "Churn fell to 3%" in markdown
+        assert "Speaker notes: Mention the onboarding flow" in markdown
+        assert "## Slide 2: Numbers" in markdown
+        assert "| EMEA" in markdown
+        assert body["json"]["slides"] == 2
+        assert body["json"]["tables"] == 1
+    finally:
+        await client.close()
+
+    context = await runtime_api._ensure_chat_attachment_context(session_id="s1", attachment_ids=[file_id])
+    assert context["context_file_ids"] == [file_id]
+    assert context["failures"] == []
+
+
+@pytest.mark.asyncio
+async def test_zip_upload_is_projected_to_listing_and_text_members(isolated_attachment_storage):
+    from src.gateway import runtime_api
+
+    client = await _client()
+    try:
+        upload = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("project.zip", _sample_zip_bytes(), "application/zip"),
+        )
+        assert upload.status == 201, await upload.text()
+        uploaded = await upload.json()
+        assert uploaded["content_type"] == "application/zip"
+        file_id = uploaded["file_id"]
+
+        parsed = await client.post("/api/files/parse", params={"session_id": "s1"}, json={"file_id": file_id})
+        assert parsed.status == 200, await parsed.text()
+        body = await parsed.json()
+        assert body["success"] is True
+        markdown = body["markdown"]
+        assert "# Archive: project.zip" in markdown
+        assert "- project/README.md" in markdown
+        assert "- project/bin/tool.exe" in markdown
+        assert "__MACOSX" not in markdown
+        assert "## project/README.md" in markdown
+        assert "Runs the nightly export." in markdown
+        assert '"retries": 3' in markdown
+        assert "project/bin/tool.exe: binary" in markdown
+        assert "project/vendor.zip: nested archive" in markdown
+        assert body["json"]["entries"] == 4
+        assert body["json"]["text_files"] == 2
+    finally:
+        await client.close()
+
+    context = await runtime_api._ensure_chat_attachment_context(session_id="s1", attachment_ids=[file_id])
+    assert context["context_file_ids"] == [file_id]
+    assert context["failures"] == []
 
 
 @pytest.mark.asyncio
@@ -256,7 +374,16 @@ async def test_upload_rejects_extension_not_on_the_allowlist(isolated_attachment
         body = await response.json()
         assert body["success"] is False
         assert "File type .exe is not allowed" in body["error"]
-        assert "Allowed: jpg, jpeg, png, webp, gif, pdf, docx, xlsx, csv, txt" in body["error"]
+        assert "Allowed: pdf, docx, xlsx, csv, txt, log, pptx, zip, md, yaml, yml, json, xml" in body["error"]
+
+        # Images are off the default list: the default model has no vision.
+        response = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("shot.png", PNG_BYTES, "image/png"),
+        )
+        assert response.status == 415
+        assert "File type .png is not allowed" in (await response.json())["error"]
 
         response = await client.post(
             "/api/files/upload",

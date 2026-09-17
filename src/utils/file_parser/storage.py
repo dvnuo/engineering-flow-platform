@@ -319,6 +319,8 @@ def _mime_to_extension(mime_type: str) -> str:
         "application/json": ".json",
         "application/yaml": ".yaml",
         "application/xml": ".xml",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+        "application/zip": ".zip",
         "image/jpeg": ".jpg",
         "image/png": ".png",
         "image/gif": ".gif",

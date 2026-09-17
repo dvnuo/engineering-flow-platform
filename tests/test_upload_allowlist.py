@@ -36,12 +36,24 @@ def test_is_upload_extension_allowed(monkeypatch):
     assert validators.is_upload_extension_allowed("doc.pdf", allowed=["pdf"]) is True
 
 
-def test_get_safe_extension_follows_the_configured_allowlist(monkeypatch):
+def test_get_safe_extension_accepts_known_formats_and_the_configured_allowlist(monkeypatch):
     monkeypatch.delenv(validators.UPLOAD_EXTENSIONS_ENV, raising=False)
-    assert validators.get_safe_extension("a.md") == ""
-    monkeypatch.setenv(validators.UPLOAD_EXTENSIONS_ENV, "md")
+    # Known formats stay recognisable even when off the allowlist (images are
+    # off the non-visual default); unknown ones need the allowlist.
+    assert validators.get_safe_extension("a.jpg") == ".jpg"
     assert validators.get_safe_extension("a.md") == ".md"
-    assert validators.get_safe_extension("a.jpg") == ""
+    assert validators.get_safe_extension("a.foo") == ""
+    monkeypatch.setenv(validators.UPLOAD_EXTENSIONS_ENV, "foo")
+    assert validators.get_safe_extension("a.foo") == ".foo"
+    assert validators.get_safe_extension("a.exe") == ""
+
+
+def test_default_allowlist_is_non_visual_and_includes_office_and_archives():
+    defaults = validators.DEFAULT_UPLOAD_EXTENSIONS
+    assert defaults == ("pdf", "docx", "xlsx", "csv", "txt", "log", "pptx", "zip", "md", "yaml", "yml", "json", "xml")
+    assert not (set(defaults) & validators.IMAGE_EXTENSIONS)
+    assert "pptx" in validators.BINARY_EXTENSION_MIME_TYPES
+    assert "zip" in validators.BINARY_EXTENSION_MIME_TYPES
 
 
 def test_resolve_max_upload_mb(monkeypatch):
@@ -67,15 +79,45 @@ def test_resolve_max_upload_mb(monkeypatch):
         ("text/x-python", True),
         ("application/json", True),
         ("application/yaml", True),
+        ("application/vnd.openxmlformats-officedocument.presentationml.presentation", True),
+        ("application/zip", True),
         ("image/bmp", False),
         ("application/octet-stream", False),
         ("application/x-dosexec", False),
-        ("application/zip", False),
+        ("application/x-7z-compressed", False),
         ("", False),
     ],
 )
 def test_is_supported_upload_mime(mime, expected):
     assert validators.is_supported_upload_mime(mime) is expected
+
+
+def _zip_bytes(entries):
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buffer.getvalue()
+
+
+def test_detect_mime_type_tells_office_documents_and_plain_archives_apart(monkeypatch):
+    monkeypatch.delenv(validators.UPLOAD_EXTENSIONS_ENV, raising=False)
+    pptx = _zip_bytes({"[Content_Types].xml": "<Types/>", "ppt/presentation.xml": "<p/>"})
+    docx = _zip_bytes({"[Content_Types].xml": "<Types/>", "word/document.xml": "<w/>"})
+    xlsx = _zip_bytes({"[Content_Types].xml": "<Types/>", "xl/workbook.xml": "<x/>"})
+    plain = _zip_bytes({"README.md": "# hi", "src/main.py": "print(1)"})
+
+    assert _detect_mime_type(pptx, "deck.pptx") == validators.BINARY_EXTENSION_MIME_TYPES["pptx"]
+    assert _detect_mime_type(docx, "doc.docx") == validators.BINARY_EXTENSION_MIME_TYPES["docx"]
+    assert _detect_mime_type(xlsx, "book.xlsx") == validators.BINARY_EXTENSION_MIME_TYPES["xlsx"]
+    assert _detect_mime_type(plain, "bundle.zip") == "application/zip"
+    # The bytes decide: a plain archive named .docx is still an archive.
+    assert _detect_mime_type(plain, "renamed.docx") == "application/zip"
+    # A zip extension on non-zip bytes is not an archive.
+    assert _detect_mime_type(b"MZ\x90\x00\xff\xfe", "fake.zip") == "application/octet-stream"
 
 
 def test_detect_mime_type_maps_allowed_text_extensions(monkeypatch):
@@ -87,6 +129,25 @@ def test_detect_mime_type_maps_allowed_text_extensions(monkeypatch):
     assert _detect_mime_type(b"print(1)\n", "main.py") == "text/plain"
     assert _detect_mime_type(b"a,b\n1,2\n", "d.csv") == "text/csv"
     assert _detect_mime_type(b"plain", "d.txt") == "text/plain"
+
+
+def test_text_helpers_accept_utf8_and_gb18030_and_reject_binary():
+    gbk = "第三季度营收增长 12%\n".encode("gb18030")
+    assert validators.looks_like_text("plain ascii".encode()) is True
+    assert validators.looks_like_text("中文 UTF-8".encode("utf-8")) is True
+    assert validators.looks_like_text(gbk) is True
+    assert validators.looks_like_text(b"MZ\x90\x00\x03") is False
+    assert validators.looks_like_text(b"") is False
+
+    assert validators.decode_text_bytes("中文".encode("utf-8")) == ("中文", "utf-8")
+    assert validators.decode_text_bytes(b"\xef\xbb\xbfbom") == ("bom", "utf-8")
+    assert validators.decode_text_bytes(gbk) == ("第三季度营收增长 12%\n", "gb18030")
+
+
+def test_detect_mime_type_accepts_gbk_encoded_logs(monkeypatch):
+    monkeypatch.setenv(validators.UPLOAD_EXTENSIONS_ENV, "log,txt")
+    gbk_log = "2026-09-16 错误：连接超时\n".encode("gb18030")
+    assert _detect_mime_type(gbk_log, "app.log") == "text/plain"
 
 
 def test_detect_mime_type_rejects_binary_bytes_and_unlisted_extensions(monkeypatch):

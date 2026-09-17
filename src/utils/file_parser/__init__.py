@@ -28,9 +28,11 @@ from .validators import (
     TEXT_EXTENSION_MIME_TYPES,
     UPLOAD_EXTENSIONS_ENV,
     allowed_upload_extensions,
+    decode_text_bytes,
     file_extension,
     is_supported_upload_mime,
     is_upload_extension_allowed,
+    looks_like_text,
     parse_upload_extensions,
     resolve_max_upload_mb,
     validate_file_size,
@@ -93,6 +95,22 @@ def _get_text_module():
         from . import text as _text
         _async_modules['text'] = _text
     return _async_modules['text']
+
+
+def _get_pptx_module():
+    """Lazy load PowerPoint parser module."""
+    if 'pptx' not in _async_modules:
+        from . import pptx as _pptx
+        _async_modules['pptx'] = _pptx
+    return _async_modules['pptx']
+
+
+def _get_archive_module():
+    """Lazy load ZIP archive parser module."""
+    if 'archive' not in _async_modules:
+        from . import archive as _archive
+        _async_modules['archive'] = _archive
+    return _async_modules['archive']
 
 
 async def upload_file(
@@ -203,6 +221,24 @@ async def parse_file(file_id: str, options: dict = None) -> ParseResult:
         result.filename = metadata.original_filename
         return result
 
+    if content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+        pptx_mod = _get_pptx_module()
+        result = await pptx_mod.parse_pptx(str(path), options)
+        result.file_id = file_id
+        result.filename = metadata.original_filename
+        return result
+
+    if content_type == "application/zip":
+        archive_mod = _get_archive_module()
+        # The stored name is the file id; the listing should carry the name
+        # the member uploaded.
+        archive_options = dict(options or {})
+        archive_options.setdefault("display_name", metadata.original_filename)
+        result = await archive_mod.parse_zip(str(path), archive_options)
+        result.file_id = file_id
+        result.filename = metadata.original_filename
+        return result
+
     text_types = {
         "application/json",
         "application/xml",
@@ -296,7 +332,8 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
     if header.startswith(b"%PDF-"):
         return "application/pdf"
     
-    # Office Open XML documents (DOCX/XLSX are ZIP-based)
+    # Office Open XML documents (DOCX/XLSX/PPTX are ZIP-based); any other valid
+    # zip is a plain archive, projected as its listing plus the text inside.
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
             names = set(zf.namelist())
@@ -304,21 +341,19 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
                 return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             if any(name.startswith("xl/") for name in names):
                 return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if any(name.startswith("ppt/") for name in names):
+                return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            return "application/zip"
     except zipfile.BadZipFile:
         pass
     
     # Text-based formats: anything on the allowlist that is not a known binary
-    # format must decode as UTF-8; the extension only picks the text MIME type.
+    # format must read as text (UTF-8 or GB18030, no NUL bytes); the extension
+    # only picks the text MIME type.
     bare_ext = ext.lstrip(".")
     if bare_ext and bare_ext not in BINARY_EXTENSION_MIME_TYPES and bare_ext in allowed_upload_extensions():
-        try:
-            header.decode("utf-8")
-        except UnicodeDecodeError:
-            # A multi-byte character may straddle the 4KB header boundary.
-            try:
-                header[:-4].decode("utf-8")
-            except UnicodeDecodeError:
-                return "application/octet-stream"
+        if not looks_like_text(header):
+            return "application/octet-stream"
         return TEXT_EXTENSION_MIME_TYPES.get(bare_ext, "text/plain")
 
     # Fallback: unknown content, treat as generic binary
@@ -362,9 +397,11 @@ __all__ = [
     "TEXT_EXTENSION_MIME_TYPES",
     "UPLOAD_EXTENSIONS_ENV",
     "allowed_upload_extensions",
+    "decode_text_bytes",
     "file_extension",
     "is_supported_upload_mime",
     "is_upload_extension_allowed",
+    "looks_like_text",
     "parse_upload_extensions",
     "resolve_max_upload_mb",
     # Storage

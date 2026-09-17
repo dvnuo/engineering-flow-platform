@@ -16,12 +16,17 @@ PROJECTABLE_MIME_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/zip",
     "text/csv",
     "text/plain",
     *TEXT_LIKE_MIME_TYPES,
 }
 
-PROJECTABLE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".csv", ".txt", ".json", ".xml", ".yaml", ".yml"}
+PROJECTABLE_EXTENSIONS = {
+    ".pdf", ".docx", ".xlsx", ".pptx", ".zip", ".csv", ".txt", ".log", ".md",
+    ".json", ".xml", ".yaml", ".yml",
+}
 
 
 def is_text_like_content_type(content_type: str) -> bool:
@@ -48,6 +53,10 @@ def infer_projection_kind(content_type: str, filename: str, parsed_markdown: str
         return "docx_markdown"
     if normalized.endswith("spreadsheetml.sheet") or ext == ".xlsx":
         return "xlsx_markdown"
+    if normalized.endswith("presentationml.presentation") or ext == ".pptx":
+        return "pptx_markdown"
+    if normalized == "application/zip" or ext == ".zip":
+        return "archive_markdown"
     if normalized == "text/csv" or ext == ".csv":
         return "csv_text"
     if is_text_like_content_type(normalized) or ext in {".txt", ".json", ".xml", ".yaml", ".yml"}:
