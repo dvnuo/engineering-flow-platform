@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -48,7 +49,12 @@ from ..prompt import resolve_prompt_references
 from ..connector_bridge import ConnectorBridgeBroker, get_connector_bridge_broker
 from ..questions import QuestionBroker
 from ..tools.builtin.browser import create_browser_tool
+from ..tools.builtin.session_search import (
+    SESSION_SEARCH_TOOL_ID,
+    create_session_search_tool,
+)
 from ..session.protocol import SessionStore
+from ..session.search import list_session_summaries, recent_sessions_overview
 from ..session.checkpoint import SessionCheckpoint
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.query import (
@@ -74,7 +80,7 @@ from ..skills.commands import (
 from ..skills.context import SkillContextBuilder, available_skills_system_message
 from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_tool
-from ..system_prompt import SystemPromptBuilder
+from ..system_prompt import SystemPromptBuilder, resolve_session_user
 from ..tools.builtin import (
     DEFAULT_STRUCTURED_OUTPUT_TOOL_ID,
     create_core_tool_registry,
@@ -604,6 +610,11 @@ class AgentRuntime:
                 if subtask_execution.user_text is not None:
                     user_text_for_request = subtask_execution.user_text
             self._annotate_skill_metadata(run_metadata, active_skills)
+            await self._annotate_session_memory_metadata(
+                run_metadata,
+                session_id=resolved_session_id,
+                run_tools=run_tools,
+            )
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             agent_profile_messages = self._build_agent_profile_messages(profile)
             self._annotate_agent_profile_metadata(
@@ -844,6 +855,11 @@ class AgentRuntime:
             )
             self._annotate_skill_metadata(run_metadata, active_skills)
             run_metadata["resume"] = True
+            await self._annotate_session_memory_metadata(
+                run_metadata,
+                session_id=session_id,
+                run_tools=run_tools,
+            )
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             agent_profile_messages = self._build_agent_profile_messages(profile)
             self._annotate_agent_profile_metadata(
@@ -1150,6 +1166,71 @@ class AgentRuntime:
     def _registered_browser_tool_id(self) -> str | None:
         """The browser tool's id, but only when this runtime really has it."""
         return BROWSER_TOOL_ID if self.tool_runtime.registry.get(BROWSER_TOOL_ID) else None
+
+    def _registered_session_search_tool_id(self) -> str | None:
+        """The session_search tool's id, but only when this runtime really has it."""
+        return (
+            SESSION_SEARCH_TOOL_ID
+            if self.tool_runtime.registry.get(SESSION_SEARCH_TOOL_ID)
+            else None
+        )
+
+    def _session_search_tool_visible(self, run_tools: Mapping[str, bool] | None) -> bool:
+        """Whether the model is offered ``session_search`` on this run.
+
+        The prompt block that advertises the tool must follow the same
+        selection the loop applies, or the model is told about a tool it
+        cannot call: registered, not disabled, inside the allowlist when there
+        is one, and not switched off for this run. Unlike ``question`` and
+        ``browser`` the tool is not forced into an allowlist, because reading
+        other sessions is a capability an allowlisted assistant may well be
+        meant to lack.
+        """
+        tool_id = self._registered_session_search_tool_id()
+        if tool_id is None:
+            return False
+        if tool_id in self.config.disabled_tools:
+            return False
+        if self.config.enabled_tools is not None and tool_id not in self.config.enabled_tools:
+            return False
+        if run_tools is not None and run_tools.get(tool_id) is False:
+            return False
+        return True
+
+    async def _annotate_session_memory_metadata(
+        self,
+        run_metadata: dict[str, Any],
+        *,
+        session_id: str,
+        run_tools: Mapping[str, bool] | None,
+    ) -> None:
+        """Attach the "earlier sessions" overview the system prompt renders.
+
+        Listing headers is a stat per file once the store's summary cache is
+        warm, but the first call after a restart parses every session, so it
+        runs off the event loop. The overview is best-effort context: a failure
+        here drops the listing, never the run.
+        """
+        if not self._session_search_tool_visible(run_tools):
+            run_metadata.pop("session_memory", None)
+            return
+        viewer = resolve_session_user(run_metadata)
+        viewer_id = viewer.get("id") if viewer else None
+        try:
+            summaries = await asyncio.to_thread(list_session_summaries, self.store)
+        except Exception:  # noqa: BLE001 - the overview must never fail a run.
+            logging.getLogger(__name__).debug(
+                "session memory overview unavailable", exc_info=True
+            )
+            run_metadata.pop("session_memory", None)
+            return
+        overview = recent_sessions_overview(
+            summaries,
+            exclude_session_id=session_id,
+            viewer_id=viewer_id,
+        )
+        overview["tool_id"] = SESSION_SEARCH_TOOL_ID
+        run_metadata["session_memory"] = overview
 
     def _publish_runtime_event(self, event: RuntimeEvent) -> None:
         """Publish an event on this runtime's bus while a tool is still running.
@@ -1656,6 +1737,7 @@ class AgentRuntime:
         run_metadata["plan_mode_read_only"] = self.config.plan_mode_read_only
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
         run_metadata["enable_browser_tool"] = self.config.enable_browser_tool
+        run_metadata["enable_session_search"] = self.config.enable_session_search
         run_metadata["default_provider_id"] = self.config.default_provider_id
         run_metadata["default_model"] = self.config.default_model
         run_metadata["model_aware_tool_selection_enabled"] = (
@@ -2881,6 +2963,7 @@ def _resolve_config(
         enable_question_tool=config.enable_question_tool,
         enable_browser_tool=config.enable_browser_tool,
         enable_lsp_tool=config.enable_lsp_tool,
+        enable_session_search=config.enable_session_search,
         inject_background_task_results=config.inject_background_task_results,
         structured_output_schema=(
             None
@@ -2993,6 +3076,8 @@ def _resolve_tool_runtime(
                 include_lsp_tool=config.enable_lsp_tool,
                 include_plan_tool=_plan_tool_enabled(config),
                 todo_store=_store_session_todo_store(store),
+                include_session_search_tool=config.enable_session_search,
+                session_store=store,
             )
         else:
             if config.enable_lsp_tool or lsp_client is not None:
@@ -3009,6 +3094,8 @@ def _resolve_tool_runtime(
                         event_publisher=connector_event_publisher,
                     )
                 )
+            if config.enable_session_search:
+                registry.register(create_session_search_tool(store))
             if skill_discovery is not None:
                 registry.register(
                     build_skill_tool(

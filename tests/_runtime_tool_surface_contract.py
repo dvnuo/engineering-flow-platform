@@ -74,6 +74,10 @@ CONDITIONAL_TOOL_IDS: dict[str, SurfaceContractEntry] = {
         status="conditional",
         reason="Disabled by default; registered only when repository scout tools are explicitly requested.",
     ),
+    "session_search": SurfaceContractEntry(
+        status="conditional",
+        reason="Enabled by RuntimeConfig.enable_session_search or include_session_search_tool; the gateway enables it for interactive chats.",
+    ),
     "websearch": SurfaceContractEntry(
         status="conditional",
         reason="Registered only when callers inject a provider-neutral websearch runner; default core registry leaves it disabled.",

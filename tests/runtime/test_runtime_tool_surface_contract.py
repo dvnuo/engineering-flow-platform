@@ -47,6 +47,7 @@ def test_conditional_contract_tool_ids_are_registrable_under_conditions(
         include_plan_tool=True,
         include_repository_tools=True,
         websearch_runner=_websearch_runner,
+        include_session_search_tool=True,
     )
 
     assert "websearch" in CONDITIONAL_TOOL_IDS

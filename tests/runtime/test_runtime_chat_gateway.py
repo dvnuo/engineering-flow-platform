@@ -621,6 +621,39 @@ def test_runtime_chat_profile_track_usage_overrides_only_when_present(monkeypatc
     assert with_profile_track_usage.track_usage is True
 
 
+def test_runtime_chat_enables_session_search_for_interactive_chats_only(monkeypatch):
+    class _FakeConfig:
+        @property
+        def session(self):
+            return {}
+
+        def get_effective_config(self):
+            return {}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    interactive = runtime_chat._runtime_config(
+        "request-model",
+        track_usage=True,
+        interactive=True,
+    )
+    background = runtime_chat._runtime_config(
+        "request-model",
+        track_usage=True,
+        interactive=False,
+    )
+    profile_off = runtime_chat._runtime_config(
+        "request-model",
+        track_usage=True,
+        interactive=True,
+        runtime_profile_config={"enable_session_search": False},
+    )
+
+    assert interactive.enable_session_search is True
+    assert background.enable_session_search is False
+    assert profile_off.enable_session_search is False
+
+
 @pytest.mark.asyncio
 async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(monkeypatch):
     result = RuntimeLoopResult(

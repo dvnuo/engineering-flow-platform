@@ -77,6 +77,10 @@ class RuntimeConfig:
     enable_question_tool: bool = False
     enable_browser_tool: bool = False
     enable_lsp_tool: bool = False
+    # Offers the `session_search` tool, which reads this assistant's other
+    # stored sessions. The gateway turns it on for interactive chats only:
+    # background tasks and sub-agents have no member to scope it to.
+    enable_session_search: bool = False
     inject_background_task_results: bool = True
     structured_output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -247,6 +251,7 @@ class RuntimeConfig:
         self.enable_question_tool = bool(self.enable_question_tool)
         self.enable_browser_tool = bool(self.enable_browser_tool)
         self.enable_lsp_tool = bool(self.enable_lsp_tool)
+        self.enable_session_search = bool(self.enable_session_search)
         self.inject_background_task_results = bool(
             self.inject_background_task_results
         )

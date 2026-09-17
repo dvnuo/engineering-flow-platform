@@ -14,6 +14,7 @@ from .question import create_question_tool
 from .registry import create_core_tool_registry
 from .repository import create_repo_clone_tool, create_repo_overview_tool
 from .search import create_glob_tool, create_grep_tool
+from .session_search import SESSION_SEARCH_TOOL_ID, create_session_search_tool
 from .shell import create_bash_tool
 from .structured_output import (
     DEFAULT_STRUCTURED_OUTPUT_TOOL_ID,
@@ -36,6 +37,7 @@ __all__ = [
     "WebSearchRequest",
     "WebSearchRunner",
     "DEFAULT_STRUCTURED_OUTPUT_TOOL_ID",
+    "SESSION_SEARCH_TOOL_ID",
     "create_apply_patch_tool",
     "create_bash_tool",
     "create_browser_tool",
@@ -51,6 +53,7 @@ __all__ = [
     "create_read_tool",
     "create_repo_clone_tool",
     "create_repo_overview_tool",
+    "create_session_search_tool",
     "create_structured_output_tool",
     "create_task_tool",
     "create_todowrite_tool",
