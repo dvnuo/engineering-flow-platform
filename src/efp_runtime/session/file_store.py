@@ -88,6 +88,16 @@ def _release_allocator_memory() -> None:
         _MALLOC_TRIM = False
 
 
+def release_allocator_memory() -> None:
+    """Hand freed parse arenas back to the OS after a burst of session reads.
+
+    Callers that parse many sessions in one go (the session_search scan) use
+    this the same way the list endpoint does, so a scan does not leave RSS
+    parked at its peak.
+    """
+    _release_allocator_memory()
+
+
 def _summary_preview_text(message: Message) -> str:
     """Preview string for a message, mirroring gateway legacy ``content``.
 

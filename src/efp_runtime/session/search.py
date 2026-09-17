@@ -9,10 +9,13 @@ the assistant actually said.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import math
 import re
+import threading
+import time
 from typing import Any
 
 from .file_store import SessionSummary, build_session_summary
@@ -48,6 +51,18 @@ ROLE_SUMMARY = "summary"
 MAX_TURN_CHARS = 4000
 MAX_TURNS_PER_SESSION = 400
 DISPLAY_NAME_PREVIEW_CHARS = 30
+
+# How long a listing of session headers may be reused before the store is
+# asked again. Listing is a stat per session file once the store's summary
+# cache is warm, but it happens on every chat turn and every search, so a short
+# reuse window keeps a busy assistant from re-scanning its directory for each
+# message. Sessions that changed inside the window show up on the next scan.
+SUMMARY_LIST_TTL_SECONDS = 30.0
+
+NO_IDENTITY_NOTE = (
+    "No member identity was attached to this run, so no session can be matched "
+    "to the member. Only an explicit scope=\"agent\" covers this assistant's sessions."
+)
 
 _CJK_RANGE = "぀-ヿ㐀-䶿一-鿿가-힯"
 _TERM_PATTERN = re.compile(rf"[{_CJK_RANGE}]+|\w+", re.UNICODE)
@@ -146,6 +161,64 @@ def list_session_summaries(store: Any) -> list[SessionSummary]:
     return [build_session_summary(session) for session in store.list_sessions()]
 
 
+class SessionSummaryListCache:
+    """Reuse a store's header listing for a short window, keyed by its root.
+
+    Only file-backed stores (those with a ``root``) are cached: an in-memory
+    store is cheap to list and, in tests, changes between calls.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = SUMMARY_LIST_TTL_SECONDS,
+        max_entries: int = 64,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.ttl_seconds = float(ttl_seconds)
+        self.max_entries = max(1, int(max_entries))
+        self._clock = clock
+        self._entries: "OrderedDict[str, tuple[float, list[SessionSummary]]]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, store: Any) -> list[SessionSummary]:
+        root = getattr(store, "root", None)
+        if root is None or self.ttl_seconds <= 0:
+            return list_session_summaries(store)
+        key = str(root)
+        now = self._clock()
+        with self._lock:
+            cached = self._entries.get(key)
+            if cached is not None and now - cached[0] < self.ttl_seconds:
+                self._entries.move_to_end(key)
+                return list(cached[1])
+        summaries = list_session_summaries(store)
+        with self._lock:
+            self._entries[key] = (now, summaries)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+        return list(summaries)
+
+    def invalidate(self, store: Any = None) -> None:
+        with self._lock:
+            if store is None:
+                self._entries.clear()
+                return
+            root = getattr(store, "root", None)
+            if root is not None:
+                self._entries.pop(str(root), None)
+
+
+SUMMARY_LIST_CACHE = SessionSummaryListCache()
+
+
+def cached_session_summaries(store: Any) -> list[SessionSummary]:
+    """Session headers, reused for ``SUMMARY_LIST_TTL_SECONDS`` per file store."""
+
+    return SUMMARY_LIST_CACHE.get(store)
+
+
 def select_candidates(
     summaries: Iterable[SessionSummary],
     *,
@@ -158,8 +231,10 @@ def select_candidates(
     """Pick the sessions a search or overview may look at, newest first.
 
     ``mine`` keeps sessions the viewer took part in. Without a viewer identity
-    (local development, no Portal) there is nothing to filter by, so the
-    selection widens to the whole assistant and says so in ``scope_note``.
+    there is nothing to match a member against, so ``mine`` fails closed:
+    nothing is selected and ``scope_note`` says why. Only an explicit
+    ``agent`` scope reaches the whole assistant, so a run that lost its
+    identity can never quietly show one member another member's sessions.
     """
 
     if scope not in SCOPES:
@@ -167,10 +242,11 @@ def select_candidates(
     effective_scope = scope
     scope_note: str | None = None
     if scope == SCOPE_MINE and not viewer_id:
-        effective_scope = SCOPE_AGENT
-        scope_note = (
-            "No member identity was attached to this run, so every session of "
-            "this assistant was considered."
+        return CandidateSelection(
+            summaries=(),
+            scope=SCOPE_MINE,
+            scope_note=NO_IDENTITY_NOTE,
+            total_in_scope=0,
         )
 
     selected: list[SessionSummary] = []
@@ -518,19 +594,24 @@ def _truncate_with_ellipsis(value: str, limit: int) -> str:
 
 __all__ = [
     "CandidateSelection",
+    "NO_IDENTITY_NOTE",
     "ROLE_ASSISTANT",
     "ROLE_MEMBER",
     "ROLE_SUMMARY",
     "SCOPES",
     "SCOPE_AGENT",
     "SCOPE_MINE",
+    "SUMMARY_LIST_CACHE",
+    "SUMMARY_LIST_TTL_SECONDS",
     "SYNTHETIC_USER_SOURCES",
     "SearchTerm",
+    "SessionSummaryListCache",
     "SessionMatch",
     "SessionTranscript",
     "SessionTurn",
     "TASK_SESSION_ID_PREFIXES",
     "TurnExcerpt",
+    "cached_session_summaries",
     "is_task_session_id",
     "list_session_summaries",
     "make_excerpt",

@@ -54,12 +54,17 @@ from ..tools.builtin.session_search import (
     create_session_search_tool,
 )
 from ..session.protocol import SessionStore
-from ..session.search import list_session_summaries, recent_sessions_overview
+from ..session.search import (
+    NO_IDENTITY_NOTE,
+    SCOPE_MINE,
+    cached_session_summaries,
+    recent_sessions_overview,
+)
 from ..member_memory import (
-    FileMemberNotesStore,
     InMemoryMemberNotesStore,
     MemberNotesStore,
     notes_to_payload,
+    shared_file_member_notes_store,
 )
 from ..tools.builtin.memory import MEMORY_TOOL_ID, create_memory_tool
 from ..session.checkpoint import SessionCheckpoint
@@ -87,7 +92,7 @@ from ..skills.commands import (
 from ..skills.context import SkillContextBuilder, available_skills_system_message
 from ..skills.discovery import SkillDiscovery
 from ..skills.tool import build_skill_tool
-from ..system_prompt import SystemPromptBuilder, resolve_session_user
+from ..system_prompt import SystemPromptBuilder, resolve_member_id
 from ..tools.builtin import (
     DEFAULT_STRUCTURED_OUTPUT_TOOL_ID,
     create_core_tool_registry,
@@ -1220,16 +1225,27 @@ class AgentRuntime:
 
         Listing headers is a stat per file once the store's summary cache is
         warm, but the first call after a restart parses every session, so it
-        runs off the event loop. The overview is best-effort context: a failure
-        here drops the listing, never the run.
+        runs off the event loop and the listing is reused for a short window.
+        Without a member identity nothing is listed and nothing is scanned:
+        the block then only says that the tool exists and why it is empty. The
+        overview is best-effort context: a failure drops the listing, never
+        the run.
         """
         if not self._tool_offered(self._registered_session_search_tool_id(), run_tools):
             run_metadata.pop("session_memory", None)
             return
-        viewer = resolve_session_user(run_metadata)
-        viewer_id = viewer.get("id") if viewer else None
+        viewer_id = resolve_member_id(run_metadata)
+        if not viewer_id:
+            run_metadata["session_memory"] = {
+                "tool_id": SESSION_SEARCH_TOOL_ID,
+                "scope": SCOPE_MINE,
+                "scope_note": NO_IDENTITY_NOTE,
+                "total_in_scope": 0,
+                "sessions": [],
+            }
+            return
         try:
-            summaries = await asyncio.to_thread(list_session_summaries, self.store)
+            summaries = await asyncio.to_thread(cached_session_summaries, self.store)
         except Exception:  # noqa: BLE001 - the overview must never fail a run.
             logging.getLogger(__name__).debug(
                 "session memory overview unavailable", exc_info=True
@@ -1260,8 +1276,7 @@ class AgentRuntime:
         run_metadata.pop("member_memory", None)
         if not self._tool_offered(self._registered_memory_tool_id(), run_tools):
             return
-        member = resolve_session_user(run_metadata)
-        member_id = (member or {}).get("id")
+        member_id = resolve_member_id(run_metadata)
         if not member_id:
             return
         notes_store = _find_member_notes_store(self.tool_runtime.registry)
@@ -2182,7 +2197,8 @@ def _resolve_member_notes_store(config: RuntimeConfig, store: SessionStore) -> M
     """Notes live next to the sessions (``<session root>/memory``) unless configured.
 
     A runtime without a file-backed session store has nowhere durable to put
-    them, so it keeps them in memory, which is what tests use.
+    them, so it keeps them in memory, which is what tests use. File stores are
+    shared per root because the gateway builds a runtime per request.
     """
     root = config.member_memory_dir
     if root is None:
@@ -2191,7 +2207,7 @@ def _resolve_member_notes_store(config: RuntimeConfig, store: SessionStore) -> M
             root = store_root / "memory"
     if root is None:
         return InMemoryMemberNotesStore()
-    return FileMemberNotesStore(root)
+    return shared_file_member_notes_store(root)
 
 
 def _find_member_notes_store(registry: ToolRegistry) -> MemberNotesStore | None:

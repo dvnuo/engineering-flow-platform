@@ -300,6 +300,32 @@ class FileMemberNotesStore:
                     tmp_path.unlink()
 
 
+_SHARED_FILE_STORES: dict[str, FileMemberNotesStore] = {}
+_SHARED_FILE_STORES_LOCK = RLock()
+
+
+def shared_file_member_notes_store(
+    root: str | Path,
+    *,
+    max_notes: int = DEFAULT_MAX_NOTES,
+    max_note_chars: int = DEFAULT_MAX_NOTE_CHARS,
+) -> FileMemberNotesStore:
+    """One store per root, so runtimes built per request share one lock.
+
+    The gateway constructs a fresh runtime for every chat request; two chats
+    of the same member writing notes at the same moment must serialize on the
+    same store, or the second read-modify-write could drop the first note.
+    """
+
+    key = str(Path(root).expanduser().resolve())
+    with _SHARED_FILE_STORES_LOCK:
+        store = _SHARED_FILE_STORES.get(key)
+        if store is None:
+            store = FileMemberNotesStore(key, max_notes=max_notes, max_note_chars=max_note_chars)
+            _SHARED_FILE_STORES[key] = store
+        return store
+
+
 def notes_to_payload(notes: list[MemberNote]) -> list[dict[str, str]]:
     """Newest first, the order both the prompt and the tool show notes in."""
 
@@ -331,4 +357,5 @@ __all__ = [
     "normalize_note_text",
     "notes_to_payload",
     "render_note_line",
+    "shared_file_member_notes_store",
 ]

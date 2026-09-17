@@ -3236,6 +3236,11 @@ async def _resume_chat_after_user_input(
     transcript as something the person never typed.
     """
     agent_id, agent_name = _resolve_runtime_agent_identity(request)
+    # The Portal stamps its identity headers on every proxied request, not only
+    # on chat POSTs. The resumed run needs them for the same reasons the first
+    # turn did: the session_search scope and the member's notes are keyed by
+    # the header-derived member id, and without it both fail closed.
+    portal_user_id, portal_user_name = _extract_portal_identity(request, {})
     request_id = f"chat-resume-{uuid.uuid4()}"
     chat_run_registry.start(session_id=session_id, request_id=request_id, engine="native")
     await session_manager.mark_runtime_running(session_id, request_id=request_id)
@@ -3292,6 +3297,8 @@ async def _resume_chat_after_user_input(
                 agent_id=agent_id,
                 agent_name=agent_name,
                 request_id=request_id,
+                portal_user_id=portal_user_id,
+                portal_user_name=portal_user_name,
                 stream_callback=event_queue,
                 # The member just answered a card; a follow-up question is as
                 # answerable as the one they cleared.
@@ -4399,6 +4406,8 @@ async def _run_edit_resend_in_background(
     model: Optional[str],
     execution_metadata: Dict[str, Any],
     user_author: Dict[str, str],
+    portal_user_id: Optional[str] = None,
+    portal_user_name: Optional[str] = None,
 ) -> None:
     """Append the edited content as a fresh user turn and regenerate the reply.
 
@@ -4431,6 +4440,8 @@ async def _run_edit_resend_in_background(
             agent_name=agent_name,
             request_id=request_id,
             model=model,
+            portal_user_id=portal_user_id,
+            portal_user_name=portal_user_name,
             interactive=True,
         )
     except Exception as exc:
@@ -4529,6 +4540,8 @@ async def api_edit_message_async(request: web.Request) -> web.Response:
                 model=model,
                 execution_metadata=execution_metadata,
                 user_author=replacement_user_author,
+                portal_user_id=portal_user_id,
+                portal_user_name=portal_user_name,
             )
         )
 
