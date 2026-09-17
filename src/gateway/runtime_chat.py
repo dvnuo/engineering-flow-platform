@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import datetime
 import inspect
 import logging
 import math
@@ -45,6 +46,7 @@ from src.efp_runtime.session.gateway_facade import (
 )
 from src.efp_runtime.session.models import MessagePartType
 from src.efp_runtime.skills.discovery import default_skill_directories
+from src.efp_runtime.system_prompt import ENVIRONMENT_TIMEZONE, ENVIRONMENT_TIMEZONE_LABEL
 from src.utils.redaction import sanitize_exception_message
 
 
@@ -932,6 +934,7 @@ def _run_metadata(
             "attached_image_count": len(attached_images or []),
             "attachments": list(attachments or []),
             "has_transient_model_message": bool(transient_model_message),
+            "current_time": _current_time_text(),
             "reasoning_replay": reasoning_replay,
             "agent_id": agent_id,
             "agent_name": agent_name,
@@ -939,6 +942,17 @@ def _run_metadata(
         }
     )
     return {key: value for key, value in metadata.items() if value is not None}
+
+
+def _current_time_text() -> str:
+    """Hong Kong wall-clock time for this turn, to the second.
+
+    The loop prefixes it to the request copy of the member's message (see
+    ``_with_current_time_prefix`` in the runner), so the model knows the time
+    of day without the system prefix or the stored transcript changing.
+    """
+    now = datetime.now(ENVIRONMENT_TIMEZONE)
+    return f"{now:%Y-%m-%d %H:%M:%S} {ENVIRONMENT_TIMEZONE_LABEL}"
 
 
 def _compose_user_prompt(

@@ -1277,6 +1277,9 @@ class RuntimeLoopRunner:
         budget: ContextBudget,
     ) -> RuntimeRequest:
         request_metadata = dict(metadata)
+        request_history = _with_current_time_prefix(
+            request_history, request_metadata.get("current_time")
+        )
         compaction_summary = None
         compaction_summary_metadata = None
         if self.compaction_summarizer is not None and self._context_budget_enabled(
@@ -2760,6 +2763,36 @@ def _request_metadata(
     )
     request_metadata["loop"] = merged_loop_metadata
     return request_metadata
+
+
+def _with_current_time_prefix(
+    messages: list[Message],
+    current_time: Any,
+) -> list[Message]:
+    """Prefix the latest user turn, in the request copy only, with the clock.
+
+    The gateway stamps each chat turn with ``current_time`` (Hong Kong
+    wall-clock time) in the run metadata. It is applied here, when the request
+    is built, rather than to the stored message: Portal rebuilds the transcript
+    from history, so the member's bubble keeps their own words, and the system
+    prefix stays byte-identical between turns so provider prompt caching keeps
+    working. Only the turn being answered says what time it is; earlier turns
+    carry no stamp. The value is fixed for the whole run, so the tool loop's
+    later iterations reuse the same prefix.
+    """
+    if not isinstance(current_time, str) or not current_time.strip():
+        return messages
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role != MessageRole.USER:
+            continue
+        stamp = MessagePart.text_part(
+            f"Current time: {current_time.strip()}",
+            metadata={"kind": "current_time", "synthetic": True},
+        )
+        stamped = replace(message, parts=[stamp, *message.parts])
+        return [*messages[:index], stamped, *messages[index + 1 :]]
+    return messages
 
 
 def _request_context_messages(

@@ -13,7 +13,7 @@ import pytest
 from efp_runtime.agents import AgentProfile
 from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
-from efp_runtime.models import MessageRole
+from efp_runtime.models import MessagePartType, MessageRole
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.system_prompt import DEFAULT_SYSTEM_PROMPT, SystemPromptBuilder
 
@@ -792,3 +792,66 @@ def test_environment_context_renders_today_in_hong_kong_time(tmp_path: Path):
         f"- date: {moment:%Y-%m-%d} ({_WEEKDAYS[moment.weekday()]})" for moment in (before, after)
     }
     assert any(line in text for line in expected)
+
+
+@pytest.mark.asyncio
+async def test_current_time_prefixes_only_the_request_copy_of_the_latest_user_turn(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider([{"content": "Done."}, {"content": "Done again."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
+    )
+
+    await runtime.run(
+        "Inspect this.",
+        session_id="session-current-time",
+        metadata={"current_time": "2026-09-17 14:03:27 Asia/Hong_Kong (UTC+08:00)"},
+    )
+    await runtime.run(
+        "And this.",
+        session_id="session-current-time",
+        metadata={"current_time": "2026-09-17 14:05:00 Asia/Hong_Kong (UTC+08:00)"},
+    )
+
+    first_turn = provider.requests[0].provider_request.messages[-1]
+    assert first_turn.role == "user"
+    assert first_turn.text.startswith(
+        "Current time: 2026-09-17 14:03:27 Asia/Hong_Kong (UTC+08:00)"
+    )
+    assert "Inspect this." in first_turn.text
+
+    second_messages = provider.requests[1].provider_request.messages
+    stamped = [message.text for message in second_messages if "Current time:" in message.text]
+    assert len(stamped) == 1
+    assert stamped[0].startswith("Current time: 2026-09-17 14:05:00")
+    assert "And this." in stamped[0]
+    earlier_turn = next(
+        message
+        for message in second_messages
+        if message.role == "user" and "Inspect this." in message.text
+    )
+    assert "Current time:" not in earlier_turn.text
+
+    stored_user_text = [
+        part.text
+        for message in runtime.store.read_history("session-current-time")
+        if message.role == MessageRole.USER
+        for part in message.parts
+        if part.type == MessagePartType.TEXT
+    ]
+    assert stored_user_text == ["Inspect this.", "And this."]
+
+
+@pytest.mark.asyncio
+async def test_runs_without_current_time_metadata_send_the_user_turn_unchanged(tmp_path: Path):
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
+    )
+
+    await runtime.run("Inspect this.", session_id="session-no-clock")
+
+    assert provider.requests[0].provider_request.messages[-1].text == "Inspect this."
