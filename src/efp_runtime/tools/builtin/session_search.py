@@ -16,10 +16,15 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
+import threading
 from typing import Any
 
 from ...permissions import ALLOW, PermissionMetadata
-from ...session.file_store import SessionSummary, build_session_summary
+from ...session.file_store import (
+    SessionSummary,
+    build_session_summary,
+    release_allocator_memory,
+)
 from ...session.protocol import SessionStore
 from ...session.search import (
     ROLE_MEMBER,
@@ -27,13 +32,13 @@ from ...session.search import (
     SCOPES,
     SessionMatch,
     SessionTranscript,
-    list_session_summaries,
+    cached_session_summaries,
     search_transcripts,
     select_candidates,
     short_timestamp,
     transcript_from_messages,
 )
-from ...system_prompt import resolve_session_user
+from ...system_prompt import resolve_member_id
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 
@@ -47,6 +52,7 @@ MAX_MAX_TURNS = 40
 DEFAULT_MAX_SCANNED_SESSIONS = 200
 READ_TURN_CHAR_LIMIT = 1200
 TRANSCRIPT_CACHE_MAX = 256
+TRANSCRIPT_CACHE_MAX_CHARS = 8 * 1024 * 1024
 
 TOOL_DESCRIPTION = (
     "Search this assistant's earlier chat sessions (conversations other than "
@@ -57,8 +63,10 @@ TOOL_DESCRIPTION = (
     "assistant turns that matched, never tool output. Read: pass `session_id` "
     "from a search result to get the numbered turns of that session, paging "
     "with `turn_offset` and `max_turns`. `scope` defaults to `mine` (sessions "
-    "the current member took part in); use `agent` for every session of this "
-    "assistant. Cite the session name and date of anything you reuse."
+    "the current member took part in); reading or searching another member's "
+    "session needs an explicit `scope=\"agent\"`, so use it only when the member "
+    "asked about a colleague's work. Cite the session name and date of anything "
+    "you reuse."
 )
 
 INPUT_SCHEMA: dict[str, Any] = {
@@ -83,7 +91,8 @@ INPUT_SCHEMA: dict[str, Any] = {
             "enum": list(SCOPES),
             "description": (
                 "mine (default): sessions the current member took part in. "
-                "agent: every session of this assistant."
+                "agent: every session of this assistant, including other "
+                "members'; required to read a session that is not the member's own."
             ),
         },
         "limit": {
@@ -113,40 +122,95 @@ class TranscriptCache:
 
     ``updated_at`` and ``message_count`` change whenever a session changes, so
     an unchanged session is never re-parsed and a changed one is never served
-    stale. Keeping only reduced transcripts, not sessions, is what keeps this
-    small enough to hold hundreds of entries.
+    stale. Entries are reduced transcripts, not sessions, and the cache is
+    bounded both by entry count and by total characters, so a handful of very
+    large sessions cannot pin hundreds of megabytes. One cache is shared per
+    session root (``shared_transcript_cache``) because the gateway builds a new
+    runtime, and with it a new tool, for every chat request.
     """
 
-    def __init__(self, max_entries: int = TRANSCRIPT_CACHE_MAX) -> None:
+    def __init__(
+        self,
+        max_entries: int = TRANSCRIPT_CACHE_MAX,
+        max_chars: int = TRANSCRIPT_CACHE_MAX_CHARS,
+    ) -> None:
         self.max_entries = max(1, int(max_entries))
-        self._entries: "OrderedDict[str, tuple[str, int, SessionTranscript]]" = OrderedDict()
+        self.max_chars = max(1, int(max_chars))
+        self._entries: "OrderedDict[str, tuple[str, int, int, SessionTranscript]]" = OrderedDict()
+        self._total_chars = 0
+        self._lock = threading.Lock()
 
     def get(
         self,
         summary: SessionSummary,
         loader: Callable[[SessionSummary], SessionTranscript],
     ) -> SessionTranscript:
-        cached = self._entries.get(summary.session_id)
-        if (
-            cached is not None
-            and cached[0] == summary.updated_at
-            and cached[1] == summary.message_count
-        ):
-            self._entries.move_to_end(summary.session_id)
-            return cached[2]
+        with self._lock:
+            cached = self._entries.get(summary.session_id)
+            if (
+                cached is not None
+                and cached[0] == summary.updated_at
+                and cached[1] == summary.message_count
+            ):
+                self._entries.move_to_end(summary.session_id)
+                return cached[3]
+        # Parse outside the lock so concurrent searches do not serialize on
+        # file I/O; two of them loading the same session is harmless.
         transcript = loader(summary)
-        self._entries[summary.session_id] = (
-            summary.updated_at,
-            summary.message_count,
-            transcript,
-        )
-        self._entries.move_to_end(summary.session_id)
-        while len(self._entries) > self.max_entries:
-            self._entries.popitem(last=False)
+        chars = transcript_chars(transcript)
+        with self._lock:
+            previous = self._entries.pop(summary.session_id, None)
+            if previous is not None:
+                self._total_chars -= previous[2]
+            self._entries[summary.session_id] = (
+                summary.updated_at,
+                summary.message_count,
+                chars,
+                transcript,
+            )
+            self._total_chars += chars
+            while len(self._entries) > 1 and (
+                len(self._entries) > self.max_entries or self._total_chars > self.max_chars
+            ):
+                _, (_, _, evicted_chars, _) = self._entries.popitem(last=False)
+                self._total_chars -= evicted_chars
         return transcript
 
+    @property
+    def total_chars(self) -> int:
+        with self._lock:
+            return self._total_chars
+
     def __len__(self) -> int:
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
+
+
+def transcript_chars(transcript: SessionTranscript) -> int:
+    return len(transcript.name) + sum(len(turn.text) for turn in transcript.turns)
+
+
+_SHARED_CACHES: dict[str, TranscriptCache] = {}
+_SHARED_CACHES_LOCK = threading.Lock()
+
+
+def shared_transcript_cache(store: Any) -> TranscriptCache:
+    """The process-wide cache for a file-backed store's root, or a private one.
+
+    A store without a ``root`` (the in-memory store used by tests) gets its own
+    cache, so sessions from one store can never answer for another.
+    """
+
+    root = getattr(store, "root", None)
+    if root is None:
+        return TranscriptCache()
+    key = str(root)
+    with _SHARED_CACHES_LOCK:
+        cache = _SHARED_CACHES.get(key)
+        if cache is None:
+            cache = TranscriptCache()
+            _SHARED_CACHES[key] = cache
+        return cache
 
 
 def create_session_search_tool(
@@ -155,12 +219,13 @@ def create_session_search_tool(
     permission: PermissionMetadata | None = None,
     max_scanned_sessions: int = DEFAULT_MAX_SCANNED_SESSIONS,
     tool_id: str = SESSION_SEARCH_TOOL_ID,
+    transcript_cache: TranscriptCache | None = None,
 ) -> ToolDef:
     """Create the ``session_search`` tool over ``store``."""
 
     if max_scanned_sessions < 1:
         raise ValueError("max_scanned_sessions must be at least 1")
-    cache = TranscriptCache()
+    cache = transcript_cache if transcript_cache is not None else shared_transcript_cache(store)
 
     def load_transcript(summary: SessionSummary) -> SessionTranscript:
         return transcript_from_messages(summary, store.read_history(summary.session_id))
@@ -174,14 +239,25 @@ def create_session_search_tool(
         viewer_id: str | None,
     ) -> dict[str, Any]:
         selection = select_candidates(
-            list_session_summaries(store),
+            cached_session_summaries(store),
             exclude_session_id=current_session_id,
             viewer_id=viewer_id,
             scope=scope,
             include_task_sessions=scope != SCOPE_MINE,
             limit=max_scanned_sessions,
         )
-        transcripts = [cache.get(summary, load_transcript) for summary in selection.summaries]
+        parsed = 0
+
+        def load_counting(summary: SessionSummary) -> SessionTranscript:
+            nonlocal parsed
+            parsed += 1
+            return load_transcript(summary)
+
+        transcripts = [cache.get(summary, load_counting) for summary in selection.summaries]
+        if parsed:
+            # A first search may parse hundreds of session files; give the
+            # allocator's freed arenas back like the list endpoint does.
+            release_allocator_memory()
         matches = search_transcripts(transcripts, query, limit=limit)
         return {
             "mode": "search",
@@ -198,7 +274,9 @@ def create_session_search_tool(
         session_id: str,
         turn_offset: int,
         max_turns: int,
+        scope: str,
         current_session_id: str | None,
+        viewer_id: str | None,
     ) -> dict[str, Any]:
         if current_session_id and session_id == current_session_id:
             raise LookupError(
@@ -207,6 +285,20 @@ def create_session_search_tool(
         summary = _session_summary(store, session_id)
         if summary is None:
             raise LookupError(f"Unknown session_id: {session_id}")
+        # Reading follows the same boundary as searching: another member's
+        # session is reachable only through an explicit agent scope.
+        if scope == SCOPE_MINE:
+            if not viewer_id:
+                raise LookupError(
+                    "This run carries no member identity, so only scope=\"agent\" can "
+                    "read a session; pass it if the member asked for that session."
+                )
+            if viewer_id not in summary.author_ids:
+                raise LookupError(
+                    f"Session {session_id} has no turns by this member. Pass "
+                    "scope=\"agent\" to read another member's session when the "
+                    "member asked about it."
+                )
         transcript = cache.get(summary, load_transcript)
         turns = transcript.turns[turn_offset : turn_offset + max_turns]
         next_offset = turn_offset + len(turns)
@@ -230,7 +322,13 @@ def create_session_search_tool(
         limit = _bounded_int(args.get("limit"), default=DEFAULT_RESULT_LIMIT, low=1, high=MAX_RESULT_LIMIT)
         turn_offset = _bounded_int(args.get("turn_offset"), default=0, low=0, high=None)
         max_turns = _bounded_int(args.get("max_turns"), default=DEFAULT_MAX_TURNS, low=1, high=MAX_MAX_TURNS)
-        viewer_id = _viewer_id(context.metadata)
+        viewer_id = resolve_member_id(context.metadata)
+        if scope not in SCOPES:
+            return _error_result(
+                context,
+                tool_id,
+                f"Unknown scope {scope!r}; use one of: {', '.join(SCOPES)}.",
+            )
 
         if not query and not session_id:
             return _error_result(
@@ -245,7 +343,9 @@ def create_session_search_tool(
                     session_id=session_id,
                     turn_offset=turn_offset,
                     max_turns=max_turns,
+                    scope=scope,
                     current_session_id=context.session_id,
+                    viewer_id=viewer_id,
                 )
                 content = _render_read(payload)
             else:
@@ -301,13 +401,6 @@ def _session_summary(store: Any, session_id: str) -> SessionSummary | None:
         return None
 
 
-def _viewer_id(metadata: Mapping[str, Any] | None) -> str | None:
-    identity = resolve_session_user(metadata)
-    if identity is None:
-        return None
-    return identity.get("id") or None
-
-
 def _match_payload(match: SessionMatch) -> dict[str, Any]:
     transcript = match.transcript
     return {
@@ -360,10 +453,13 @@ def _render_search(payload: Mapping[str, Any], *, tool_id: str) -> str:
     if note:
         lines.append(f"Note: {note}")
     if not results:
-        lines.append(
-            "No earlier session mentions these keywords. Try other words, or "
-            "scope=\"agent\" to include every session of this assistant."
-        )
+        if not payload.get("sessions_in_scope"):
+            lines.append("No session is in scope for this search.")
+        else:
+            lines.append(
+                "No earlier session mentions these keywords. Try other words, or "
+                "scope=\"agent\" to include every session of this assistant."
+            )
         return "\n".join(lines)
     lines.append("")
     for position, result in enumerate(results, 1):
@@ -488,4 +584,6 @@ __all__ = [
     "TOOL_DESCRIPTION",
     "TranscriptCache",
     "create_session_search_tool",
+    "shared_transcript_cache",
+    "transcript_chars",
 ]

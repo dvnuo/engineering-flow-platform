@@ -178,20 +178,66 @@ async def test_agent_scope_includes_other_members_and_task_sessions(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_search_without_member_identity_widens_scope_and_says_so(tmp_path: Path):
+async def test_search_without_member_identity_fails_closed_and_says_so(tmp_path: Path):
     store = FileSessionStore(tmp_path)
     _seed_world(store)
     tool = create_session_search_tool(store)
 
     result = await _run(tool, {"query": "timeout"}, _context(viewer=None))
+    explicit = await _run(tool, {"query": "timeout", "scope": "agent"}, _context(viewer=None))
 
     assert result.success is True
-    assert result.output["scope"] == SCOPE_AGENT
-    assert "Note:" in result.content
-    assert {item["session_id"] for item in result.output["results"]} >= {
+    assert result.output["scope"] == SCOPE_MINE
+    assert result.output["results"] == []
+    assert result.output["sessions_in_scope"] == 0
+    assert "No member identity" in result.content
+    assert "No session is in scope" in result.content
+    assert {item["session_id"] for item in explicit.output["results"]} >= {
         "chat-alice-timeout",
         "chat-bob-timeout",
     }
+
+
+@pytest.mark.asyncio
+async def test_identity_comes_from_header_derived_portal_user_id_only(tmp_path: Path):
+    store = FileSessionStore(tmp_path)
+    _seed_world(store)
+    tool = create_session_search_tool(store)
+    spoofed = ToolContext(
+        session_id="chat-current",
+        metadata={"portal_user": {"id": "bob-id", "display_name": "Bob"}},
+        tool_call_id="call-search",
+    )
+
+    result = await _run(tool, {"query": "timeout"}, spoofed)
+
+    assert result.output["results"] == []
+    assert "No member identity" in result.content
+
+
+@pytest.mark.asyncio
+async def test_read_mode_requires_agent_scope_for_other_members_sessions(tmp_path: Path):
+    store = FileSessionStore(tmp_path)
+    _seed_world(store)
+    tool = create_session_search_tool(store)
+
+    own = await _run(tool, {"session_id": "chat-alice-timeout"}, _context())
+    other = await _run(tool, {"session_id": "chat-bob-timeout"}, _context())
+    other_explicit = await _run(tool, {"session_id": "chat-bob-timeout", "scope": "agent"}, _context())
+    anonymous = await _run(tool, {"session_id": "chat-alice-timeout"}, _context(viewer=None))
+    anonymous_explicit = await _run(
+        tool, {"session_id": "chat-alice-timeout", "scope": "agent"}, _context(viewer=None)
+    )
+    # The schema already rejects unknown scopes; the tool checks again so a
+    # caller that skips validation cannot slip past the boundary.
+    bad_scope = await tool.execute({"query": "timeout", "scope": "everyone"}, _context())
+
+    assert own.success is True
+    assert other.success is False and 'scope="agent"' in other.content
+    assert other_explicit.success is True and "Bob" in other_explicit.content
+    assert anonymous.success is False and "member identity" in anonymous.content
+    assert anonymous_explicit.success is True
+    assert bad_scope.success is False and "Unknown scope" in bad_scope.content
 
 
 @pytest.mark.asyncio
@@ -356,8 +402,8 @@ def test_select_candidates_orders_newest_first_and_filters_scope():
     assert mine.scope == SCOPE_MINE and mine.scope_note is None
     assert {item.session_id for item in everything.summaries} == {"old", "task-x", "bobs", "new"}
     assert everything.summaries[0].session_id == "new"
-    assert anonymous.scope == SCOPE_AGENT and anonymous.scope_note
-    assert "task-x" not in {item.session_id for item in anonymous.summaries}
+    assert anonymous.scope == SCOPE_MINE and anonymous.summaries == ()
+    assert anonymous.total_in_scope == 0 and anonymous.scope_note
     assert is_task_session_id("task-x") and not is_task_session_id("chat-x")
     with pytest.raises(ValueError):
         select_candidates(summaries, exclude_session_id=None, viewer_id=None, scope="everyone")
@@ -412,6 +458,75 @@ def test_transcript_cache_reuses_unchanged_sessions_and_evicts_old_ones():
     assert len(cache) == 1
     cache.get(changed, loader)
     assert loads == ["chat-a", "chat-a", "chat-b", "chat-a"]
+
+
+def test_transcript_cache_evicts_by_char_budget_but_keeps_newest():
+    store = InMemorySessionStore()
+    for index in range(3):
+        _seed(store, f"chat-{index}", [_member("x" * 1000)])
+    cache = TranscriptCache(max_entries=10, max_chars=1500)
+
+    def loader(summary):
+        return transcript_from_messages(summary, store.read_history(summary.session_id))
+
+    for index in range(3):
+        cache.get(store.get_session_summary(f"chat-{index}"), loader)
+
+    assert len(cache) == 1
+    assert cache.total_chars <= 1500 or len(cache) == 1
+    loads: list[str] = []
+
+    def counting(summary):
+        loads.append(summary.session_id)
+        return loader(summary)
+
+    cache.get(store.get_session_summary("chat-2"), counting)
+    assert loads == []
+
+
+def test_shared_transcript_cache_is_per_session_root(tmp_path: Path):
+    file_store = FileSessionStore(tmp_path / "a")
+    other_file_store = FileSessionStore(tmp_path / "b")
+    memory_store = InMemorySessionStore()
+
+    first = create_session_search_tool(file_store).runtime_metadata["transcript_cache"]
+    second = create_session_search_tool(file_store).runtime_metadata["transcript_cache"]
+    other = create_session_search_tool(other_file_store).runtime_metadata["transcript_cache"]
+    private_a = create_session_search_tool(memory_store).runtime_metadata["transcript_cache"]
+    private_b = create_session_search_tool(memory_store).runtime_metadata["transcript_cache"]
+
+    assert first is second
+    assert first is not other
+    assert private_a is not private_b
+
+
+def test_summary_list_cache_reuses_listing_within_ttl(tmp_path: Path):
+    from efp_runtime.session.search import SessionSummaryListCache
+
+    store = FileSessionStore(tmp_path)
+    _seed(store, "chat-a", [_member("a")])
+    now = [1000.0]
+    cache = SessionSummaryListCache(ttl_seconds=30.0, clock=lambda: now[0])
+    calls: list[int] = []
+    original = store.list_session_summaries
+
+    def counting():
+        calls.append(1)
+        return original()
+
+    store.list_session_summaries = counting
+
+    first = cache.get(store)
+    _seed(store, "chat-b", [_member("b")])
+    second = cache.get(store)
+    now[0] += 31.0
+    third = cache.get(store)
+
+    assert [item.session_id for item in first] == ["chat-a"]
+    assert [item.session_id for item in second] == ["chat-a"]
+    assert sorted(item.session_id for item in third) == ["chat-a", "chat-b"]
+    assert len(calls) == 2
+    assert cache.get(InMemorySessionStore()) == []
 
 
 def test_recent_sessions_overview_lists_member_sessions_newest_first():
@@ -555,6 +670,40 @@ async def test_agent_runtime_offers_tool_and_lists_earlier_sessions(tmp_path: Pa
     assert "Bob chat" not in memory_blocks[0]
     assert "chat-now" not in memory_blocks[0]
     assert request.metadata["session_memory"]["scope"] == SCOPE_MINE
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_without_identity_lists_nothing_but_explains(tmp_path: Path):
+    store = FileSessionStore(tmp_path / "sessions")
+    _seed(store, "chat-earlier", [_member("Earlier words.")], custom_name="Earlier chat")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        store=store,
+        config=RuntimeConfig(workspace_root=workspace, enable_session_search=True, max_iterations=2),
+    )
+
+    result = await runtime.run(
+        "Hello",
+        session_id="chat-now",
+        metadata={"portal_user": {"id": "alice-id"}},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    memory = request.metadata["session_memory"]
+    assert memory["sessions"] == []
+    assert memory["scope"] == SCOPE_MINE
+    assert "No member identity" in memory["scope_note"]
+    block = next(
+        message.text
+        for message in request.provider_request.messages
+        if message.role == "system" and message.text.startswith("Earlier sessions:")
+    )
+    assert "Earlier chat" not in block
+    assert "No member identity" in block
 
 
 @pytest.mark.asyncio

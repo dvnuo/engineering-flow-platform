@@ -586,6 +586,23 @@ def resolve_session_user(metadata: Mapping[str, Any] | None) -> dict[str, str] |
     return identity or None
 
 
+def resolve_member_id(metadata: Mapping[str, Any] | None) -> str | None:
+    """The Portal member id the runtime may keep per-member state for.
+
+    Only the header-derived ``portal_user_id`` counts. The structured
+    ``portal_user`` object is also trusted chat metadata, but on the non-chat
+    POSTs (question and permission answers, edit-regenerate) the Portal
+    forwards the browser's body verbatim, so a value in there could name
+    another member. Scoping earlier sessions and keeping notes select whose
+    private state is read and written, so they follow the header alone, the
+    same way ``author_id`` is stamped on member turns.
+    """
+    if not isinstance(metadata, Mapping):
+        return None
+    value = _clean_identity_value(metadata.get("portal_user_id"))
+    return value or None
+
+
 def _clean_identity_value(value: Any) -> str:
     if value is None or isinstance(value, bool):
         return ""

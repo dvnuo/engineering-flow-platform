@@ -21,7 +21,7 @@ from ...member_memory import (
     render_note_line,
 )
 from ...permissions import ALLOW, PermissionMetadata
-from ...system_prompt import resolve_session_user
+from ...system_prompt import resolve_member_id
 from ...types import ToolResult
 from ..definition import ToolContext, ToolDef
 
@@ -76,8 +76,7 @@ def create_memory_tool(
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         action = str(args.get("action") or "").strip()
-        member = resolve_session_user(context.metadata)
-        member_id = (member or {}).get("id") or ""
+        member_id = resolve_member_id(context.metadata) or ""
         if not member_id:
             return _error_result(
                 context,

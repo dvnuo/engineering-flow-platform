@@ -5299,6 +5299,10 @@ async def test_api_edit_message_async_truncates_and_starts_regeneration(monkeypa
         "author_type": "human",
         "author_source": "portal",
     }
+    # The regenerated run carries the requester's header identity, so the
+    # session_search scope and member notes resolve to the person editing.
+    assert calls["background"]["portal_user_id"] == "user-1"
+    assert calls["background"]["portal_user_name"] == "Alice"
 
 
 @pytest.mark.asyncio

@@ -130,12 +130,22 @@ async def test_memory_tool_errors_are_explicit():
     await _run(tool, {"action": "remember", "text": "first"})
 
     no_identity = await _run(tool, {"action": "list"}, _context(viewer=None))
+    spoofed = await _run(
+        tool,
+        {"action": "list"},
+        ToolContext(
+            session_id="chat-now",
+            metadata={"portal_user": {"id": "alice-id"}},
+            tool_call_id="call-memory",
+        ),
+    )
     full = await _run(tool, {"action": "remember", "text": "second"})
     missing_id = await _run(tool, {"action": "forget"})
     unknown_id = await _run(tool, {"action": "forget", "note_id": "n_nope"})
     empty_text = await _run(tool, {"action": "remember", "text": " "})
 
     assert no_identity.success is False and "member identity" in no_identity.content
+    assert spoofed.success is False and "member identity" in spoofed.content
     assert full.success is False and "maximum" in full.content
     assert missing_id.success is False and "note_id" in missing_id.content
     assert unknown_id.success is False and "No note with id n_nope" in unknown_id.content
@@ -258,6 +268,21 @@ async def test_agent_runtime_offers_memory_and_lists_notes_next_to_sessions(tmp_
     notes_store = tool.runtime_metadata["member_notes_store"]
     assert isinstance(notes_store, FileMemberNotesStore)
     assert notes_store.root == (sessions_root / "memory").resolve()
+
+
+def test_runtimes_over_the_same_session_root_share_one_notes_store(tmp_path: Path):
+    store = FileSessionStore(tmp_path / "runtime")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = RuntimeConfig(workspace_root=workspace, enable_member_memory=True, max_iterations=2)
+
+    first = AgentRuntime(provider=ScriptedLLMProvider([]), store=store, config=config)
+    second = AgentRuntime(provider=ScriptedLLMProvider([]), store=store, config=config)
+
+    first_store = first.tool_runtime.registry.require(MEMORY_TOOL_ID).runtime_metadata["member_notes_store"]
+    second_store = second.tool_runtime.registry.require(MEMORY_TOOL_ID).runtime_metadata["member_notes_store"]
+    assert first_store is second_store
+    assert isinstance(first_store, FileMemberNotesStore)
 
 
 @pytest.mark.asyncio
