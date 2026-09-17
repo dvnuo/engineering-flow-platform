@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -915,3 +916,26 @@ async def test_resumed_runtime_chat_also_reports_deliverables(monkeypatch, tmp_p
         ("markdown", None, None),
         ("file", "output/stale.txt", "updated"),
     ]
+
+
+def test_run_metadata_stamps_the_turn_with_hong_kong_time():
+    metadata = runtime_chat._run_metadata(
+        request_path="/api/chat",
+        request_id="req-clock",
+        user_name=None,
+        portal_user_id=None,
+        portal_user_name=None,
+        attached_images=None,
+        attachments=None,
+        transient_model_message=None,
+        reasoning_replay=None,
+        execution_metadata=None,
+        agent_id=None,
+        agent_name=None,
+        model="gpt-5.4",
+    )
+
+    assert re.fullmatch(
+        r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} Asia/Hong_Kong \(UTC\+08:00\)",
+        metadata["current_time"],
+    )

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ import pytest
 from efp_runtime.agents import AgentProfile
 from efp_runtime.agents.task_runner import _child_config
 from efp_runtime.loop import LoopStatus, ScriptedLLMProvider
-from efp_runtime.models import MessageRole
+from efp_runtime.models import MessagePartType, MessageRole
 from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.system_prompt import DEFAULT_SYSTEM_PROMPT, SystemPromptBuilder
 
@@ -41,7 +42,7 @@ def test_default_system_prompt_contains_coding_agent_operating_rules():
 
 
 @pytest.mark.asyncio
-async def test_default_runtime_injects_only_agents_instruction_before_skills(
+async def test_default_runtime_injects_environment_and_agents_instruction_before_skills(
     tmp_path: Path,
 ):
     (tmp_path / "AGENTS.md").write_text("Project instructions.", encoding="utf-8")
@@ -65,24 +66,24 @@ async def test_default_runtime_injects_only_agents_instruction_before_skills(
     assert result.status == LoopStatus.COMPLETED
     request = provider.requests[0]
     messages = request.provider_request.messages
-    assert [message.role for message in messages] == ["system", "system", "system", "user"]
-    assert messages[0].text.startswith("Instructions from:")
-    assert "Project instructions." in messages[0].text
+    assert [message.role for message in messages] == ["system", "system", "system", "system", "user"]
+    assert messages[0].text.startswith("Environment:")
+    assert messages[1].text.startswith("Instructions from:")
+    assert "Project instructions." in messages[1].text
     assert "Claude instructions." not in "\n".join(message.text for message in messages)
     assert "Context instructions." not in "\n".join(message.text for message in messages)
     assert DEFAULT_SYSTEM_PROMPT.strip() not in "\n".join(message.text for message in messages)
-    assert "Environment:" not in "\n".join(message.text for message in messages)
     assert "Runtime reminders:" not in "\n".join(message.text for message in messages)
-    assert "<available_skills>" in messages[1].text
-    assert messages[2].text.startswith('<skill_content name="review-pr">')
-    assert messages[3].text == "Inspect this."
-    assert request.metadata["system_prompt_context_count"] == 0
-    assert request.metadata["environment_context_count"] == 0
+    assert "<available_skills>" in messages[2].text
+    assert messages[3].text.startswith('<skill_content name="review-pr">')
+    assert messages[4].text == "Inspect this."
+    assert request.metadata["system_prompt_context_count"] == 1
+    assert request.metadata["environment_context_count"] == 1
     assert request.metadata["instruction_context_count"] == 1
     assert request.metadata["available_skill_context_count"] == 1
     assert request.metadata["skill_context_count"] == 1
-    assert request.provider_request.metadata["system_prompt_context_count"] == 0
-    assert request.provider_request.metadata["environment_context_count"] == 0
+    assert request.provider_request.metadata["system_prompt_context_count"] == 1
+    assert request.provider_request.metadata["environment_context_count"] == 1
     assert request.provider_request.metadata["instruction_context_count"] == 1
     assert request.provider_request.metadata["available_skill_context_count"] == 1
     assert request.provider_request.metadata["skill_context_count"] == 1
@@ -536,7 +537,8 @@ def test_environment_context_builder_contains_runtime_environment(tmp_path: Path
     assert f"- workspace root: {tmp_path.resolve()}" in text
     assert "- git repository: true" in text
     assert f"- platform: {sys.platform}" in text
-    assert re.search(r"- date: \d{4}-\d{2}-\d{2}", text)
+    assert re.search(r"^- date: \d{4}-\d{2}-\d{2} \((?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\)$", text, re.MULTILINE)
+    assert "- timezone: Asia/Hong_Kong (UTC+08:00)" in text
 
 
 @pytest.mark.asyncio
@@ -765,3 +767,91 @@ async def test_runtime_places_session_user_after_environment_and_before_instruct
     assert "- username: runtime-user" in messages[session_user_index].text
     assert request.metadata["system_prompt_context_count"] == 2
     assert request.metadata["environment_context_count"] == 1
+
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def test_environment_context_renders_today_in_hong_kong_time(tmp_path: Path):
+    hong_kong = timezone(timedelta(hours=8))
+
+    before = datetime.now(hong_kong)
+    messages = SystemPromptBuilder(
+        workspace_root=tmp_path,
+        include_default_system_prompt=False,
+        include_environment_context=True,
+        include_runtime_reminders=False,
+    ).build_messages(metadata={"requested_model": "github-copilot/gpt-5.4"})
+    after = datetime.now(hong_kong)
+
+    assert len(messages) == 1
+    text = messages[0].parts[0].text
+    assert "- timezone: Asia/Hong_Kong (UTC+08:00)" in text
+    # Two candidates so a midnight rollover during the call cannot flake.
+    expected = {
+        f"- date: {moment:%Y-%m-%d} ({_WEEKDAYS[moment.weekday()]})" for moment in (before, after)
+    }
+    assert any(line in text for line in expected)
+
+
+@pytest.mark.asyncio
+async def test_current_time_prefixes_only_the_request_copy_of_the_latest_user_turn(
+    tmp_path: Path,
+):
+    provider = ScriptedLLMProvider([{"content": "Done."}, {"content": "Done again."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
+    )
+
+    await runtime.run(
+        "Inspect this.",
+        session_id="session-current-time",
+        metadata={"current_time": "2026-09-17 14:03:27 Asia/Hong_Kong (UTC+08:00)"},
+    )
+    await runtime.run(
+        "And this.",
+        session_id="session-current-time",
+        metadata={"current_time": "2026-09-17 14:05:00 Asia/Hong_Kong (UTC+08:00)"},
+    )
+
+    first_turn = provider.requests[0].provider_request.messages[-1]
+    assert first_turn.role == "user"
+    assert first_turn.text.startswith(
+        "Current time: 2026-09-17 14:03:27 Asia/Hong_Kong (UTC+08:00)"
+    )
+    assert "Inspect this." in first_turn.text
+
+    second_messages = provider.requests[1].provider_request.messages
+    stamped = [message.text for message in second_messages if "Current time:" in message.text]
+    assert len(stamped) == 1
+    assert stamped[0].startswith("Current time: 2026-09-17 14:05:00")
+    assert "And this." in stamped[0]
+    earlier_turn = next(
+        message
+        for message in second_messages
+        if message.role == "user" and "Inspect this." in message.text
+    )
+    assert "Current time:" not in earlier_turn.text
+
+    stored_user_text = [
+        part.text
+        for message in runtime.store.read_history("session-current-time")
+        if message.role == MessageRole.USER
+        for part in message.parts
+        if part.type == MessagePartType.TEXT
+    ]
+    assert stored_user_text == ["Inspect this.", "And this."]
+
+
+@pytest.mark.asyncio
+async def test_runs_without_current_time_metadata_send_the_user_turn_unchanged(tmp_path: Path):
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2),
+    )
+
+    await runtime.run("Inspect this.", session_id="session-no-clock")
+
+    assert provider.requests[0].provider_request.messages[-1].text == "Inspect this."

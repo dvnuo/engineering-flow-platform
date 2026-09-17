@@ -107,7 +107,18 @@ is only a build input for PATH binaries.
 
 `efp_runtime.runtime.AgentRuntime` builds provider requests from:
 
-1. Provider-only system prompt and runtime reminders.
+1. Provider-only system prompt and runtime reminders. This layer carries the
+   `Environment:` block (model, working directory, workspace root, git,
+   platform, today's date with its weekday, and the time zone), which is on by
+   default so the model can resolve "recent" or "this week" against the real
+   calendar instead of its training cutoff. The date is rendered in Hong Kong
+   time (`Asia/Hong_Kong`, UTC+08:00) regardless of the container's zone, which
+   is UTC in the runtime image. Turn the block off with
+   `include_environment_context: false`. The gateway also stamps each chat
+   turn with the current Hong Kong time to the second (`current_time` in the
+   run metadata); the loop prefixes it to the request copy of the member's
+   message only, so the stored transcript and the cached system prefix stay
+   untouched.
 2. Workspace instruction files and configured instruction text.
 3. Available-skill and active-skill context.
 4. Persisted session history.

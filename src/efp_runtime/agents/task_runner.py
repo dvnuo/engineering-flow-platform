@@ -493,7 +493,7 @@ def _child_config(
             else base_config.include_default_system_prompt
         ),
         include_environment_context=(
-            False
+            True
             if base_config is None
             else base_config.include_environment_context
         ),

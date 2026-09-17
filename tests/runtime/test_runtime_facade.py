@@ -55,7 +55,8 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     ]
 
     request = provider.requests[0]
-    assert request.provider_request.messages[0].role == "user"
+    assert request.provider_request.messages[0].role == "system"
+    assert request.provider_request.messages[0].text.startswith("Environment:")
     assert request.provider_request.messages[-1].role == "user"
     assert request.provider_request.messages[-1].text == "Use the facade."
     assert [schema.id for schema in request.provider_request.tools] == [
@@ -72,8 +73,8 @@ async def test_agent_runtime_defaults_to_builtin_tools_for_workspace(tmp_path: P
     ]
     assert request.metadata["suite"] == "facade"
     assert request.metadata["request_id"] == "run-1"
-    assert request.metadata["system_prompt_context_count"] == 0
-    assert request.metadata["environment_context_count"] == 0
+    assert request.metadata["system_prompt_context_count"] == 1
+    assert request.metadata["environment_context_count"] == 1
     assert request.metadata["instruction_context_count"] == 0
     assert request.metadata["skill_context_count"] == 0
     assert request.metadata["loop"]["iteration"] == 1

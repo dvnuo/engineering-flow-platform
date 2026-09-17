@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -207,7 +207,7 @@ class SystemPromptBuilder:
         model_id = _environment_model_id(metadata)
         git_repository = _is_git_repository(workspace_root)
         platform_id = sys.platform
-        current_date = _current_local_date_iso()
+        now = datetime.now(ENVIRONMENT_TIMEZONE)
 
         fields: list[tuple[str, str]] = [("model", model_id)]
         if working_directory is not None:
@@ -218,7 +218,8 @@ class SystemPromptBuilder:
             [
                 ("git repository", str(git_repository).lower()),
                 ("platform", platform_id),
-                ("date", current_date),
+                ("date", f"{now:%Y-%m-%d} ({_WEEKDAY_NAMES[now.weekday()]})"),
+                ("timezone", ENVIRONMENT_TIMEZONE_LABEL),
             ]
         )
         if not fields:
@@ -687,8 +688,14 @@ def _is_git_repository(workspace_root: Path | None) -> bool:
         return False
 
 
-def _current_local_date_iso() -> str:
-    return date.today().isoformat()
+# EFP's users work in Hong Kong. The zone has had no daylight saving since
+# 1979, so a fixed offset is exact and needs neither a tz database nor any
+# configuration; the container's own zone (UTC in the image) is irrelevant.
+ENVIRONMENT_TIMEZONE_LABEL = "Asia/Hong_Kong (UTC+08:00)"
+ENVIRONMENT_TIMEZONE = timezone(timedelta(hours=8), "HKT")
+_WEEKDAY_NAMES = (
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+)
 
 
 def _metadata_bool(metadata: Mapping[str, Any], *keys: str) -> bool:

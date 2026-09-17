@@ -91,7 +91,13 @@ class RuntimeConfig:
     structured_output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     include_default_system_prompt: bool = False
-    include_environment_context: bool = False
+    # On by default: the "Environment:" system block is the only place the model
+    # learns today's date, and without it "recent" / "this week" requests are
+    # answered from the training cutoff. Portal cannot switch it on per agent
+    # (its profile sanitizer keeps only the connection sections), and the
+    # OpenCode runtime already gets the equivalent "Today's date" line from
+    # OpenCode itself, so this keeps both runtime types on the same footing.
+    include_environment_context: bool = True
     system_prompt_texts: list[str] = field(default_factory=list)
     system_prompt_paths: list[str | Path] = field(default_factory=list)
     max_system_prompt_chars: int = 20000

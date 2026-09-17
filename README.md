@@ -109,6 +109,16 @@ Reconciliation/session contract notes:
 - Jira reconciliation fallback publishes to Portal via `/api/internal/external-events/ingest` using Portal `ExternalEventIngressRequest`-compatible fields (`workflow_review_requested`, `payload_json`, `project_key`, `issue_key`, etc.).
 - Runtime session metadata publish keeps canonical keys first and supports legacy Portal aliases (`portal_group_id`, `portal_task_id`, `portal_delegation_id`, `portal_coordination_run_id`) for cross-version compatibility.
 
+### Time Zone
+
+The model sees today's date and weekday in an `Environment:` system block,
+rendered in Hong Kong time (`Asia/Hong_Kong`, UTC+08:00) regardless of the
+container's own zone, so "recent" or "this week" resolve against the users'
+calendar. Each chat turn is also stamped with the current Hong Kong time to
+the second; the loop prefixes it to the request copy of the member's message
+only, so transcripts and the cached system prefix are untouched. Set
+`include_environment_context: false` in the runtime config to drop the block.
+
 ### Integrations
 
 #### Jira (Multiple Instances)
