@@ -111,13 +111,11 @@ Reconciliation/session contract notes:
 
 ### Time Zone
 
-The model sees today's date and weekday in an `Environment:` system block, so
-"recent" or "this week" resolve against the real calendar. Set `EFP_TIMEZONE`
-(an IANA name such as `Asia/Shanghai`) on the runtime process so that date is
-the users' date rather than the container's, which is UTC in the published
-image; `TZ` is honoured as a fallback, and a per-request `timezone` in run
-metadata wins over both. Set `include_environment_context: false` in the
-runtime config to drop the block.
+The model sees today's date and weekday in an `Environment:` system block,
+rendered in Hong Kong time (`Asia/Hong_Kong`, UTC+08:00) regardless of the
+container's own zone, so "recent" or "this week" resolve against the users'
+calendar. Set `include_environment_context: false` in the runtime config to
+drop the block.
 
 ### Integrations
 

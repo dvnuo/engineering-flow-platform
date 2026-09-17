@@ -5,9 +5,8 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -539,7 +538,7 @@ def test_environment_context_builder_contains_runtime_environment(tmp_path: Path
     assert "- git repository: true" in text
     assert f"- platform: {sys.platform}" in text
     assert re.search(r"^- date: \d{4}-\d{2}-\d{2} \((?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\)$", text, re.MULTILINE)
-    assert re.search(r"^- timezone: \S.* \(UTC[+-]\d{2}:\d{2}\)$", text, re.MULTILINE)
+    assert "- timezone: Asia/Hong_Kong (UTC+08:00)" in text
 
 
 @pytest.mark.asyncio
@@ -773,58 +772,23 @@ async def test_runtime_places_session_user_after_environment_and_before_instruct
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
-def _environment_text(tmp_path: Path, **metadata) -> str:
+def test_environment_context_renders_today_in_hong_kong_time(tmp_path: Path):
+    hong_kong = timezone(timedelta(hours=8))
+
+    before = datetime.now(hong_kong)
     messages = SystemPromptBuilder(
         workspace_root=tmp_path,
         include_default_system_prompt=False,
         include_environment_context=True,
         include_runtime_reminders=False,
-    ).build_messages(metadata={"requested_model": "github-copilot/gpt-5.4", **metadata})
+    ).build_messages(metadata={"requested_model": "github-copilot/gpt-5.4"})
+    after = datetime.now(hong_kong)
+
     assert len(messages) == 1
-    return messages[0].parts[0].text
-
-
-def _date_line(moment: datetime) -> str:
-    return f"- date: {moment:%Y-%m-%d} ({_WEEKDAYS[moment.weekday()]})"
-
-
-def test_environment_context_renders_today_in_efp_timezone(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("EFP_TIMEZONE", "Asia/Shanghai")
-    monkeypatch.setenv("TZ", "America/Phoenix")
-    zone = ZoneInfo("Asia/Shanghai")
-
-    before = datetime.now(zone)
-    text = _environment_text(tmp_path)
-    after = datetime.now(zone)
-
-    assert "- timezone: Asia/Shanghai (UTC+08:00)" in text
+    text = messages[0].parts[0].text
+    assert "- timezone: Asia/Hong_Kong (UTC+08:00)" in text
     # Two candidates so a midnight rollover during the call cannot flake.
-    assert _date_line(before) in text or _date_line(after) in text
-
-
-def test_environment_context_falls_back_to_tz_env(monkeypatch, tmp_path: Path):
-    monkeypatch.delenv("EFP_TIMEZONE", raising=False)
-    monkeypatch.setenv("TZ", "America/Phoenix")
-
-    assert "- timezone: America/Phoenix (UTC-07:00)" in _environment_text(tmp_path)
-
-
-def test_environment_context_prefers_run_metadata_timezone(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("EFP_TIMEZONE", "UTC")
-
-    text = _environment_text(tmp_path, timezone="Asia/Kolkata")
-
-    assert "- timezone: Asia/Kolkata (UTC+05:30)" in text
-
-
-def test_environment_context_skips_unknown_timezones(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("EFP_TIMEZONE", "UTC")
-
-    assert "- timezone: UTC (UTC+00:00)" in _environment_text(tmp_path, timezone="Mars/Olympus_Mons")
-
-    monkeypatch.setenv("EFP_TIMEZONE", "Mars/Olympus_Mons")
-    monkeypatch.delenv("TZ", raising=False)
-    text = _environment_text(tmp_path)
-
-    assert re.search(r"^- date: \d{4}-\d{2}-\d{2} \(\w+day\)$", text, re.MULTILINE)
-    assert re.search(r"^- timezone: \S.* \(UTC[+-]\d{2}:\d{2}\)$", text, re.MULTILINE)
+    expected = {
+        f"- date: {moment:%Y-%m-%d} ({_WEEKDAYS[moment.weekday()]})" for moment in (before, after)
+    }
+    assert any(line in text for line in expected)

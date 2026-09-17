@@ -8,9 +8,6 @@ python-dotenv
 httpx
 requests
 cryptography>=42.0.0
-# IANA zone database for zoneinfo on hosts that ship none (Windows dev boxes,
-# slim images); the Environment block renders its date in EFP_TIMEZONE / TZ.
-tzdata
 
 # OCR support (for image preview)
 pytesseract>=0.3.10
