@@ -55,6 +55,13 @@ from ..tools.builtin.session_search import (
 )
 from ..session.protocol import SessionStore
 from ..session.search import list_session_summaries, recent_sessions_overview
+from ..member_memory import (
+    FileMemberNotesStore,
+    InMemoryMemberNotesStore,
+    MemberNotesStore,
+    notes_to_payload,
+)
+from ..tools.builtin.memory import MEMORY_TOOL_ID, create_memory_tool
 from ..session.checkpoint import SessionCheckpoint
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.query import (
@@ -615,6 +622,7 @@ class AgentRuntime:
                 session_id=resolved_session_id,
                 run_tools=run_tools,
             )
+            await self._annotate_member_memory_metadata(run_metadata, run_tools=run_tools)
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             agent_profile_messages = self._build_agent_profile_messages(profile)
             self._annotate_agent_profile_metadata(
@@ -860,6 +868,7 @@ class AgentRuntime:
                 session_id=session_id,
                 run_tools=run_tools,
             )
+            await self._annotate_member_memory_metadata(run_metadata, run_tools=run_tools)
             system_prompt_messages = self._build_system_prompt_messages(run_metadata)
             agent_profile_messages = self._build_agent_profile_messages(profile)
             self._annotate_agent_profile_metadata(
@@ -1175,18 +1184,21 @@ class AgentRuntime:
             else None
         )
 
-    def _session_search_tool_visible(self, run_tools: Mapping[str, bool] | None) -> bool:
-        """Whether the model is offered ``session_search`` on this run.
+    def _registered_memory_tool_id(self) -> str | None:
+        """The memory tool's id, but only when this runtime really has it."""
+        return MEMORY_TOOL_ID if self.tool_runtime.registry.get(MEMORY_TOOL_ID) else None
 
-        The prompt block that advertises the tool must follow the same
-        selection the loop applies, or the model is told about a tool it
-        cannot call: registered, not disabled, inside the allowlist when there
-        is one, and not switched off for this run. Unlike ``question`` and
-        ``browser`` the tool is not forced into an allowlist, because reading
-        other sessions is a capability an allowlisted assistant may well be
-        meant to lack.
+    def _tool_offered(self, tool_id: str | None, run_tools: Mapping[str, bool] | None) -> bool:
+        """Whether the model is offered ``tool_id`` on this run.
+
+        A prompt block that advertises a tool must follow the same selection
+        the loop applies, or the model is told about a tool it cannot call:
+        registered, not disabled, inside the allowlist when there is one, and
+        not switched off for this run. Unlike ``question`` and ``browser`` the
+        memory tools are not forced into an allowlist, because reading other
+        sessions or keeping notes is a capability an allowlisted assistant may
+        well be meant to lack.
         """
-        tool_id = self._registered_session_search_tool_id()
         if tool_id is None:
             return False
         if tool_id in self.config.disabled_tools:
@@ -1211,7 +1223,7 @@ class AgentRuntime:
         runs off the event loop. The overview is best-effort context: a failure
         here drops the listing, never the run.
         """
-        if not self._session_search_tool_visible(run_tools):
+        if not self._tool_offered(self._registered_session_search_tool_id(), run_tools):
             run_metadata.pop("session_memory", None)
             return
         viewer = resolve_session_user(run_metadata)
@@ -1231,6 +1243,41 @@ class AgentRuntime:
         )
         overview["tool_id"] = SESSION_SEARCH_TOOL_ID
         run_metadata["session_memory"] = overview
+
+    async def _annotate_member_memory_metadata(
+        self,
+        run_metadata: dict[str, Any],
+        *,
+        run_tools: Mapping[str, bool] | None,
+    ) -> None:
+        """Attach the member's standing notes for the system prompt.
+
+        Rendered only when the ``memory`` tool is offered on this run and the
+        run carries a member identity: without one there is nobody the notes
+        could belong to. Reading a member's notes is one small file read, done
+        off the event loop; a failure drops the block, never the run.
+        """
+        run_metadata.pop("member_memory", None)
+        if not self._tool_offered(self._registered_memory_tool_id(), run_tools):
+            return
+        member = resolve_session_user(run_metadata)
+        member_id = (member or {}).get("id")
+        if not member_id:
+            return
+        notes_store = _find_member_notes_store(self.tool_runtime.registry)
+        if notes_store is None:
+            return
+        try:
+            notes = await asyncio.to_thread(notes_store.list_notes, member_id)
+        except Exception:  # noqa: BLE001 - the notes block must never fail a run.
+            logging.getLogger(__name__).debug("member notes unavailable", exc_info=True)
+            return
+        run_metadata["member_memory"] = {
+            "tool_id": MEMORY_TOOL_ID,
+            "notes": notes_to_payload(notes),
+            "note_count": len(notes),
+            "max_notes": notes_store.max_notes,
+        }
 
     def _publish_runtime_event(self, event: RuntimeEvent) -> None:
         """Publish an event on this runtime's bus while a tool is still running.
@@ -1738,6 +1785,7 @@ class AgentRuntime:
         run_metadata["enable_question_tool"] = self.config.enable_question_tool
         run_metadata["enable_browser_tool"] = self.config.enable_browser_tool
         run_metadata["enable_session_search"] = self.config.enable_session_search
+        run_metadata["enable_member_memory"] = self.config.enable_member_memory
         run_metadata["default_provider_id"] = self.config.default_provider_id
         run_metadata["default_model"] = self.config.default_model
         run_metadata["model_aware_tool_selection_enabled"] = (
@@ -2128,6 +2176,33 @@ def _store_session_todo_store(store: SessionStore) -> SessionTodoStore | None:
     if isinstance(store_value, SessionTodoStore):
         return store_value
     return None
+
+
+def _resolve_member_notes_store(config: RuntimeConfig, store: SessionStore) -> MemberNotesStore:
+    """Notes live next to the sessions (``<session root>/memory``) unless configured.
+
+    A runtime without a file-backed session store has nowhere durable to put
+    them, so it keeps them in memory, which is what tests use.
+    """
+    root = config.member_memory_dir
+    if root is None:
+        store_root = getattr(store, "root", None)
+        if isinstance(store_root, Path):
+            root = store_root / "memory"
+    if root is None:
+        return InMemoryMemberNotesStore()
+    return FileMemberNotesStore(root)
+
+
+def _find_member_notes_store(registry: ToolRegistry) -> MemberNotesStore | None:
+    tool = registry.get(MEMORY_TOOL_ID)
+    if tool is None:
+        return None
+    runtime_metadata = getattr(tool, "runtime_metadata", {}) or {}
+    if not isinstance(runtime_metadata, Mapping):
+        return None
+    store = runtime_metadata.get("member_notes_store")
+    return store if store is not None else None
 
 
 def _find_session_todo_store(registry: ToolRegistry) -> SessionTodoStore | None:
@@ -2964,6 +3039,8 @@ def _resolve_config(
         enable_browser_tool=config.enable_browser_tool,
         enable_lsp_tool=config.enable_lsp_tool,
         enable_session_search=config.enable_session_search,
+        enable_member_memory=config.enable_member_memory,
+        member_memory_dir=config.member_memory_dir,
         inject_background_task_results=config.inject_background_task_results,
         structured_output_schema=(
             None
@@ -3078,6 +3155,12 @@ def _resolve_tool_runtime(
                 todo_store=_store_session_todo_store(store),
                 include_session_search_tool=config.enable_session_search,
                 session_store=store,
+                include_memory_tool=config.enable_member_memory,
+                member_notes_store=(
+                    _resolve_member_notes_store(config, store)
+                    if config.enable_member_memory
+                    else None
+                ),
             )
         else:
             if config.enable_lsp_tool or lsp_client is not None:
@@ -3096,6 +3179,10 @@ def _resolve_tool_runtime(
                 )
             if config.enable_session_search:
                 registry.register(create_session_search_tool(store))
+            if config.enable_member_memory:
+                registry.register(
+                    create_memory_tool(_resolve_member_notes_store(config, store))
+                )
             if skill_discovery is not None:
                 registry.register(
                     build_skill_tool(

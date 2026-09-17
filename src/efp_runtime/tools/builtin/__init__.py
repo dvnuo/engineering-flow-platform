@@ -9,6 +9,7 @@ from .filesystem import (
 )
 from .invalid import create_invalid_tool
 from .lsp import create_lsp_tool
+from .memory import MEMORY_TOOL_ID, create_memory_tool
 from .plan import create_plan_exit_tool
 from .question import create_question_tool
 from .registry import create_core_tool_registry
@@ -37,6 +38,7 @@ __all__ = [
     "WebSearchRequest",
     "WebSearchRunner",
     "DEFAULT_STRUCTURED_OUTPUT_TOOL_ID",
+    "MEMORY_TOOL_ID",
     "SESSION_SEARCH_TOOL_ID",
     "create_apply_patch_tool",
     "create_bash_tool",
@@ -48,6 +50,7 @@ __all__ = [
     "create_grep_tool",
     "create_invalid_tool",
     "create_lsp_tool",
+    "create_memory_tool",
     "create_plan_exit_tool",
     "create_question_tool",
     "create_read_tool",

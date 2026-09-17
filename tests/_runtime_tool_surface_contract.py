@@ -58,6 +58,10 @@ CONDITIONAL_TOOL_IDS: dict[str, SurfaceContractEntry] = {
         status="conditional",
         reason="Enabled by RuntimeConfig.enable_lsp_tool, include_lsp_tool, or an injected LSP client.",
     ),
+    "memory": SurfaceContractEntry(
+        status="conditional",
+        reason="Enabled by RuntimeConfig.enable_member_memory or include_memory_tool; the gateway enables it for interactive chats.",
+    ),
     "plan_exit": SurfaceContractEntry(
         status="conditional",
         reason="Enabled for EFP runtime plan mode or include_plan_tool.",

@@ -81,6 +81,12 @@ class RuntimeConfig:
     # stored sessions. The gateway turns it on for interactive chats only:
     # background tasks and sub-agents have no member to scope it to.
     enable_session_search: bool = False
+    # Offers the `memory` tool: one-sentence standing notes per Portal member,
+    # rendered into every run's system prompt. Same interactive-only rule.
+    enable_member_memory: bool = False
+    # Where member notes live; None means next to the file session store
+    # (`<session root>/memory`), or in memory when there is no file store.
+    member_memory_dir: str | Path | None = None
     inject_background_task_results: bool = True
     structured_output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -252,6 +258,7 @@ class RuntimeConfig:
         self.enable_browser_tool = bool(self.enable_browser_tool)
         self.enable_lsp_tool = bool(self.enable_lsp_tool)
         self.enable_session_search = bool(self.enable_session_search)
+        self.enable_member_memory = bool(self.enable_member_memory)
         self.inject_background_task_results = bool(
             self.inject_background_task_results
         )
