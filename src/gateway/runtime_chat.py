@@ -481,6 +481,23 @@ def _runtime_config(
         or _mapping_has_key(profile_config, "enable_browser_tool")
     ):
         kwargs["enable_browser_tool"] = True
+    # session_search only reads this assistant's own stored sessions and scopes
+    # them to the member Portal identified, so every interactive chat gets it
+    # unless a profile says otherwise. Background tasks, the Jira handler, and
+    # sub-agents have no member to scope it to and inherit "off".
+    if interactive and not (
+        _mapping_has_key(managed_overlay_config, "enable_session_search")
+        or _mapping_has_key(profile_config, "enable_session_search")
+    ):
+        kwargs["enable_session_search"] = True
+    # The memory tool keeps one-sentence notes per Portal member, next to the
+    # sessions on the agent volume, and only writes when the model is asked to.
+    # Same interactive-only rule as session_search, for the same reason.
+    if interactive and not (
+        _mapping_has_key(managed_overlay_config, "enable_member_memory")
+        or _mapping_has_key(profile_config, "enable_member_memory")
+    ):
+        kwargs["enable_member_memory"] = True
 
     try:
         return RuntimeConfig(**kwargs)

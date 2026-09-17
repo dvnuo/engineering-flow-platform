@@ -59,6 +59,15 @@ Default core tool ids are:
 Conditional built-ins include:
 
 - `question`, when interactive question support is enabled.
+- `session_search`, when `enable_session_search` is set. The gateway sets it
+  for interactive chats so the model can search and read the assistant's
+  earlier sessions (member and assistant text only), scoped by default to the
+  Portal member behind the run. The system prompt then carries an "Earlier
+  sessions" block listing that member's recent sessions.
+- `memory`, when `enable_member_memory` is set (the gateway sets it for
+  interactive chats). It keeps one-sentence standing notes per Portal member
+  under `<session root>/memory/`, written only on explicit request, and the
+  system prompt renders them as a "Member notes" block on every run.
 - `lsp`, when an LSP client or explicit LSP flag is supplied.
 - `plan_exit`, in plan mode or when explicitly enabled.
 - `repo_clone` and `repo_overview`, when repository scout tools are explicitly

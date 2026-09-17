@@ -72,6 +72,7 @@ from src.efp_runtime.session.gateway_facade import (
     runtime_session_manager as session_manager,
 )
 from src.efp_runtime.questions import normalize_answers
+from src.efp_runtime.session.search import TASK_SESSION_ID_PREFIXES
 from src.efp_runtime.context.render import render_history
 from src.efp_runtime.context.usage import build_context_usage_snapshot
 from src.efp_runtime.llm.models import resolve_model_context_profile
@@ -469,15 +470,8 @@ def _safe_runtime_task_session_id(value: str) -> str:
     return cleaned or f"task-session-{hashlib.sha256(str(value).encode('utf-8')).hexdigest()[:16]}"
 
 
-TASK_SESSION_ID_PREFIXES = (
-    "agent-task:",
-    "agent-task-",
-    "generic-task:",
-    "generic-task-",
-    "delegation:",
-    "delegation-",
-    "task-",
-)
+# TASK_SESSION_ID_PREFIXES is defined in efp_runtime.session.search so this
+# listing and the session_search tool agree on what a task session is.
 
 
 def _runtime_session_id_is_task_session(session_id: Any) -> bool:

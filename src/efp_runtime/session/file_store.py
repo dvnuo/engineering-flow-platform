@@ -57,6 +57,11 @@ class SessionSummary:
     revert_active: bool = False
     workspace_snapshot_id: Optional[str] = None
     unrevert_snapshot_id: Optional[str] = None
+    # Portal member ids/names stamped on the member turns, first appearance
+    # first. The session_search tool scopes "mine" searches by id without
+    # opening a single session body.
+    author_ids: Tuple[str, ...] = ()
+    author_names: Tuple[str, ...] = ()
 
 
 # malloc_trim(0) hands freed arenas back to the OS after a large parse burst.
@@ -119,14 +124,35 @@ def _truncate_preview(value: str, limit: int = _SUMMARY_PREVIEW_CHARS) -> str:
     return value if len(value) <= limit else value[:limit]
 
 
+_SUMMARY_AUTHOR_CAP = 16
+
+
+def _collect_author(message: Message, author_ids: List[str], author_names: List[str]) -> None:
+    """Record who wrote a member turn, in first-appearance order."""
+    metadata = message.metadata if isinstance(message.metadata, Mapping) else {}
+    author_id = metadata.get("author_id")
+    if isinstance(author_id, str):
+        author_id = author_id.strip()
+        if author_id and author_id not in author_ids and len(author_ids) < _SUMMARY_AUTHOR_CAP:
+            author_ids.append(author_id)
+    author_name = metadata.get("author_name")
+    if isinstance(author_name, str):
+        author_name = author_name.strip()
+        if author_name and author_name not in author_names and len(author_names) < _SUMMARY_AUTHOR_CAP:
+            author_names.append(author_name)
+
+
 def build_session_summary(session: Session) -> SessionSummary:
     user_count = 0
     first_user_preview = ""
+    author_ids: List[str] = []
+    author_names: List[str] = []
     for message in session.messages:
         if message.role is MessageRole.USER:
             user_count += 1
             if not first_user_preview:
                 first_user_preview = _truncate_preview(_summary_preview_text(message))
+            _collect_author(message, author_ids, author_names)
     last_preview = ""
     for message in reversed(session.messages):
         if message.role in (MessageRole.USER, MessageRole.ASSISTANT):
@@ -156,6 +182,8 @@ def build_session_summary(session: Session) -> SessionSummary:
         unrevert_snapshot_id=(
             unrevert_snapshot_id if isinstance(unrevert_snapshot_id, str) else None
         ),
+        author_ids=tuple(author_ids),
+        author_names=tuple(author_names),
     )
 
 

@@ -58,6 +58,10 @@ CONDITIONAL_TOOL_IDS: dict[str, SurfaceContractEntry] = {
         status="conditional",
         reason="Enabled by RuntimeConfig.enable_lsp_tool, include_lsp_tool, or an injected LSP client.",
     ),
+    "memory": SurfaceContractEntry(
+        status="conditional",
+        reason="Enabled by RuntimeConfig.enable_member_memory or include_memory_tool; the gateway enables it for interactive chats.",
+    ),
     "plan_exit": SurfaceContractEntry(
         status="conditional",
         reason="Enabled for EFP runtime plan mode or include_plan_tool.",
@@ -73,6 +77,10 @@ CONDITIONAL_TOOL_IDS: dict[str, SurfaceContractEntry] = {
     "repo_overview": SurfaceContractEntry(
         status="conditional",
         reason="Disabled by default; registered only when repository scout tools are explicitly requested.",
+    ),
+    "session_search": SurfaceContractEntry(
+        status="conditional",
+        reason="Enabled by RuntimeConfig.enable_session_search or include_session_search_tool; the gateway enables it for interactive chats.",
     ),
     "websearch": SurfaceContractEntry(
         status="conditional",
