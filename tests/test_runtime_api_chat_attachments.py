@@ -74,7 +74,9 @@ async def _client(client_max_size: int | None = None) -> TestClient:
 
 
 def _file_form(filename: str, data: bytes, content_type: str = "application/octet-stream") -> FormData:
-    form = FormData()
+    # Browsers send the multipart filename as raw UTF-8; aiohttp's client would
+    # percent-encode it unless told not to, which no browser does.
+    form = FormData(quote_fields=False)
     form.add_field("file", data, filename=filename, content_type=content_type)
     return form
 
@@ -297,6 +299,123 @@ async def test_zip_upload_is_projected_to_listing_and_text_members(isolated_atta
     context = await runtime_api._ensure_chat_attachment_context(session_id="s1", attachment_ids=[file_id])
     assert context["context_file_ids"] == [file_id]
     assert context["failures"] == []
+
+
+@pytest.mark.asyncio
+async def test_attachment_bytes_outlive_the_run_and_go_with_the_session(isolated_attachment_storage, monkeypatch):
+    """The transcript's chip must still open the file after the run; deleting the session drops it."""
+    from types import SimpleNamespace
+
+    from src.gateway import runtime_api
+
+    async def _delete_session(_session_id):
+        return False  # a session that received uploads but was never persisted
+
+    monkeypatch.setattr(runtime_api, "session_manager", SimpleNamespace(_initialized=True, delete_session=_delete_session))
+
+    client = await _client()
+    try:
+        upload = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("2026-09 日志 (final).log", "错误：连接超时\n".encode("utf-8"), "text/plain"),
+        )
+        assert upload.status == 201, await upload.text()
+        uploaded = await upload.json()
+        assert uploaded["filename"] == "2026-09 日志 (final).log"
+        file_id = uploaded["file_id"]
+
+        context = await runtime_api._ensure_chat_attachment_context(session_id="s1", attachment_ids=[file_id])
+        assert context["context_file_ids"] == [file_id]
+
+        # What the chat handlers do once the run is over: release the context...
+        await runtime_api._cleanup_one_shot_attachments("s1", [file_id])
+        assert runtime_api.file_context_storage.get_file_meta("s1", file_id) is None
+
+        # ...but keep the bytes for the chip in the transcript.
+        inline = await client.get(f"/api/files/{file_id}", params={"session_id": "s1"})
+        assert inline.status == 200
+        assert inline.headers["Content-Disposition"].startswith("inline;")
+        assert "filename*=UTF-8''2026-09%20%E6%97%A5%E5%BF%97%20%28final%29.log" in inline.headers["Content-Disposition"]
+        assert await inline.read() == "错误：连接超时\n".encode("utf-8")
+
+        download = await client.get(f"/api/files/{file_id}", params={"session_id": "s1", "download": "1"})
+        assert download.status == 200
+        assert download.headers["Content-Disposition"].startswith("attachment;")
+
+        # Deleting the session takes its attachments with it, even when the
+        # session itself was never persisted.
+        deleted = await client.delete("/api/sessions/s1")
+        assert deleted.status == 404
+        gone = await client.get(f"/api/files/{file_id}", params={"session_id": "s1"})
+        assert gone.status == 404
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_display_attachments_describe_each_file_for_the_transcript(isolated_attachment_storage, monkeypatch):
+    from src.gateway import runtime_api
+
+    monkeypatch.setenv("EFP_CHAT_UPLOAD_EXTENSIONS", "png,txt,log")
+    client = await _client()
+    try:
+        text_upload = await client.post(
+            "/api/files/upload", params={"session_id": "s1"}, data=_file_form("app.log", b"ERROR boom", "text/plain")
+        )
+        image_upload = await client.post(
+            "/api/files/upload", params={"session_id": "s1"}, data=_file_form("shot.png", PNG_BYTES, "image/png")
+        )
+        text_id = (await text_upload.json())["file_id"]
+        image_id = (await image_upload.json())["file_id"]
+    finally:
+        await client.close()
+
+    context = await runtime_api._ensure_chat_attachment_context(session_id="s1", attachment_ids=[text_id, image_id])
+    display = runtime_api._build_display_attachments([text_id, image_id, "missing-file"], context)
+
+    assert [item["name"] for item in display] == ["app.log", "shot.png"]
+    assert display[0] == {
+        "file_id": text_id, "id": text_id, "name": "app.log", "filename": "app.log",
+        "content_type": "text/plain", "mime": "text/plain", "size": 10, "type": "file", "parsed": True,
+    }
+    assert display[1]["type"] == "image"
+    assert display[1]["parsed"] is True
+    assert display[1]["content_type"] == "image/png"
+
+
+def test_history_shows_the_members_words_and_files_not_the_expanded_prompt():
+    from src.gateway import runtime_api
+
+    stored = {
+        "role": "user",
+        "content": "Based on the following context, answer the user's question.\n\nContext: ...\n\nQuestion: can you help check ths logs?\n\nAnswer:",
+        "metadata": {
+            "author_type": "human",
+            "original_user_message": "can you help check ths logs?",
+            "display_attachments": [
+                {"file_id": "f1", "id": "f1", "name": "app.log", "content_type": "text/plain", "size": 233, "type": "file", "parsed": True},
+            ],
+            "internal_model_content_hidden": True,
+        },
+    }
+
+    shown = runtime_api._normalize_chat_history_message(
+        stored, portal_user_id=None, portal_user_name=None, runtime_agent_id=None, runtime_agent_name=None
+    )
+
+    assert shown["display_content"] == "can you help check ths logs?"
+    assert shown["attachments"] == stored["metadata"]["display_attachments"]
+    assert shown["metadata"]["internal_model_content_hidden"] is True
+    # The model-facing content is still there for anyone who needs it.
+    assert shown["content"].startswith("Based on the following context")
+
+    # A turn without attachment metadata is untouched.
+    plain = runtime_api._normalize_chat_history_message(
+        {"role": "user", "content": "hello", "metadata": {"author_type": "human"}},
+        portal_user_id=None, portal_user_name=None, runtime_agent_id=None, runtime_agent_name=None,
+    )
+    assert "display_content" not in plain and "attachments" not in plain
 
 
 @pytest.mark.asyncio

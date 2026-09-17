@@ -144,6 +144,18 @@ def test_text_helpers_accept_utf8_and_gb18030_and_reject_binary():
     assert validators.decode_text_bytes(gbk) == ("第三季度营收增长 12%\n", "gb18030")
 
 
+def test_sanitize_filename_keeps_names_in_any_script():
+    assert validators.sanitize_filename("2026-09 日志 (final).log") == "2026-09 日志 (final).log"
+    assert validators.sanitize_filename("C:\\Users\\me\\报告.docx") == "报告.docx"
+    assert validators.sanitize_filename("dir/../notes.txt") == "notes.txt"
+    assert validators.sanitize_filename("bad\x00\x1fname.txt") == "badname.txt"
+    assert validators.sanitize_filename("..hidden") == "hidden"
+    assert validators.sanitize_filename("   ").startswith("file_")
+    assert validators.sanitize_filename("") .startswith("file_")
+    long_name = "a" * 300 + ".log"
+    assert validators.sanitize_filename(long_name) == "a" * 196 + ".log"
+
+
 def test_detect_mime_type_accepts_gbk_encoded_logs(monkeypatch):
     monkeypatch.setenv(validators.UPLOAD_EXTENSIONS_ENV, "log,txt")
     gbk_log = "2026-09-16 错误：连接超时\n".encode("gb18030")

@@ -34,14 +34,14 @@ class FileContextStorage:
         """Load session context."""
         path = self._session_path(session_id)
         if path.exists():
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             return SessionContext(**data)
         return SessionContext(session_id=session_id)
     
     def save_session_context(self, context: SessionContext) -> None:
         """Save session context."""
         path = self._session_path(context.session_id)
-        path.write_text(context.model_dump_json(indent=2))
+        path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
     
     def add_file_to_session(self, session_id: str, meta: SessionFileMeta) -> None:
         """Add file to session."""
@@ -102,7 +102,7 @@ class FileContextStorage:
     def save_chunk(self, chunk: Chunk) -> None:
         """Save chunk to storage."""
         path = self._chunk_path(chunk.file_id, chunk.chunk_id)
-        path.write_text(chunk.model_dump_json(indent=2))
+        path.write_text(chunk.model_dump_json(indent=2), encoding="utf-8")
     
     def save_chunks(self, chunks: List[Chunk]) -> None:
         """Save multiple chunks."""
@@ -113,7 +113,7 @@ class FileContextStorage:
         """Load chunk from storage."""
         path = self._chunk_path(file_id, chunk_id)
         if path.exists():
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             return Chunk(**data)
         return None
     
@@ -125,7 +125,7 @@ class FileContextStorage:
         
         chunks = []
         for path in file_dir.glob("*.json"):
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             chunks.append(Chunk(**data))
         
         # Sort by page and index

@@ -534,7 +534,75 @@ def _normalize_attachment_ids(value: Any) -> List[str]:
     return result
 
 
+def _build_display_attachments(
+    attachment_ids: List[str],
+    attachment_context: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Name, type and size of each attached file, persisted with the user turn.
+
+    The transcript renders these as chips (the model prompt itself carries the
+    projected text, not the file); ``parsed`` says whether the file reached
+    the model as context or as an image.
+    """
+    context = attachment_context or {}
+    ready = set(context.get("context_file_ids") or []) | set(context.get("image_file_ids") or [])
+    failures = {
+        str(item.get("file_id")): str(item.get("error") or "")
+        for item in (context.get("failures") or [])
+        if isinstance(item, dict)
+    }
+    items: List[Dict[str, Any]] = []
+    for file_id in attachment_ids:
+        try:
+            metadata = get_metadata(file_id)
+        except Exception:
+            continue
+        content_type = str(getattr(metadata, "content_type", "") or "")
+        name = str(getattr(metadata, "original_filename", "") or file_id)
+        item: Dict[str, Any] = {
+            "file_id": file_id,
+            "id": file_id,
+            "name": name,
+            "filename": name,
+            "content_type": content_type,
+            "mime": content_type,
+            "size": int(getattr(metadata, "size", 0) or 0),
+            "type": "image" if content_type.startswith("image/") else "file",
+            "parsed": file_id in ready,
+        }
+        if file_id in failures:
+            item["parse_error"] = failures[file_id]
+        items.append(item)
+    return items
+
+
+def _delete_session_attachments(session_id: str) -> int:
+    """Drop every uploaded file bound to ``session_id`` (used when the session goes)."""
+    from src.utils.file_parser.storage import delete_file, list_files
+
+    removed = 0
+    try:
+        bound = list(list_files(session_id))
+    except Exception:
+        logger.warning("Listing attachments for session %s failed", safe_log_field(session_id, 120), exc_info=True)
+        return 0
+    for metadata in bound:
+        try:
+            if delete_file(metadata.file_id):
+                removed += 1
+        except Exception:
+            logger.warning("Deleting attachment %s failed", metadata.file_id, exc_info=True)
+    return removed
+
+
 async def _cleanup_one_shot_attachments(session_id: Optional[str], file_ids: List[str]) -> None:
+    """Release the retrieval context of the files a chat request attached.
+
+    The bytes stay on disk until the session is deleted: the transcript shows
+    the attachment as a chip the member can open again, and the next turn only
+    sees a file it explicitly attaches (the context below is what feeds the
+    model, and it goes here).
+    """
     if not session_id or not file_ids:
         return
     unique_ids: List[str] = []
@@ -544,7 +612,6 @@ async def _cleanup_one_shot_attachments(session_id: Optional[str], file_ids: Lis
             unique_ids.append(fid)
             seen.add(fid)
 
-    from src.utils.file_parser.storage import delete_file
     from src.hooks.file_context.storage import storage as file_context_storage
     from src.hooks.file_context.retrieval import retrieval_engine
 
@@ -558,11 +625,6 @@ async def _cleanup_one_shot_attachments(session_id: Optional[str], file_ids: Lis
                 touched_context = True
         except Exception:
             logger.warning("Best-effort file_context cleanup failed for %s/%s", session_id, fid, exc_info=True)
-
-        try:
-            delete_file(fid)
-        except Exception:
-            logger.warning("Best-effort upload cleanup failed for %s", fid, exc_info=True)
 
     if touched_context:
         try:
@@ -1005,6 +1067,7 @@ async def _run_chat_via_execution_bus(
     portal_user_name: Optional[str],
     attached_images: Optional[List[str]] = None,
     attachments: Optional[List[str]] = None,
+    display_attachments: Optional[List[Dict[str, Any]]] = None,
     transient_model_message: Optional[str] = None,
     reasoning_replay: Optional[bool] = None,
     stream_callback: Optional[Any] = None,
@@ -1025,6 +1088,7 @@ async def _run_chat_via_execution_bus(
         portal_user_name=portal_user_name,
         attached_images=attached_images,
         attachments=attachments,
+        display_attachments=display_attachments,
         transient_model_message=transient_model_message,
         reasoning_replay=reasoning_replay,
         stream_callback=stream_callback,
@@ -1160,6 +1224,16 @@ def _normalize_chat_history_message(
 
         normalized_message.setdefault("author_type", "human")
         normalized_message.setdefault("author_source", "runtime")
+
+        # A turn whose model prompt was expanded (attachment context ahead of
+        # the question) keeps the member's own words and files in metadata;
+        # that, not the prompt, is what the transcript shows.
+        original = persisted_metadata.get("original_user_message")
+        if isinstance(original, str) and not normalized_message.get("display_content"):
+            normalized_message["display_content"] = original
+        display_attachments = persisted_metadata.get("display_attachments")
+        if isinstance(display_attachments, list) and display_attachments and not normalized_message.get("attachments"):
+            normalized_message["attachments"] = [dict(item) for item in display_attachments if isinstance(item, dict)]
 
         # Request identity belongs to the viewer loading the session, not
         # necessarily to the user who originally wrote a historical message.
@@ -1389,6 +1463,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 )
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for chat.started", exc_info=True)
+        display_attachments = _build_display_attachments(attachment_ids, attachment_context) if attachment_ids else None
         result = await _run_chat_via_execution_bus(
                 message=history_message,
                 session_id=session_id,
@@ -1398,6 +1473,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 reasoning_replay=reasoning_replay,
                 attached_images=attached_images if attached_images else None,
                 attachments=attachment_ids if attachment_ids else None,
+                display_attachments=display_attachments,
                 request_path="/api/chat",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
@@ -1780,6 +1856,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for streaming chat.started", exc_info=True)
 
+        display_attachments = _build_display_attachments(attachment_ids, attachment_context) if attachment_ids else None
         run_task = asyncio.create_task(
             _run_chat_via_execution_bus(
                 message=history_message,
@@ -1790,6 +1867,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 stream_callback=event_queue,
                 attached_images=attached_images if attached_images else None,
                 attachments=attachment_ids if attachment_ids else None,
+                display_attachments=display_attachments,
                 request_path="/api/chat/stream",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
@@ -4193,10 +4271,13 @@ async def api_delete_session(request: web.Request) -> web.Response:
             return web.json_response({'error': 'Session ID required'}, status=400)
 
         deleted = await session_manager.delete_session(session_id)
+        # Chat attachments live as long as their session; drop them with it
+        # (also for a session that was never persisted but received uploads).
+        removed_attachments = _delete_session_attachments(session_id)
         if not deleted:
             return web.json_response({'error': 'Session not found'}, status=404)
 
-        return web.json_response({'success': True, 'session_id': session_id})
+        return web.json_response({'success': True, 'session_id': session_id, 'attachments_removed': removed_attachments})
     except Exception as e:
         logger.error(f"Error deleting session: {e}")
         return web.json_response({'error': str(e)}, status=500)
@@ -4477,11 +4558,13 @@ async def api_skills(request: web.Request) -> web.Response:
 
 # ===== Chat attachment API =====
 #
-# File-id based, one-shot attachments for the Portal chatbox: the composer
-# uploads (and optionally parses) each file here, sends the returned ids in
-# the chat request's ``attachments`` array, and the chat handlers delete the
-# files once the run finishes (_cleanup_one_shot_attachments). Path-based
-# workspace browsing is a different API under /api/server-files.
+# File-id based attachments for the Portal chatbox: the composer uploads (and
+# optionally parses) each file here and sends the returned ids in the chat
+# request's ``attachments`` array. A file feeds the model only for the request
+# that attached it (_cleanup_one_shot_attachments releases its context after
+# the run); the bytes stay until the session is deleted so the transcript's
+# chips can open them. Path-based workspace browsing is a different API under
+# /api/server-files.
 
 def _attachment_session_id(request: web.Request, payload: Optional[Dict[str, Any]] = None) -> Optional[str]:
     candidates = [
@@ -4664,9 +4747,9 @@ async def api_files_preview(request: web.Request) -> web.Response:
 
 
 async def api_files_get(request: web.Request) -> web.Response:
-    """Serve the raw attachment inline (images in the transcript).
+    """Serve the raw attachment: inline by default, as a download with ``download=1``.
 
-    GET /api/files/{file_id}?session_id=...
+    GET /api/files/{file_id}?session_id=...[&download=1]
     """
     file_id = str(request.match_info.get("file_id") or "").strip()
     if not file_id:
@@ -4680,12 +4763,20 @@ async def api_files_get(request: web.Request) -> web.Response:
         return _attachment_error_response("File not found", 404)
 
     body = await asyncio.to_thread(file_path.read_bytes)
-    safe_name = re.sub(r'[\r\n"\\]', "_", str(metadata.original_filename or file_id))
+    disposition = "attachment" if str(request.query.get("download", "")).strip().lower() in {"1", "true", "yes"} else "inline"
     return web.Response(
         body=body,
         content_type=metadata.content_type or "application/octet-stream",
-        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+        headers={"Content-Disposition": _attachment_content_disposition(str(metadata.original_filename or file_id), disposition)},
     )
+
+
+def _attachment_content_disposition(filename: str, disposition: str) -> str:
+    """RFC 6266 header carrying an ASCII fallback plus the UTF-8 name (RFC 5987)."""
+    from urllib.parse import quote
+
+    ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in {'"', "\\"} else "_" for ch in filename).strip() or "download"
+    return f'{disposition}; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
 
 
 async def api_files_delete(request: web.Request) -> web.Response:

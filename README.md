@@ -291,16 +291,21 @@ Additional runtime contracts:
 ### Uploading Attachments
 
 The Portal chatbox uploads each attached file to the runtime before sending the
-message; the ids come back in the chat request. Attachments are one-shot: the
-chat handlers delete them once the run finishes.
+message; the ids come back in the chat request. A file feeds the model only for
+the request that attached it (its retrieval context is released when the run
+ends), but the bytes stay until the session is deleted so the transcript's
+attachment chips can open them again. The persisted user turn keeps the
+member's own words (`metadata.original_user_message`) and the attached files
+(`metadata.display_attachments`) next to the composed model prompt, and
+`GET /api/sessions/{id}` surfaces them as `display_content` and `attachments`.
 
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /api/files/upload?session_id=...` | multipart `file` part → `201 {"success": true, "file_id", "filename", "content_type", "size", "uploaded_at", "session_id"}`; `413` over the size cap, `415` when the extension is not allowed or the bytes are not a supported format |
 | `POST /api/files/parse?session_id=...` | body `{"file_id": "..."}` → parses the file into the session file context (`markdown`, `blocks`); the chat handlers also parse on demand |
 | `GET /api/files/{file_id}/preview?max_chars=N` | first `N` characters of the parsed text |
-| `GET /api/files/{file_id}` | raw bytes, inline |
-| `DELETE /api/files/{file_id}` | remove the file and its session context |
+| `GET /api/files/{file_id}` | raw bytes, inline; `?download=1` sends it as a download (UTF-8 filename preserved) |
+| `DELETE /api/files/{file_id}` | remove the file and its session context (`DELETE /api/sessions/{id}` removes every file of that session) |
 
 A file bound to a session is only visible with that `session_id` (query, `X-Session-ID` header, or JSON body).
 

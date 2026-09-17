@@ -275,31 +275,34 @@ def validate_image_for_llm(
 
 
 def sanitize_filename(filename: str) -> str:
-    """Sanitize user-provided filename.
-    
-    Rules:
-    - Only allow letters, digits, dots, underscores, hyphens
-    - Must start with letter or digit
-    - Max 200 characters
-    - Strip control characters
-    
+    """Sanitize a user-provided filename for metadata and Content-Disposition.
+
+    Keeps the member's own name for the file, whatever script it is in
+    (Chinese names, spaces and brackets included), so the transcript shows the
+    file they attached. Drops path components, control characters and leading
+    dots, caps the length at 200 and falls back to a random name when nothing
+    usable remains. Storage never uses this name (files are stored as
+    ``<file_id><ext>``), so no further filesystem rules apply.
+
     Args:
         filename: Original filename from user
-        
+
     Returns:
         Sanitized filename or random name if invalid
     """
-    # Extract name only (remove path)
-    name = Path(filename).name
-    
-    # Strip control characters
-    name = ''.join(c for c in name if ord(c) >= 32)
-    
-    # Check if valid (only reject empty or control chars)
-    if not name or not FILENAME_PATTERN.match(name):
+    name = str(filename or "").replace("\\", "/").split("/")[-1]
+    name = "".join(c for c in name if ord(c) >= 32 and c != "\x7f").strip().lstrip(".").strip()
+
+    if not name:
         import uuid
         return f"file_{uuid.uuid4().hex[:8]}"
-    
+
+    if len(name) > 200:
+        stem, dot, ext = name.rpartition(".")
+        if dot and stem and 0 < len(ext) <= 10:
+            name = stem[: 200 - len(ext) - 1] + "." + ext
+        else:
+            name = name[:200]
     return name
 
 
