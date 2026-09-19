@@ -168,7 +168,8 @@ boot (no hot apply; config changes require a Portal-triggered restart):
   after projection.
 - `EFP_PROFILE_REVISION` / `EFP_PROFILE_ID` — profile revision and id.
 - Tools config env vars — exported by the runtime for CLI child processes
-  (`jira`, `confluence`, `jenkins`, `aws-auth`, `mobile-auto`) as
+  (`jira`, `confluence`, `jenkins`, `aws-auth`, `nexus`, `splunk`, `appd`,
+  `pgsql`, `mobile-auto`) as
   EFP_-prefixed, indexed variables flattened from the tools `RootConfig`-shaped
   config (e.g. `EFP_JIRA_DEFAULT_INSTANCE`, `EFP_JIRA_INSTANCES_0_BASE_URL`,
   `EFP_AWS_DOMAIN`, `EFP_AWS_ACCOUNTS_0_ACCOUNT_ID`,
