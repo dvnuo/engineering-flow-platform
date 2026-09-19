@@ -64,33 +64,22 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
     assert "COPY runtime-tools/jira runtime-tools/confluence /usr/local/bin/" not in text
     assert "chmod 0755 /usr/local/bin/jira /usr/local/bin/confluence" not in text
     assert "Go toolchain" in text
+    # Every CLI is smoke-tested through the manifest prepare-runtime-tools.sh
+    # writes, so the Dockerfile does not repeat a list that goes stale; assert
+    # the loop instead, and keep one schema call per established CLI.
+    assert "test -f /tmp/runtime-tools/efp-tools.manifest" in text
+    assert '"$cli" version --json' in text
+    assert '"$cli" commands --json' in text
+    assert "done < /tmp/runtime-tools/efp-tools.manifest" in text
+    # The manifest is a build input, not something to put on PATH.
+    assert "! -name efp-tools.manifest" in text
     for command in [
-        "aws-auth version --json",
-        "aws-auth commands --json",
         "aws-auth schema login --json",
-        "jira version --json",
-        "jira commands --json",
         "jira schema issue.map-csv --json",
-        "confluence version --json",
-        "confluence commands --json",
         "confluence schema page.create --json",
-        "jenkins version --json",
-        "jenkins commands --json",
         "jenkins schema build.test-report --json",
-        "browser version --json",
-        "browser commands --json",
         "browser schema probe --json",
-        "mobile-auto version --json",
-        "mobile-auto commands --json",
         "mobile-auto schema run.start --json",
-        "nexus version --json",
-        "nexus commands --json",
-        "splunk version --json",
-        "splunk commands --json",
-        "appd version --json",
-        "appd commands --json",
-        "pgsql version --json",
-        "pgsql commands --json",
     ]:
         assert command in text
 

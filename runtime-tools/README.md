@@ -21,3 +21,9 @@ neither.
 The runtime image copies generated binaries into `/usr/local/bin` so agents can
 call them through the EFP `bash` built-in from the workspace. The final runtime
 image does not install the Go toolchain.
+
+The script also writes `efp-tools.manifest`, one CLI name per line, listing what
+it built. The image build reads it to smoke-test exactly those binaries, so the
+check follows the tools repo instead of a list copied into the Dockerfile. The
+manifest is a build input: it is not installed onto `PATH`, and like the
+binaries it is generated rather than committed.

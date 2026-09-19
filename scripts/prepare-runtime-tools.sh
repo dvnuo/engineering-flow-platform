@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="$ROOT/runtime-tools"
+# Lists the CLIs built from the tools repo, for the image smoke test.
+MANIFEST_NAME="efp-tools.manifest"
 TOOLS_REPO_URL="https://github.com/dvnuo/engineering-flow-platform-tools.git"
 TEMP_DIR=""
 TOOLS_REPO_DIR=""
@@ -107,7 +109,7 @@ log "Discovered runtime tools: ${tool_names[*]}"
 
 # runtime-tools/ is a generated Docker build input. Keep README.md, but remove
 # stale binaries so deleted or renamed cmd/<tool> directories do not enter PATH.
-find "$OUTPUT_DIR" -maxdepth 1 -type f ! -name README.md -delete
+find "$OUTPUT_DIR" -maxdepth 1 -type f ! -name README.md ! -name "$MANIFEST_NAME" -delete
 
 built_outputs=()
 for tool_name in "${tool_names[@]}"; do
@@ -122,6 +124,14 @@ for tool_name in "${tool_names[@]}"; do
 done
 
 chmod 0755 "${built_outputs[@]}"
+
+# The image smoke-tests exactly the CLIs that were built, rather than a list
+# copied into the Dockerfile that goes stale whenever the tools repo gains or
+# loses a cmd/<tool>. Third-party binaries staged below are deliberately not
+# listed: they do not answer `version --json`.
+printf '%s\n' "${tool_names[@]}" > "$OUTPUT_DIR/$MANIFEST_NAME"
+log "Wrote $MANIFEST_NAME listing ${#tool_names[@]} CLIs"
+
 stage_browserstack_local
 stage_aws_login_providers
 log "Built runtime tools: ${tool_names[*]}"

@@ -85,10 +85,20 @@ COPY . .
 # adfs-assume or saml2aws that aws-auth login shells out to) are installed the
 # same way; scripts/prepare-runtime-tools.sh stages them from *_SOURCE paths.
 COPY runtime-tools/ /tmp/runtime-tools/
+# The smoke test reads efp-tools.manifest, which prepare-runtime-tools.sh writes
+# listing the CLIs it built, so it never goes stale when the tools repo gains or
+# loses a cmd/<tool>. The schema calls stay explicit: each asserts one known
+# command of one CLI, which a generic loop cannot do.
 RUN set -eux; \
     while IFS= read -r -d '' tool; do \
         install -m 0755 "$tool" "/usr/local/bin/$(basename "$tool")"; \
-    done < <(find /tmp/runtime-tools -maxdepth 1 -type f ! -name README.md -print0); \
+    done < <(find /tmp/runtime-tools -maxdepth 1 -type f ! -name README.md ! -name efp-tools.manifest -print0); \
+    test -f /tmp/runtime-tools/efp-tools.manifest; \
+    while IFS= read -r cli; do \
+        test -n "$cli" || continue; \
+        "$cli" version --json >/dev/null; \
+        "$cli" commands --json >/dev/null; \
+    done < /tmp/runtime-tools/efp-tools.manifest; \
     rm -rf /tmp/runtime-tools; \
     printf '%s\n' '#!/usr/bin/env bash' 'exec /usr/bin/google-chrome-stable --no-sandbox "$@"' > /usr/local/bin/google-chrome; \
     chmod 0755 /usr/local/bin/google-chrome \
@@ -96,32 +106,12 @@ RUN set -eux; \
     && aws --version >/dev/null \
     && kubectl version --client >/dev/null \
     && jq --version >/dev/null \
-    && aws-auth version --json >/dev/null \
-    && aws-auth commands --json >/dev/null \
     && aws-auth schema login --json >/dev/null \
-    && jira version --json >/dev/null \
-    && jira commands --json >/dev/null \
     && jira schema issue.map-csv --json >/dev/null \
-    && confluence version --json >/dev/null \
-    && confluence commands --json >/dev/null \
     && confluence schema page.create --json >/dev/null \
-    && jenkins version --json >/dev/null \
-    && jenkins commands --json >/dev/null \
     && jenkins schema build.test-report --json >/dev/null \
-    && browser version --json >/dev/null \
-    && browser commands --json >/dev/null \
     && browser schema probe --json >/dev/null \
-    && mobile-auto version --json >/dev/null \
-    && mobile-auto commands --json >/dev/null \
-    && mobile-auto schema run.start --json >/dev/null \
-    && nexus version --json >/dev/null \
-    && nexus commands --json >/dev/null \
-    && splunk version --json >/dev/null \
-    && splunk commands --json >/dev/null \
-    && appd version --json >/dev/null \
-    && appd commands --json >/dev/null \
-    && pgsql version --json >/dev/null \
-    && pgsql commands --json >/dev/null
+    && mobile-auto schema run.start --json >/dev/null
 
 # Create the runtime workspace and external skills directories.
 RUN mkdir -p /app/skills /workspace
