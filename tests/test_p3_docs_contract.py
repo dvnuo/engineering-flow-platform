@@ -39,7 +39,7 @@ def test_runtime_contract_doc_mentions_current_native_contract_surfaces():
         "EFP runtime native mode supports GitHub Copilot only",
         "EFP-owned runtime built-in registry",
         "prebuilt `engineering-flow-platform-tools` CLI binaries",
-        "`jira`, `confluence`, `browser`, and `mobile-auto`",
+        "`jira`, `confluence`, `jenkins`, `aws-auth`, `nexus`, `splunk`, `appd`, `pgsql`, `browser`, and `mobile-auto`",
         "<tool> commands --json",
         "Runtime profile boot projection applies GitHub, AWS, and Git configuration through real CLIs",
         "Legacy Python tool packages",

@@ -135,7 +135,18 @@ RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS = (
     "`private-external` with a supplied local identifier or `private-managed` only when the runtime image has BrowserStackLocal installed. "
     "Jenkins runtime profile credentials are available as EFP_JENKINS_USERNAME and EFP_JENKINS_PASSWORD; "
     "when the user provides a Jenkins controller URL or pipeline/job, configure or log in to that controller at that time and pass the password through stdin, never by echoing it. "
-    "For AWS, prefer `aws --output json` for inspection and avoid changing cloud resources unless the user asks. "
+    "For AWS, run `aws-auth account list --json` to see the configured accounts and `aws-auth login --account <name> --json` "
+    "(or `aws-auth login --all --json`) before the first aws call; each account's credentials live in the AWS CLI profile named "
+    "after the account, so pass `--profile <name>` to every aws command and `--output json` for inspection. "
+    "Run `aws-auth eks kubeconfig --account <name> --cluster <cluster> --json` before kubectl and pass `--context <name>/<cluster>` "
+    "on every kubectl command; keep kubectl read-only (get, describe, logs --tail, events, top, explain) and never apply, delete, "
+    "edit, patch, scale, rollout, exec, port-forward, or read secrets. When aws or kubectl reports an expired or missing token, "
+    "run `aws-auth login --account <name> --json` again. Avoid changing cloud resources unless the user asks. "
+    "Use nexus for Nexus Repository artifacts (`nexus repo list --json`, `nexus component search --repository <repo> --name <artifact> --version <ver> --json`), "
+    "splunk for log searches (`splunk search run --query \"index=<idx> ...\" --earliest -1h --count 100 --json`; always give a time range and a count), "
+    "appd for AppDynamics (`appd app list --json`, `appd snapshot list --app <app> --duration-mins 60 --errors-only --json`, `appd violation list --app <app> --duration-mins 60 --json`), "
+    "and pgsql for PostgreSQL (`pgsql schema tables --json`, `pgsql query --sql \"select ...\" --limit 200 --json`; queries run in a read-only transaction). "
+    "For every nexus, splunk, appd, and pgsql command add --json and use --instance when several instances are configured. "
     "Run write operations with --dry-run before executing them. Use --yes only for destructive "
     "operations after the user explicitly confirms. Runtime profile credentials are applied in "
     "the runtime container through CLIs or environment variables; if a CLI returns auth_failed, report a runtime profile "
@@ -222,10 +233,26 @@ def _has_git_config(config: dict[str, Any]) -> bool:
     return bool(str(user.get("name") or user.get("email") or "").strip())
 
 
+def _has_enabled_aws_accounts(aws: dict[str, Any]) -> bool:
+    accounts = aws.get("accounts")
+    if not isinstance(accounts, list):
+        return False
+    for item in accounts:
+        if not isinstance(item, dict) or item.get("enabled") is False:
+            continue
+        if str(item.get("account_id") or item.get("role_arn") or "").strip():
+            return True
+    return False
+
+
 def _has_enabled_aws_config(config: dict[str, Any]) -> bool:
     aws = config.get("aws")
     if not isinstance(aws, dict) or aws.get("enabled") is not True:
         return False
+    # assume-role chains from an already-authenticated source profile and
+    # needs no directory password, only an account matrix.
+    if str(aws.get("provider") or "").strip().lower() == "assume-role":
+        return _has_enabled_aws_accounts(aws)
     domain = str(aws.get("domain") or "").strip()
     username = str(aws.get("username") or "").strip()
     password = str(aws.get("password") or "").strip()
@@ -264,11 +291,30 @@ def _has_enabled_mobile_config(config: dict[str, Any]) -> bool:
     )
 
 
+def _has_enabled_pgsql_config(config: dict[str, Any]) -> bool:
+    pgsql = config.get("pgsql")
+    if not isinstance(pgsql, dict) or pgsql.get("enabled") is not True:
+        return False
+    instances = pgsql.get("instances")
+    if not isinstance(instances, list):
+        return False
+    for item in instances:
+        if not isinstance(item, dict) or item.get("enabled") is False:
+            continue
+        if str(item.get("host") or "").strip():
+            return True
+    return False
+
+
 def _has_enabled_external_cli_config(config: dict[str, Any]) -> bool:
     return (
         _has_enabled_instance_section(config, "jira")
         or _has_enabled_instance_section(config, "confluence")
         or _has_enabled_jenkins_config(config)
+        or _has_enabled_instance_section(config, "nexus")
+        or _has_enabled_instance_section(config, "splunk")
+        or _has_enabled_instance_section(config, "appd")
+        or _has_enabled_pgsql_config(config)
         or _has_enabled_mobile_config(config)
         or _has_enabled_github_config(config)
         or _has_enabled_aws_config(config)
