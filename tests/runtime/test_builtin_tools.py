@@ -319,6 +319,64 @@ async def test_shell_output_is_redacted_before_model_and_archive(tmp_path: Path)
     assert "hunter2" not in archived and "AKIAIOSFODNN7EXAMPLE" not in archived
 
 
+def test_redaction_covers_the_shapes_the_troubleshooting_clis_print():
+    from efp_runtime.tools.builtin.redaction import redact_tool_output
+
+    # Every case here is output a configured CLI can really produce.
+    cases = {
+        # aws sts assume-role / the credentials the provider writes
+        '{"SecretAccessKey": "wJalrXUtnFEMIK7MDENGbPxRfiCY", "SessionToken": "FwoGZXIvYXdzEBYaDHRl"}': (
+            ["wJalrXUtnFEMIK7MDENGbPxRfiCY", "FwoGZXIvYXdzEBYaDHRl"]
+        ),
+        # a prefixed environment variable, which a bare word boundary misses
+        "EFP_PGSQL_INSTANCES_0_PASSWORD=pgS3cretValue": ["pgS3cretValue"],
+        # splunk /services/auth/login answers in XML
+        "<sessionKey>abc123def456</sessionKey>": ["abc123def456"],
+        # an AppDynamics API client secret
+        '{"clientSecret": "appd-client-secret"}': ["appd-client-secret"],
+        # a .pgpass line
+        "db.example.com:5432:mydb:appuser:s3cr3tPass": ["s3cr3tPass"],
+        # a credential passed on a command line
+        "curl -u admin:changeme https://nexus.example.test": ["changeme"],
+        # a bearer header with no scheme word
+        "Authorization: AbCdEf0123456789": ["AbCdEf0123456789"],
+        # a key whose END marker never arrived because the read was killed
+        "-----BEGIN RSA PRIVATE KEY-----" + chr(10) + "MIIEowIBAAKCAQEA1234": ["MIIEowIBAAKCAQEA1234"],
+        # the PGP spelling, which carries a BLOCK suffix
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----" + chr(10) + "xyz" + chr(10) + "-----END PGP PRIVATE KEY BLOCK-----": ["xyz"],
+    }
+    for raw, secrets in cases.items():
+        out = redact_tool_output(raw)
+        for secret in secrets:
+            assert secret not in out, (raw, out)
+
+    # Ordinary output stays readable.
+    assert redact_tool_output("pods 3/3 image sha256:abcd") == "pods 3/3 image sha256:abcd"
+
+
+def test_redaction_replaces_configured_secret_values_verbatim(monkeypatch):
+    from efp_runtime.tools.builtin import redaction
+
+    # `env`, `printenv` or a CLI that dumps its configuration prints the value
+    # with no recognisable key beside it; only a literal match catches that.
+    monkeypatch.setenv("EFP_APPD_INSTANCES_0_AUTH_API_KEY", "appd-secret-value")
+    monkeypatch.setattr(redaction, "_literal_cache", None)
+    out = redaction.redact_tool_output("the client said: appd-secret-value")
+    assert "appd-secret-value" not in out
+
+
+def test_redaction_of_many_unterminated_key_markers_stays_linear():
+    import time
+
+    from efp_runtime.tools.builtin.redaction import redact_tool_output
+
+    # An unbounded lazy body between BEGIN and END rescans to end-of-text from
+    # every marker, which turns this input into minutes of blocked event loop.
+    text = ("-----BEGIN RSA PRIVATE KEY-----" + chr(10)) * 4000
+    started = time.monotonic()
+    redact_tool_output(text)
+    assert time.monotonic() - started < 5.0
+
 @pytest.mark.asyncio
 async def test_shell_permission_subject_is_the_command(tmp_path: Path):
     from efp_runtime.permissions import ConfiguredPermissionBroker

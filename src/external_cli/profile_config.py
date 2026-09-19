@@ -137,8 +137,16 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
 
     for section_name in _VERBATIM_SECTIONS:
         section = effective_config.get(section_name)
-        if isinstance(section, dict) and section:
-            root[section_name] = json.loads(json.dumps(section))
+        if not isinstance(section, dict) or not section:
+            continue
+        if section.get("enabled") is False:
+            # A section the admin switched off is not projected at all, the
+            # same as a disabled instance section. Copying it anyway would put
+            # its credentials in the pod environment for a tool nobody may use,
+            # and pgsql has no section-level enabled flag on the Go side to
+            # fall back on.
+            continue
+        root[section_name] = json.loads(json.dumps(section))
 
     return root
 

@@ -117,6 +117,28 @@ def test_pgsql_section_is_copied_verbatim():
     assert env["EFP_PGSQL_INSTANCES_0_SSLMODE"] == "require"
 
 
+def test_pgsql_query_bounds_reach_the_cli():
+    # The Portal stores them as ints; the pgsql CLI reads them as the statement
+    # timeout and the row cap, falling back to 30s/5000 when they are absent.
+    env = _env({
+        "pgsql": {
+            "enabled": True,
+            "instances": [
+                {
+                    "name": "orders-uat",
+                    "host": "h",
+                    "database": "orders",
+                    "username": "efp_readonly",
+                    "statement_timeout_seconds": 10,
+                    "max_rows": 500,
+                },
+            ],
+        }
+    })
+    assert env["EFP_PGSQL_INSTANCES_0_STATEMENT_TIMEOUT_SECONDS"] == "10"
+    assert env["EFP_PGSQL_INSTANCES_0_MAX_ROWS"] == "500"
+
+
 def test_disabled_sections_and_instances_are_dropped():
     env = _env({
         "nexus": {"enabled": False, "instances": [{"name": "x", "url": "https://x", "token": "t"}]},
@@ -124,6 +146,30 @@ def test_disabled_sections_and_instances_are_dropped():
     })
     assert not any(key.startswith("EFP_NEXUS_") for key in env)
     assert not any(key.startswith("EFP_SPLUNK_") for key in env)
+
+
+def test_a_disabled_verbatim_section_is_not_projected_at_all():
+    # pgsql and aws are copied verbatim rather than rebuilt instance by
+    # instance, so the disabled check has to live in the copy: the pgsql node of
+    # the tools config has no section-level enabled flag to fall back on, and a
+    # section the admin switched off must not put its password in the pod
+    # environment for a tool nobody may use.
+    env = _env({
+        "pgsql": {
+            "enabled": False,
+            "instances": [{"name": "orders", "host": "h", "database": "o", "username": "u", "password": "pg-password"}],
+        },
+        "aws": {
+            "enabled": False,
+            "provider": "adfs-assume",
+            "password": "domain-password",
+            "accounts": [{"name": "cps-dev", "account_id": "111122223333", "role": "ADFS-ReadOnly"}],
+        },
+    })
+    assert not any(key.startswith("EFP_PGSQL_") for key in env)
+    assert not any(key.startswith("EFP_AWS_") for key in env)
+    assert "pg-password" not in "".join(env.values())
+    assert "domain-password" not in "".join(env.values())
 
 
 def test_portal_field_tree_and_overlay_sections_accept_the_new_sections():

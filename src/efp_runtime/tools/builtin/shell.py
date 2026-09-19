@@ -82,8 +82,12 @@ def _create_shell_tool(
         # content, the structured output, and the archived full log all derive
         # from these two strings. Troubleshooting CLIs (aws, kubectl, pgsql)
         # can echo credentials that must never reach the transcript.
-        stdout = redact_tool_output(stdout_bytes.decode("utf-8", errors="replace"))
-        stderr = redact_tool_output(stderr_bytes.decode("utf-8", errors="replace"))
+        # Off the event loop: redaction is linear but a large `kubectl logs`
+        # is megabytes, and every other session in the pod shares this loop.
+        stdout, stderr = await asyncio.gather(
+            asyncio.to_thread(redact_tool_output, stdout_bytes.decode("utf-8", errors="replace")),
+            asyncio.to_thread(redact_tool_output, stderr_bytes.decode("utf-8", errors="replace")),
+        )
         output = {
             "stdout": stdout,
             "stderr": stderr,
