@@ -232,6 +232,17 @@ class Config:
             "domain": True,
             "username": True,
             "password": True,
+            # Account matrix and provider settings consumed by the aws-auth CLI
+            # (EFP_AWS_PROVIDER, EFP_AWS_ACCOUNTS_<i>_*, ...). Mirrors the Portal
+            # sanitizer in app/schemas/runtime_profile.py.
+            "provider": True,
+            "idp_url": True,
+            "source_profile": True,
+            "default_account": True,
+            "default_region": True,
+            "session_duration_seconds": True,
+            "kubeconfig_path": True,
+            "accounts": True,
         },
         "jenkins": {
             "enabled": True,
@@ -811,6 +822,33 @@ class Config:
             self._mobile_env_vars.add("BROWSERSTACK_LOCAL_BINARY")
     
     @property
+    def aws(self) -> Dict[str, Any]:
+        return self._config.get("aws", {})
+
+    # Where `aws-auth eks kubeconfig` writes kubectl contexts. Kept outside the
+    # browsable workspace like EFP_CONFIG so a `read`/`grep` of the workspace
+    # never surfaces cluster endpoints or exec-plugin arguments.
+    DEFAULT_KUBECONFIG_PATH = Path.home() / ".efp" / "kube" / "config"
+
+    def apply_kube_env(self) -> None:
+        """Point kubectl at the managed kubeconfig when the profile enables AWS.
+
+        Only a profile with an enabled ``aws`` section gets ``KUBECONFIG``; in
+        local development without one, kubectl keeps resolving the developer's
+        own ``~/.kube/config``. An explicit ``aws.kubeconfig_path`` wins, and
+        an inherited ``KUBECONFIG`` is respected (the runtime never clobbers an
+        operator-provided value).
+        """
+        aws_config = self.aws
+        if not (isinstance(aws_config, dict) and aws_config.get("enabled")):
+            return
+        if os.environ.get("KUBECONFIG"):
+            return
+        configured = str(aws_config.get("kubeconfig_path") or "").strip()
+        path = Path(os.path.expanduser(configured)) if configured else self.DEFAULT_KUBECONFIG_PATH
+        os.environ["KUBECONFIG"] = str(path)
+
+    @property
     def heartbeat(self) -> Dict[str, Any]:
         """Get heartbeat configuration."""
         return self._config.get("heartbeat", {})
@@ -1018,7 +1056,7 @@ def bootstrap_profile_boot() -> bool:
        from the tools RootConfig-shaped subset of the effective config, e.g.
        EFP_JIRA_INSTANCES_0_BASE_URL / EFP_AWS_DOMAIN) for every CLI child
        process.
-    3. Apply proxy / jenkins / mobile env exactly once.
+    3. Apply proxy / jenkins / mobile / kubeconfig env exactly once.
     4. Scrub EFP_PROFILE_CONFIG from os.environ so no child process can see the
        full profile blob.
     5. Record success/failure for GET /ready.
@@ -1063,6 +1101,7 @@ def bootstrap_profile_boot() -> bool:
     config.apply_proxy()
     config.apply_jenkins_env()
     config.apply_mobile_env()
+    config.apply_kube_env()
 
     # Scrub the full profile blob AFTER the external CLI projection took its
     # os.environ.copy() snapshot; children must never inherit it.

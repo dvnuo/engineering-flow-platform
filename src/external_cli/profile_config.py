@@ -651,6 +651,12 @@ def _build_aws_config(profile_config: dict[str, Any]) -> dict[str, Any] | None:
     aws = profile_config.get("aws") if isinstance(profile_config, dict) else None
     if not isinstance(aws, dict) or aws.get("enabled") is False:
         return None
+    # The assume-role provider chains from an already-authenticated source
+    # profile; it has no directory password to store, so there is nothing for
+    # `aws-auth auth login` to do. The account matrix still reaches aws-auth
+    # through the EFP_AWS_* env vars exported after this projection.
+    if str(aws.get("provider") or "").strip().lower() == "assume-role":
+        return None
     domain = _single_line(aws.get("domain"))
     username = _single_line(aws.get("username"))
     password = _string_or_empty(aws.get("password"))

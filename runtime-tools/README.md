@@ -11,6 +11,13 @@ For private managed mobile sessions, CI may also stage the BrowserStack-provided
 `BROWSERSTACK_LOCAL_BINARY` before running the prepare script. That binary is
 copied to `/usr/local/bin/BrowserStackLocal` by the runtime image build.
 
+The AWS login provider that `aws-auth login` shells out to is staged the same
+way: set `ADFS_ASSUME_SOURCE` (enterprise `adfs-assume` binary) or
+`SAML2AWS_SOURCE` (a `saml2aws` release binary) to a linux/amd64 executable
+before running the prepare script. Without one, `aws-auth login` reports
+`provider_missing` in the running image; the `assume-role` provider needs
+neither.
+
 The runtime image copies generated binaries into `/usr/local/bin` so agents can
 call them through the EFP `bash` built-in from the workspace. The final runtime
 image does not install the Go toolchain.

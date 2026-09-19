@@ -46,6 +46,16 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
     assert "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" in text
     assert "/tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli" in text
     assert "aws --version" in text
+    # kubectl (read-only EKS inspection) is pinned to a minor release line so
+    # it stays within one minor of the target control planes, and verified
+    # against the published sha256 before it lands on PATH.
+    assert "ARG KUBECTL_STABLE_CHANNEL=stable-1." in text
+    assert 'ARG KUBECTL_VERSION=""' in text
+    assert 'https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl"' in text
+    assert "kubectl.sha256" in text and "sha256sum --check" in text
+    assert "kubectl version --client" in text
+    assert " jq \\" in text
+    assert "jq --version" in text
     assert "google-chrome-stable" in text
     assert "google-chrome --version" in text
     assert "COPY runtime-tools/ /tmp/runtime-tools/" in text
@@ -55,6 +65,9 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
     assert "chmod 0755 /usr/local/bin/jira /usr/local/bin/confluence" not in text
     assert "Go toolchain" in text
     for command in [
+        "aws-auth version --json",
+        "aws-auth commands --json",
+        "aws-auth schema login --json",
         "jira version --json",
         "jira commands --json",
         "jira schema issue.map-csv --json",

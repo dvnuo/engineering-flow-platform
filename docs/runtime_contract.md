@@ -55,8 +55,13 @@ Portal-triggered restart with a new Secret.
   literal prefix `EFP_` plus an UPPERCASED `_`-joined path from the root (with
   `-` replaced by `_` and list elements indexed by position), e.g.
   `EFP_JIRA_DEFAULT_INSTANCE`, `EFP_JIRA_INSTANCES_0_BASE_URL`, `EFP_AWS_DOMAIN`,
+  `EFP_AWS_ACCOUNTS_0_ACCOUNT_ID`, `EFP_AWS_ACCOUNTS_0_REGIONS_0`,
   `EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME`. Only present values are emitted, and
   every CLI child process reads them.
+- `KUBECONFIG`: set by the runtime when the profile enables `aws` (an inherited
+  value is respected), pointing at `aws.kubeconfig_path` or
+  `~/.efp/kube/config`, outside the workspace. `aws-auth eks kubeconfig` writes
+  `<account>/<cluster>` contexts there and `kubectl` reads them.
 - `GET /ready` returns `200 {"ready": true, "runtime_profile_id", "revision"}`
   only after the boot projection succeeded, `503 {"ready": false, "error"}`
   otherwise. `GET /health` stays always-ok as the liveness probe.
@@ -76,7 +81,8 @@ Portal-triggered restart with a new Secret.
 - Interactive chats also get `session_search`, which searches and reads the assistant's other stored sessions under the runtime session root (member and assistant text only). It scopes to the Portal member by default (`scope=mine`, the header-derived `portal_user_id` from `X-Portal-User-Id` matched against the `author_id` stamped on member turns) and to the whole agent on request (`scope=agent`). Without a member identity `mine` fails closed, and reading another member's session always needs `scope=agent`. The Portal stamps the identity headers on every proxied request, and the gateway passes them on the question/permission answer and edit-regenerate resumes as well as on chat. A runtime profile can disable it with `enable_session_search: false`.
 - Interactive chats also get `memory`, which keeps up to 50 one-sentence standing notes per Portal member under `<session root>/memory/<member>.json` and renders them into the system prompt as "Member notes". Notes are written only when the model calls `remember`, never extracted automatically; the tool refuses without a member identity (the same header-derived `portal_user_id`, never a body-supplied `portal_user`). A runtime profile can disable it with `enable_member_memory: false`.
 - Legacy Python tool packages such as `src.bash_tools` are not present, and Jira/GitHub/Confluence/Git Python tools are not exposed as LLM tools.
-- The runtime image may include prebuilt `engineering-flow-platform-tools` CLI binaries on `PATH` in `/usr/local/bin`. Current binaries include `jira`, `confluence`, `browser`, and `mobile-auto`; future binaries are discovered from `cmd/<tool>` in that repo.
+- The runtime image may include prebuilt `engineering-flow-platform-tools` CLI binaries on `PATH` in `/usr/local/bin`. Current binaries include `jira`, `confluence`, `jenkins`, `aws-auth`, `browser`, and `mobile-auto`; future binaries are discovered from `cmd/<tool>` in that repo. The image also carries the AWS CLI v2, `kubectl` (pinned to a minor release line through `KUBECTL_STABLE_CHANNEL`/`KUBECTL_VERSION`), and `jq`; the AWS login provider `aws-auth login` shells out to (`adfs-assume` or `saml2aws`, per `aws.provider`) is staged into `runtime-tools/` by `scripts/prepare-runtime-tools.sh` from `ADFS_ASSUME_SOURCE`/`SAML2AWS_SOURCE` and installed alongside.
+- AWS access is per account: `aws-auth login --account <name>` writes each configured account's credentials to the AWS CLI profile named after the account, and `aws-auth eks kubeconfig --account <name> --cluster <cluster>` writes a `<account>/<cluster>` kubectl context. The profile's `aws.accounts[]` matrix, provider, and defaults reach the CLI through `EFP_AWS_*`; the `assume-role` provider needs no directory password, so the boot projection skips `aws-auth auth login` for it.
 - Agents use those CLIs through the model-visible `bash` built-in in the workspace-full-access runtime workspace. They should run `<tool> commands --json`, then `<tool> schema <command> --json`, prefer `--json`, use `--dry-run` before writes, and pass `--yes` for destructive operations.
 - Runtime profile boot projection applies GitHub, AWS, and Git configuration through real CLIs and exports Jira, Confluence, Jenkins, and mobile BrowserStack configuration to CLI child processes via EFP_-prefixed indexed tools config env vars (e.g. `EFP_JIRA_INSTANCES_0_BASE_URL`, `EFP_AWS_DOMAIN`, `EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME`).
 - Private managed mobile runs require BrowserStackLocal at `/usr/local/bin/BrowserStackLocal` or a configured `BROWSERSTACK_LOCAL_BINARY`; CI may stage that third-party binary into `runtime-tools/BrowserStackLocal`.

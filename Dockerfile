@@ -8,6 +8,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# kubectl release line: pin KUBECTL_VERSION (e.g. v1.32.13) for an exact build,
+# or leave it empty to take the latest patch of KUBECTL_STABLE_CHANNEL.
+ARG KUBECTL_STABLE_CHANNEL=stable-1.32
+ARG KUBECTL_VERSION=""
+
 WORKDIR /app
 
 # Install Ubuntu system dependencies and Python 3.11.
@@ -36,6 +41,7 @@ RUN apt-get update \
         build-essential \
         git \
         gh \
+        jq \
         tesseract-ocr \
         google-chrome-stable \
     && AWS_CLI_ARCH="$(dpkg --print-architecture)" \
@@ -44,6 +50,16 @@ RUN apt-get update \
     && unzip -q /tmp/awscliv2.zip -d /tmp \
     && /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli \
     && rm -rf /tmp/aws /tmp/awscliv2.zip \
+    # kubectl for read-only EKS inspection. kubectl must stay within one minor
+    # version of the target EKS control planes; KUBECTL_STABLE_CHANNEL picks the
+    # latest patch of that minor and KUBECTL_VERSION pins an exact release.
+    && KUBECTL_ARCH="$(dpkg --print-architecture)" \
+    && KUBECTL_VERSION="${KUBECTL_VERSION:-$(curl -fsSL "https://dl.k8s.io/release/${KUBECTL_STABLE_CHANNEL}.txt")}" \
+    && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" \
+    && curl -fsSLo /tmp/kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl.sha256" \
+    && echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum --check \
+    && chmod 0755 /usr/local/bin/kubectl \
+    && rm -f /tmp/kubectl.sha256 \
     && python3.11 -m venv "$VIRTUAL_ENV" \
     && "$VIRTUAL_ENV/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     && rm -rf /var/lib/apt/lists/*
@@ -64,7 +80,10 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY . .
 
 # CI/release must place prebuilt engineering-flow-platform-tools binaries here.
-# The runtime image intentionally does not install the Go toolchain.
+# The runtime image intentionally does not install the Go toolchain. Third-party
+# binaries staged next to them (BrowserStackLocal, and the AWS login provider
+# adfs-assume or saml2aws that aws-auth login shells out to) are installed the
+# same way; scripts/prepare-runtime-tools.sh stages them from *_SOURCE paths.
 COPY runtime-tools/ /tmp/runtime-tools/
 RUN set -eux; \
     while IFS= read -r -d '' tool; do \
@@ -75,6 +94,11 @@ RUN set -eux; \
     chmod 0755 /usr/local/bin/google-chrome \
     && google-chrome --version >/dev/null \
     && aws --version >/dev/null \
+    && kubectl version --client >/dev/null \
+    && jq --version >/dev/null \
+    && aws-auth version --json >/dev/null \
+    && aws-auth commands --json >/dev/null \
+    && aws-auth schema login --json >/dev/null \
     && jira version --json >/dev/null \
     && jira commands --json >/dev/null \
     && jira schema issue.map-csv --json >/dev/null \
