@@ -83,6 +83,14 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
         "mobile-auto version --json",
         "mobile-auto commands --json",
         "mobile-auto schema run.start --json",
+        "nexus version --json",
+        "nexus commands --json",
+        "splunk version --json",
+        "splunk commands --json",
+        "appd version --json",
+        "appd commands --json",
+        "pgsql version --json",
+        "pgsql commands --json",
     ]:
         assert command in text
 

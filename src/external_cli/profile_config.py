@@ -125,7 +125,7 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
     if isinstance(version, int) and not isinstance(version, bool):
         root["version"] = version
 
-    for product in ("jira", "confluence", "jenkins"):
+    for product in _INSTANCE_PRODUCTS:
         section = _normalized_product_config(effective_config.get(product), product=product)
         instances = _build_product_instances(section, product=product)
         if not instances:
@@ -135,12 +135,26 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
             "instances": [_tools_instance_config(instance, product=product) for instance in instances],
         }
 
-    for section_name in ("aws", "mobile-auto"):
+    for section_name in _VERBATIM_SECTIONS:
         section = effective_config.get(section_name)
         if isinstance(section, dict) and section:
             root[section_name] = json.loads(json.dumps(section))
 
     return root
+
+
+# Products projected through the `{default_instance, instances[]}` shape with
+# auth canonicalization (tools InstanceConfig). nexus/splunk/appd are the
+# read-only troubleshooting CLIs added alongside jira/confluence/jenkins.
+_INSTANCE_PRODUCTS = ("jira", "confluence", "jenkins", "nexus", "splunk", "appd")
+# Sections whose shape already matches the tools RootConfig node and are copied
+# as-is: aws (account matrix), mobile-auto, pgsql (connection fields).
+_VERBATIM_SECTIONS = ("aws", "mobile-auto", "pgsql")
+# Per-instance fields that pass through to the tools InstanceConfig unchanged.
+_INSTANCE_EXTRA_FIELDS = {
+    "appd": ("account",),
+    "splunk": ("default_index", "default_earliest", "max_results"),
+}
 
 
 def flatten_config_to_env(root: dict[str, Any]) -> dict[str, str]:
@@ -197,6 +211,12 @@ def _tools_instance_config(instance: dict[str, Any], *, product: str) -> dict[st
     if product == "jira":
         out["api_version"] = instance["api_version"]
 
+    for field in _INSTANCE_EXTRA_FIELDS.get(product, ()):
+        value = instance.get(field)
+        if value is None or value == "":
+            continue
+        out[field] = value
+
     auth = instance.get("auth") if isinstance(instance.get("auth"), dict) else {}
     auth_type = str(auth.get("type") or "")
     if auth_type:
@@ -210,6 +230,10 @@ def _tools_instance_config(instance: dict[str, Any], *, product: str) -> dict[st
                 "basic_password": "password",
                 "basic_api_key": "api_key",
                 "bearer_token": "token",
+                # AppDynamics API client: username is the client name and the
+                # client secret travels as api_key (the appd CLI exchanges the
+                # pair for a bearer token).
+                "api_client": "api_key",
             }.get(auth_type)
             if secret_field:
                 auth_out[secret_field] = secret
@@ -508,6 +532,11 @@ def _build_product_instances(product_config: Any, *, product: str) -> list[dict[
                 "rest_path": str(raw.get("rest_path") or _default_rest_path(product)),
                 "auth": auth,
             }
+        for field in _INSTANCE_EXTRA_FIELDS.get(product, ()):
+            value = raw.get(field)
+            if value is None or str(value).strip() == "":
+                continue
+            instance[field] = value
         instances.append(instance)
     return instances
 
@@ -518,8 +547,10 @@ def _default_rest_path(product: str) -> str:
     Atlassian CLIs address a REST base below the site URL; the Jenkins CLI
     talks to the controller root, so Jenkins deliberately keeps an EMPTY
     rest_path (injecting an Atlassian-style prefix would break every URL).
+    The troubleshooting CLIs (nexus/splunk/appd) own their REST prefixes
+    (/service/rest/v1, /services, /controller) for the same reason.
     """
-    return "" if product == "jenkins" else "/rest/api"
+    return "" if product in ("jenkins", "nexus", "splunk", "appd") else "/rest/api"
 
 
 def _normalized_product_config(product_config: Any, *, product: str) -> Any:
@@ -575,6 +606,17 @@ def _build_auth(raw: dict[str, Any]) -> dict[str, str]:
     password = _string_or_empty(raw.get("password"))
     api_key = _string_or_empty(raw.get("api_key") or raw.get("api_token"))
     token = _string_or_empty(raw.get("token") or raw.get("access_token"))
+    # An explicit auth_type overrides the field-shape inference. Today only
+    # AppDynamics needs it: an API client is username (client name) plus a
+    # secret, which the inference would otherwise label basic_api_key.
+    explicit_type = _string_or_empty(raw.get("auth_type")).lower()
+    if explicit_type == "api_client" and username and (api_key or token):
+        return {
+            "type": "api_client",
+            "username": username,
+            "secret": api_key or token,
+            "stdin_flag": "--api-key-stdin",
+        }
     if username and password:
         return {
             "type": "basic_password",

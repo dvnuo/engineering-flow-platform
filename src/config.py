@@ -159,6 +159,10 @@ class Config:
         "github",
         "aws",
         "jenkins",
+        "nexus",
+        "splunk",
+        "appd",
+        "pgsql",
         "mobile-auto",
         "git",
         "debug",
@@ -254,6 +258,29 @@ class Config:
             "url": True,
             "username": True,
             "password": True,
+        },
+        # Troubleshooting integrations (read-only CLIs): nexus/splunk/appd are
+        # multi-instance products like jira; pgsql carries connection fields
+        # per instance and is copied verbatim into the tools config.
+        "nexus": {
+            "enabled": True,
+            "instances": True,
+            "default_instance": True,
+        },
+        "splunk": {
+            "enabled": True,
+            "instances": True,
+            "default_instance": True,
+        },
+        "appd": {
+            "enabled": True,
+            "instances": True,
+            "default_instance": True,
+        },
+        "pgsql": {
+            "enabled": True,
+            "instances": True,
+            "default_instance": True,
         },
         "mobile-auto": {
             "enabled": True,

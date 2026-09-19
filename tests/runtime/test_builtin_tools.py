@@ -295,6 +295,57 @@ async def test_shell_succeeds_with_allow_evaluator(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_shell_output_is_redacted_before_model_and_archive(tmp_path: Path):
+    runtime = ToolRuntime(create_core_tool_registry(tmp_path), permission_evaluator=AllowEvaluator())
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-shell-secret",
+            tool_id="bash",
+            args={
+                "command": "printf 'password=hunter2 aws_secret_access_key=abc token: t-1 key=AKIAIOSFODNN7EXAMPLE plain=ok'",
+                "description": "Echo secrets",
+            },
+        )
+    )
+
+    assert result.status == "success"
+    for leaked in ("hunter2", "abc", "t-1", "AKIAIOSFODNN7EXAMPLE"):
+        assert leaked not in result.output["stdout"]
+        assert leaked not in result.content
+    assert "***REDACTED***" in result.output["stdout"]
+    assert "plain=ok" in result.output["stdout"]
+    archived = (tmp_path / result.metadata["output_path"]).read_text(encoding="utf-8")
+    assert "hunter2" not in archived and "AKIAIOSFODNN7EXAMPLE" not in archived
+
+
+@pytest.mark.asyncio
+async def test_shell_permission_subject_is_the_command(tmp_path: Path):
+    from efp_runtime.permissions import ConfiguredPermissionBroker
+
+    registry = create_core_tool_registry(tmp_path)
+    bash = registry.get("bash")
+    assert bash.permission.data["subject_arg"] == "command"
+
+    broker = ConfiguredPermissionBroker({"bash": {"*kubectl*delete*": "deny", "*": "allow"}})
+    context = ToolContext(session_id="session-bash-subject")
+    denied = await broker.evaluate(
+        tool_id="bash",
+        args={"command": "kubectl --context a/c delete pod api-1 -n payments", "description": "delete"},
+        metadata=bash.permission,
+        context=context,
+    )
+    allowed = await broker.evaluate(
+        tool_id="bash",
+        args={"command": "kubectl --context a/c get pods -n payments", "description": "list"},
+        metadata=bash.permission,
+        context=context,
+    )
+    assert denied.action == "deny"
+    assert allowed.action == "allow"
+
+
+@pytest.mark.asyncio
 async def test_invalid_tool_returns_model_visible_argument_error(tmp_path: Path):
     runtime = ToolRuntime(create_core_tool_registry(tmp_path))
 

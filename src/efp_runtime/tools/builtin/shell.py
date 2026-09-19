@@ -19,6 +19,7 @@ from .output import (
     save_workspace_output,
     truncate_tail,
 )
+from .redaction import redact_tool_output
 
 
 DEFAULT_TIMEOUT_MS = 30_000
@@ -77,8 +78,12 @@ def _create_shell_tool(
         )
         duration_ms = int(round((time.monotonic() - started) * 1000))
 
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        # Redact before anything downstream sees the text: the model-visible
+        # content, the structured output, and the archived full log all derive
+        # from these two strings. Troubleshooting CLIs (aws, kubectl, pgsql)
+        # can echo credentials that must never reach the transcript.
+        stdout = redact_tool_output(stdout_bytes.decode("utf-8", errors="replace"))
+        stderr = redact_tool_output(stderr_bytes.decode("utf-8", errors="replace"))
         output = {
             "stdout": stdout,
             "stderr": stderr,
@@ -155,6 +160,10 @@ def _create_shell_tool(
                 "command_preview": "",
                 "description": "",
                 "workdir": ".",
+                # The command string is the permission subject, so a profile
+                # can express declarative guardrails with subject globs:
+                # tool_permissions.bash = {"*kubectl*delete*": "deny", "*": "allow"}.
+                "subject_arg": "command",
             },
         ),
     )

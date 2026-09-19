@@ -113,7 +113,15 @@ RUN set -eux; \
     && browser schema probe --json >/dev/null \
     && mobile-auto version --json >/dev/null \
     && mobile-auto commands --json >/dev/null \
-    && mobile-auto schema run.start --json >/dev/null
+    && mobile-auto schema run.start --json >/dev/null \
+    && nexus version --json >/dev/null \
+    && nexus commands --json >/dev/null \
+    && splunk version --json >/dev/null \
+    && splunk commands --json >/dev/null \
+    && appd version --json >/dev/null \
+    && appd commands --json >/dev/null \
+    && pgsql version --json >/dev/null \
+    && pgsql commands --json >/dev/null
 
 # Create the runtime workspace and external skills directories.
 RUN mkdir -p /app/skills /workspace
