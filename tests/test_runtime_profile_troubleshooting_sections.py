@@ -200,7 +200,10 @@ def test_native_projection_mentions_every_troubleshooting_cli():
         "always give a time range and a count",
         "appd snapshot list --app <app> --duration-mins 60 --errors-only --json",
         "pgsql query --sql",
-        "read-only transaction",
+        # pgsql is not read-only by construction any more: the instruction has
+        # to name the real control so the model does not assume a safety net.
+        "pgsql exec",
+        "decided by the database role and endpoint",
         "For every nexus, splunk, appd, and pgsql command add --json",
     ):
         assert token in text, token
