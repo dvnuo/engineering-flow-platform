@@ -152,15 +152,14 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
 
 
 # Products projected through the `{default_instance, instances[]}` shape with
-# auth canonicalization (tools InstanceConfig). nexus/splunk/appd are the
+# auth canonicalization (tools InstanceConfig). nexus and splunk are the
 # read-only troubleshooting CLIs added alongside jira/confluence/jenkins.
-_INSTANCE_PRODUCTS = ("jira", "confluence", "jenkins", "nexus", "splunk", "appd")
+_INSTANCE_PRODUCTS = ("jira", "confluence", "jenkins", "nexus", "splunk")
 # Sections whose shape already matches the tools RootConfig node and are copied
 # as-is: aws (account matrix), mobile-auto, pgsql (connection fields).
 _VERBATIM_SECTIONS = ("aws", "mobile-auto", "pgsql")
 # Per-instance fields that pass through to the tools InstanceConfig unchanged.
 _INSTANCE_EXTRA_FIELDS = {
-    "appd": ("account",),
     # app/owner are the Splunk namespace: saved searches, macros, lookups and
     # index visibility belong to an app, so a profile whose objects live in one
     # must carry it or the CLI sees the global view and reports nothing.
@@ -241,10 +240,6 @@ def _tools_instance_config(instance: dict[str, Any], *, product: str) -> dict[st
                 "basic_password": "password",
                 "basic_api_key": "api_key",
                 "bearer_token": "token",
-                # AppDynamics API client: username is the client name and the
-                # client secret travels as api_key (the appd CLI exchanges the
-                # pair for a bearer token).
-                "api_client": "api_key",
             }.get(auth_type)
             if secret_field:
                 auth_out[secret_field] = secret
@@ -558,10 +553,10 @@ def _default_rest_path(product: str) -> str:
     Atlassian CLIs address a REST base below the site URL; the Jenkins CLI
     talks to the controller root, so Jenkins deliberately keeps an EMPTY
     rest_path (injecting an Atlassian-style prefix would break every URL).
-    The troubleshooting CLIs (nexus/splunk/appd) own their REST prefixes
+    The troubleshooting CLIs (nexus/splunk) own their REST prefixes
     (/service/rest/v1, /services, /controller) for the same reason.
     """
-    return "" if product in ("jenkins", "nexus", "splunk", "appd") else "/rest/api"
+    return "" if product in ("jenkins", "nexus", "splunk") else "/rest/api"
 
 
 def _normalized_product_config(product_config: Any, *, product: str) -> Any:
@@ -617,17 +612,6 @@ def _build_auth(raw: dict[str, Any]) -> dict[str, str]:
     password = _string_or_empty(raw.get("password"))
     api_key = _string_or_empty(raw.get("api_key") or raw.get("api_token"))
     token = _string_or_empty(raw.get("token") or raw.get("access_token"))
-    # An explicit auth_type overrides the field-shape inference. Today only
-    # AppDynamics needs it: an API client is username (client name) plus a
-    # secret, which the inference would otherwise label basic_api_key.
-    explicit_type = _string_or_empty(raw.get("auth_type")).lower()
-    if explicit_type == "api_client" and username and (api_key or token):
-        return {
-            "type": "api_client",
-            "username": username,
-            "secret": api_key or token,
-            "stdin_flag": "--api-key-stdin",
-        }
     if username and password:
         return {
             "type": "basic_password",

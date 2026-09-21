@@ -67,7 +67,7 @@ _KEY_RE = _KEY_PART + r"(?:" + _KEY_GROUP + r")" + _KEY_PART
 
 _TEXT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)(authorization\s*:\s*(?:bearer|basic|splunk|token)\s+)([^\s,;\"']+)"), r"\1" + REDACTED),
-    # Authorization with no scheme word, and the Splunk/AppD style headers.
+    # Authorization with no scheme word, and the Splunk style headers.
     (re.compile(r"(?i)((?:authorization|x-api-key|x-auth-token|cookie|set-cookie)\s*:\s*)([^\n\r]+)"), r"\1" + REDACTED),
     # "password": "value" / 'token': 'value' (JSON and YAML flow style)
     (re.compile(r'(?i)(["\'](?:' + _KEY_RE + r')["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),

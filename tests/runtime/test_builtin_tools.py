@@ -332,8 +332,8 @@ def test_redaction_covers_the_shapes_the_troubleshooting_clis_print():
         "EFP_PGSQL_INSTANCES_0_PASSWORD=pgS3cretValue": ["pgS3cretValue"],
         # splunk /services/auth/login answers in XML
         "<sessionKey>abc123def456</sessionKey>": ["abc123def456"],
-        # an AppDynamics API client secret
-        '{"clientSecret": "appd-client-secret"}': ["appd-client-secret"],
+        # an API client secret
+        '{"clientSecret": "svc-client-secret"}': ["svc-client-secret"],
         # a .pgpass line
         "db.example.com:5432:mydb:appuser:s3cr3tPass": ["s3cr3tPass"],
         # a credential passed on a command line
@@ -359,10 +359,10 @@ def test_redaction_replaces_configured_secret_values_verbatim(monkeypatch):
 
     # `env`, `printenv` or a CLI that dumps its configuration prints the value
     # with no recognisable key beside it; only a literal match catches that.
-    monkeypatch.setenv("EFP_APPD_INSTANCES_0_AUTH_API_KEY", "appd-secret-value")
+    monkeypatch.setenv("EFP_NEXUS_INSTANCES_0_AUTH_API_KEY", "nexus-secret-value")
     monkeypatch.setattr(redaction, "_literal_cache", None)
-    out = redaction.redact_tool_output("the client said: appd-secret-value")
-    assert "appd-secret-value" not in out
+    out = redaction.redact_tool_output("the client said: nexus-secret-value")
+    assert "nexus-secret-value" not in out
 
 
 def test_redaction_of_many_unterminated_key_markers_stays_linear():
