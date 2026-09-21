@@ -65,6 +65,32 @@ def test_splunk_instances_carry_token_and_search_defaults():
     assert env["EFP_SPLUNK_INSTANCES_0_MAX_RESULTS"] == "500"
 
 
+def test_splunk_namespace_reaches_the_cli():
+    # Saved searches, macros, lookups and index visibility belong to a Splunk
+    # app, so a profile that names one must carry it through or the CLI
+    # addresses the global namespace and reports nothing.
+    env = _env({
+        "splunk": {
+            "enabled": True,
+            "instances": [
+                {
+                    "name": "prod",
+                    "url": "https://splunk.example.test:8089",
+                    "token": "t",
+                    "app": "cmb_search",
+                    "owner": "user001",
+                }
+            ],
+        }
+    })
+    assert env["EFP_SPLUNK_INSTANCES_0_APP"] == "cmb_search"
+    assert env["EFP_SPLUNK_INSTANCES_0_OWNER"] == "user001"
+
+    # Absent is absent: an instance without an app keeps the global namespace.
+    plain = _env({"splunk": {"enabled": True, "instances": [{"name": "prod", "url": "https://s:8089", "token": "t"}]}})
+    assert not any(key.endswith("_APP") or key.endswith("_OWNER") for key in plain)
+
+
 def test_appd_api_client_auth_keeps_account_and_secret_as_api_key():
     env = _env({
         "appd": {

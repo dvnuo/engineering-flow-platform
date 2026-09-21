@@ -161,7 +161,10 @@ _VERBATIM_SECTIONS = ("aws", "mobile-auto", "pgsql")
 # Per-instance fields that pass through to the tools InstanceConfig unchanged.
 _INSTANCE_EXTRA_FIELDS = {
     "appd": ("account",),
-    "splunk": ("default_index", "default_earliest", "max_results"),
+    # app/owner are the Splunk namespace: saved searches, macros, lookups and
+    # index visibility belong to an app, so a profile whose objects live in one
+    # must carry it or the CLI sees the global view and reports nothing.
+    "splunk": ("default_index", "default_earliest", "max_results", "app", "owner"),
 }
 
 
