@@ -196,6 +196,10 @@ def test_native_projection_mentions_every_troubleshooting_cli():
         # to name the real control so the model does not assume a safety net.
         "pgsql exec",
         "decided by the database role and endpoint",
+        # Bulk transfer is not discoverable from query/exec: an agent that
+        # needs more rows than --limit allows has to be told copy exists.
+        "pgsql copy out --table <rel> --output <file>",
+        "pgsql copy in",
         "For every nexus, splunk, and pgsql command add --json",
     ):
         assert token in text, token
