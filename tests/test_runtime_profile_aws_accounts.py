@@ -46,6 +46,21 @@ AWS_MATRIX = {
             "enabled": False,
         },
     ],
+    "eks_clusters": [
+        {
+            "account": "cps-dev",
+            "cluster": "cps-dev-eks",
+            "private_endpoint": "https://vpce-0ab.vpce-svc-1.eu-west-1.vpce.amazonaws.com",
+        },
+        {
+            "account": "222222222222",
+            "cluster": "dcc-eks",
+            "region": "eu-west-1",
+            "private_endpoint": "https://vpce-dcc.example.test",
+            "tls_server_name": "dcc.internal.example.test",
+            "enabled": False,
+        },
+    ],
 }
 
 
@@ -62,6 +77,16 @@ def test_account_matrix_is_flattened_into_indexed_env_vars():
     assert env["EFP_AWS_ACCOUNTS_0_ACCOUNT_ID"] == "111111111111"
     assert env["EFP_AWS_ACCOUNTS_0_ROLE"] == "ADFS-ReadOnly"
     assert env["EFP_AWS_ACCOUNTS_0_REGIONS_0"] == "ap-east-1"
+    # The private-endpoint rows ride along verbatim: the aws section is copied
+    # whole, and the flattener recurses into a list inside a section the same
+    # way it does into accounts[].regions[].
+    assert env["EFP_AWS_EKS_CLUSTERS_0_ACCOUNT"] == "cps-dev"
+    assert env["EFP_AWS_EKS_CLUSTERS_0_CLUSTER"] == "cps-dev-eks"
+    assert env["EFP_AWS_EKS_CLUSTERS_0_PRIVATE_ENDPOINT"] == "https://vpce-0ab.vpce-svc-1.eu-west-1.vpce.amazonaws.com"
+    assert "EFP_AWS_EKS_CLUSTERS_0_TLS_SERVER_NAME" not in env
+    assert env["EFP_AWS_EKS_CLUSTERS_1_REGION"] == "eu-west-1"
+    assert env["EFP_AWS_EKS_CLUSTERS_1_TLS_SERVER_NAME"] == "dcc.internal.example.test"
+    assert env["EFP_AWS_EKS_CLUSTERS_1_ENABLED"] == "false"
     assert env["EFP_AWS_ACCOUNTS_0_REGIONS_1"] == "eu-west-1"
     assert env["EFP_AWS_ACCOUNTS_1_NAME"] == "dcc-dev"
     assert env["EFP_AWS_ACCOUNTS_1_ENABLED"] == "false"
@@ -156,9 +181,18 @@ def test_apply_kube_env_points_kubectl_at_managed_kubeconfig(monkeypatch, tmp_pa
     assert os.environ["KUBECONFIG"] == str(Path(os.path.expanduser("~/custom/kube")))
 
 
-@pytest.mark.parametrize("field", ["provider", "accounts", "default_account"])
+@pytest.mark.parametrize("field", ["provider", "accounts", "default_account", "eks_clusters"])
 def test_overlay_filter_keeps_matrix_fields(field):
     overlay = {"aws": {"enabled": True, field: AWS_MATRIX[field]}}
     cfg = config_module.Config.__new__(config_module.Config)
     filtered = cfg._filter_by_field_tree(overlay, config_module.Config.PORTAL_MANAGED_FIELD_TREE)
     assert filtered["aws"][field] == AWS_MATRIX[field]
+
+
+def test_native_projection_points_at_the_endpoint_probe_when_kubectl_cannot_connect():
+    # A cluster behind PrivateLink fails in a way that looks like an outage
+    # (no route) or a broken certificate. The model has to be told which
+    # command turns that into a diagnosis instead of retrying kubectl.
+    text = RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS
+    assert "aws-auth eks endpoint --account <name> --cluster <cluster> --json" in text
+    assert "private endpoint this profile configures" in text

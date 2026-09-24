@@ -246,6 +246,9 @@ class Config:
             "session_duration_seconds": True,
             "kubeconfig_path": True,
             "accounts": True,
+            # Clusters reached through a private endpoint instead of the one
+            # describe-cluster reports (EFP_AWS_EKS_CLUSTERS_<i>_*).
+            "eks_clusters": True,
         },
         "jenkins": {
             "enabled": True,
