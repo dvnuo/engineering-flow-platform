@@ -187,7 +187,7 @@ esac
             if any(msg in lowered for msg in ["repository not found", "authentication", "permission denied", "could not read username"]):
                 return (
                     f"{output}\n"
-                    "Configure github.api_token for private GitHub repository access over HTTPS."
+                    "Set up the GitHub connector in Portal (API token) for private GitHub repository access over HTTPS."
                 )
         return output
 
