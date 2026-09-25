@@ -46,6 +46,16 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
     assert "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" in text
     assert "/tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli" in text
     assert "aws --version" in text
+    # kubectl (read-only EKS inspection) is pinned to a minor release line so
+    # it stays within one minor of the target control planes, and verified
+    # against the published sha256 before it lands on PATH.
+    assert "ARG KUBECTL_STABLE_CHANNEL=stable-1." in text
+    assert 'ARG KUBECTL_VERSION=""' in text
+    assert 'https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl"' in text
+    assert "kubectl.sha256" in text and "sha256sum --check" in text
+    assert "kubectl version --client" in text
+    assert " jq \\" in text
+    assert "jq --version" in text
     assert "google-chrome-stable" in text
     assert "google-chrome --version" in text
     assert "COPY runtime-tools/ /tmp/runtime-tools/" in text
@@ -54,21 +64,21 @@ def test_dockerfile_installs_gh_and_copies_runtime_tools_binaries():
     assert "COPY runtime-tools/jira runtime-tools/confluence /usr/local/bin/" not in text
     assert "chmod 0755 /usr/local/bin/jira /usr/local/bin/confluence" not in text
     assert "Go toolchain" in text
+    # Every CLI is smoke-tested through the manifest prepare-runtime-tools.sh
+    # writes, so the Dockerfile does not repeat a list that goes stale; assert
+    # the loop instead, and keep one schema call per established CLI.
+    assert "test -f /tmp/runtime-tools/efp-tools.manifest" in text
+    assert '"$cli" version --json' in text
+    assert '"$cli" commands --json' in text
+    assert "done < /tmp/runtime-tools/efp-tools.manifest" in text
+    # The manifest is a build input, not something to put on PATH.
+    assert "! -name efp-tools.manifest" in text
     for command in [
-        "jira version --json",
-        "jira commands --json",
+        "aws-auth schema login --json",
         "jira schema issue.map-csv --json",
-        "confluence version --json",
-        "confluence commands --json",
         "confluence schema page.create --json",
-        "jenkins version --json",
-        "jenkins commands --json",
         "jenkins schema build.test-report --json",
-        "browser version --json",
-        "browser commands --json",
         "browser schema probe --json",
-        "mobile-auto version --json",
-        "mobile-auto commands --json",
         "mobile-auto schema run.start --json",
     ]:
         assert command in text

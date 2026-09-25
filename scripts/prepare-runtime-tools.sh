@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="$ROOT/runtime-tools"
+# Lists the CLIs built from the tools repo, for the image smoke test.
+MANIFEST_NAME="efp-tools.manifest"
 TOOLS_REPO_URL="https://github.com/dvnuo/engineering-flow-platform-tools.git"
 TEMP_DIR=""
 TOOLS_REPO_DIR=""
@@ -10,6 +12,12 @@ TARGET_GOOS="${GOOS:-linux}"
 TARGET_GOARCH="${GOARCH:-amd64}"
 TARGET_CGO_ENABLED="${CGO_ENABLED:-0}"
 BROWSERSTACK_LOCAL_SOURCE="${BROWSERSTACK_LOCAL_SOURCE:-${BROWSERSTACK_LOCAL_BINARY:-}}"
+# AWS login providers that `aws-auth login` shells out to. Neither is built from
+# the tools repo: adfs-assume is an enterprise binary, saml2aws a GitHub release
+# (https://github.com/Versent/saml2aws/releases). Stage whichever the runtime
+# profile's aws.provider selects; both are optional at build time.
+ADFS_ASSUME_SOURCE="${ADFS_ASSUME_SOURCE:-}"
+SAML2AWS_SOURCE="${SAML2AWS_SOURCE:-}"
 
 log() {
   printf '[prepare-runtime-tools] %s\n' "$*" >&2
@@ -52,18 +60,30 @@ resolve_tools_repo_dir() {
   TOOLS_REPO_DIR="$TEMP_DIR/engineering-flow-platform-tools"
 }
 
-stage_browserstack_local() {
-  local source="$BROWSERSTACK_LOCAL_SOURCE"
+# stage_provided_binary <name> <source-path> <why-it-matters>
+# Copies a third-party binary that the runtime image must carry but this repo
+# does not build. An unset source only logs what the image will lack.
+stage_provided_binary() {
+  local name="$1" source="$2" reason="$3"
   if [[ -z "$source" ]]; then
-    log "BrowserStackLocal source not set; private-managed mobile runs require staging runtime-tools/BrowserStackLocal separately"
+    log "$name source not set; $reason"
     return
   fi
   if [[ "$source" != /* ]]; then
     source="$ROOT/$source"
   fi
-  [[ -f "$source" ]] || die "BrowserStackLocal source does not exist: $source"
-  install -m 0755 "$source" "$OUTPUT_DIR/BrowserStackLocal"
-  log "Staged BrowserStackLocal binary from $source"
+  [[ -f "$source" ]] || die "$name source does not exist: $source"
+  install -m 0755 "$source" "$OUTPUT_DIR/$name"
+  log "Staged $name binary from $source"
+}
+
+stage_browserstack_local() {
+  stage_provided_binary BrowserStackLocal "$BROWSERSTACK_LOCAL_SOURCE" "private-managed mobile runs require staging runtime-tools/BrowserStackLocal separately"
+}
+
+stage_aws_login_providers() {
+  stage_provided_binary adfs-assume "$ADFS_ASSUME_SOURCE" "aws-auth login with provider adfs-assume will report provider_missing unless the binary is installed another way"
+  stage_provided_binary saml2aws "$SAML2AWS_SOURCE" "aws-auth login with provider saml2aws will report provider_missing unless the binary is installed another way"
 }
 
 command -v go >/dev/null 2>&1 || die "go is required to build runtime tools"
@@ -89,7 +109,7 @@ log "Discovered runtime tools: ${tool_names[*]}"
 
 # runtime-tools/ is a generated Docker build input. Keep README.md, but remove
 # stale binaries so deleted or renamed cmd/<tool> directories do not enter PATH.
-find "$OUTPUT_DIR" -maxdepth 1 -type f ! -name README.md -delete
+find "$OUTPUT_DIR" -maxdepth 1 -type f ! -name README.md ! -name "$MANIFEST_NAME" -delete
 
 built_outputs=()
 for tool_name in "${tool_names[@]}"; do
@@ -104,6 +124,15 @@ for tool_name in "${tool_names[@]}"; do
 done
 
 chmod 0755 "${built_outputs[@]}"
+
+# The image smoke-tests exactly the CLIs that were built, rather than a list
+# copied into the Dockerfile that goes stale whenever the tools repo gains or
+# loses a cmd/<tool>. Third-party binaries staged below are deliberately not
+# listed: they do not answer `version --json`.
+printf '%s\n' "${tool_names[@]}" > "$OUTPUT_DIR/$MANIFEST_NAME"
+log "Wrote $MANIFEST_NAME listing ${#tool_names[@]} CLIs"
+
 stage_browserstack_local
+stage_aws_login_providers
 log "Built runtime tools: ${tool_names[*]}"
 log "Prepared runtime tool binaries in $OUTPUT_DIR"

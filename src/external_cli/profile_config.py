@@ -125,7 +125,7 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
     if isinstance(version, int) and not isinstance(version, bool):
         root["version"] = version
 
-    for product in ("jira", "confluence", "jenkins"):
+    for product in _INSTANCE_PRODUCTS:
         section = _normalized_product_config(effective_config.get(product), product=product)
         instances = _build_product_instances(section, product=product)
         if not instances:
@@ -135,12 +135,36 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
             "instances": [_tools_instance_config(instance, product=product) for instance in instances],
         }
 
-    for section_name in ("aws", "mobile-auto"):
+    for section_name in _VERBATIM_SECTIONS:
         section = effective_config.get(section_name)
-        if isinstance(section, dict) and section:
-            root[section_name] = json.loads(json.dumps(section))
+        if not isinstance(section, dict) or not section:
+            continue
+        if section.get("enabled") is False:
+            # A section the admin switched off is not projected at all, the
+            # same as a disabled instance section. Copying it anyway would put
+            # its credentials in the pod environment for a tool nobody may use,
+            # and pgsql has no section-level enabled flag on the Go side to
+            # fall back on.
+            continue
+        root[section_name] = json.loads(json.dumps(section))
 
     return root
+
+
+# Products projected through the `{default_instance, instances[]}` shape with
+# auth canonicalization (tools InstanceConfig). nexus and splunk are the
+# read-only troubleshooting CLIs added alongside jira/confluence/jenkins.
+_INSTANCE_PRODUCTS = ("jira", "confluence", "jenkins", "nexus", "splunk")
+# Sections whose shape already matches the tools RootConfig node and are copied
+# as-is: aws (account matrix), mobile-auto, pgsql (connection fields).
+_VERBATIM_SECTIONS = ("aws", "mobile-auto", "pgsql")
+# Per-instance fields that pass through to the tools InstanceConfig unchanged.
+_INSTANCE_EXTRA_FIELDS = {
+    # app/owner are the Splunk namespace: saved searches, macros, lookups and
+    # index visibility belong to an app, so a profile whose objects live in one
+    # must carry it or the CLI sees the global view and reports nothing.
+    "splunk": ("default_index", "default_earliest", "max_results", "app", "owner"),
+}
 
 
 def flatten_config_to_env(root: dict[str, Any]) -> dict[str, str]:
@@ -196,6 +220,12 @@ def _tools_instance_config(instance: dict[str, Any], *, product: str) -> dict[st
     }
     if product == "jira":
         out["api_version"] = instance["api_version"]
+
+    for field in _INSTANCE_EXTRA_FIELDS.get(product, ()):
+        value = instance.get(field)
+        if value is None or value == "":
+            continue
+        out[field] = value
 
     auth = instance.get("auth") if isinstance(instance.get("auth"), dict) else {}
     auth_type = str(auth.get("type") or "")
@@ -508,6 +538,11 @@ def _build_product_instances(product_config: Any, *, product: str) -> list[dict[
                 "rest_path": str(raw.get("rest_path") or _default_rest_path(product)),
                 "auth": auth,
             }
+        for field in _INSTANCE_EXTRA_FIELDS.get(product, ()):
+            value = raw.get(field)
+            if value is None or str(value).strip() == "":
+                continue
+            instance[field] = value
         instances.append(instance)
     return instances
 
@@ -518,8 +553,10 @@ def _default_rest_path(product: str) -> str:
     Atlassian CLIs address a REST base below the site URL; the Jenkins CLI
     talks to the controller root, so Jenkins deliberately keeps an EMPTY
     rest_path (injecting an Atlassian-style prefix would break every URL).
+    The troubleshooting CLIs (nexus/splunk) own their REST prefixes
+    (/service/rest/v1, /services) for the same reason.
     """
-    return "" if product == "jenkins" else "/rest/api"
+    return "" if product in ("jenkins", "nexus", "splunk") else "/rest/api"
 
 
 def _normalized_product_config(product_config: Any, *, product: str) -> Any:
@@ -650,6 +687,12 @@ def _apply_aws(
 def _build_aws_config(profile_config: dict[str, Any]) -> dict[str, Any] | None:
     aws = profile_config.get("aws") if isinstance(profile_config, dict) else None
     if not isinstance(aws, dict) or aws.get("enabled") is False:
+        return None
+    # The assume-role provider chains from an already-authenticated source
+    # profile; it has no directory password to store, so there is nothing for
+    # `aws-auth auth login` to do. The account matrix still reaches aws-auth
+    # through the EFP_AWS_* env vars exported after this projection.
+    if str(aws.get("provider") or "").strip().lower() == "assume-role":
         return None
     domain = _single_line(aws.get("domain"))
     username = _single_line(aws.get("username"))

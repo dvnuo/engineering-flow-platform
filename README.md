@@ -168,10 +168,15 @@ boot (no hot apply; config changes require a Portal-triggered restart):
   after projection.
 - `EFP_PROFILE_REVISION` / `EFP_PROFILE_ID` — profile revision and id.
 - Tools config env vars — exported by the runtime for CLI child processes
-  (`jira`, `confluence`, `jenkins`, `aws-auth`, `mobile-auto`) as
+  (`jira`, `confluence`, `jenkins`, `aws-auth`, `nexus`, `splunk`,
+  `pgsql`, `mobile-auto`) as
   EFP_-prefixed, indexed variables flattened from the tools `RootConfig`-shaped
   config (e.g. `EFP_JIRA_DEFAULT_INSTANCE`, `EFP_JIRA_INSTANCES_0_BASE_URL`,
-  `EFP_AWS_DOMAIN`, `EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME`).
+  `EFP_AWS_DOMAIN`, `EFP_AWS_ACCOUNTS_0_ACCOUNT_ID`,
+  `EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME`).
+- `KUBECONFIG` — set to `aws.kubeconfig_path` or `~/.efp/kube/config` when the
+  profile enables `aws`, so `aws-auth eks kubeconfig` and `kubectl` share one
+  managed kubeconfig outside the workspace.
 
 `GET /ready` reports readiness only after the boot projection succeeded. In
 local development (no `EFP_PROFILE_CONFIG`), the runtime uses `config.yaml`
