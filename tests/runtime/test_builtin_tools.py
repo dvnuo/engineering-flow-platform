@@ -354,6 +354,37 @@ def test_redaction_covers_the_shapes_the_troubleshooting_clis_print():
     assert redact_tool_output("pods 3/3 image sha256:abcd") == "pods 3/3 image sha256:abcd"
 
 
+def test_redaction_leaves_identifiers_and_structure_alone():
+    from efp_runtime.tools.builtin.redaction import redact_tool_output
+
+    # Each of these was rewritten by an over-broad rule. None holds a secret,
+    # and an ARN is the identifier an AWS investigation turns on: losing its
+    # account id and name makes the output useless.
+    unchanged = [
+        # aws sts get-caller-identity --query Arn --output text
+        "arn:aws:sts::111111111111:assumed-role/ADFS-ReadOnly/session-1",
+        # an EKS cluster ARN on its own line
+        "arn:aws:eks:eu-west-1:111111111111:cluster/cps-dev-eks",
+        # jq -c output
+        '{"name":"api","status":"Running","node":"ip-10-0-1-2","restarts":3}',
+        # aws eks describe-cluster, pretty-printed: the key opens an object
+        '    "certificateAuthority": {\n        "data": "LS0tLS1CRUdJTiBDRVJU"\n    },',
+        # kubectl get pod -o yaml: a boolean is a setting, not a secret
+        "  automountServiceAccountToken: true",
+        '{"token": null, "passwordLastUsed": false}',
+        # an IPv6 address, which is all colons
+        "fe80::1:2:3:4",
+    ]
+    for text in unchanged:
+        assert redact_tool_output(text) == text, text
+
+    # The narrower .pgpass rule still catches the wildcard port form, and a
+    # numeric secret next to a secret-looking key is still a secret.
+    assert "s3cr3t" not in redact_tool_output("*:*:app:readonly:s3cr3t")
+    assert "123456" not in redact_tool_output('{"password": 123456}')
+    assert "123456" not in redact_tool_output("PGPASSWORD=123456")
+
+
 def test_redaction_replaces_configured_secret_values_verbatim(monkeypatch):
     from efp_runtime.tools.builtin import redaction
 

@@ -554,7 +554,7 @@ def _default_rest_path(product: str) -> str:
     talks to the controller root, so Jenkins deliberately keeps an EMPTY
     rest_path (injecting an Atlassian-style prefix would break every URL).
     The troubleshooting CLIs (nexus/splunk) own their REST prefixes
-    (/service/rest/v1, /services, /controller) for the same reason.
+    (/service/rest/v1, /services) for the same reason.
     """
     return "" if product in ("jenkins", "nexus", "splunk") else "/rest/api"
 

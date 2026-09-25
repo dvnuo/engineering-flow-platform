@@ -65,25 +65,33 @@ _KEY_GROUP = "|".join(re.escape(name) for name in _SECRET_KEY_NAMES)
 _KEY_PART = r"[A-Za-z0-9_.\-]*"
 _KEY_RE = _KEY_PART + r"(?:" + _KEY_GROUP + r")" + _KEY_PART
 
+# A value that says nothing about a secret: redacting `automountServiceAccountToken: true`
+# or `"token": null` hides a setting the reader needs and protects nothing.
+_NOT_A_SECRET = r"(?!(?:true|false|null|none)\b)"
+
 _TEXT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)(authorization\s*:\s*(?:bearer|basic|splunk|token)\s+)([^\s,;\"']+)"), r"\1" + REDACTED),
     # Authorization with no scheme word, and the Splunk style headers.
     (re.compile(r"(?i)((?:authorization|x-api-key|x-auth-token|cookie|set-cookie)\s*:\s*)([^\n\r]+)"), r"\1" + REDACTED),
     # "password": "value" / 'token': 'value' (JSON and YAML flow style)
     (re.compile(r'(?i)(["\'](?:' + _KEY_RE + r')["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),
-    # "password": 12345 / "token": null -- an unquoted JSON value
-    (re.compile(r'(?i)(["\'](?:' + _KEY_RE + r')["\']\s*:\s*)([^\s,}\]"\']+)'), r"\1" + REDACTED),
+    # "password": 12345 -- an unquoted JSON scalar. Not an object or array
+    # opening ("certificateAuthority": {), which is structure, not a value.
+    (re.compile(r'(?i)(["\'](?:' + _KEY_RE + r')["\']\s*:\s*)' + _NOT_A_SECRET + r'([^\s,}\]"\'{\[]+)'), r"\1" + REDACTED),
     # <password>value</password> (XML, and the Splunk /services/auth/login body)
     (re.compile(r"(?i)(<\s*(" + _KEY_RE + r")\s*>)([^<]*)(<\s*/\s*\2\s*>)"), r"\1" + REDACTED + r"\4"),
     # password=value / token: value / EFP_PGSQL_INSTANCES_0_PASSWORD=value
-    (re.compile(r"(?i)(\b(?:" + _KEY_RE + r")\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
+    (re.compile(r"(?i)(\b(?:" + _KEY_RE + r")\s*[=:]\s*)" + _NOT_A_SECRET + r"([^\s&\"',;]+)"), r"\1" + REDACTED),
     # --password value / -p value / --token value, space separated
     (re.compile(r"(?i)(--(?:" + _KEY_RE + r")[= ])([^\s\"';|&]+)"), r"\1" + REDACTED),
     # curl -u user:pass, splunk -auth user:pass
     (re.compile(r"(?i)((?:^|\s)(?:-u|--user|-auth|--auth)\s+)([^\s:\"']+):([^\s\"';|&]+)"), r"\1\2:" + REDACTED),
     (re.compile(r"(?i)(\b(?:pgpassword|ad_pass|saml2aws_password|gh_token|github_token|gh_enterprise_token)\s*=\s*)([^\s\"',;]+)"), r"\1" + REDACTED),
-    # host:port:database:user:password -- a .pgpass line
-    (re.compile(r"(?m)^([^\s:]+:[^\s:]*:[^\s:]*:[^\s:]*:)(\S+)$"), r"\1" + REDACTED),
+    # host:port:database:user:password -- a .pgpass line. The port field must
+    # be a number or *, which is what tells a .pgpass line from the other
+    # colon-separated lines a troubleshooting session prints on their own:
+    # ARNs (arn:aws:eks:eu-west-1:111111111111:cluster/x) and compact JSON.
+    (re.compile(r"(?m)^([^\s:]+:(?:\d+|\*):[^\s:]*:[^\s:]*:)(\S+)$"), r"\1" + REDACTED),
     # Well-known token shapes.
     (re.compile(r"\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b"), REDACTED),
     (re.compile(r"\bghp_[A-Za-z0-9_]{20,}\b"), REDACTED),
