@@ -40,7 +40,7 @@ Runtime CLI tools:
 _TRUNCATION_NOTICE = "[System prompt content truncated to {kept} of {original} chars.]"
 
 SESSION_USER_IDENTITY_RULES = """Identity rules:
-- The jira, confluence, gh, jenkins, and aws CLIs may authenticate with a shared service account configured by the runtime profile rather than with this user's own account. `jira myself`, `confluence myself`, JQL/CQL `currentUser()`, and similar "current user" lookups describe that service account, never the session user.
+- The jira, confluence, gh, jenkins, and aws CLIs may authenticate with a shared service account configured in the user's Portal connectors rather than with this user's own account. `jira myself`, `confluence myself`, JQL/CQL `currentUser()`, and similar "current user" lookups describe that service account, never the session user.
 - When the user says "my", "mine", "me", "assigned to me", "my pages", or otherwise refers to themselves, filter explicitly by the session user identity above, for example JQL `assignee = "<username>"` or CQL `creator = "<username>"`. If the external system needs an account id, look the user up by username or display name first.
 - If the session user cannot be resolved in the external system, ask which account to use instead of silently falling back to the service account."""
 

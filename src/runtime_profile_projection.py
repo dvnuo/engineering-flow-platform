@@ -124,7 +124,7 @@ def project_llm_for_runtime(llm: dict, runtime_type: str) -> dict:
 
 
 RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS = (
-    "Use bash for runtime profile CLI tools: jira/confluence for Atlassian, "
+    "Use bash for the connector CLI tools: jira/confluence for Atlassian, "
     "gh for GitHub issues, PRs, and api calls, aws for AWS operations, "
     "jenkins for Jenkins controller operations, mobile-auto for BrowserStack/Appium device automation, "
     "and git for clone, fetch, push, and status. "
@@ -133,7 +133,7 @@ RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS = (
     "`jira schema <command> --json`, `jira help llm --json`, and the matching confluence/jenkins/mobile-auto commands. "
     "For mobile work, start with `mobile-auto doctor --json` and `mobile-auto auth test --json`; use BrowserStackLocal through "
     "`private-external` with a supplied local identifier or `private-managed` only when the runtime image has BrowserStackLocal installed. "
-    "Jenkins runtime profile credentials are available as EFP_JENKINS_USERNAME and EFP_JENKINS_PASSWORD; "
+    "Jenkins connector credentials are available as EFP_JENKINS_USERNAME and EFP_JENKINS_PASSWORD; "
     "when the user provides a Jenkins controller URL or pipeline/job, configure or log in to that controller at that time and pass the password through stdin, never by echoing it. "
     "For AWS, run `aws-auth account list --json` to see the configured accounts and `aws-auth login --account <name> --json` "
     "(or `aws-auth login --all --json`) before the first aws call; each account's credentials live in the AWS CLI profile named "
@@ -143,18 +143,18 @@ RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS = (
     "edit, patch, scale, rollout, exec, port-forward, or read secrets. When aws or kubectl reports an expired or missing token, "
     "run `aws-auth login --account <name> --json` again. When kubectl cannot reach a cluster or rejects its certificate, "
     "run `aws-auth eks endpoint --account <name> --cluster <cluster> --json`: it reports whether the address kubectl uses "
-    "(the cluster's own endpoint, or the private endpoint this profile configures for it) answers with the cluster's certificate, "
+    "(the cluster's own endpoint, or the private endpoint the AWS connector configures for it) answers with the cluster's certificate, "
     "and what to change if not. Avoid changing cloud resources unless the user asks. "
     "Use nexus for Nexus Repository artifacts (`nexus repo list --json`, `nexus component search --repository <repo> --name <artifact> --version <ver> --json`), "
     "splunk for log searches (`splunk search run --query \"index=<idx> ...\" --earliest -1h --count 100 --json`; always give a time range and a count), "
     "and pgsql for PostgreSQL (`pgsql schema tables --json`, `pgsql query --sql \"select ...\" --limit 200 --json`; "
-    "`pgsql exec` applies statements that change data, and whether that succeeds is decided by the database role and endpoint this profile configures, not by the CLI; "
+    "`pgsql exec` applies statements that change data, and whether that succeeds is decided by the database role and endpoint the PostgreSQL connector configures, not by the CLI; "
     "`pgsql copy out --table <rel> --output <file>` extracts more rows than --limit allows and `pgsql copy in` loads a file back). "
     "For every nexus, splunk, and pgsql command add --json and use --instance when several instances are configured. "
     "Run write operations with --dry-run before executing them. Use --yes only for destructive "
-    "operations after the user explicitly confirms. Runtime profile credentials are applied in "
-    "the runtime container through CLIs or environment variables; if a CLI returns auth_failed, report a runtime profile "
-    "configuration problem instead of guessing or inventing tokens."
+    "operations after the user explicitly confirms. Credentials come from the user's Portal connectors and are applied in "
+    "the runtime container through CLIs or environment variables; if a CLI returns auth_failed, tell the user which "
+    "connector to fix in Portal > Connectors instead of guessing or inventing tokens."
 )
 
 OPENCODE_RUNTIME_RESTRICTION_FIELDS = frozenset(

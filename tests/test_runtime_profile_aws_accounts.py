@@ -195,4 +195,4 @@ def test_native_projection_points_at_the_endpoint_probe_when_kubectl_cannot_conn
     # command turns that into a diagnosis instead of retrying kubectl.
     text = RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS
     assert "aws-auth eks endpoint --account <name> --cluster <cluster> --json" in text
-    assert "private endpoint this profile configures" in text
+    assert "private endpoint the AWS connector configures" in text
