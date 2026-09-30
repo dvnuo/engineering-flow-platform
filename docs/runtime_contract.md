@@ -130,7 +130,7 @@ Each capability item includes at least:
 
 - Portal may inject `metadata.connectors` (a map keyed by connector type) into
   trusted chat metadata, plus `enable_browser_tool: true` when
-  `connectors.local_browser` is present. The gateway registers the `browser`
+  `connectors.local_bridge` is present. The gateway registers the `browser`
   tool only for interactive chats that carry that block; background tasks,
   Jira/GitHub handlers, and sub-agents never see it.
 - The `browser` tool publishes `tool.connector_requested` on the runtime event

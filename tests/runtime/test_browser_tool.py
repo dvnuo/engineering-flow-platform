@@ -28,7 +28,7 @@ from efp_runtime.tools.definition import ToolContext
 
 
 ENABLED_METADATA = {
-    "connectors": {"local_browser": {"enabled": True, "client_id": "tab-1", "protocol_version": 1}},
+    "connectors": {"local_bridge": {"enabled": True, "client_id": "tab-1", "protocol_version": 1}},
 }
 
 
@@ -131,7 +131,7 @@ async def test_tool_reports_connector_disabled_without_metadata():
 @pytest.mark.asyncio
 async def test_tool_reports_connector_disabled_when_flag_false():
     tool = create_browser_tool(ConnectorBridgeBroker())
-    metadata = {"connectors": {"local_browser": {"enabled": False, "client_id": "tab-1"}}}
+    metadata = {"connectors": {"local_bridge": {"enabled": False, "client_id": "tab-1"}}}
     result = await tool.execute({"action": "tab.list"}, _context(metadata=metadata))
     assert result.error == "connector_disabled"
 
@@ -333,13 +333,13 @@ def test_runtime_config_coerces_flag():
 # system prompt
 
 
-def test_system_prompt_mentions_local_browser_only_when_enabled():
+def test_system_prompt_mentions_local_bridge_only_when_enabled():
     builder = SystemPromptBuilder(workspace_root=None)
     with_connector = builder.build_messages(dict(ENABLED_METADATA))
     texts = [part.text for message in with_connector for part in message.parts]
-    assert any("Local browser" in text and "<page-content>" in text for text in texts)
+    assert any("Local bridge" in text and "<page-content>" in text for text in texts)
     assert any(message.metadata.get("kind") == "connectors_context" for message in with_connector)
 
-    without = builder.build_messages({"connectors": {"local_browser": {"enabled": False}}})
+    without = builder.build_messages({"connectors": {"local_bridge": {"enabled": False}}})
     assert not any(message.metadata.get("kind") == "connectors_context" for message in without)
     assert not any(message.metadata.get("kind") == "connectors_context" for message in builder.build_messages({}))

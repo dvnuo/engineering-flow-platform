@@ -37,7 +37,7 @@ def _broker() -> ConnectorBridgeBroker:
 @pytest.mark.asyncio
 async def test_connectors_respond_resolves_pending_request():
     broker = _broker()
-    request = broker.create(session_id="sess-1", connector_type="local_browser", action="tab.list")
+    request = broker.create(session_id="sess-1", connector_type="local_bridge", action="tab.list")
     waiter = asyncio.create_task(broker.wait(request.request_id))
     await asyncio.sleep(0)
 
@@ -58,7 +58,7 @@ async def test_connectors_respond_resolves_pending_request():
 @pytest.mark.asyncio
 async def test_connectors_respond_failure_payload_carries_error():
     broker = _broker()
-    request = broker.create(session_id="sess-2", connector_type="local_browser", action="page.click")
+    request = broker.create(session_id="sess-2", connector_type="local_bridge", action="page.click")
     waiter = asyncio.create_task(broker.wait(request.request_id))
     await asyncio.sleep(0)
     response = await runtime_api.api_session_connectors_respond(
@@ -73,7 +73,7 @@ async def test_connectors_respond_failure_payload_carries_error():
 @pytest.mark.asyncio
 async def test_connectors_respond_rejects_unknown_or_foreign_requests():
     broker = _broker()
-    request = broker.create(session_id="sess-3", connector_type="local_browser", action="tab.list")
+    request = broker.create(session_id="sess-3", connector_type="local_bridge", action="tab.list")
     waiter = asyncio.create_task(broker.wait(request.request_id))
     await asyncio.sleep(0)
 
@@ -107,7 +107,7 @@ async def test_connectors_respond_rejects_unknown_or_foreign_requests():
 @pytest.mark.asyncio
 async def test_connectors_pending_lists_session_requests():
     broker = _broker()
-    request = broker.create(session_id="sess-4", connector_type="local_browser", action="page.snapshot", target_client_id="tab-9")
+    request = broker.create(session_id="sess-4", connector_type="local_bridge", action="page.snapshot", target_client_id="tab-9")
     response = await runtime_api.api_session_connectors_pending(_Request("sess-4", {}))
     body = json.loads(response.text)
     assert body["session_id"] == "sess-4"
@@ -135,7 +135,7 @@ def test_projection_maps_connector_events():
         payload={
             "tool_call_id": "call-1",
             "tool_name": "browser",
-            "connector_type": "local_browser",
+            "connector_type": "local_bridge",
             "connector_request": request_payload,
             "target_client_id": "tab-1",
             "action": "page.snapshot",
@@ -149,7 +149,7 @@ def test_projection_maps_connector_events():
     assert event["state"] == "pending"
     assert event["data"]["session_id"] == "sess-1"
     assert event["data"]["request_id"] == "chat-1"
-    assert event["data"]["connector_type"] == "local_browser"
+    assert event["data"]["connector_type"] == "local_bridge"
     assert event["data"]["connector_request"]["id"] == "cr_abc"
     assert event["data"]["connector_request"]["params"] == {"target_id": "T1"}
     assert event["data"]["connector_request_id"] == "cr_abc"
@@ -163,7 +163,7 @@ def test_projection_maps_connector_events():
         payload={
             "tool_call_id": "call-1",
             "tool_name": "browser",
-            "connector_type": "local_browser",
+            "connector_type": "local_bridge",
             "connector_request_id": "cr_abc",
             "action": "page.snapshot",
             "ok": False,
@@ -183,6 +183,6 @@ def test_execution_metadata_gate():
     assert _execution_metadata_enables_browser_tool(None) is False
     assert _execution_metadata_enables_browser_tool({}) is False
     assert _execution_metadata_enables_browser_tool({"enable_browser_tool": True}) is True
-    assert _execution_metadata_enables_browser_tool({"connectors": {"local_browser": {"client_id": "t"}}}) is True
-    assert _execution_metadata_enables_browser_tool({"connectors": {"local_browser": {"enabled": False}}}) is False
+    assert _execution_metadata_enables_browser_tool({"connectors": {"local_bridge": {"client_id": "t"}}}) is True
+    assert _execution_metadata_enables_browser_tool({"connectors": {"local_bridge": {"enabled": False}}}) is False
     assert _execution_metadata_enables_browser_tool({"connectors": {"other": {"enabled": True}}}) is False
