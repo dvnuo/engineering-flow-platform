@@ -75,8 +75,10 @@ def test_retrieval_engine_uses_default_llm_model_when_config_model_missing(monke
             RetrievalRequest(session_id="s1", query="A", top_k=1)
         )
 
-        assert direct == 13600
-        assert topk == 54400
+        # gpt-6-sol's 922k prompt budget lands every tier on its cap
+        # (5% -> 16k, 20% -> 64k, 50% -> 128k).
+        assert direct == 16000
+        assert topk == 64000
         assert summarize == 128000
     finally:
         if had_model:
