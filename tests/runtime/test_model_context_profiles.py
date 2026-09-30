@@ -17,16 +17,18 @@ from efp_runtime.llm.models import (
 @pytest.mark.parametrize(
     ("model", "expected_model"),
     [
-        ("github-copilot/gpt-5.4", "gpt-5.4"),
-        ("github-copilot/gpt-5.5", "gpt-5.5"),
         ("github-copilot/gpt-5.6-luna", "gpt-5.6-luna"),
         ("github-copilot/gpt-5.6-sol", "gpt-5.6-sol"),
         ("github-copilot/gpt-5.6-terra", "gpt-5.6-terra"),
-        ("gpt-5.4", "gpt-5.4"),
-        ("gpt-5.5", "gpt-5.5"),
+        ("github-copilot/gpt-6-astra", "gpt-6-astra"),
+        ("github-copilot/gpt-6-luna", "gpt-6-luna"),
+        ("github-copilot/gpt-6-sol", "gpt-6-sol"),
         ("gpt-5.6 luna", "gpt-5.6-luna"),
         ("gpt-5.6 sol", "gpt-5.6-sol"),
         ("gpt-5.6 terra", "gpt-5.6-terra"),
+        ("gpt-6 astra", "gpt-6-astra"),
+        ("gpt-6 luna", "gpt-6-luna"),
+        ("gpt-6 sol", "gpt-6-sol"),
     ],
 )
 def test_github_copilot_profile_resolution(model: str, expected_model: str):
@@ -35,31 +37,43 @@ def test_github_copilot_profile_resolution(model: str, expected_model: str):
     assert isinstance(profile, ModelContextProfile)
     assert profile.provider_id == DEFAULT_PROVIDER_ID
     assert profile.model_id == expected_model
-    if expected_model == "gpt-5.6-luna":
-        assert profile.context_window_tokens == 1_000_000
-        assert profile.default_reserve_tokens == 128_000
+    if expected_model.startswith("gpt-6-"):
+        # OpenAI publishes 1,050,000 tokens (922k input + 128k output) for the
+        # whole GPT-6 line.
+        assert profile.context_window_tokens == 1_050_000
     else:
         assert profile.context_window_tokens == 1_000_000
-        assert profile.default_reserve_tokens == 128_000
+    assert profile.default_reserve_tokens == 128_000
     assert profile.default_preserve_recent_tokens == 8_000
     assert profile.tokens_to_chars(100) == 400
 
 
 def test_default_and_supported_model_list_are_copilot_responses_models():
-    assert DEFAULT_MODEL_ID == "gpt-5.6-terra"
+    assert DEFAULT_MODEL_ID == "gpt-6-sol"
     assert SUPPORTED_COPILOT_MODEL_IDS == (
-        "gpt-5.4",
-        "gpt-5.5",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
     )
 
 
 def test_canonicalize_copilot_model_id_rejects_unsupported_models():
     assert canonicalize_copilot_model_id("gpt-5.6 terra") == "gpt-5.6-terra"
+    assert canonicalize_copilot_model_id("github-copilot/gpt-6 sol") == "gpt-6-sol"
     with pytest.raises(ValueError, match="unsupported GitHub Copilot model"):
         canonicalize_copilot_model_id("gpt-5")
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.5", "github-copilot/gpt-5.4"])
+def test_retired_copilot_models_are_rejected(model: str):
+    # gpt-5.4 and gpt-5.5 left the Copilot list with the GPT-6 release. gpt-5.4
+    # still has a context profile for AI Platform, so the catalog lookup alone
+    # cannot be what gates a Copilot request.
+    with pytest.raises(ValueError, match="unsupported GitHub Copilot model"):
+        canonicalize_copilot_model_id(model)
 
 
 def test_unknown_model_falls_back_to_conservative_copilot_profile():

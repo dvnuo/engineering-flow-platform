@@ -7,18 +7,22 @@ from typing import Any
 
 
 DEFAULT_PROVIDER_ID = "github-copilot"
-DEFAULT_MODEL_ID = "gpt-5.6-terra"
+DEFAULT_MODEL_ID = "gpt-6-sol"
 DEFAULT_CHARS_PER_TOKEN = 4
 MIN_PRESERVE_RECENT_TOKENS = 2_000
 MAX_PRESERVE_RECENT_TOKENS = 8_000
 DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS = 8_000
 CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR = 20
+# GitHub Copilot models the native runtime accepts. gpt-5.4 and gpt-5.5 left
+# this list when the GPT-6 line (Astra, Sol, Luna) arrived; gpt-5.4 keeps a
+# context profile below only because AI Platform still serves it.
 SUPPORTED_COPILOT_MODEL_IDS = (
-    "gpt-5.4",
-    "gpt-5.5",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
 )
 
 # AI Platform (enterprise gateway) models. Must stay aligned with the Portal
@@ -62,10 +66,11 @@ def resolve_model_context_profile(
     the model, not of the gateway serving it. ``provider_id`` is accepted (and
     a ``provider/model`` prefix is stripped from ``model``) so callers can pass
     a qualified id, but it does not gate the lookup - ai_platform serves the
-    same GPT-5.x line (see ``AI_PLATFORM_MODEL_IDS``) with the same 1M window
-    as Copilot, and this profile is the default source of the native runtime's
-    context budget, so falling back to the 64k profile purely because of a
-    provider id would compact those sessions roughly seven times too early.
+    same GPT-5.x line (see ``AI_PLATFORM_MODEL_IDS``) with the same 1M-class
+    window as Copilot, and this profile is the default source of the native
+    runtime's context budget, so falling back to the 64k profile purely
+    because of a provider id would compact those sessions roughly seven times
+    too early.
     """
 
     del provider_id  # accepted for call-site compatibility; see docstring
@@ -118,8 +123,9 @@ def context_safety_margin_tokens(profile: ModelContextProfile) -> int:
     safety of 8000 tokens). Combined with ``default_reserve_tokens`` this
     reproduces the legacy prompt budget ``context_window - reserved - safety``;
     the legacy path additionally clamps by a configured ``max_prompt_tokens``,
-    which has no native-runtime equivalent, and has no table entry for the
-    ``gpt-5.6-*`` models at all.
+    which has no native-runtime equivalent, and its window table
+    (``src/config.py`` ``DEFAULT_MODEL_LIMITS``) disagrees with this one for
+    the GPT-5.x line (400k/328k there against 1M here).
     """
 
     return min(
@@ -189,13 +195,10 @@ def _default_preserve_recent_tokens(
 
 
 _COPILOT_PROFILES = {
+    # Not a Copilot model any more (see SUPPORTED_COPILOT_MODEL_IDS); kept for
+    # AI Platform, which still serves it and resolves its budget through here.
     "gpt-5.4": _profile(
         "gpt-5.4",
-        context_window_tokens=1_000_000,
-        default_reserve_tokens=128_000,
-    ),
-    "gpt-5.5": _profile(
-        "gpt-5.5",
         context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
     ),
@@ -212,6 +215,28 @@ _COPILOT_PROFILES = {
     "gpt-5.6-terra": _profile(
         "gpt-5.6-terra",
         context_window_tokens=1_000_000,
+        default_reserve_tokens=128_000,
+    ),
+    # GPT-6 (released 2026-09; in Copilot since 2026-09-04 for Astra and
+    # 2026-09-22 for Sol and Luna). OpenAI publishes a 1,050,000-token window
+    # for all three - 922k of input plus 128k of output - so the reserve is the
+    # full 128k output cap. Astra is the flagship reasoning model, Sol the
+    # balanced default for interactive and agentic coding, Luna the fast and
+    # cheap one. Sol and Luna also accept reasoning effort ``none``; Astra does
+    # not, and the runtime does not offer it for any model.
+    "gpt-6-astra": _profile(
+        "gpt-6-astra",
+        context_window_tokens=1_050_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gpt-6-luna": _profile(
+        "gpt-6-luna",
+        context_window_tokens=1_050_000,
+        default_reserve_tokens=128_000,
+    ),
+    "gpt-6-sol": _profile(
+        "gpt-6-sol",
+        context_window_tokens=1_050_000,
         default_reserve_tokens=128_000,
     ),
 }
