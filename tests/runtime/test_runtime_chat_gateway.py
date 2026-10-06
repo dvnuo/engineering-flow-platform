@@ -116,7 +116,7 @@ def test_build_github_copilot_provider_uses_responses_and_config_reasoning(monke
         raising=False,
     )
 
-    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+    provider = runtime_chat._build_github_copilot_provider("gpt-6-luna")
 
     assert provider.endpoint == "responses"
     assert provider.stream is True
@@ -166,7 +166,7 @@ def test_build_github_copilot_provider_prefers_env_reasoning(monkeypatch):
         raising=False,
     )
 
-    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+    provider = runtime_chat._build_github_copilot_provider("gpt-6-luna")
 
     assert provider.reasoning_effort == "low"
 
@@ -224,7 +224,7 @@ def test_build_github_copilot_provider_rejects_invalid_reasoning(monkeypatch):
     )
 
     with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
-        runtime_chat._build_github_copilot_provider("gpt-5.4")
+        runtime_chat._build_github_copilot_provider("gpt-6-luna")
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_type == "invalid_reasoning_effort"
@@ -253,7 +253,7 @@ def test_build_github_copilot_provider_resolves_configured_timeout(
         raising=False,
     )
 
-    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+    provider = runtime_chat._build_github_copilot_provider("gpt-6-luna")
 
     assert provider.transport.timeout == expected_timeout
 
@@ -270,7 +270,7 @@ def test_build_github_copilot_provider_prefers_env_timeout_over_config(monkeypat
         raising=False,
     )
 
-    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+    provider = runtime_chat._build_github_copilot_provider("gpt-6-luna")
 
     assert provider.transport.timeout == 90
 
@@ -300,7 +300,7 @@ def test_build_github_copilot_provider_can_disable_timeout(
         raising=False,
     )
 
-    provider = runtime_chat._build_github_copilot_provider("gpt-5.4")
+    provider = runtime_chat._build_github_copilot_provider("gpt-6-luna")
 
     assert provider.transport.timeout is None
 
@@ -320,7 +320,7 @@ def test_build_github_copilot_provider_rejects_invalid_timeout_config(
     )
 
     with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
-        runtime_chat._build_github_copilot_provider("gpt-5.4")
+        runtime_chat._build_github_copilot_provider("gpt-6-luna")
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_type == "invalid_timeout"
@@ -339,7 +339,7 @@ def test_build_github_copilot_provider_rejects_invalid_timeout_env(monkeypatch):
     )
 
     with pytest.raises(runtime_chat.RuntimeChatError) as exc_info:
-        runtime_chat._build_github_copilot_provider("gpt-5.4")
+        runtime_chat._build_github_copilot_provider("gpt-6-luna")
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_type == "invalid_timeout"
@@ -932,7 +932,7 @@ def test_run_metadata_stamps_the_turn_with_hong_kong_time():
         execution_metadata=None,
         agent_id=None,
         agent_name=None,
-        model="gpt-5.4",
+        model="gpt-6-luna",
     )
 
     assert re.fullmatch(

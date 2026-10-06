@@ -81,7 +81,7 @@ curl -X POST http://localhost:8000/api/chat \
 llm:
   provider: "github_copilot"
   api_key: "ghu_..."
-  model: "gpt-5.4"
+  model: "gpt-6-sol"
   reasoning_effort: "high"
 ```
 
@@ -94,8 +94,8 @@ directly. `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
 Copilot transport base URL; otherwise EFP uses the exchanged token `proxy-ep`
 when present.
 
-Supported GitHub Copilot models are `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`,
-`gpt-5.3-codex`, `gpt-5-mini`, `gemini-2.5-pro`, and `gemini-3.5-flash`.
+Supported GitHub Copilot models are `gpt-6-sol` (default), `gpt-6-astra`,
+`gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
 
 ### Control-Plane Runtime Settings
 

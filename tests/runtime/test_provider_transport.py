@@ -224,12 +224,12 @@ async def test_github_copilot_provider_defaults_strict_responses_payload():
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5.6-terra"
+    assert provider.model == "gpt-6-sol"
     assert provider.endpoint == "responses"
     assert provider.reasoning_effort == DEFAULT_COPILOT_REASONING_EFFORT
     assert provider.metadata["provider_id"] == "github-copilot"
     payload = transport.payloads[0]
-    assert payload["model"] == "gpt-5.6-terra"
+    assert payload["model"] == "gpt-6-sol"
     assert "input" in payload
     assert "messages" not in payload
     assert payload["reasoning"] == {"effort": "high"}
@@ -259,7 +259,7 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     )
 
     assert result.status == LoopStatus.COMPLETED
-    assert provider.model == "gpt-5.6-terra"
+    assert provider.model == "gpt-6-sol"
     assert transport.payloads[0]["model"] == "gpt-5.6-luna"
     assert "metadata" not in transport.payloads[0]
 
@@ -291,11 +291,12 @@ def test_github_copilot_provider_rejects_invalid_reasoning_effort_locally():
 
 def test_github_copilot_supported_models_and_reasoning_are_exact():
     assert SUPPORTED_COPILOT_MODEL_IDS == (
-        "gpt-5.4",
-        "gpt-5.5",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
     )
     assert SUPPORTED_COPILOT_REASONING_EFFORTS == (
         "low",
@@ -589,7 +590,7 @@ async def test_github_copilot_model_unavailable_does_not_fallback_to_gpt_5_5():
             )
         ]
     )
-    provider = GitHubCopilotProvider(transport=transport, model="gpt-5.4")
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-6-luna")
     runner = RuntimeLoopRunner(
         store=InMemorySessionStore(),
         provider=provider,
@@ -603,7 +604,7 @@ async def test_github_copilot_model_unavailable_does_not_fallback_to_gpt_5_5():
 
     assert result.status == LoopStatus.ERROR
     assert len(transport.payloads) == 1
-    assert transport.payloads[0]["model"] == "gpt-5.4"
+    assert transport.payloads[0]["model"] == "gpt-6-luna"
     _assert_strict_copilot_responses_payload(transport.payloads[0])
 
 
@@ -623,7 +624,7 @@ async def test_github_copilot_regular_http_400_does_not_fallback_or_retry():
             )
         ]
     )
-    provider = GitHubCopilotProvider(transport=transport, model="gpt-5.4")
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-6-luna")
     runner = RuntimeLoopRunner(
         store=InMemorySessionStore(),
         provider=provider,
@@ -637,7 +638,7 @@ async def test_github_copilot_regular_http_400_does_not_fallback_or_retry():
 
     assert result.status == LoopStatus.ERROR
     assert len(transport.payloads) == 1
-    assert transport.payloads[0]["model"] == "gpt-5.4"
+    assert transport.payloads[0]["model"] == "gpt-6-luna"
     assert not [
         event
         for event in result.runtime_events
@@ -805,7 +806,7 @@ async def test_github_source_token_exchange_uses_copilot_plugin_headers_and_pars
     transport = GitHubCopilotHTTPTransport(token="ghp_source123", timeout=12)
     result = await transport.send(
         {
-            "model": "gpt-5.4",
+            "model": "gpt-6-luna",
             "input": [{"role": "user", "content": [{"type": "input_text", "text": "ok"}]}],
             "reasoning": {"effort": "high"},
             "stream": False,
@@ -897,7 +898,7 @@ async def test_github_source_token_refreshes_before_expiry(monkeypatch):
 
     result = await transport.send(
         {
-            "model": "gpt-5.4",
+            "model": "gpt-6-luna",
             "input": [{"role": "user", "content": [{"type": "input_text", "text": "ok"}]}],
             "reasoning": {"effort": "high"},
             "stream": False,
@@ -937,7 +938,7 @@ async def test_github_source_token_stream_refreshes_before_expiry(monkeypatch):
     transport = GitHubCopilotHTTPTransport(token="gho_source123", timeout=12)
     now[0] = transport.token_expires_at - 299
 
-    stream = await transport.send({"model": "gpt-5.4", "stream": True})
+    stream = await transport.send({"model": "gpt-6-luna", "stream": True})
     chunks = [chunk async for chunk in stream]
 
     assert chunks == [{"type": "response.output_text.delta", "delta": "hello"}]
@@ -978,7 +979,7 @@ async def test_github_source_token_expired_401_refreshes_and_retries_once(monkey
     transport = GitHubCopilotHTTPTransport(token="gho_source123", timeout=12)
     result = await transport.send(
         {
-            "model": "gpt-5.4",
+            "model": "gpt-6-luna",
             "input": [{"role": "user", "content": [{"type": "input_text", "text": "ok"}]}],
             "reasoning": {"effort": "high"},
             "stream": False,
@@ -1099,7 +1100,7 @@ async def test_github_copilot_http_transport_raises_model_unavailable(monkeypatc
     with pytest.raises(ProviderModelUnavailableError) as exc_info:
         await transport.send(
             {
-                "model": "gpt-5.4",
+                "model": "gpt-6-luna",
                 "input": [
                     {
                         "role": "user",
@@ -1138,7 +1139,7 @@ async def test_github_copilot_http_transport_regular_400_is_transport_error(
     with pytest.raises(ProviderTransportError) as exc_info:
         await transport.send(
             {
-                "model": "gpt-5.4",
+                "model": "gpt-6-luna",
                 "input": [
                     {
                         "role": "user",
@@ -1164,7 +1165,7 @@ _CONTEXT_OVERFLOW_400_BODY = (
 
 def _copilot_payload(*, stream: bool) -> dict:
     return {
-        "model": "gpt-5.4",
+        "model": "gpt-6-luna",
         "input": [
             {"role": "user", "content": [{"type": "input_text", "text": "Say ok"}]}
         ],
@@ -1446,7 +1447,7 @@ async def test_ai_platform_http_transport_raises_context_overflow(monkeypatch):
 
     transport = _ai_platform_transport()
     with pytest.raises(ProviderContextOverflowError) as exc_info:
-        await transport.send({"model": "gpt-5.4", "messages": [], "stream": False})
+        await transport.send({"model": "gpt-6-luna", "messages": [], "stream": False})
 
     error = exc_info.value
     assert error.code == "context_overflow"
@@ -1475,7 +1476,7 @@ async def test_ai_platform_http_transport_stream_raises_context_overflow(monkeyp
 
     transport = _ai_platform_transport()
     stream = await transport.send(
-        {"model": "gpt-5.4", "messages": [], "stream": True}
+        {"model": "gpt-6-luna", "messages": [], "stream": True}
     )
     with pytest.raises(ProviderContextOverflowError) as exc_info:
         [chunk async for chunk in stream]
@@ -1499,7 +1500,7 @@ async def test_ai_platform_http_transport_unrelated_400_is_transport_error(monke
 
     transport = _ai_platform_transport()
     with pytest.raises(ProviderTransportError) as exc_info:
-        await transport.send({"model": "gpt-5.4", "messages": [], "stream": False})
+        await transport.send({"model": "gpt-6-luna", "messages": [], "stream": False})
 
     assert not isinstance(exc_info.value, ProviderContextOverflowError)
     assert "usercase is required" in str(exc_info.value)
@@ -1515,7 +1516,7 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
         }
     )
 
-    assert provider.model == "gpt-5.6-terra"
+    assert provider.model == "gpt-6-sol"
     assert provider.endpoint == "responses"
     assert provider.reasoning_effort == "medium"
     assert provider.metadata["provider_id"] == "github-copilot"
@@ -1556,7 +1557,7 @@ def test_github_copilot_provider_from_env_exchanges_github_source_token(monkeypa
         env={"EFP_GITHUB_COPILOT_TOKEN": "ghu_source123"}
     )
 
-    assert provider.model == "gpt-5.6-terra"
+    assert provider.model == "gpt-6-sol"
     assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
     assert provider.transport.token_source == "github_exchange"
     assert provider.transport.endpoint == "https://api.enterprise.githubcopilot.com/responses"
@@ -1601,11 +1602,11 @@ def test_github_copilot_smoke_dry_run_outputs_payload_without_token():
     assert payload["dry_run"] is True
     assert payload["provider"] == "github-copilot"
     assert payload["provider_id"] == "github-copilot"
-    assert payload["model"] == "gpt-5.6-terra"
+    assert payload["model"] == "gpt-6-sol"
     assert payload["payload_summary"]["tool_count"] == 0
     assert payload["payload_summary"]["stream"] is False
     assert payload["payload_summary"]["reasoning"] == {"effort": "high"}
-    assert payload["payload"]["model"] == "gpt-5.6-terra"
+    assert payload["payload"]["model"] == "gpt-6-sol"
     assert payload["payload"]["reasoning"] == {"effort": "high"}
     assert payload["payload"]["input"][-1]["role"] == "user"
     input_item = payload["payload"]["input"][-1]["content"][0]
@@ -1844,7 +1845,7 @@ async def test_stream_context_overflow_reaches_runner_retry():
     )
     provider = GitHubCopilotProvider(
         transport=transport,
-        model="gpt-5.4",
+        model="gpt-6-luna",
         stream=True,
     )
     runner = RuntimeLoopRunner(
@@ -1890,7 +1891,7 @@ async def test_non_stream_context_overflow_reaches_runner_retry():
             _responses_response("Recovered."),
         ]
     )
-    provider = GitHubCopilotProvider(transport=transport, model="gpt-5.4")
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-6-luna")
     runner = RuntimeLoopRunner(
         store=InMemorySessionStore(),
         provider=provider,
