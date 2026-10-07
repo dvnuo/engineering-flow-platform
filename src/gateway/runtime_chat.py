@@ -477,7 +477,7 @@ def _runtime_config(
         kwargs["enable_question_tool"] = True
     # The browser tool waits on the Portal page that started the chat, so it is
     # registered only for interactive chat and only when Portal vouched for a
-    # local browser connector in the trusted metadata (see CONNECTORS_CONTRACT §2).
+    # Local bridge connector in the trusted metadata (see CONNECTORS_CONTRACT §2).
     if interactive and _execution_metadata_enables_browser_tool(execution_metadata) and not (
         _mapping_has_key(managed_overlay_config, "enable_browser_tool")
         or _mapping_has_key(profile_config, "enable_browser_tool")
@@ -515,7 +515,7 @@ def _runtime_config(
 def _execution_metadata_enables_browser_tool(
     execution_metadata: Mapping[str, Any] | None,
 ) -> bool:
-    """True when Portal injected an enabled ``connectors.local_browser`` block."""
+    """True when Portal injected an enabled ``connectors.local_bridge`` block."""
 
     if not isinstance(execution_metadata, Mapping):
         return False
@@ -524,8 +524,8 @@ def _execution_metadata_enables_browser_tool(
     connectors = execution_metadata.get("connectors")
     if not isinstance(connectors, Mapping):
         return False
-    local_browser = connectors.get("local_browser")
-    return isinstance(local_browser, Mapping) and local_browser.get("enabled") is not False
+    local_bridge = connectors.get("local_bridge")
+    return isinstance(local_bridge, Mapping) and local_bridge.get("enabled") is not False
 
 
 def _active_managed_overlay_runtime_config() -> Mapping[str, Any] | None:

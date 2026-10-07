@@ -29,7 +29,7 @@ def _home_path() -> Path:
     return Path(os.environ.get("HOME") or Path.home())
 
 
-DEFAULT_LLM_MODEL = "gpt-5.4"
+DEFAULT_LLM_MODEL = "gpt-6-sol"
 DEFAULT_LLM_TEMPERATURE = 0.7
 
 PORTAL_MANAGED_RUNTIME_FIELDS = frozenset(
@@ -917,6 +917,23 @@ DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
     "gpt-5.6-terra": {
         "max_context_window_tokens": 400000,
         "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
+    # GPT-6: OpenAI publishes a 1,050,000-token window split as 922k input +
+    # 128k output for Astra, Sol and Luna alike.
+    "gpt-6-astra": {
+        "max_context_window_tokens": 1050000,
+        "max_prompt_tokens": 922000,
+        "max_output_tokens": 128000,
+    },
+    "gpt-6-luna": {
+        "max_context_window_tokens": 1050000,
+        "max_prompt_tokens": 922000,
+        "max_output_tokens": 128000,
+    },
+    "gpt-6-sol": {
+        "max_context_window_tokens": 1050000,
+        "max_prompt_tokens": 922000,
         "max_output_tokens": 128000,
     },
     "gemini-2.5-pro": {

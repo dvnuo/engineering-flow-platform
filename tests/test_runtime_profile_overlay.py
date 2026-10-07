@@ -468,7 +468,7 @@ def test_boot_projection_adds_cli_instructions_and_keeps_canonical_llm(tmp_path,
         {
             "llm": {
                 "provider": "github_copilot",
-                "model": "gpt-5.4",
+                "model": "gpt-6-sol",
                 "reasoning_effort": "max",
                 "max_context_tokens": 1_000_000,
             },
@@ -485,7 +485,7 @@ def test_boot_projection_adds_cli_instructions_and_keeps_canonical_llm(tmp_path,
     assert effective["instruction_texts"] == [RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS]
     # native keeps the canonical github_copilot provider and the bare model.
     assert effective["llm"]["provider"] == "github_copilot"
-    assert effective["llm"]["model"] == "gpt-5.4"
+    assert effective["llm"]["model"] == "gpt-6-sol"
     assert effective["llm"]["reasoning_effort"] == "max"
     assert "max_context_tokens" not in effective["llm"]
     assert effective["max_context_tokens"] == 1_000_000
@@ -496,7 +496,7 @@ def test_boot_projection_omits_cli_instructions_when_no_tools_enabled(tmp_path, 
         tmp_path,
         monkeypatch,
         {
-            "llm": {"provider": "github_copilot", "model": "gpt-5.4"},
+            "llm": {"provider": "github_copilot", "model": "gpt-6-sol"},
             "jira": {"enabled": False},
         },
     )
@@ -504,7 +504,7 @@ def test_boot_projection_omits_cli_instructions_when_no_tools_enabled(tmp_path, 
     effective = cfg.get_effective_config()
     assert "instruction_texts" not in effective
     assert effective["llm"]["provider"] == "github_copilot"
-    assert effective["llm"]["model"] == "gpt-5.4"
+    assert effective["llm"]["model"] == "gpt-6-sol"
 
 
 # ---------------------------------------------------------------------------

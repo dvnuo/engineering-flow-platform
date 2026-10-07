@@ -95,6 +95,10 @@ def test_default_budget_leaves_room_for_the_declared_response_reserve():
         ("gpt-5.6-sol", 1_000_000),
         ("gpt-5.6-terra", 1_000_000),
         ("gpt-5.6-luna", 1_000_000),
+        ("gpt-6-astra", 1_050_000),
+        ("gpt-6-sol", 1_050_000),
+        ("gpt-6-luna", 1_050_000),
+        # Retired from Copilot but still served by AI Platform.
         ("gpt-5.4", 1_000_000),
     ],
 )
