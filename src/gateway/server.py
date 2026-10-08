@@ -386,7 +386,7 @@ class Gateway:
         Returns 200 only after bootstrap_profile_boot() completed successfully;
         503 otherwise so the pod stays unready when the profile is broken.
         """
-        from src.config import config as runtime_config, get_profile_boot_state
+        from src.config import config as runtime_config, get_image_analysis_state, get_profile_boot_state
 
         boot_state = get_profile_boot_state()
         external_status = runtime_config.get_external_config_status()
@@ -397,6 +397,7 @@ class Gateway:
                     "ready": True,
                     "runtime_profile_id": meta.get("runtime_profile_id"),
                     "revision": meta.get("revision"),
+                    "image_analysis": get_image_analysis_state(),
                 }
             )
         error = (

@@ -349,7 +349,18 @@ async def test_ready_endpoint_gates_on_boot_projection(tmp_path, monkeypatch, bo
 
     status, body = await _ready_response()
     assert status == 200
-    assert body == {"ready": True, "runtime_profile_id": "rp_ready", "revision": 11}
+    assert body == {
+        "ready": True,
+        "runtime_profile_id": "rp_ready",
+        "revision": 11,
+        # No AI Platform account in this profile: image analysis says why.
+        "image_analysis": {
+            "configured": False,
+            "reason": "image analysis is off for this profile",
+            "model": None,
+            "config_path": None,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -359,7 +370,9 @@ async def test_ready_endpoint_dev_mode_reports_null_profile(tmp_path, monkeypatc
 
     status, body = await _ready_response()
     assert status == 200
-    assert body == {"ready": True, "runtime_profile_id": None, "revision": None}
+    assert body["ready"] is True
+    assert body["runtime_profile_id"] is None and body["revision"] is None
+    assert body["image_analysis"]["configured"] is False
 
 
 @pytest.mark.asyncio
