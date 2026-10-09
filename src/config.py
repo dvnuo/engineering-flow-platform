@@ -209,6 +209,14 @@ class Config:
         },
         "proxy": {
             "enabled": True,
+            # Named proxies (see src/utils/proxy_plan.py): the list, the one
+            # the environment gets, and which proxy each connector uses. The
+            # flat url/username/password keys are the pre-list shape and the
+            # mirror of the default entry that a newer Portal keeps writing
+            # for older runtimes.
+            "default": True,
+            "proxies": True,
+            "assignments": True,
             "url": True,
             "username": True,
             "password": True,
@@ -706,28 +714,34 @@ class Config:
         for var in self.PROXY_ENV_VARS:
             os.environ.pop(var, None)
     
-    def apply_proxy(self) -> None:
-        """Apply proxy settings to os.environ."""
-        from src.utils.proxy import no_proxy_value, proxy_url_with_credentials
+    def proxy_plan(self):
+        """The Proxy connector resolved: the default proxy for the environment
+        and a choice per connector (src/utils/proxy_plan.py)."""
+        from src.utils.proxy_plan import build_proxy_plan
 
-        proxy_config = self.proxy
-        if proxy_config.get("enabled") and proxy_config.get("url"):
-            url = proxy_url_with_credentials(
-                proxy_config.get("url", ""),
-                proxy_config.get("username"),
-                proxy_config.get("password"),
-            )
-            
-            os.environ["http_proxy"] = url
-            os.environ["https_proxy"] = url
-            os.environ["HTTP_PROXY"] = url
-            os.environ["HTTPS_PROXY"] = url
-            os.environ["all_proxy"] = url
-            os.environ["ALL_PROXY"] = url
-            # Handle no_proxy for internal addresses
-            no_proxy = no_proxy_value(proxy_config)
-            os.environ["no_proxy"] = no_proxy
-            os.environ["NO_PROXY"] = no_proxy
+        return build_proxy_plan(self.proxy)
+
+    def apply_proxy(self) -> None:
+        """Export the default proxy to os.environ.
+
+        The environment is what aws, kubectl, gh, git and every tool without a
+        proxy field of its own follow; the proxies assigned to the other
+        connectors reach their tools through the tools config projection and
+        the LLM transports instead. The credentials of every named proxy are
+        exported as EFP_PROXY_<NAME>_USERNAME/_PASSWORD for mobile-auto, which
+        names its proxy credentials by variable.
+        """
+        plan = self.proxy_plan()
+        env = plan.environment()
+        if env:
+            for key, value in env.items():
+                os.environ[key] = value
+            # A proxy renamed or a credential removed since the last apply
+            # must not linger under its old variable.
+            for key in [key for key in os.environ if key.startswith("EFP_PROXY_")]:
+                os.environ.pop(key, None)
+            for key, value in plan.credential_environment().items():
+                os.environ[key] = value
         elif "proxy" in self._config:
             # Only clear if proxy section exists but is disabled
             # Don't clear inherited env vars when proxy section is absent
@@ -1102,6 +1116,28 @@ def _set_image_analysis_state(state: Dict[str, Any]) -> None:
     _image_analysis_state.update(state)
 
 
+# The Proxy connector as this runtime resolved it at boot (names, addresses
+# and assignments, never credentials). GET /ready reports it so "which proxy
+# does my Jira go through" has an answer without reading the pod.
+_proxy_plan_state: Dict[str, Any] = {
+    "enabled": False,
+    "default": None,
+    "proxies": [],
+    "assignments": {},
+    "warnings": [],
+}
+
+
+def get_proxy_plan_state() -> Dict[str, Any]:
+    return dict(_proxy_plan_state)
+
+
+def _set_proxy_plan_state(state: Dict[str, Any]) -> None:
+    _proxy_plan_state.clear()
+    _proxy_plan_state.update({"enabled": False, "default": None, "proxies": [], "assignments": {}, "warnings": []})
+    _proxy_plan_state.update(state)
+
+
 def _set_profile_boot_state(*, completed: bool, ready: bool, error: Optional[str]) -> None:
     _profile_boot_state["completed"] = completed
     _profile_boot_state["ready"] = ready
@@ -1185,6 +1221,11 @@ def bootstrap_profile_boot() -> bool:
         logger.warning("Failed to project image analysis settings", exc_info=True)
 
     config.apply_proxy()
+    try:
+        _set_proxy_plan_state(config.proxy_plan().summary())
+    except Exception as exc:
+        _set_proxy_plan_state({"warnings": [f"proxy plan failed: {exc}"]})
+        logger.warning("Failed to resolve the Proxy connector", exc_info=True)
     config.apply_jenkins_env()
     config.apply_mobile_env()
     config.apply_kube_env()

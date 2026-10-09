@@ -8,6 +8,7 @@ provider data.
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -154,6 +155,65 @@ _CONTEXT_OVERFLOW_MESSAGE_MARKERS = (
 _CONTEXT_OVERFLOW_ERROR_CODES = ("context_length_exceeded",)
 
 
+class _AssignedProxyHandler(urllib_request.ProxyHandler):
+    """urllib's ProxyHandler without its ``proxy_bypass`` check.
+
+    The stdlib handler asks ``proxy_bypass(host)``, which reads the
+    environment's ``no_proxy``: the list of the *default* proxy, exported by
+    ``Config.apply_proxy``. A transport built for an assigned proxy must use
+    that proxy for every host (the entry's own ``no_proxy`` was applied when
+    the choice was made), so the bypass is left out; the rest is the stdlib
+    body: credentials as Proxy-Authorization, set_proxy, and a restart when
+    the proxy's scheme differs from the request's.
+    """
+
+    def proxy_open(self, req, proxy, type):
+        orig_type = req.type
+        proxy_type, user, password, hostport = urllib_request._parse_proxy(proxy)
+        if proxy_type is None:
+            proxy_type = orig_type
+        if user and password:
+            user_pass = "{0}:{1}".format(urllib_parse.unquote(user), urllib_parse.unquote(password))
+            creds = base64.b64encode(user_pass.encode()).decode("ascii")
+            req.add_header("Proxy-authorization", "Basic " + creds)
+        hostport = urllib_parse.unquote(hostport)
+        req.set_proxy(hostport, proxy_type)
+        if orig_type == proxy_type or orig_type == "https":
+            return None
+        return self.parent.open(req, timeout=req.timeout)
+
+
+def build_proxy_opener(setting: str | None) -> urllib_request.OpenerDirector | None:
+    """The opener for a proxy setting in the Go CLIs' vocabulary.
+
+    ``""`` (also ``env``/``environment``) answers None: the transport keeps
+    using ``urllib.request.urlopen``, which follows HTTPS_PROXY/NO_PROXY from
+    the environment the way it always did. ``none`` (``direct``, ``off``) is
+    an opener with no proxies at all, and a URL (a bare host:port is an http
+    proxy) is an opener that sends every request through that proxy, with
+    its credentials as Proxy-Authorization, whatever the environment's
+    ``no_proxy`` says.
+    """
+    text = (setting or "").strip()
+    if text.lower() in ("", "env", "environment"):
+        return None
+    if text.lower() in ("none", "direct", "off"):
+        return urllib_request.build_opener(urllib_request.ProxyHandler({}))
+    url = text if "://" in text else "http://" + text
+    return urllib_request.build_opener(_AssignedProxyHandler({"http": url, "https": url}))
+
+
+def _open_request(
+    opener: urllib_request.OpenerDirector | None,
+    request: urllib_request.Request,
+    *,
+    timeout: float | None,
+):
+    if opener is None:
+        return urllib_request.urlopen(request, timeout=timeout)
+    return opener.open(request, timeout=timeout)
+
+
 class GitHubCopilotHTTPTransport:
     """Standard-library HTTP JSON transport for GitHub Copilot Responses."""
 
@@ -174,9 +234,15 @@ class GitHubCopilotHTTPTransport:
         integration_id: str = "vscode-chat",
         initiator: str = "agent",
         exchange_source_token: bool = True,
+        proxy: str | None = None,
     ) -> None:
         credential = _required_non_empty_string(token, "token")
         self.timeout = timeout
+        # The proxy the Model provider connector was assigned: "" follows the
+        # environment, "none" connects directly, a URL names the proxy. It
+        # covers the Responses calls and the token exchange alike.
+        self.proxy_setting = (proxy or "").strip()
+        self._opener = build_proxy_opener(proxy)
         self.user_agent = _required_non_empty_string(user_agent, "user_agent")
         self.editor_version = _required_non_empty_string(
             editor_version,
@@ -266,7 +332,7 @@ class GitHubCopilotHTTPTransport:
             method="POST",
         )
         try:
-            with urllib_request.urlopen(request, timeout=self.timeout) as response:
+            with self._open(request, timeout=self.timeout) as response:
                 yield from parse_sse_json_events(_iter_response_lines(response))
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
@@ -278,7 +344,7 @@ class GitHubCopilotHTTPTransport:
                     method="POST",
                 )
                 try:
-                    with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                    with self._open(request, timeout=self.timeout) as response:
                         yield from parse_sse_json_events(_iter_response_lines(response))
                         return
                 except urllib_error.HTTPError as retry_exc:
@@ -346,7 +412,7 @@ class GitHubCopilotHTTPTransport:
             method="POST",
         )
         try:
-            with urllib_request.urlopen(request, timeout=self.timeout) as response:
+            with self._open(request, timeout=self.timeout) as response:
                 raw_body = response.read()
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
@@ -358,7 +424,7 @@ class GitHubCopilotHTTPTransport:
                     method="POST",
                 )
                 try:
-                    with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                    with self._open(request, timeout=self.timeout) as response:
                         raw_body = response.read()
                 except urllib_error.HTTPError as retry_exc:
                     exc = retry_exc
@@ -451,8 +517,12 @@ class GitHubCopilotHTTPTransport:
                 editor_version=self.editor_version,
                 editor_plugin_version=self.editor_plugin_version,
                 integration_id=self.integration_id,
+                opener=self._opener,
             )
             self._apply_token_exchange(exchange)
+
+    def _open(self, request: urllib_request.Request, *, timeout: float | None):
+        return _open_request(self._opener, request, timeout=timeout)
 
     def _token_refresh_due(self) -> bool:
         if self._source_credential is None or self.token_expires_at is None:
@@ -687,10 +757,15 @@ class AIPlatformHTTPTransport:
         tracking_prefix: str = DEFAULT_AI_PLATFORM_TRACKING_PREFIX,
         timeout: float | None = DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS,
         token_ttl_seconds: int = DEFAULT_AI_PLATFORM_TOKEN_TTL_SECONDS,
+        proxy: str | None = None,
     ) -> None:
         self.endpoint = _required_non_empty_string(chat_endpoint, "chat_endpoint")
         self.ib2b_endpoint = (ib2b_endpoint or "").strip()
         self.timeout = timeout
+        # See GitHubCopilotHTTPTransport: the assigned proxy, for the chat
+        # calls and the iB2B token exchange alike.
+        self.proxy_setting = (proxy or "").strip()
+        self._opener = build_proxy_opener(proxy)
         self.token_source = "ai_platform"
         self._username = (username or "").strip()
         self._password = (password or "").strip()
@@ -705,6 +780,9 @@ class AIPlatformHTTPTransport:
         self._refresh_lock = threading.Lock()
 
     # -- token management --------------------------------------------------
+
+    def _open(self, request: urllib_request.Request, *, timeout: float | None):
+        return _open_request(self._opener, request, timeout=timeout)
 
     def _token_is_fresh(self) -> bool:
         if not self._token:
@@ -746,7 +824,7 @@ class AIPlatformHTTPTransport:
             method="POST",
         )
         try:
-            with urllib_request.urlopen(request, timeout=self.timeout) as response:
+            with self._open(request, timeout=self.timeout) as response:
                 raw = response.read()
         except urllib_error.HTTPError as exc:
             text = _read_http_error_body(exc)
@@ -853,7 +931,7 @@ class AIPlatformHTTPTransport:
                 self.endpoint, data=body, headers=self._headers(stream=True), method="POST"
             )
             try:
-                with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                with self._open(request, timeout=self.timeout) as response:
                     yield from parse_sse_json_events(_iter_response_lines(response))
                 return
             except urllib_error.HTTPError as exc:
@@ -893,7 +971,7 @@ class AIPlatformHTTPTransport:
                 self.endpoint, data=body, headers=self._headers(), method="POST"
             )
             try:
-                with urllib_request.urlopen(request, timeout=self.timeout) as response:
+                with self._open(request, timeout=self.timeout) as response:
                     return self._decode_json_response(response.read())
             except urllib_error.HTTPError as exc:
                 if attempt == 0 and self._should_reexchange(exc):
@@ -1427,8 +1505,13 @@ def exchange_github_token_for_copilot_token(
     editor_version: str = "vscode/1.133.0",
     editor_plugin_version: str = "copilot-chat/0.41.0",
     integration_id: str = "vscode-chat",
+    opener: urllib_request.OpenerDirector | None = None,
 ) -> CopilotTokenExchange:
-    """Exchange a GitHub source token for a Copilot plugin token."""
+    """Exchange a GitHub source token for a Copilot plugin token.
+
+    ``opener`` is the transport's proxy opener (build_proxy_opener); None
+    follows the environment.
+    """
 
     source_token = _required_non_empty_string(source_credential, "source_credential")
     endpoint = "{0}/copilot_internal/v2/token".format(
@@ -1452,7 +1535,7 @@ def exchange_github_token_for_copilot_token(
         method="GET",
     )
     try:
-        with urllib_request.urlopen(request, timeout=timeout) as response:
+        with _open_request(opener, request, timeout=timeout) as response:
             raw_body = response.read()
     except urllib_error.HTTPError as exc:
         response_text = _read_http_error_body(exc)

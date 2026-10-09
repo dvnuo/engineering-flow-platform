@@ -30,6 +30,7 @@ from ruamel.yaml import YAML
 from src.efp_runtime.llm.models import AI_PLATFORM_MODEL_IDS, DEFAULT_AI_PLATFORM_MODEL
 from src.efp_runtime.llm.vision import normalize_provider_id
 from src.utils.file_parser.validators import resolve_max_upload_mb
+from src.utils.proxy_plan import build_proxy_plan, hostname_of
 
 INSPECT_IMAGE_CONFIG_ENV = "INSPECT_IMAGE_CONFIG"
 USERNAME_ENV = "EFP_INSPECT_IMAGE_AI_PLATFORM_USERNAME"
@@ -60,6 +61,10 @@ class ImageAnalysisSettings:
     usercase: str
     trust_token_header: str
     tracking_prefix: str
+    # The proxy the Model provider connector was assigned, in inspect-image's
+    # api.proxy vocabulary: "" follows the environment, "none" connects
+    # directly, a URL names the proxy (src/utils/proxy_plan.py).
+    proxy: str = ""
 
 
 @dataclass(frozen=True)
@@ -143,6 +148,7 @@ def resolve_image_analysis_settings(
     model = _text(vision, "model")
     if not model and normalize_provider_id(llm.get("provider")) == "ai_platform":
         model = _text(llm, "model")
+    proxy = build_proxy_plan(_mapping(config).get("proxy")).choice("llm", host=hostname_of(chat_host)).setting
     return (
         ImageAnalysisSettings(
             model=coerce_vision_model(model),
@@ -155,6 +161,7 @@ def resolve_image_analysis_settings(
             usercase=usercase,
             trust_token_header=_text(auth, "trust_token_header") or DEFAULT_TRUST_TOKEN_HEADER,
             tracking_prefix=_text(auth, "tracking_prefix") or DEFAULT_TRACKING_PREFIX,
+            proxy=proxy,
         ),
         None,
     )
@@ -162,13 +169,19 @@ def resolve_image_analysis_settings(
 
 def build_inspect_image_config(settings: ImageAnalysisSettings, *, token_file: Path) -> dict[str, Any]:
     """The YAML inspect-image reads; credentials are environment references."""
+    inspect_image: dict[str, Any] = {
+        "provider": "ai_platform",
+        "defaults": {"model": settings.model},
+        "limits": {"max_image_bytes": max_image_bytes()},
+    }
+    if settings.proxy:
+        # inspect-image reads api.proxy the way the other CLIs read an
+        # instance's proxy field; an empty value is left out so the file stays
+        # what it was for a profile that follows the environment.
+        inspect_image["api"] = {"proxy": settings.proxy}
     return {
         "version": 1,
-        "inspect_image": {
-            "provider": "ai_platform",
-            "defaults": {"model": settings.model},
-            "limits": {"max_image_bytes": max_image_bytes()},
-        },
+        "inspect_image": inspect_image,
         "ai_platform": {
             "chat": {"host": settings.chat_host, "uri": settings.chat_uri},
             "ib2b": {"host": settings.ib2b_host, "uri": settings.ib2b_uri},

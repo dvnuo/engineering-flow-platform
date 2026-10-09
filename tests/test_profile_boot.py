@@ -360,7 +360,55 @@ async def test_ready_endpoint_gates_on_boot_projection(tmp_path, monkeypatch, bo
             "model": None,
             "config_path": None,
         },
+        # No Proxy connector in this profile: nothing resolved, nothing assigned.
+        "proxy": {"enabled": False, "default": None, "proxies": [], "assignments": {}, "warnings": []},
     }
+
+
+@pytest.mark.asyncio
+async def test_ready_endpoint_reports_the_resolved_proxy_plan(tmp_path, monkeypatch, boot_state_reset):
+    monkeypatch.setattr(profile_config_module, "apply_runtime_profile_external_config", lambda overlay, **_: None)
+    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(key, raising=False)
+    for key in ("EFP_PROXY_CORP_A_USERNAME", "EFP_PROXY_CORP_A_PASSWORD", "EFP_PROXY_STALE_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("EFP_PROXY_STALE_PASSWORD", "left over from a proxy since renamed")
+    _install_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "proxy": {
+                "enabled": True,
+                "default": "corp-a",
+                "proxies": [
+                    {"name": "corp-a", "url": "http://proxy-a.example.test:3128", "username": "ua", "password": "pa"},
+                    {"name": "corp-b", "url": "https://proxy-b.example.test"},
+                ],
+                "assignments": {"llm": "corp-b", "pgsql": "none", "jira": "ghost"},
+            }
+        },
+        profile_id="rp_proxy",
+        revision=3,
+    )
+    config_module.bootstrap_profile_boot()
+
+    status, body = await _ready_response()
+    assert status == 200
+    assert body["proxy"] == {
+        "enabled": True,
+        "default": "corp-a",
+        "proxies": [
+            {"name": "corp-a", "address": "proxy-a.example.test:3128"},
+            {"name": "corp-b", "address": "proxy-b.example.test:443"},
+        ],
+        "assignments": {"llm": "corp-b", "pgsql": "none", "jira": "ghost"},
+        "warnings": ["jira is assigned the proxy 'ghost', which the Proxy connector does not define; it follows the environment"],
+    }
+    assert "ua:pa" not in json.dumps(body) and "password" not in json.dumps(body["proxy"])
+    # The default proxy went to the environment, with its credentials by name; a stale credential variable did not survive.
+    assert os.environ["HTTPS_PROXY"] == "http://ua:pa@proxy-a.example.test:3128"
+    assert os.environ["EFP_PROXY_CORP_A_PASSWORD"] == "pa"
+    assert "EFP_PROXY_STALE_PASSWORD" not in os.environ
 
 
 @pytest.mark.asyncio

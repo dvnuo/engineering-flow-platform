@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
+from src.utils.proxy_plan import hostname_of
 from src.gateway.runtime_event_projection import RuntimeEventProjector
 from src.gateway.workspace_deliverables import (
     attach_deliverable_blocks,
@@ -620,6 +621,21 @@ def _resolve_model(model: str | None = None) -> str:
         ) from exc
 
 
+def _llm_proxy_setting(endpoint: str | None) -> str:
+    """The proxy the Model provider connector was assigned, as a transport setting.
+
+    "" follows the environment (the default proxy, or none), "none" connects
+    directly, a URL names the proxy; see src/utils/proxy_plan.py. A proxy
+    section the plan cannot read must not take chat down, so it reads as the
+    environment.
+    """
+    try:
+        return config.proxy_plan().choice("llm", host=hostname_of(endpoint or "")).setting
+    except Exception:  # pragma: no cover - defensive, the plan tolerates any shape
+        logger.warning("Could not resolve the Proxy connector for the model provider", exc_info=True)
+        return ""
+
+
 def _request_llm_config(execution_metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     llm_config = dict(config.llm) if isinstance(config.llm, dict) else {}
     profile_config = _trusted_runtime_profile_config(execution_metadata)
@@ -665,12 +681,14 @@ def _build_github_copilot_provider(
             details={"provider": "github-copilot"},
         )
 
+    copilot_base_url = _env_string("EFP_GITHUB_COPILOT_BASE_URL") or _config_string(llm_config, "api_base")
     transport = GitHubCopilotHTTPTransport(
         token=token,
-        base_url=_env_string("EFP_GITHUB_COPILOT_BASE_URL") or _config_string(llm_config, "api_base"),
+        base_url=copilot_base_url,
         timeout=_resolve_github_copilot_timeout(llm_config),
         user_agent="GitHubCopilotChat/0.41.0",
         initiator="agent",
+        proxy=_llm_proxy_setting(copilot_base_url or GitHubCopilotHTTPTransport.DEFAULT_BASE_URL),
     )
     return GitHubCopilotProvider(
         transport=transport,
@@ -741,6 +759,7 @@ def _build_ai_platform_provider(
         trust_token_header=str(auth.get("trust_token_header") or "") or DEFAULT_AI_PLATFORM_TRUST_TOKEN_HEADER,
         tracking_prefix=str(auth.get("tracking_prefix") or "") or DEFAULT_AI_PLATFORM_TRACKING_PREFIX,
         timeout=_resolve_github_copilot_timeout(llm_config),
+        proxy=_llm_proxy_setting(chat_endpoint),
     )
     return AIPlatformProvider(
         transport=transport,

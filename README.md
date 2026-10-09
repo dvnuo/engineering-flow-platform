@@ -177,6 +177,19 @@ boot (no hot apply; config changes require a Portal-triggered restart):
 - `KUBECONFIG` — set to `aws.kubeconfig_path` or `~/.efp/kube/config` when the
   profile enables `aws`, so `aws-auth eks kubeconfig` and `kubectl` share one
   managed kubeconfig outside the workspace.
+- Proxy — the profile's `proxy` section is the Portal's Proxy connector: a
+  list of named proxies (`proxies`), the `default` one, and `assignments`
+  (connector type -> proxy name, `none`, or empty for the default). The
+  default proxy is exported as `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` and
+  `NO_PROXY` (what `aws`, `kubectl`, `gh` and `git` follow); every other
+  connector's proxy is written into its own tool config (`EFP_<PRODUCT>_INSTANCES_<i>_PROXY`,
+  pgsql's per-instance `proxy`, mobile-auto's `browserstack.http_proxy`,
+  inspect-image's `api.proxy`) and used by the LLM transports, so the model
+  provider and PostgreSQL can leave through different proxies. The credentials
+  of every proxy are exported as `EFP_PROXY_<NAME>_USERNAME`/`_PASSWORD` for
+  mobile-auto. `GET /ready` reports the resolved plan without credentials. A
+  profile with the older flat `proxy.url` shape reads as one proxy named
+  `default`. See `src/utils/proxy_plan.py`.
 
 `GET /ready` reports readiness only after the boot projection succeeded. In
 local development (no `EFP_PROFILE_CONFIG`), the runtime uses `config.yaml`

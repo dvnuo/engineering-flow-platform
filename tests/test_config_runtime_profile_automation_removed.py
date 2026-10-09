@@ -39,7 +39,10 @@ def test_portal_managed_field_tree_provider_sections_do_not_include_automation()
     assert "automation" not in Config.PORTAL_MANAGED_FIELD_TREE["github"]
     assert "automation" not in Config.PORTAL_MANAGED_FIELD_TREE["jira"]
     assert "automation" not in Config.PORTAL_MANAGED_FIELD_TREE["confluence"]
-    managed_tree_repr = repr(Config.PORTAL_MANAGED_FIELD_TREE)
+    # The automation vocabulary must not come back under any provider section.
+    # (proxy.assignments is unrelated: it is the Proxy connector's table of
+    # which proxy each connector uses.)
+    managed_tree_repr = repr({key: Config.PORTAL_MANAGED_FIELD_TREE[key] for key in ("github", "jira", "confluence")})
     assert "review_requests" not in managed_tree_repr
     assert "assignments" not in managed_tree_repr
     assert "mentions" not in managed_tree_repr
