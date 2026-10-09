@@ -156,6 +156,12 @@ def test_choice_per_connector():
     assert off.choice("pgsql", instance_setting="http://own.proxy.test:9").setting == "http://own.proxy.test:9"
     assert off.choice("pgsql", instance_setting="corp-b").kind == KIND_ENVIRONMENT
     assert build_proxy_plan(None).choice("pgsql", instance_setting="127.0.0.1:3128").setting == "127.0.0.1:3128"
+    # A row's own value that is an address rather than a name: a bare host
+    # (a name never has a dot), an IP address, a bracketed IPv6 host.
+    assert build_proxy_plan(None).choice("pgsql", instance_setting="proxy.corp").setting == "proxy.corp"
+    assert build_proxy_plan(None).choice("pgsql", instance_setting="10.0.0.9").setting == "10.0.0.9"
+    assert build_proxy_plan(None).choice("pgsql", instance_setting="[::1]:3128").setting == "[::1]:3128"
+    assert build_proxy_plan(None).choice("pgsql", instance_setting="corp-c").kind == KIND_ENVIRONMENT
 
 
 def test_credential_environment_and_summary_keep_secrets_apart():
@@ -177,19 +183,61 @@ def test_credential_environment_and_summary_keep_secrets_apart():
 
 
 def test_no_proxy_exempts():
-    rules = "localhost,.svc.cluster.local, db.internal ,*.corp.test,https://nexus.example.test:8081,[::1]"
+    # Read the way Go's ProxyFromEnvironment reads NO_PROXY (golang.org/x/net/http/httpproxy).
+    rules = "localhost,.svc.cluster.local, db.internal ,*.corp.test,https://nexus.example.test:8081,[::1],10.0.0.0/8,192.168.1.7"
     assert no_proxy_exempts("db.internal", rules)
     assert no_proxy_exempts("DB.internal.", rules)
+    # A bare domain covers its subdomains too.
+    assert no_proxy_exempts("replica.db.internal", rules)
+    # A leading dot (or *.) covers the subdomains only.
     assert no_proxy_exempts("api.svc.cluster.local", rules)
-    assert no_proxy_exempts("svc.cluster.local", rules)
+    assert not no_proxy_exempts("svc.cluster.local", rules)
     assert no_proxy_exempts("a.corp.test", rules)
+    assert not no_proxy_exempts("corp.test", rules)
     assert no_proxy_exempts("nexus.example.test", rules)
+    # Addresses: one address, a CIDR block, and loopback always.
+    assert no_proxy_exempts("192.168.1.7", rules)
+    assert not no_proxy_exempts("192.168.1.8", rules)
+    assert no_proxy_exempts("10.20.30.40", rules)
+    assert not no_proxy_exempts("11.0.0.1", rules)
     assert no_proxy_exempts("127.0.0.1", "")
+    assert no_proxy_exempts("127.0.0.2", "")
+    assert no_proxy_exempts("[::1]", "")
     assert no_proxy_exempts("anything.example.test", "*")
     assert not no_proxy_exempts("db.internal.example.test", rules)
     assert not no_proxy_exempts("notdb.internal", rules)
     assert not no_proxy_exempts("", rules)
     assert not no_proxy_exempts("jira.example.test", rules)
+
+
+def test_credential_variables_are_unique_per_proxy_and_only_the_halves_that_exist():
+    section = list_section(
+        proxies=[
+            {"name": "corp-a", "url": "http://a.example.test:1", "username": "ua", "password": "pa"},
+            {"name": "corp_a", "url": "http://b.example.test:1", "username": "ub"},
+            {"name": "Corp-A", "url": "http://c.example.test:1", "password": "pc"},
+            {"name": "plain", "url": "http://d.example.test:1"},
+        ],
+        assignments={"llm": "http://u:p@x.example.test:1", "jira": "corp_a"},
+    )
+    plan = build_proxy_plan(section)
+    assert [item.credential_env_names() for item in plan.entries] == [
+        ("EFP_PROXY_CORP_A_USERNAME", "EFP_PROXY_CORP_A_PASSWORD"),
+        ("EFP_PROXY_CORP_A_2_USERNAME", "EFP_PROXY_CORP_A_2_PASSWORD"),
+        ("EFP_PROXY_CORP_A_3_USERNAME", "EFP_PROXY_CORP_A_3_PASSWORD"),
+        ("EFP_PROXY_PLAIN_USERNAME", "EFP_PROXY_PLAIN_PASSWORD"),
+    ]
+    # mobile-auto refuses a named variable that is set but empty: only the halves that exist.
+    assert plan.credential_environment() == {
+        "EFP_PROXY_CORP_A_USERNAME": "ua",
+        "EFP_PROXY_CORP_A_PASSWORD": "pa",
+        "EFP_PROXY_CORP_A_2_USERNAME": "ub",
+        "EFP_PROXY_CORP_A_3_PASSWORD": "pc",
+    }
+    # An assignment that is not a name is neither repeated in a warning nor in the summary.
+    assert plan.summary()["assignments"] == {"llm": "unlisted", "jira": "corp_a"}
+    assert not any("x.example.test" in warning for warning in plan.warnings)
+    assert any("llm is assigned the proxy an unlisted value" in warning for warning in plan.warnings)
 
 
 def test_hostname_of():

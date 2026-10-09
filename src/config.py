@@ -736,6 +736,10 @@ class Config:
         if env:
             for key, value in env.items():
                 os.environ[key] = value
+            # A proxy renamed or a credential removed since the last apply
+            # must not linger under its old variable.
+            for key in [key for key in os.environ if key.startswith("EFP_PROXY_")]:
+                os.environ.pop(key, None)
             for key, value in plan.credential_environment().items():
                 os.environ[key] = value
         elif "proxy" in self._config:

@@ -8,6 +8,7 @@ provider data.
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -154,6 +155,34 @@ _CONTEXT_OVERFLOW_MESSAGE_MARKERS = (
 _CONTEXT_OVERFLOW_ERROR_CODES = ("context_length_exceeded",)
 
 
+class _AssignedProxyHandler(urllib_request.ProxyHandler):
+    """urllib's ProxyHandler without its ``proxy_bypass`` check.
+
+    The stdlib handler asks ``proxy_bypass(host)``, which reads the
+    environment's ``no_proxy``: the list of the *default* proxy, exported by
+    ``Config.apply_proxy``. A transport built for an assigned proxy must use
+    that proxy for every host (the entry's own ``no_proxy`` was applied when
+    the choice was made), so the bypass is left out; the rest is the stdlib
+    body: credentials as Proxy-Authorization, set_proxy, and a restart when
+    the proxy's scheme differs from the request's.
+    """
+
+    def proxy_open(self, req, proxy, type):
+        orig_type = req.type
+        proxy_type, user, password, hostport = urllib_request._parse_proxy(proxy)
+        if proxy_type is None:
+            proxy_type = orig_type
+        if user and password:
+            user_pass = "{0}:{1}".format(urllib_parse.unquote(user), urllib_parse.unquote(password))
+            creds = base64.b64encode(user_pass.encode()).decode("ascii")
+            req.add_header("Proxy-authorization", "Basic " + creds)
+        hostport = urllib_parse.unquote(hostport)
+        req.set_proxy(hostport, proxy_type)
+        if orig_type == proxy_type or orig_type == "https":
+            return None
+        return self.parent.open(req, timeout=req.timeout)
+
+
 def build_proxy_opener(setting: str | None) -> urllib_request.OpenerDirector | None:
     """The opener for a proxy setting in the Go CLIs' vocabulary.
 
@@ -162,7 +191,8 @@ def build_proxy_opener(setting: str | None) -> urllib_request.OpenerDirector | N
     the environment the way it always did. ``none`` (``direct``, ``off``) is
     an opener with no proxies at all, and a URL (a bare host:port is an http
     proxy) is an opener that sends every request through that proxy, with
-    its credentials as Proxy-Authorization.
+    its credentials as Proxy-Authorization, whatever the environment's
+    ``no_proxy`` says.
     """
     text = (setting or "").strip()
     if text.lower() in ("", "env", "environment"):
@@ -170,7 +200,7 @@ def build_proxy_opener(setting: str | None) -> urllib_request.OpenerDirector | N
     if text.lower() in ("none", "direct", "off"):
         return urllib_request.build_opener(urllib_request.ProxyHandler({}))
     url = text if "://" in text else "http://" + text
-    return urllib_request.build_opener(urllib_request.ProxyHandler({"http": url, "https": url}))
+    return urllib_request.build_opener(_AssignedProxyHandler({"http": url, "https": url}))
 
 
 def _open_request(

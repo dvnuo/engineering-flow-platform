@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.request
@@ -150,7 +151,9 @@ def test_build_tools_config_json_materializes_the_assigned_proxies():
         "proxy_user_env": "EFP_PROXY_CORP_B_USERNAME",
         "proxy_pass_env": "EFP_PROXY_CORP_B_PASSWORD",
     }
-    assert browserstack["local"]["proxy_host"] == "https://proxy-b.example.test"
+    # BrowserStackLocal takes --proxy-host as a bare host name.
+    assert browserstack["local"]["proxy_host"] == "proxy-b.example.test"
+    assert browserstack["local"]["proxy_port"] == 443
     assert browserstack["local"]["proxy_pass_env"] == "EFP_PROXY_CORP_B_PASSWORD"
     assert browserstack["username"] == "bs"
 
@@ -163,11 +166,47 @@ def test_build_tools_config_json_materializes_the_assigned_proxies():
 def test_build_tools_config_json_browserstack_none_switches_discovery_off():
     effective = {
         "proxy": proxy_section(browserstack="none"),
-        "mobile-auto": {"enabled": True, "browserstack": {"username": "bs", "http_proxy": {"proxy_host": "old.proxy.test", "proxy_port": 1}}},
+        "mobile-auto": {
+            "enabled": True,
+            "browserstack": {
+                "username": "bs",
+                # force_proxy without a host is a config error in mobile-auto: it goes too.
+                "http_proxy": {"proxy_host": "old.proxy.test", "proxy_port": 1, "force_proxy": True, "no_proxy_hosts": ["old.internal"]},
+                "local": {"force_proxy": True},
+            },
+        },
     }
     browserstack = profile_config_module.build_tools_config_json(effective)["mobile-auto"]["browserstack"]
     assert browserstack["http_proxy"] == {"disable_proxy_discovery": True}
     assert browserstack["local"] == {"disable_proxy_discovery": True}
+
+
+def test_build_tools_config_json_browserstack_names_only_the_credential_halves_that_exist():
+    section = proxy_section(browserstack="corp-b")
+    section["proxies"][1] = {"name": "corp-b", "url": "https://proxy-b.example.test", "username": "ub"}
+    effective = {"proxy": section, "mobile-auto": {"enabled": True, "browserstack": {"username": "bs", "access_key": "k"}}}
+    browserstack = profile_config_module.build_tools_config_json(effective)["mobile-auto"]["browserstack"]
+    for block in (browserstack["http_proxy"], browserstack["local"]):
+        assert block["proxy_user_env"] == "EFP_PROXY_CORP_B_USERNAME"
+        assert "proxy_pass_env" not in block
+    assert browserstack["http_proxy"]["proxy_host"] == "https://proxy-b.example.test"
+    assert browserstack["local"]["proxy_host"] == "proxy-b.example.test"
+
+
+def test_assigned_proxy_opener_ignores_the_environment_no_proxy(monkeypatch):
+    # The environment's NO_PROXY is the default proxy's list; an assigned
+    # proxy was chosen for this host already and applies to every request.
+    monkeypatch.setenv("NO_PROXY", "chat.int")
+    monkeypatch.setenv("no_proxy", "chat.int")
+    handler = _proxy_handler_of(provider_module.build_proxy_opener("http://ub:p%3Ab@proxy-b.example.test:3128"))
+    request = urllib.request.Request("https://chat.int/v1", method="POST")
+    assert handler.https_open(request) is None
+    assert request.host == "proxy-b.example.test:3128"
+    assert request.get_header("Proxy-authorization") == "Basic " + base64.b64encode(b"ub:p:b").decode("ascii")
+    # The stdlib handler would have let the environment's list skip the proxy.
+    plain = urllib.request.ProxyHandler({"https": "http://proxy-b.example.test:3128"})
+    request = urllib.request.Request("https://chat.int/v1")
+    assert plain.https_open(request) is None and request.host == "chat.int"
 
 
 def test_build_tools_config_json_without_assignments_is_what_it_always_was():
