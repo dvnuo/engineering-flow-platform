@@ -360,6 +360,8 @@ async def test_ready_endpoint_gates_on_boot_projection(tmp_path, monkeypatch, bo
             "model": None,
             "config_path": None,
         },
+        # No Proxy connector in this profile: nothing resolved, nothing assigned.
+        "proxy": {"enabled": False, "default": None, "proxies": [], "assignments": {}, "warnings": []},
     }
 
 

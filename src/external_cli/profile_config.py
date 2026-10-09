@@ -6,6 +6,7 @@ import hashlib
 import configparser
 import json
 import os
+import re
 import shlex
 import stat
 import subprocess
@@ -17,7 +18,8 @@ from urllib.parse import quote, urlparse
 from ruamel.yaml import YAML
 
 from src.external_cli.github import github_hostname_from_base_url
-from src.utils.proxy import no_proxy_value, proxy_url_with_credentials
+from src.utils.proxy import proxy_url_with_credentials
+from src.utils.proxy_plan import KIND_ENVIRONMENT, KIND_NONE, ProxyPlan, build_proxy_plan, hostname_of
 
 
 _MANAGED_BY = "efp_runtime_profile"
@@ -125,14 +127,23 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
     if isinstance(version, int) and not isinstance(version, bool):
         root["version"] = version
 
+    # The proxy each connector was assigned lands in its own tool config
+    # (src/utils/proxy_plan.py); the environment carries only the default.
+    plan = build_proxy_plan(effective_config.get("proxy"))
+
     for product in _INSTANCE_PRODUCTS:
         section = _normalized_product_config(effective_config.get(product), product=product)
         instances = _build_product_instances(section, product=product)
         if not instances:
             continue
+        projected = []
+        for instance in instances:
+            out = _tools_instance_config(instance, product=product)
+            _apply_instance_proxy(out, plan, connector=product, host=hostname_of(out.get("base_url", "")))
+            projected.append(out)
         root[product] = {
             "default_instance": _default_instance_name(section, instances),
-            "instances": [_tools_instance_config(instance, product=product) for instance in instances],
+            "instances": projected,
         }
 
     for section_name in _VERBATIM_SECTIONS:
@@ -146,9 +157,71 @@ def build_tools_config_json(effective_config: dict[str, Any]) -> dict[str, Any]:
             # and pgsql has no section-level enabled flag on the Go side to
             # fall back on.
             continue
-        root[section_name] = json.loads(json.dumps(section))
+        copied = json.loads(json.dumps(section))
+        if section_name == "pgsql":
+            for instance in copied.get("instances") or []:
+                if isinstance(instance, dict):
+                    _apply_instance_proxy(instance, plan, connector="pgsql", host=_string_or_empty(instance.get("host")))
+        elif section_name == "mobile-auto":
+            _apply_browserstack_proxy(copied, plan)
+        root[section_name] = copied
 
     return root
+
+
+def _apply_instance_proxy(instance: dict[str, Any], plan: ProxyPlan, *, connector: str, host: str) -> None:
+    """Set the instance's ``proxy`` field from the plan, or drop it for the environment."""
+    choice = plan.choice(connector, host=host, instance_setting=_string_or_empty(instance.get("proxy")))
+    setting = choice.setting
+    if setting:
+        instance["proxy"] = setting
+    else:
+        instance.pop("proxy", None)
+
+
+def _apply_browserstack_proxy(mobile: dict[str, Any], plan: ProxyPlan) -> None:
+    """Map the BrowserStack connector's proxy onto mobile-auto's own proxy blocks.
+
+    mobile-auto's REST/Appium clients and the BrowserStackLocal tunnel read
+    ``browserstack.http_proxy`` and ``browserstack.local`` (host, port, and
+    the names of the environment variables holding the credentials). The
+    environment choice leaves whatever the member configured there; ``none``
+    switches discovery off and clears an explicit proxy; a proxy fills both
+    blocks and points the credentials at EFP_PROXY_<NAME>_USERNAME/_PASSWORD.
+    """
+    browserstack = mobile.get("browserstack")
+    if not isinstance(browserstack, dict):
+        browserstack = {}
+    api_host = hostname_of(_string_or_empty(browserstack.get("api_base_url"))) or "api-cloud.browserstack.com"
+    choice = plan.choice("browserstack", host=api_host)
+    if choice.kind == KIND_ENVIRONMENT:
+        return
+    http_proxy = dict(browserstack.get("http_proxy") or {}) if isinstance(browserstack.get("http_proxy"), dict) else {}
+    local = dict(browserstack.get("local") or {}) if isinstance(browserstack.get("local"), dict) else {}
+    for block in (http_proxy, local):
+        for key in ("proxy_host", "proxy_port", "proxy_user_env", "proxy_pass_env"):
+            block.pop(key, None)
+    if choice.kind == KIND_NONE:
+        http_proxy["disable_proxy_discovery"] = True
+        local["disable_proxy_discovery"] = True
+    else:
+        parsed = urlparse(choice.setting)
+        scheme = parsed.scheme or "http"
+        port = parsed.port or (443 if scheme == "https" else 80)
+        for block in (http_proxy, local):
+            block["proxy_host"] = f"{scheme}://{parsed.hostname}"
+            block["proxy_port"] = port
+            block.pop("disable_proxy_discovery", None)
+        if choice.entry is not None and (choice.entry.username or choice.entry.password):
+            user_env, pass_env = choice.entry.credential_env_names()
+            for block in (http_proxy, local):
+                block["proxy_user_env"] = user_env
+                block["proxy_pass_env"] = pass_env
+        if choice.entry is not None and choice.entry.no_proxy.strip():
+            http_proxy["no_proxy_hosts"] = [item for item in re.split(r"[,\s]+", choice.entry.no_proxy) if item]
+    browserstack["http_proxy"] = http_proxy
+    browserstack["local"] = local
+    mobile["browserstack"] = browserstack
 
 
 # Products projected through the `{default_instance, instances[]}` shape with
@@ -226,6 +299,8 @@ def _tools_instance_config(instance: dict[str, Any], *, product: str) -> dict[st
         if value is None or value == "":
             continue
         out[field] = value
+    if _string_or_empty(instance.get("proxy")):
+        out["proxy"] = _string_or_empty(instance.get("proxy"))
 
     auth = instance.get("auth") if isinstance(instance.get("auth"), dict) else {}
     auth_type = str(auth.get("type") or "")
@@ -468,24 +543,18 @@ def _build_cli_environment(
     if not isinstance(proxy_config, dict):
         return _CliEnvironment(env=env)
 
-    proxy_url = _string_or_empty(proxy_config.get("url"))
-    if not proxy_config.get("enabled") or not proxy_url:
+    # The CLIs run at boot (gh, aws, git) only read the environment, so they
+    # get the default proxy; see src/utils/proxy_plan.py.
+    plan = build_proxy_plan(proxy_config)
+    proxy_env = plan.environment()
+    if not proxy_env:
         return _CliEnvironment(env=env)
-
-    final_proxy_url = proxy_url_with_credentials(
-        proxy_url,
-        proxy_config.get("username"),
-        proxy_config.get("password"),
-    )
-    for key in _PROXY_URL_ENV_KEYS:
-        env[key] = final_proxy_url
-    no_proxy = no_proxy_value(proxy_config)
-    env["no_proxy"] = no_proxy
-    env["NO_PROXY"] = no_proxy
+    env.update(proxy_env)
+    env.update(plan.credential_environment())
 
     return _CliEnvironment(
         env=env,
-        secrets=_combine_secrets(_proxy_redaction_secrets(proxy_config, final_proxy_url)),
+        secrets=_combine_secrets(_proxy_redaction_secrets(proxy_config, proxy_env.get("HTTPS_PROXY", ""))),
     )
 
 
@@ -501,6 +570,7 @@ def _proxy_redaction_secrets(proxy_config: dict[str, Any], final_proxy_url: str)
         password_text = str(password)
         secrets.append(password_text)
         secrets.append(quote(password_text, safe=""))
+    secrets.extend(build_proxy_plan(proxy_config).redaction_secrets())
     return tuple(secrets)
 
 
@@ -543,6 +613,11 @@ def _build_product_instances(product_config: Any, *, product: str) -> list[dict[
             if value is None or str(value).strip() == "":
                 continue
             instance[field] = value
+        # A row's own proxy field (a name, none, or a URL) is resolved against
+        # the Proxy connector by build_tools_config_json.
+        own_proxy = _string_or_empty(raw.get("proxy"))
+        if own_proxy:
+            instance["proxy"] = own_proxy
         instances.append(instance)
     return instances
 
@@ -908,6 +983,7 @@ def _profile_proxy_redaction_secrets(profile_config: dict[str, Any]) -> tuple[st
         password_text = str(password)
         secrets.append(password_text)
         secrets.append(quote(password_text, safe=""))
+    secrets.extend(build_proxy_plan(proxy_config).redaction_secrets())
     return tuple(secrets)
 
 
