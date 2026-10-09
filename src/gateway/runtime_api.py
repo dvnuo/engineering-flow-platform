@@ -35,7 +35,9 @@ from src.hooks.file_context import inject_context
 from src.hooks.file_context.models import Chunk, SessionFileMeta
 from src.hooks.file_context.retrieval import retrieval_engine
 from src.hooks.file_context.storage import storage as file_context_storage
-from src.config import config as global_config, DEFAULT_LLM_MODEL
+from src.config import config as global_config, DEFAULT_LLM_MODEL, get_image_analysis_state
+from src.efp_runtime.llm.vision import chat_provider_accepts_images
+from src.gateway.image_handoff import build_image_handoff
 from src.runtime.chat_orchestration_adapter import execute_runtime_task_request
 from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 from src.runtime.runtime_task_session_coordinator import RuntimeTaskSessionCoordinator
@@ -670,6 +672,50 @@ async def _collect_attached_images(
             await process_file(file_id)
 
     return attached_images
+
+
+def _collect_attached_image_files(
+    *,
+    session_id: str,
+    attachments: Optional[List[str]],
+) -> List[Dict[str, Any]]:
+    """Where each attached image sits on disk, for the inspect-image handoff.
+
+    Uploads live under the workspace (``/workspace/uploads``), so the agent's
+    bash can pass the path straight to ``inspect-image``; nothing is copied.
+    """
+    files: List[Dict[str, Any]] = []
+    if not (attachments and isinstance(attachments, list)):
+        return files
+    for file_id in dict.fromkeys(attachments):
+        if not isinstance(file_id, str) or not file_id:
+            continue
+        try:
+            from src.utils.file_parser.storage import get_file_path
+
+            metadata = get_metadata(file_id)
+            if metadata.session_id and metadata.session_id != session_id:
+                logger.warning(f"[api_chat] File {file_id} belongs to different session")
+                continue
+            if not (metadata.content_type or "").startswith("image/"):
+                continue
+            file_path = get_file_path(file_id)
+            if not file_path.exists():
+                continue
+            files.append(
+                {
+                    "file_id": file_id,
+                    "path": str(file_path),
+                    "name": str(getattr(metadata, "original_filename", "") or file_path.name),
+                    "content_type": metadata.content_type,
+                    "size_bytes": file_path.stat().st_size,
+                }
+            )
+        except StoredFileNotFoundError:
+            logger.warning(f"[api_chat] File {file_id} not found")
+        except Exception as e:
+            logger.warning(f"[api_chat] Failed to locate image file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
+    return files
 
 
 def _chunk_context_text(chunk: Chunk) -> str:
@@ -1362,9 +1408,17 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
+        # Copilot's models no longer accept image input: unless the chat provider
+        # can see images, the files are handed to the agent for inspect-image
+        # (AI Platform) instead of being inlined into the model request.
+        vision_via_chat = chat_provider_accepts_images(global_config.llm if isinstance(global_config.llm, dict) else {})
         attached_images = await _collect_attached_images(
             session_id=session_id,
             message=message,
+            attachments=attachment_ids,
+        ) if vision_via_chat else []
+        attached_image_files = [] if vision_via_chat else _collect_attached_image_files(
+            session_id=session_id,
             attachments=attachment_ids,
         )
         
@@ -1374,21 +1428,21 @@ async def api_chat(request: web.Request) -> web.Response:
         failure_notice = _build_attachment_parse_failure_notice(failures)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
-        if failures and not context_file_ids and not attached_images:
+        if failures and not context_file_ids and not attached_images and not attached_image_files:
             return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
         if original_user_text:
             history_message = original_user_text
         elif context_file_ids:
             history_message = "[attachment]"
-        elif attached_images:
+        elif attached_images or attached_image_files:
             history_message = "[image]"
         else:
             history_message = ""
 
         model_context_query = original_user_text or ("Please summarize the attached file(s)." if context_file_ids else history_message)
 
-        if not history_message.strip() and not attached_images and not attachment_ids:
+        if not history_message.strip() and not attached_images and not attached_image_files and not attachment_ids:
             return web.json_response({'error': 'Empty message'}, status=400)
 
         # Inject file context if user has uploaded files
@@ -1423,6 +1477,14 @@ async def api_chat(request: web.Request) -> web.Response:
                 f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
                 f"{failure_notice}"
             )
+        if attached_image_files:
+            handoff = build_image_handoff(attached_image_files, image_analysis=get_image_analysis_state())
+            if transient_model_message:
+                transient_model_message = f"{transient_model_message}\n\n{handoff}"
+            elif failure_notice:
+                transient_model_message = f"{failure_notice}\n\n{handoff}"
+            else:
+                transient_model_message = handoff
         # Revalidate message is not empty to prevent downstream LLM input from being empty
         if not history_message.strip() and not transient_model_message:
             logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
@@ -1739,9 +1801,17 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             return await _stream_existing_chat_run(request, session_id=session_id, request_id=request_id)
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
+        # Copilot's models no longer accept image input: unless the chat provider
+        # can see images, the files are handed to the agent for inspect-image
+        # (AI Platform) instead of being inlined into the model request.
+        vision_via_chat = chat_provider_accepts_images(global_config.llm if isinstance(global_config.llm, dict) else {})
         attached_images = await _collect_attached_images(
             session_id=session_id,
             message=message,
+            attachments=attachment_ids,
+        ) if vision_via_chat else []
+        attached_image_files = [] if vision_via_chat else _collect_attached_image_files(
+            session_id=session_id,
             attachments=attachment_ids,
         )
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
@@ -1750,21 +1820,21 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         failure_notice = _build_attachment_parse_failure_notice(failures)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
-        if failures and not context_file_ids and not attached_images:
+        if failures and not context_file_ids and not attached_images and not attached_image_files:
             return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
         if original_user_text:
             history_message = original_user_text
         elif context_file_ids:
             history_message = "[attachment]"
-        elif attached_images:
+        elif attached_images or attached_image_files:
             history_message = "[image]"
         else:
             history_message = ""
 
         model_context_query = original_user_text or ("Please summarize the attached file(s)." if context_file_ids else history_message)
 
-        if not history_message.strip() and not attached_images and not attachment_ids:
+        if not history_message.strip() and not attached_images and not attached_image_files and not attachment_ids:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
         transient_model_message: Optional[str] = None
@@ -1794,6 +1864,14 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
                 f"{failure_notice}"
             )
+        if attached_image_files:
+            handoff = build_image_handoff(attached_image_files, image_analysis=get_image_analysis_state())
+            if transient_model_message:
+                transient_model_message = f"{transient_model_message}\n\n{handoff}"
+            elif failure_notice:
+                transient_model_message = f"{failure_notice}\n\n{handoff}"
+            else:
+                transient_model_message = handoff
 
         # Create streaming response
         response = web.StreamResponse(
