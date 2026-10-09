@@ -29,6 +29,7 @@ from ruamel.yaml import YAML
 
 from src.efp_runtime.llm.models import AI_PLATFORM_MODEL_IDS, DEFAULT_AI_PLATFORM_MODEL
 from src.efp_runtime.llm.vision import normalize_provider_id
+from src.utils.file_parser.validators import resolve_max_upload_mb
 
 INSPECT_IMAGE_CONFIG_ENV = "INSPECT_IMAGE_CONFIG"
 USERNAME_ENV = "EFP_INSPECT_IMAGE_AI_PLATFORM_USERNAME"
@@ -37,9 +38,6 @@ USERCASE_ENV = "EFP_INSPECT_IMAGE_AI_PLATFORM_USERCASE"
 MANAGED_ENV_VARS = (INSPECT_IMAGE_CONFIG_ENV, USERNAME_ENV, PASSWORD_ENV, USERCASE_ENV)
 CONFIG_FILE_NAME = "inspect-image.yaml"
 TOKEN_FILE_NAME = "inspect-image-ai-platform-token"
-# Phone screenshots often exceed inspect-image's 3 MiB default; the gateway's
-# own limit decides beyond this.
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_CHAT_URI = "/v1/api/v1/chat/completions"
 DEFAULT_IB2B_URI = "/dsp/rest-sts/DSP_iB2B/iB2B_tokenTranslator_v2?_action=translate"
 DEFAULT_TRUST_TOKEN_HEADER = "X-XXXX-E2E-Trust-Token"
@@ -93,6 +91,17 @@ def _text(mapping: Mapping[str, Any], key: str) -> str:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def max_image_bytes() -> int:
+    """inspect-image's size limit: whatever the upload API accepts.
+
+    Every image the handoff names came through the attachment API, which
+    caps a file at EFP_MAX_UPLOAD_MB (25 MiB by default), so inspect-image
+    must take the same size or an upload that succeeded is handed to a
+    command that then refuses it. inspect-image's own default is 3 MiB.
+    """
+    return resolve_max_upload_mb() * 1024 * 1024
 
 
 def coerce_vision_model(model: Any) -> str:
@@ -158,7 +167,7 @@ def build_inspect_image_config(settings: ImageAnalysisSettings, *, token_file: P
         "inspect_image": {
             "provider": "ai_platform",
             "defaults": {"model": settings.model},
-            "limits": {"max_image_bytes": MAX_IMAGE_BYTES},
+            "limits": {"max_image_bytes": max_image_bytes()},
         },
         "ai_platform": {
             "chat": {"host": settings.chat_host, "uri": settings.chat_uri},

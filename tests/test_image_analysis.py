@@ -94,7 +94,8 @@ def test_resolve_image_analysis_settings():
     assert iic.coerce_vision_model("ai-platform/gpt-5.6-luna") == "gpt-5.6-luna"
 
 
-def test_apply_projection_writes_a_config_with_environment_references(tmp_path):
+def test_apply_projection_writes_a_config_with_environment_references(tmp_path, monkeypatch):
+    monkeypatch.delenv("EFP_MAX_UPLOAD_MB", raising=False)
     projection = iic.apply_image_analysis_projection({"llm": _vision_llm()}, config_dir=tmp_path)
     assert projection.configured is True
     assert projection.model == "gpt-5.6-sol"
@@ -105,7 +106,8 @@ def test_apply_projection_writes_a_config_with_environment_references(tmp_path):
     loaded = YAML().load(text)
     assert loaded["inspect_image"]["provider"] == "ai_platform"
     assert loaded["inspect_image"]["defaults"]["model"] == "gpt-5.6-sol"
-    assert loaded["inspect_image"]["limits"]["max_image_bytes"] == 10 * 1024 * 1024
+    # Whatever the upload API accepts (25 MiB by default) inspect-image must take too.
+    assert loaded["inspect_image"]["limits"]["max_image_bytes"] == 25 * 1024 * 1024
     assert loaded["ai_platform"]["chat"] == {"host": "https://chat.int", "uri": "/v1/api/v1/chat/completions"}
     assert loaded["ai_platform"]["ib2b"] == {"host": "https://ib2b.int", "uri": "/dsp/token"}
     auth = loaded["ai_platform"]["auth"]
@@ -143,6 +145,17 @@ def test_apply_projection_writes_a_config_with_environment_references(tmp_path):
     iic.export_image_analysis_env(off, environ)
     assert "INSPECT_IMAGE_CONFIG" not in environ
     assert "EFP_INSPECT_IMAGE_AI_PLATFORM_PASSWORD" not in environ
+
+
+def test_inspect_image_size_limit_follows_the_upload_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("EFP_MAX_UPLOAD_MB", "40")
+    assert iic.max_image_bytes() == 40 * 1024 * 1024
+    iic.apply_image_analysis_projection({"llm": _vision_llm()}, config_dir=tmp_path)
+    loaded = YAML().load((tmp_path / "inspect-image.yaml").read_text(encoding="utf-8"))
+    assert loaded["inspect_image"]["limits"]["max_image_bytes"] == 40 * 1024 * 1024
+    # A broken value falls back to the upload API's own default, as the API does.
+    monkeypatch.setenv("EFP_MAX_UPLOAD_MB", "lots")
+    assert iic.max_image_bytes() == 25 * 1024 * 1024
 
 
 # --- the handoff block ----------------------------------------------------------
