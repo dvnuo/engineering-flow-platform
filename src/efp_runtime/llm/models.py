@@ -15,7 +15,8 @@ DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS = 8_000
 CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR = 20
 # GitHub Copilot models the native runtime accepts. gpt-5.4 and gpt-5.5 left
 # this list when the GPT-6 line (Astra, Sol, Luna) arrived; gpt-5.4 keeps a
-# context profile below only because AI Platform still serves it.
+# context profile below only because AI Platform still serves it. GPT-6.1 Sol
+# joined the line on 2026-09-29.
 SUPPORTED_COPILOT_MODEL_IDS = (
     "gpt-5.6-luna",
     "gpt-5.6-sol",
@@ -23,6 +24,7 @@ SUPPORTED_COPILOT_MODEL_IDS = (
     "gpt-6-astra",
     "gpt-6-luna",
     "gpt-6-sol",
+    "gpt-6.1-sol",
 )
 
 # AI Platform (enterprise gateway) models. Must stay aligned with the Portal
@@ -236,6 +238,15 @@ _COPILOT_PROFILES = {
     ),
     "gpt-6-sol": _profile(
         "gpt-6-sol",
+        context_window_tokens=1_050_000,
+        default_reserve_tokens=128_000,
+    ),
+    # GPT-6.1 Sol (GA in Copilot since 2026-09-29) publishes the same
+    # 1,050,000-token window as the GPT-6 line - 922k of input plus the 128k
+    # output cap held back as the reserve. Reasoning efforts low..max only; it
+    # does not accept ``none``.
+    "gpt-6.1-sol": _profile(
+        "gpt-6.1-sol",
         context_window_tokens=1_050_000,
         default_reserve_tokens=128_000,
     ),

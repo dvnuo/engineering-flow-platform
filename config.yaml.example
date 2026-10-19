@@ -48,6 +48,10 @@ llm:
   max_tokens: 128000
   allow_lower_max_tokens_than_model_limit: false
   model_limits:
+    gpt-6.1-sol:
+      max_context_window_tokens: 1050000
+      max_prompt_tokens: 922000
+      max_output_tokens: 128000
     gpt-6-astra:
       max_context_window_tokens: 1050000
       max_prompt_tokens: 922000
@@ -270,7 +274,7 @@ cost_tracking:
 #   retention_days: 30
 
 # EFP runtime native provider and common models:
-# - github_copilot: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-luna, gpt-5.6-sol, gpt-5.6-terra (default: gpt-6-sol)
+# - github_copilot: gpt-6.1-sol, gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-luna, gpt-5.6-sol, gpt-5.6-terra (default: gpt-6-sol)
 
 # ============================================
 # Workspace Configuration (OPTIONAL)

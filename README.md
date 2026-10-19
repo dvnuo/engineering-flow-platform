@@ -94,8 +94,8 @@ directly. `llm.api_base` or `EFP_GITHUB_COPILOT_BASE_URL` can override the
 Copilot transport base URL; otherwise EFP uses the exchanged token `proxy-ep`
 when present.
 
-Supported GitHub Copilot models are `gpt-6-sol` (default), `gpt-6-astra`,
-`gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
+Supported GitHub Copilot models are `gpt-6-sol` (default), `gpt-6.1-sol`,
+`gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
 
 ### Control-Plane Runtime Settings
 
