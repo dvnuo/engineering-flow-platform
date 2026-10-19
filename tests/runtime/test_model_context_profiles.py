@@ -23,12 +23,14 @@ from efp_runtime.llm.models import (
         ("github-copilot/gpt-6-astra", "gpt-6-astra"),
         ("github-copilot/gpt-6-luna", "gpt-6-luna"),
         ("github-copilot/gpt-6-sol", "gpt-6-sol"),
+        ("github-copilot/gpt-6.1-sol", "gpt-6.1-sol"),
         ("gpt-5.6 luna", "gpt-5.6-luna"),
         ("gpt-5.6 sol", "gpt-5.6-sol"),
         ("gpt-5.6 terra", "gpt-5.6-terra"),
         ("gpt-6 astra", "gpt-6-astra"),
         ("gpt-6 luna", "gpt-6-luna"),
         ("gpt-6 sol", "gpt-6-sol"),
+        ("gpt-6.1 sol", "gpt-6.1-sol"),
     ],
 )
 def test_github_copilot_profile_resolution(model: str, expected_model: str):
@@ -37,9 +39,9 @@ def test_github_copilot_profile_resolution(model: str, expected_model: str):
     assert isinstance(profile, ModelContextProfile)
     assert profile.provider_id == DEFAULT_PROVIDER_ID
     assert profile.model_id == expected_model
-    if expected_model.startswith("gpt-6-"):
+    if expected_model.startswith("gpt-6"):
         # OpenAI publishes 1,050,000 tokens (922k input + 128k output) for the
-        # whole GPT-6 line.
+        # whole GPT-6 line, GPT-6.1 Sol included.
         assert profile.context_window_tokens == 1_050_000
     else:
         assert profile.context_window_tokens == 1_000_000
@@ -57,12 +59,14 @@ def test_default_and_supported_model_list_are_copilot_responses_models():
         "gpt-6-astra",
         "gpt-6-luna",
         "gpt-6-sol",
+        "gpt-6.1-sol",
     )
 
 
 def test_canonicalize_copilot_model_id_rejects_unsupported_models():
     assert canonicalize_copilot_model_id("gpt-5.6 terra") == "gpt-5.6-terra"
     assert canonicalize_copilot_model_id("github-copilot/gpt-6 sol") == "gpt-6-sol"
+    assert canonicalize_copilot_model_id("github-copilot/gpt-6.1 sol") == "gpt-6.1-sol"
     with pytest.raises(ValueError, match="unsupported GitHub Copilot model"):
         canonicalize_copilot_model_id("gpt-5")
 

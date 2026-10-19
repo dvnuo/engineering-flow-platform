@@ -264,6 +264,28 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     assert "metadata" not in transport.payloads[0]
 
 
+def test_github_copilot_provider_passes_gpt_6_1_sol_through_unchanged():
+    # GPT-6.1 Sol (in Copilot since 2026-09-29) is sent under its own id, both
+    # as the configured model and as a per-request override; the whitespace
+    # and provider-qualified spellings canonicalize like the rest of the list.
+    provider = GitHubCopilotProvider(
+        transport=RecordingTransport([]),
+        model="gpt-6.1 sol",
+    )
+
+    assert provider.model == "gpt-6.1-sol"
+    assert provider.build_payload(_runtime_request_with_metadata({}))["model"] == "gpt-6.1-sol"
+
+    default_provider = GitHubCopilotProvider(transport=RecordingTransport([]))
+    payload = default_provider.build_payload(
+        _runtime_request_with_metadata({"requested_model": "github-copilot/gpt-6.1-sol"})
+    )
+
+    assert default_provider.model == "gpt-6-sol"
+    assert payload["model"] == "gpt-6.1-sol"
+    assert "metadata" not in payload
+
+
 def test_github_copilot_provider_rejects_invalid_model_locally():
     with pytest.raises(ValueError, match="unsupported GitHub Copilot model"):
         GitHubCopilotProvider(
@@ -297,6 +319,7 @@ def test_github_copilot_supported_models_and_reasoning_are_exact():
         "gpt-6-astra",
         "gpt-6-luna",
         "gpt-6-sol",
+        "gpt-6.1-sol",
     )
     assert SUPPORTED_COPILOT_REASONING_EFFORTS == (
         "low",

@@ -85,3 +85,24 @@ def test_retrieval_engine_uses_default_llm_model_when_config_model_missing(monke
             config.llm["model"] = original_model
         else:
             config.llm.pop("model", None)
+
+
+def test_retrieval_engine_knows_gpt_6_1_sol():
+    # The known-model check is a substring match on full ids, so gpt-6-sol does
+    # not cover gpt-6.1-sol: without a key of its own the 922k prompt budget
+    # would be skipped for the emergency fallback (1000 / 4000 / 8000).
+    engine = RetrievalEngine()
+
+    original_model = config.llm.get("model")
+    config.llm["model"] = "gpt-6.1-sol"
+    try:
+        thresholds = engine._resolve_budget_thresholds(
+            RetrievalRequest(session_id="s1", query="A", top_k=1)
+        )
+
+        assert thresholds == (16000, 64000, 128000)
+    finally:
+        if original_model is None:
+            config.llm.pop("model", None)
+        else:
+            config.llm["model"] = original_model
