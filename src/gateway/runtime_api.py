@@ -1239,6 +1239,15 @@ def _normalize_chat_history_message(
 
     if role == "assistant":
         normalized_message = normalize_assistant_history_message(normalized_message)
+        # The runner stamps which model answered (and, for auto, what was
+        # requested and why it fell back) on the message; the transcript
+        # reads them top-level like the author fields.
+        persisted_metadata = normalized_message.get("metadata")
+        persisted_metadata = persisted_metadata if isinstance(persisted_metadata, dict) else {}
+        for key in ("model", "requested_model", "model_fallback_reason"):
+            value = persisted_metadata.get(key)
+            if isinstance(value, str) and value and not normalized_message.get(key):
+                normalized_message[key] = value
         normalized_message.setdefault("author_type", "agent")
         normalized_message.setdefault("author_source", "runtime")
         if runtime_agent_id and not normalized_message.get("author_id"):

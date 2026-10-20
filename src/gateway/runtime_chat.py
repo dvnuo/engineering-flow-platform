@@ -1118,7 +1118,26 @@ def _result_payload(
         payload["pending_question_request"] = result.pending_question_request
     if result.structured_output is not None:
         payload["structured_output"] = result.structured_output
+    payload.update(_model_attribution_from_result(result, model))
     return payload
+
+
+def _model_attribution_from_result(result: RuntimeLoopResult, model: str) -> dict[str, str]:
+    """``model`` (what answered), plus ``requested_model`` / ``model_fallback_reason``
+    for an auto run, read from the assistant message the runner stamped; the
+    requested id stands in when there is no assistant message.
+    """
+
+    message = result.final_assistant_message
+    metadata = getattr(message, "metadata", None) if message is not None else None
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    answered = metadata.get("model")
+    attribution = {"model": answered if isinstance(answered, str) and answered else str(model or "")}
+    for key in ("requested_model", "model_fallback_reason"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            attribution[key] = value
+    return {key: value for key, value in attribution.items() if value}
 
 
 def _assistant_text(result: RuntimeLoopResult) -> str:

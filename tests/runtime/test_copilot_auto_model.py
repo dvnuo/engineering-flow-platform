@@ -384,3 +384,67 @@ async def test_runner_with_a_concrete_model_reports_no_resolved_model():
     usage_events = [event for event in result.runtime_events if event.type == "usage.updated"]
     assert usage_events
     assert "resolved_model" not in usage_events[-1].payload
+# --- attribution ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_records_the_model_that_answered_for_auto():
+    transport = _SessionTransport([_responses_answer("Routed.")])
+    provider = GitHubCopilotProvider(transport=transport, model="auto")
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(session_id="session-attrib-auto", user_text="Hi.")
+
+    metadata = result.final_assistant_message.metadata
+    assert metadata["model"] == "gpt-6.1-sol"
+    assert metadata["requested_model"] == "auto"
+    assert "model_fallback_reason" not in metadata
+    usage_events = [event for event in result.runtime_events if event.type == "usage.updated"]
+    assert usage_events[-1].payload["model"] == "gpt-6.1-sol"
+    # Persisted with the message, so a reloaded transcript shows it too.
+    stored = runner.store.read_history("session-attrib-auto")[-1]
+    assert stored.metadata["model"] == "gpt-6.1-sol"
+    assert stored.metadata["requested_model"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_records_the_fallback_when_auto_had_no_session():
+    transport = RecordingTransport([_responses_answer("Default.")])
+    provider = GitHubCopilotProvider(transport=transport, model="auto")
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(session_id="session-attrib-fallback", user_text="Hi.")
+
+    metadata = result.final_assistant_message.metadata
+    assert metadata["model"] == DEFAULT_MODEL_ID
+    assert metadata["requested_model"] == "auto"
+    assert "no auto-mode session support" in metadata["model_fallback_reason"]
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_records_a_concrete_model_without_auto_fields():
+    transport = RecordingTransport([_responses_answer("Plain.")])
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-6-luna")
+    runner = RuntimeLoopRunner(
+        store=InMemorySessionStore(),
+        provider=provider,
+        tool_runtime=ToolRuntime(ToolRegistry()),
+    )
+
+    result = await runner.run(session_id="session-attrib-concrete", user_text="Hi.")
+
+    metadata = result.final_assistant_message.metadata
+    assert metadata["model"] == "gpt-6-luna"
+    assert "requested_model" not in metadata
+    assert "model_fallback_reason" not in metadata
+    usage_events = [event for event in result.runtime_events if event.type == "usage.updated"]
+    assert usage_events[-1].payload["model"] == "gpt-6-luna"
+    assert "resolved_model" not in usage_events[-1].payload
