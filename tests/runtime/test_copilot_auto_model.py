@@ -31,9 +31,9 @@ from efp_runtime.llm.models import (
     is_auto_model_id,
     is_catalog_model_context_profile,
     model_prompt_budget_tokens,
+    preferred_model_context_profile,
     register_model_context_profile,
     resolve_model_context_profile,
-    smallest_model_context_profile,
     static_model_context_profile,
 )
 from efp_runtime.llm.provider import (
@@ -80,12 +80,17 @@ def _entry(model_id, *, window, prompt, output, efforts=None, endpoints=("/respo
     return entry
 
 
-# What the 2026-10-20 probe saw on a Business seat: /auto embeds OpenAI's
-# published windows, GET /models reports the gateway's smaller ones.
+# What the 2026-10-20 probes saw on a Business seat: /auto and GET /models
+# (with the API-version header) both describe Luna with OpenAI's 1M window;
+# the headerless catalog of the morning had reported 400k, which is what the
+# precedence test below feeds in as the catalog row.
 LUNA_AUTO = _entry("gpt-6-luna", window=1_000_000, prompt=872_000, output=128_000,
                    efforts=("none", "low", "medium", "high", "xhigh", "max"))
-LUNA_CATALOG = _entry("gpt-6-luna", window=400_000, prompt=272_000, output=128_000,
-                      efforts=("none", "low", "medium", "high", "xhigh", "max"))
+LUNA_CATALOG = _entry("gpt-6-luna", window=1_000_000, prompt=872_000, output=128_000,
+                      efforts=("none", "low", "medium", "high", "xhigh", "max"),
+                      billing={"token_prices": {"default": {"max_prompt_tokens": 272_000}, "long_context": {"max_prompt_tokens": 872_000}}})
+LUNA_OLD_SCHEMA = _entry("gpt-6-luna", window=400_000, prompt=272_000, output=128_000,
+                         efforts=("none", "low", "medium", "high", "xhigh", "max"))
 SOL61_AUTO = _entry("gpt-6.1-sol", window=1_050_000, prompt=922_000, output=128_000,
                     efforts=("low", "medium", "high", "xhigh", "max"))
 MAI = _entry("mai-code-1.1-flash", window=256_000, prompt=128_000, output=128_000,
@@ -193,9 +198,10 @@ def test_auto_ids_are_accepted_as_copilot_model_ids_but_are_not_concrete_models(
 
 
 def test_static_gpt_6_rows_carry_the_gateway_window_and_auto_rows_mirror_the_default():
+    windows = {"gpt-6-astra": 1_050_000, "gpt-6-luna": 1_000_000, "gpt-6-sol": 1_000_000, "gpt-6.1-sol": 1_050_000}
     for model in SUPPORTED_COPILOT_MODEL_IDS:
         profile = resolve_model_context_profile(model)
-        assert profile.context_window_tokens == 400_000
+        assert profile.context_window_tokens == windows[model]
         assert profile.default_reserve_tokens == 128_000
     default = resolve_model_context_profile(DEFAULT_MODEL_ID)
     for auto_id in AUTO_MODEL_IDS:
@@ -213,8 +219,9 @@ def test_copilot_model_context_profile_reads_the_gateway_limits():
     profile = copilot_model_context_profile(LUNA_CATALOG)
     assert profile is not None
     assert profile.model_id == "gpt-6-luna"
-    assert profile.context_window_tokens == 400_000
+    assert profile.context_window_tokens == 1_000_000
     assert profile.default_reserve_tokens == 128_000
+    assert copilot_model_context_profile(LUNA_OLD_SCHEMA).context_window_tokens == 400_000
     # Without an output cap the gap to the prompt cap is the reserve; without
     # either a quarter of the window (at most 128k) is.
     assert copilot_model_context_profile({"id": "x", "capabilities": {"limits": {"max_context_window_tokens": 300_000, "max_prompt_tokens": 250_000}}}).default_reserve_tokens == 50_000
@@ -226,14 +233,17 @@ def test_copilot_model_context_profile_reads_the_gateway_limits():
     assert copilot_model_context_profile(None) is None
 
 
-def test_smallest_profile_wins_and_learned_profiles_override_the_static_rows():
+def test_preferred_profile_is_the_first_source_and_learned_profiles_override_the_static_rows():
     auto_profile = copilot_model_context_profile(LUNA_AUTO)
-    catalog_profile = copilot_model_context_profile(LUNA_CATALOG)
+    old_profile = copilot_model_context_profile(LUNA_OLD_SCHEMA)
     static_profile = static_model_context_profile("gpt-6-luna")
-    assert smallest_model_context_profile((auto_profile, None, catalog_profile, static_profile)) == catalog_profile
-    assert smallest_model_context_profile((None, auto_profile)) == auto_profile
-    assert smallest_model_context_profile(()) is None
-    assert model_prompt_budget_tokens(catalog_profile) == 400_000 - 8_000 - 128_000
+    # The caller lists its sources by trust; the first one that exists wins,
+    # smaller or larger than the others.
+    assert preferred_model_context_profile(old_profile, auto_profile, static_profile) == old_profile
+    assert preferred_model_context_profile(None, auto_profile, static_profile) == auto_profile
+    assert preferred_model_context_profile(None, None, static_profile) == static_profile
+    assert preferred_model_context_profile() is None
+    assert model_prompt_budget_tokens(auto_profile) == 1_000_000 - 8_000 - 128_000
 
     learned = copilot_model_context_profile(MAI)
     register_model_context_profile(learned)
@@ -428,9 +438,9 @@ def test_provider_sends_the_picked_model_with_the_session_token_and_registers_it
     assert resolution.tier == "balance"
     assert resolution.reasoning_effort == "high"
     assert resolution.expires_at == FAR_FUTURE
-    # The gateway's catalog row says less than the /auto metadata: it wins,
-    # and the runner's lookup now sees it.
-    assert resolution.profile.context_window_tokens == 400_000
+    # The gateway's catalog row is the budget, and the runner's lookup now
+    # sees it.
+    assert resolution.profile == copilot_model_context_profile(LUNA_CATALOG)
     assert resolve_model_context_profile("gpt-6-luna") == resolution.profile
     # A second payload in the same run reuses the decision.
     provider.build_payload(_request({"run_id": "run-1"}, prompt="hey"))
@@ -439,6 +449,23 @@ def test_provider_sends_the_picked_model_with_the_session_token_and_registers_it
     provider.build_payload(_request({"run_id": "run-2"}, prompt="Refactor everything"))
     assert transport.route_calls[-1] == ("Refactor everything", "balance", False)
     assert transport.session_token == "session-2"
+
+
+def test_provider_budgets_with_the_catalog_row_over_the_auto_metadata_and_the_static_row():
+    # Whatever the catalog says is the budget: the morning's headerless 400k
+    # row beats the 1M the /auto answer embeds and the 1M static row.
+    transport = _RoutingTransport([], catalog=(LUNA_OLD_SCHEMA,))
+    provider = GitHubCopilotProvider(transport=transport, model="auto")
+    provider.build_payload(_request({"run_id": "r1"}))
+    assert provider.auto_resolution.profile.context_window_tokens == 400_000
+    assert resolve_model_context_profile("gpt-6-luna").context_window_tokens == 400_000
+    # Without a catalog row the /auto metadata decides; without either, the static row.
+    provider = GitHubCopilotProvider(transport=_RoutingTransport([], selected=LUNA_OLD_SCHEMA), model="auto")
+    provider.build_payload(_request({"run_id": "r1"}))
+    assert provider.auto_resolution.profile.context_window_tokens == 400_000
+    provider = GitHubCopilotProvider(transport=_RoutingTransport([], selected={"id": "gpt-6-luna", "capabilities": {"supports": {"tool_calls": True}}}), model="auto")
+    provider.build_payload(_request({"run_id": "r1"}))
+    assert provider.auto_resolution.profile == static_model_context_profile("gpt-6-luna")
 
 
 def test_provider_takes_the_tier_from_the_auto_id_and_the_prompt_from_the_member():
@@ -634,9 +661,7 @@ async def test_runner_routes_each_turn_on_its_prompt_and_budgets_for_the_pick():
     assert second.status == LoopStatus.COMPLETED
     assert transport.route_calls[-1] == ("Now refactor it all", "efficiency", False)
     assert transport.payloads[1]["model"] == "gpt-6-luna"
-    # /auto described Luna with OpenAI's 1M window; the static row says 400k
-    # (the gateway's number) and the smaller budget wins.
-    assert provider.seen_metadata[1]["context_window_tokens"] == 400_000
+    assert provider.seen_metadata[1]["context_window_tokens"] == 1_000_000
     stored = runner.store.read_history("session-auto-run")[-1]
     assert stored.metadata["model"] == "gpt-6-luna"
     assert stored.metadata["requested_model"] == "auto-efficiency"
@@ -651,7 +676,7 @@ async def test_runner_without_routing_support_falls_back_and_says_so():
     assert transport.payloads[0]["model"] == DEFAULT_MODEL_ID
     assert provider.seen_metadata[0]["auto_routing"]["model"] == DEFAULT_MODEL_ID
     assert provider.seen_metadata[0]["model_id"] == DEFAULT_MODEL_ID
-    assert provider.seen_metadata[0]["context_window_tokens"] == 400_000
+    assert provider.seen_metadata[0]["context_window_tokens"] == 1_000_000
     usage_events = [event for event in result.runtime_events if event.type == "usage.updated"]
     assert usage_events[-1].payload["resolved_model"] == DEFAULT_MODEL_ID
     assert "no auto routing support" in usage_events[-1].payload["resolved_model_fallback"]

@@ -40,7 +40,7 @@ from .models import (
     is_auto_model_id,
     model_prompt_budget_tokens,
     register_model_context_profile,
-    smallest_model_context_profile,
+    preferred_model_context_profile,
     static_model_context_profile,
 )
 from .openai import (
@@ -963,9 +963,9 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         can drive it (served on ``/responses``, tool calls not refused, its
         prompt budget covering the conversation so far); the transport then
         carries the session token, the configured reasoning effort is clamped
-        to what the model lists, and the model's context profile (its
-        metadata from the answer, narrowed by the ``GET /models`` row and the
-        static row when they say less) is registered for the runner's budget.
+        to what the model lists, and the model's context profile (the
+        ``GET /models`` row, else the metadata from the answer, else the
+        static row) is registered for the runner's budget.
         Everything else degrades to DEFAULT_MODEL_ID without a session, with
         ``fallback_reason`` saying why. Later calls for the same ``run_key``
         (the run id, else the session and prompt) reuse the decision, so the
@@ -1012,12 +1012,10 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         refusal = _auto_pick_refusal(model, metadata, catalog_entry)
         if refusal is not None:
             return self._auto_fallback(refusal, tier=tier)
-        profile = smallest_model_context_profile(
-            (
-                copilot_model_context_profile(metadata),
-                copilot_model_context_profile(catalog_entry),
-                static_model_context_profile(model),
-            )
+        profile = preferred_model_context_profile(
+            copilot_model_context_profile(catalog_entry),
+            copilot_model_context_profile(metadata),
+            static_model_context_profile(model),
         )
         if profile is None:
             return self._auto_fallback(
