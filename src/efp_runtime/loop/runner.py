@@ -34,6 +34,7 @@ from ..llm.models import (
     ModelContextProfile,
     context_safety_margin_tokens,
     default_max_context_tokens,
+    is_auto_model_id,
     is_catalog_model_context_profile,
     resolve_model_context_profile,
 )
@@ -721,6 +722,11 @@ class RuntimeLoopRunner:
                 )
                 break
 
+            _annotate_assistant_model(
+                assistant_message,
+                provider=self.provider,
+                requested_model=_requested_model_for_run(run_metadata, self.default_model),
+            )
             final_assistant_message = self._append_processed_message(
                 resolved_session_id,
                 assistant_message,
@@ -2469,21 +2475,75 @@ def _usage_payload(summary: UsageSummary) -> dict[str, Any]:
 
 
 def _resolved_model_payload(provider: Any) -> dict[str, Any]:
-    """``resolved_model`` for usage events once the provider has routed ``auto``.
+    """Model fields for usage events: ``model`` is the id the provider sent.
 
-    Absent for a concrete model, so existing payloads are unchanged; carries
-    ``resolved_model_fallback`` when auto degraded to the default model.
+    Once the provider has routed ``auto`` the payload also carries
+    ``resolved_model`` and, when auto degraded to the default model,
+    ``resolved_model_fallback``. A provider without ``last_payload_model``
+    (scripted test providers) adds nothing, so older payloads are unchanged.
+    """
+
+    payload: dict[str, Any] = {}
+    sent = getattr(provider, "last_payload_model", None)
+    if isinstance(sent, str) and sent:
+        payload["model"] = sent
+    resolution = getattr(provider, "auto_resolution", None)
+    model = getattr(resolution, "model", None)
+    if isinstance(model, str) and model:
+        payload["resolved_model"] = model
+        reason = getattr(resolution, "fallback_reason", None)
+        if isinstance(reason, str) and reason:
+            payload["resolved_model_fallback"] = reason
+    return payload
+
+
+def _requested_model_for_run(run_metadata: Any, default_model: Any) -> str:
+    requested = run_metadata.get("requested_model") if isinstance(run_metadata, Mapping) else None
+    if isinstance(requested, str) and requested.strip():
+        return requested.strip()
+    return str(default_model or "").strip()
+
+
+def _bare_model_id(model: str) -> str:
+    text = str(model or "").strip()
+    return text.split("/", 1)[1] if "/" in text else text
+
+
+def _model_attribution(provider: Any, requested_model: str) -> dict[str, str]:
+    """What answered: ``model`` is the id actually sent to the provider.
+
+    For an ``auto`` run it adds ``requested_model`` (``auto``) and, when the
+    run degraded to the default model, ``model_fallback_reason``; a concrete
+    model carries ``model`` alone. Falls back to the requested id for
+    providers that do not report what they sent.
     """
 
     resolution = getattr(provider, "auto_resolution", None)
-    model = getattr(resolution, "model", None)
-    if not isinstance(model, str) or not model:
+    sent = getattr(provider, "last_payload_model", None)
+    model = sent if isinstance(sent, str) and sent else None
+    if model is None:
+        resolved = getattr(resolution, "model", None)
+        model = resolved if isinstance(resolved, str) and resolved else _bare_model_id(requested_model)
+    if not model:
         return {}
-    payload: dict[str, Any] = {"resolved_model": model}
-    reason = getattr(resolution, "fallback_reason", None)
-    if isinstance(reason, str) and reason:
-        payload["resolved_model_fallback"] = reason
-    return payload
+    attribution = {"model": model}
+    if resolution is not None or is_auto_model_id(requested_model):
+        attribution["requested_model"] = "auto"
+        reason = getattr(resolution, "fallback_reason", None)
+        if isinstance(reason, str) and reason:
+            attribution["model_fallback_reason"] = reason
+    return attribution
+
+
+def _annotate_assistant_model(message: Any, *, provider: Any, requested_model: str) -> None:
+    """Stamp the model attribution on an assistant message before it is stored."""
+
+    metadata = getattr(message, "metadata", None)
+    if not isinstance(metadata, dict):
+        return
+    for key in ("model", "requested_model", "model_fallback_reason"):
+        metadata.pop(key, None)
+    metadata.update(_model_attribution(provider, requested_model))
 
 
 def _annotate_latest_step_usage_event(

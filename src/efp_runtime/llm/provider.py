@@ -813,6 +813,9 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         # What ``auto`` resolved to for this provider instance (one run); None
         # while no auto request has been built.
         self.auto_resolution: AutoModelResolution | None = None
+        # The model id the last payload actually carried (auto already
+        # resolved); the runner stamps it on the assistant message.
+        self.last_payload_model: str | None = None
 
     async def invoke(self, request: RuntimeRequest) -> ProviderOutput:
         if canonicalize_copilot_model_id(_requested_model(request) or self.model) == AUTO_MODEL_ID:
@@ -832,6 +835,7 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             self.auto_resolution = None
             self._set_transport_auto_session_token(None)
         payload["model"] = model
+        self.last_payload_model = model
         if self.endpoint == "responses":
             payload["reasoning"] = {"effort": self.reasoning_effort}
         _inject_copilot_noop_tool_fallback(payload, request)
@@ -1245,6 +1249,7 @@ class AIPlatformProvider(OpenAICompatibleProvider):
         # The AI Platform endpoints reject the EFP/OpenAI-compatible extension
         # field even though it is useful for other providers.
         payload.pop("metadata", None)
+        self.last_payload_model = payload.get("model")
         if self.endpoint == "responses":
             # The base projection already carries the effort as
             # ``reasoning: {effort}``; the gateway's chat/completions-only
