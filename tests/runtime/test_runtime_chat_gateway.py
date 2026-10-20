@@ -58,12 +58,12 @@ def test_runtime_chat_resolves_default_and_alias_models(monkeypatch):
     class _FakeConfig:
         @property
         def llm(self):
-            return {"model": "gpt-5.6 terra"}
+            return {"model": "gpt-6 luna"}
 
     monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
 
-    assert runtime_chat._resolve_model(None) == "gpt-5.6-terra"
-    assert runtime_chat._resolve_model("gpt-5.6 luna") == "gpt-5.6-luna"
+    assert runtime_chat._resolve_model(None) == "gpt-6-luna"
+    assert runtime_chat._resolve_model("gpt-6.1 sol") == "gpt-6.1-sol"
 
 
 def test_runtime_chat_rejects_invalid_model_locally(monkeypatch):
@@ -419,7 +419,7 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
         message="hello",
         session_id="s-profile",
         request_id="req-profile",
-        model="gpt-5.6 terra",
+        model="gpt-6 luna",
         track_usage=False,
         execution_metadata={
             "runtime_profile": {
@@ -430,10 +430,10 @@ async def test_runtime_chat_applies_trusted_portal_runtime_profile_config(monkey
     )
 
     runtime_config = captured["config"]
-    assert captured["provider_model"] == "gpt-5.6-terra"
+    assert captured["provider_model"] == "gpt-6-luna"
     assert runtime_config.workspace_root == runtime_chat._runtime_workspace_root()
     assert runtime_config.default_provider_id == "github-copilot"
-    assert runtime_config.default_model == "gpt-5.6-terra"
+    assert runtime_config.default_model == "gpt-6-luna"
     assert runtime_config.track_usage is False
     assert runtime_config.enabled_tools == ["read"]
     assert runtime_config.disabled_tools == ["write"]
@@ -737,7 +737,7 @@ async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(
             "llm": {
                 "provider": "github_copilot",
                 "api_key": "copilot-config-token",
-                "model": "gpt-5.6-terra",
+                "model": "gpt-6-luna",
             },
             "session": {"max_iterations": 1},
         },
@@ -841,7 +841,7 @@ async def test_runtime_chat_reports_files_written_under_output_as_file_blocks(mo
         message="make the deck",
         session_id="s-deliverables",
         request_id="req-deliverables",
-        model="gpt-5.6 terra",
+        model="gpt-6 luna",
         track_usage=False,
     )
 
@@ -880,7 +880,7 @@ async def test_runtime_chat_leaves_display_blocks_alone_when_nothing_was_written
         message="just talk",
         session_id="s-deliverables",
         request_id="req-none",
-        model="gpt-5.6 terra",
+        model="gpt-6 luna",
         track_usage=False,
     )
 
@@ -908,7 +908,7 @@ async def test_resumed_runtime_chat_also_reports_deliverables(monkeypatch, tmp_p
     payload = await runtime_chat.resume_runtime_chat(
         session_id="s-deliverables",
         request_id="req-resume",
-        model="gpt-5.6 terra",
+        model="gpt-6 luna",
         track_usage=False,
     )
 

@@ -13,14 +13,14 @@ MIN_PRESERVE_RECENT_TOKENS = 2_000
 MAX_PRESERVE_RECENT_TOKENS = 8_000
 DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS = 8_000
 CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR = 20
-# GitHub Copilot models the native runtime accepts. gpt-5.4 and gpt-5.5 left
-# this list when the GPT-6 line (Astra, Sol, Luna) arrived; gpt-5.4 keeps a
-# context profile below only because AI Platform still serves it. GPT-6.1 Sol
-# joined the line on 2026-09-29.
+# GitHub Copilot models the native runtime accepts: the GPT-6 line (Astra,
+# Sol, Luna) plus GPT-6.1 Sol, which joined on 2026-09-29. gpt-5.4 and
+# gpt-5.5 left this list when GPT-6 arrived; the GPT-5.6 line left on
+# 2026-10-19, ahead of Terra's 2026-11-16 retirement and so that Copilot
+# auto routing can only ever land on a 1,050,000-token model. The retired
+# ids keep a context profile below only because AI Platform still serves
+# them.
 SUPPORTED_COPILOT_MODEL_IDS = (
-    "gpt-5.6-luna",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
     "gpt-6-astra",
     "gpt-6-luna",
     "gpt-6-sol",
@@ -197,8 +197,9 @@ def _default_preserve_recent_tokens(
 
 
 _COPILOT_PROFILES = {
-    # Not a Copilot model any more (see SUPPORTED_COPILOT_MODEL_IDS); kept for
-    # AI Platform, which still serves it and resolves its budget through here.
+    # Not Copilot models any more (see SUPPORTED_COPILOT_MODEL_IDS); kept for
+    # AI Platform, which still serves them and resolves their budgets through
+    # here.
     "gpt-5.4": _profile(
         "gpt-5.4",
         context_window_tokens=1_000_000,
