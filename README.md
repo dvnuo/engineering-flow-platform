@@ -98,15 +98,19 @@ Supported GitHub Copilot models are `gpt-6-sol` (default), `gpt-6.1-sol`,
 `gpt-6-astra`, and `gpt-6-luna`. The GPT-5.6 line is no longer offered on
 Copilot (AI Platform still serves it).
 
-`model: "auto"` hands the choice to Copilot's auto mode: each run opens an
-auto session (`POST /models/session`), sends the first of `gpt-6.1-sol`,
-`gpt-6-sol`, `gpt-6-luna`, `gpt-6-astra` that Copilot lists as available,
-and carries the session token so the request is billed in the auto pool.
-If the session cannot be opened (for example the endpoint refuses the
-token) or the pool holds no GPT model the runtime drives, the run falls
+`model: "auto"` hands the choice to Copilot's auto mode, the way VS Code's
+Auto picker works: each user turn posts the prompt and a tier to Copilot's
+`POST /auto` (`auto` is the Balance tier; `auto-efficiency` and
+`auto-intelligence` name the other two), Copilot answers with the model it
+picked for that turn, and the run sends that model together with the
+session token that bills it in the auto pool at the auto discount. The pick
+is honoured when the runtime can drive it (served on `/responses`, tool
+calls allowed, its prompt budget covering the conversation so far); the
+context budget and the reasoning effort follow the picked model's Copilot
+metadata. If the route fails or the pick cannot be driven, the run falls
 back to `gpt-6-sol` without the session and `usage.updated` events report
 `resolved_model_fallback`; `resolved_model` always names the model that
-actually answered.
+actually answered and `auto_tier` the tier that was asked for.
 
 ### Control-Plane Runtime Settings
 

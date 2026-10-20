@@ -48,25 +48,37 @@ llm:
   max_tokens: 128000
   allow_lower_max_tokens_than_model_limit: false
   model_limits:
-    auto:   # Copilot auto routes within the GPT-6 line; budget as the smallest
-      max_context_window_tokens: 1050000
-      max_prompt_tokens: 922000
+    # Copilot's catalog (GET /models) reports 400k / 272k prompt / 128k output
+    # for the GPT-6 line; auto sends the model Copilot picks per turn and the
+    # runtime budgets from that model's metadata, so these rows only cover a
+    # run that could not be routed (it sends gpt-6-sol).
+    auto:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
+      max_output_tokens: 128000
+    auto-efficiency:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
+      max_output_tokens: 128000
+    auto-intelligence:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
       max_output_tokens: 128000
     gpt-6.1-sol:
-      max_context_window_tokens: 1050000
-      max_prompt_tokens: 922000
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
       max_output_tokens: 128000
     gpt-6-astra:
-      max_context_window_tokens: 1050000
-      max_prompt_tokens: 922000
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
       max_output_tokens: 128000
     gpt-6-sol:
-      max_context_window_tokens: 1050000
-      max_prompt_tokens: 922000
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
       max_output_tokens: 128000
     gpt-6-luna:
-      max_context_window_tokens: 1050000
-      max_prompt_tokens: 922000
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
       max_output_tokens: 128000
   temperature: 0.7
   reasoning_replay: false
