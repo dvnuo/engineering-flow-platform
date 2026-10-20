@@ -26,6 +26,7 @@ from efp_runtime.llm.models import (
     select_auto_model,
 )
 from efp_runtime.llm.provider import (
+    COPILOT_AUTO_SESSION_API_VERSION,
     COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS,
     CopilotAutoSession,
     GitHubCopilotHTTPTransport,
@@ -181,7 +182,11 @@ def test_transport_opens_an_auto_session_the_way_vscode_does(monkeypatch):
     assert request.get_header("Authorization") == "Bearer copilot-token"
     assert request.get_header("Copilot-integration-id") == "vscode-chat"
     assert request.get_header("Accept") == "application/json"
+    assert request.get_header("X-github-api-version") == COPILOT_AUTO_SESSION_API_VERSION
     assert request.get_header("Copilot-session-token") is None
+    # Chat-only headers are not part of the session request.
+    assert request.get_header("Openai-intent") is None
+    assert request.get_header("X-initiator") is None
     # Reused while valid: no second round trip.
     assert transport.auto_session() is session
     assert len(requests) == 1

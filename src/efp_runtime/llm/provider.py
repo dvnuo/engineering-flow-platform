@@ -167,6 +167,10 @@ DEFAULT_COPILOT_REASONING_EFFORT = "high"
 # Auto sessions are reopened this close to ``expires_at`` (VS Code uses the
 # same five-minute margin).
 COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS = 300
+# VS Code's CAPI client (@vscode/copilot-api 0.5.2) stamps this API version on
+# every CAPI request, /models/session included; without it the route answered
+# 404 for a Portal-issued token on 2026-10-20.
+COPILOT_AUTO_SESSION_API_VERSION = "2026-08-01"
 DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS = 300
 GITHUB_COPILOT_TOKEN_REFRESH_MARGIN_SECONDS = 300
 SUPPORTED_COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -650,7 +654,11 @@ class GitHubCopilotHTTPTransport:
         self._refresh_source_token_if_needed()
         headers = self._headers()
         headers["Accept"] = "application/json"
-        headers.pop("Copilot-Session-Token", None)
+        headers["X-GitHub-Api-Version"] = COPILOT_AUTO_SESSION_API_VERSION
+        # Chat-only headers stay on the chat calls; the session request carries
+        # what VS Code's CAPI client sends.
+        for chat_only in ("Copilot-Session-Token", "Openai-Intent", "x-initiator"):
+            headers.pop(chat_only, None)
         body = json.dumps(
             {"auto_mode": {"model_hints": [AUTO_MODEL_ID]}},
             separators=(",", ":"),
