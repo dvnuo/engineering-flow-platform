@@ -289,6 +289,14 @@ class Config:
             "enabled": True,
             "instances": True,
             "default_instance": True,
+            # What every instance shares: the connector's access policy and
+            # the query budget. The section is copied verbatim into the tools
+            # config, so a key missing here would never reach the pgsql CLI
+            # (EFP_PGSQL_ACCESS, EFP_PGSQL_SSLMODE, ...).
+            "access": True,
+            "sslmode": True,
+            "statement_timeout_seconds": True,
+            "max_rows": True,
         },
         "mobile-auto": {
             "enabled": True,
