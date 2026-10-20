@@ -75,10 +75,10 @@ def test_retrieval_engine_uses_default_llm_model_when_config_model_missing(monke
             RetrievalRequest(session_id="s1", query="A", top_k=1)
         )
 
-        # gpt-6-sol's 922k prompt budget lands every tier on its cap
-        # (5% -> 16k, 20% -> 64k, 50% -> 128k).
-        assert direct == 16000
-        assert topk == 64000
+        # gpt-6-sol's 272k prompt cap (Copilot's catalog number): 5% -> 13.6k,
+        # 20% -> 54.4k, and 50% lands on the 128k summarize cap.
+        assert direct == 13600
+        assert topk == 54400
         assert summarize == 128000
     finally:
         if had_model:
@@ -89,7 +89,7 @@ def test_retrieval_engine_uses_default_llm_model_when_config_model_missing(monke
 
 def test_retrieval_engine_knows_gpt_6_1_sol():
     # The known-model check is a substring match on full ids, so gpt-6-sol does
-    # not cover gpt-6.1-sol: without a key of its own the 922k prompt budget
+    # not cover gpt-6.1-sol: without a key of its own the 272k prompt cap
     # would be skipped for the emergency fallback (1000 / 4000 / 8000).
     engine = RetrievalEngine()
 
@@ -100,7 +100,7 @@ def test_retrieval_engine_knows_gpt_6_1_sol():
             RetrievalRequest(session_id="s1", query="A", top_k=1)
         )
 
-        assert thresholds == (16000, 64000, 128000)
+        assert thresholds == (13600, 54400, 128000)
     finally:
         if original_model is None:
             config.llm.pop("model", None)

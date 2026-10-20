@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import inspect
 import json
+import logging
 from typing import Any, Callable, List, Optional, Union
 
 from ..compaction.controller import CompactionController, CompactionSummarizer
@@ -16,6 +17,7 @@ from ..compaction.strategy import (
     CompactionResult,
     ContextBudget,
     TailTurnCompactionStrategy,
+    _messages_chars,
 )
 from ..context.render import prepare_history_for_request
 from ..context.usage import build_context_usage_snapshot
@@ -32,6 +34,7 @@ from ..llm.models import (
     DEFAULT_MODEL_ID,
     DEFAULT_PROVIDER_ID,
     ModelContextProfile,
+    auto_tier_for,
     context_safety_margin_tokens,
     default_max_context_tokens,
     is_auto_model_id,
@@ -428,6 +431,13 @@ class RuntimeLoopRunner:
             enabled_tool_ids=enabled_tool_ids,
             disabled_tool_ids=disabled_tool_ids,
         )
+        # An auto run is routed here, before the budget below is fixed, so the
+        # budget is the picked model's (see _route_auto_model).
+        await self._route_auto_model(
+            run_metadata,
+            session_id=resolved_session_id,
+            user_text=user_text,
+        )
         run_metadata.update(self._model_context_budget_metadata(run_metadata))
         run_usage = _summary_with_estimated_cost(
             UsageSummary(),
@@ -725,7 +735,7 @@ class RuntimeLoopRunner:
             _annotate_assistant_model(
                 assistant_message,
                 provider=self.provider,
-                requested_model=_requested_model_for_run(run_metadata, self.default_model),
+                requested_model=_requested_model_for_run(run_metadata, self._provider_model()),
             )
             final_assistant_message = self._append_processed_message(
                 resolved_session_id,
@@ -1012,10 +1022,74 @@ class RuntimeLoopRunner:
             requested_model = metadata.get("requested_model")
         if not isinstance(requested_model, str) or not requested_model.strip():
             requested_model = self.default_model
+        # An auto run budgets for the model Copilot picked for it (see
+        # _route_auto_model), not for the auto id's placeholder row.
+        routing = metadata.get("auto_routing") if metadata is not None else None
+        routed_model = routing.get("model") if isinstance(routing, Mapping) else None
+        if isinstance(routed_model, str) and routed_model.strip():
+            requested_model = routed_model
         return resolve_model_context_profile(
             requested_model,
             provider_id=self.default_provider_id,
         )
+
+    def _provider_model(self) -> str:
+        """The model the provider sends by default: its own, else the runner's."""
+
+        model = getattr(self.provider, "model", None)
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+        return self.default_model
+
+    async def _route_auto_model(
+        self,
+        run_metadata: dict[str, Any],
+        *,
+        session_id: str,
+        user_text: str,
+    ) -> None:
+        """Ask the provider which model an auto run sends, before its budget is set.
+
+        Copilot auto routes on the turn's prompt (``POST /auto``, like VS
+        Code's Auto picker), so the member's words for this turn, the size of
+        the conversation so far and the tier the auto id names go in, and the
+        pick comes back as ``run_metadata["auto_routing"]`` for the context
+        budget and the per-iteration payloads. Providers without
+        ``resolve_auto_model`` and concrete models are left alone; a failure
+        here is the provider's fallback at invoke time, never the run's.
+        """
+
+        requested_model = _requested_model_for_run(run_metadata, self._provider_model())
+        if not is_auto_model_id(requested_model):
+            return
+        resolver = getattr(self.provider, "resolve_auto_model", None)
+        if not callable(resolver):
+            return
+        prompt = run_metadata.get("original_user_message")
+        if not isinstance(prompt, str) or not prompt.strip():
+            prompt = user_text
+        try:
+            history_chars = _messages_chars(list(self.store.read_history(session_id)))
+        except Exception:  # noqa: BLE001 - the size only guards the pick; routing goes on without it.
+            history_chars = None
+        try:
+            resolution = await asyncio.to_thread(
+                resolver,
+                prompt=prompt,
+                tier=auto_tier_for(requested_model),
+                run_key=run_metadata.get("run_id"),
+                history_chars=history_chars,
+                has_image=bool(run_metadata.get("attached_image_count")),
+            )
+        except Exception as exc:  # noqa: BLE001 - the provider falls back on its own at invoke time.
+            logging.getLogger(__name__).warning("auto routing at run start failed: %s", exc)
+            return
+        run_metadata["auto_routing"] = {
+            "model": getattr(resolution, "model", None),
+            "tier": getattr(resolution, "tier", None),
+            "session_active": bool(getattr(resolution, "session_active", False)),
+            "fallback_reason": getattr(resolution, "fallback_reason", None),
+        }
 
     def _compaction_preserve_recent_chars(
         self,
@@ -2494,6 +2568,9 @@ def _resolved_model_payload(provider: Any) -> dict[str, Any]:
         reason = getattr(resolution, "fallback_reason", None)
         if isinstance(reason, str) and reason:
             payload["resolved_model_fallback"] = reason
+        tier = getattr(resolution, "tier", None)
+        if isinstance(tier, str) and tier:
+            payload["auto_tier"] = tier
     return payload
 
 
@@ -2512,9 +2589,9 @@ def _bare_model_id(model: str) -> str:
 def _model_attribution(provider: Any, requested_model: str) -> dict[str, str]:
     """What answered: ``model`` is the id actually sent to the provider.
 
-    For an ``auto`` run it adds ``requested_model`` (``auto``) and, when the
-    run degraded to the default model, ``model_fallback_reason``; a concrete
-    model carries ``model`` alone. Falls back to the requested id for
+    For an auto run it adds ``requested_model`` (the auto id asked for),
+    ``auto_tier`` and, when the run degraded to the default model,
+    ``model_fallback_reason``; a concrete model carries ``model`` alone. Falls back to the requested id for
     providers that do not report what they sent.
     """
 
@@ -2528,7 +2605,11 @@ def _model_attribution(provider: Any, requested_model: str) -> dict[str, str]:
         return {}
     attribution = {"model": model}
     if resolution is not None or is_auto_model_id(requested_model):
-        attribution["requested_model"] = "auto"
+        requested = _bare_model_id(requested_model)
+        attribution["requested_model"] = requested if is_auto_model_id(requested) else "auto"
+        tier = getattr(resolution, "tier", None) or auto_tier_for(requested)
+        if isinstance(tier, str) and tier:
+            attribution["auto_tier"] = tier
         reason = getattr(resolution, "fallback_reason", None)
         if isinstance(reason, str) and reason:
             attribution["model_fallback_reason"] = reason
@@ -2541,7 +2622,7 @@ def _annotate_assistant_model(message: Any, *, provider: Any, requested_model: s
     metadata = getattr(message, "metadata", None)
     if not isinstance(metadata, dict):
         return
-    for key in ("model", "requested_model", "model_fallback_reason"):
+    for key in ("model", "requested_model", "model_fallback_reason", "auto_tier"):
         metadata.pop(key, None)
     metadata.update(_model_attribution(provider, requested_model))
 

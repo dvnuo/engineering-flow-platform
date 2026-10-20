@@ -1133,7 +1133,7 @@ def _model_attribution_from_result(result: RuntimeLoopResult, model: str) -> dic
     metadata = metadata if isinstance(metadata, Mapping) else {}
     answered = metadata.get("model")
     attribution = {"model": answered if isinstance(answered, str) and answered else str(model or "")}
-    for key in ("requested_model", "model_fallback_reason"):
+    for key in ("requested_model", "model_fallback_reason", "auto_tier"):
         value = metadata.get(key)
         if isinstance(value, str) and value:
             attribution[key] = value

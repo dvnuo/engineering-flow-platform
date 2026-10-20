@@ -30,12 +30,18 @@ from .errors import (
     ProviderTransientError,
 )
 from .models import (
-    AUTO_MODEL_ID,
     DEFAULT_MODEL_ID,
     DEFAULT_PROVIDER_ID,
     SUPPORTED_COPILOT_MODEL_IDS,
+    ModelContextProfile,
+    auto_tier_for,
     canonicalize_copilot_model_id,
-    select_auto_model,
+    copilot_model_context_profile,
+    is_auto_model_id,
+    model_prompt_budget_tokens,
+    register_model_context_profile,
+    smallest_model_context_profile,
+    static_model_context_profile,
 )
 from .openai import (
     normalize_responses_call_id,
@@ -140,12 +146,17 @@ class ProviderAutoSessionError(ProviderTransportError):
 
 
 @dataclass(frozen=True)
-class CopilotAutoSession:
-    """One GitHub Copilot auto-mode session (``POST /models/session``)."""
+class CopilotAutoDecision:
+    """One ``POST /auto`` answer: the model Copilot picked for a prompt and tier."""
 
+    model: str
     session_token: str
     expires_at: int
-    available_models: tuple[str, ...]
+    tier: str | None
+    # The ``selected_model`` entry as returned: a ``GET /models`` row minus
+    # ``type`` (id, name, vendor, capabilities.limits / supports,
+    # supported_endpoints, ...).
+    metadata: Mapping[str, Any]
     discounted_costs: Mapping[str, Any]
 
     def expires_within(self, seconds: int, *, now: float | None = None) -> bool:
@@ -155,18 +166,32 @@ class CopilotAutoSession:
 
 @dataclass(frozen=True)
 class AutoModelResolution:
-    """What ``auto`` became for one provider instance, i.e. one run."""
+    """What an auto id became for one run."""
 
     model: str
     session_active: bool
     fallback_reason: str | None = None
     discount: Any = None
+    tier: str | None = None
+    # The effort the picked model accepts closest to the configured one.
+    reasoning_effort: str | None = None
+    # The context profile the run budgets with (registered in models.py).
+    profile: ModelContextProfile | None = None
+    expires_at: int | None = None
 
 
 DEFAULT_COPILOT_REASONING_EFFORT = "high"
-# Auto sessions are reopened this close to ``expires_at`` (VS Code uses the
-# same five-minute margin).
+# A routed run routes again when its session token is this close to
+# ``expires_at`` (VS Code's five-minute rule; the token lasts 24 h).
 COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS = 300
+# VS Code's CAPI client stamps this API version on every request; without
+# it the auto routes answer 404.
+COPILOT_AUTO_API_VERSION = "2026-08-01"
+# Routing is one small classification call (VS Code allows five seconds);
+# the catalog fetch is just as small. Both stay well under the chat timeout.
+COPILOT_AUTO_ROUTE_TIMEOUT_SECONDS = 20.0
+COPILOT_MODELS_CATALOG_TTL_SECONDS = 3600.0
+COPILOT_MODELS_CATALOG_RETRY_SECONDS = 300.0
 DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS = 300
 GITHUB_COPILOT_TOKEN_REFRESH_MARGIN_SECONDS = 300
 SUPPORTED_COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -261,7 +286,8 @@ class GitHubCopilotHTTPTransport:
     DEFAULT_BASE_URL = "https://api.githubcopilot.com"
     DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com"
     RESPONSES_PATH = "/responses"
-    AUTO_SESSION_PATH = "/models/session"
+    AUTO_ROUTE_PATH = "/auto"
+    MODELS_PATH = "/models"
 
     def __init__(
         self,
@@ -312,7 +338,9 @@ class GitHubCopilotHTTPTransport:
         self._source_credential: str | None = None
         self._refresh_lock = threading.Lock()
         self._token = credential
-        self._auto_session: CopilotAutoSession | None = None
+        self._models_catalog: dict[str, Mapping[str, Any]] | None = None
+        self._models_catalog_at = 0.0
+        self._models_catalog_failed_at: float | None = None
         self._auto_session_token: str | None = None
         self._auto_lock = threading.Lock()
         self.base_url = _normalize_base_url(self._explicit_base_url)
@@ -622,52 +650,128 @@ class GitHubCopilotHTTPTransport:
 
         self._auto_session_token = token or None
 
-    def auto_session(self, *, force: bool = False) -> CopilotAutoSession:
-        """Return the auto-mode session, opening or refreshing it as needed.
+    def auto_route(
+        self,
+        prompt: str,
+        *,
+        tier: str | None = None,
+        has_image: bool = False,
+    ) -> CopilotAutoDecision:
+        """Ask Copilot which model should answer ``prompt`` (``POST /auto``).
 
-        Mirrors VS Code: ``POST {base_url}/models/session`` with the chat headers
-        and ``{"auto_mode": {"model_hints": ["auto"]}}``; the answer names the
-        pool (``available_models``) and the ``session_token`` chat requests
-        then carry. The session is reused until it is within
-        COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS of ``expires_at``. Any
+        What current VS Code does behind its Auto picker: the body carries the
+        turn's prompt, the tier (``efficiency`` / ``balance`` /
+        ``intelligence``; omitted lets the server pick its default) and
+        ``has_image`` when the turn attaches one. The answer names the chosen
+        model with its metadata, the session token the chat request then
+        carries (``set_auto_session_token``) and the discount per model. Any
         failure raises ProviderAutoSessionError; the provider decides the
         fallback.
         """
 
+        text = str(prompt or "").strip()
+        if not text:
+            raise ProviderAutoSessionError("GitHub Copilot auto route needs a prompt")
+        body: dict[str, Any] = {"prompt": text}
+        if tier:
+            body["tier"] = tier
+        if has_image:
+            body["has_image"] = True
+        raw_body = self._capi_request(
+            "POST",
+            self.AUTO_ROUTE_PATH,
+            body=body,
+            timeout=self._auto_route_timeout(),
+            label="GitHub Copilot auto route request",
+        )
+        return _parse_auto_decision(raw_body, tier=tier)
+
+    def models_catalog(self, *, force: bool = False) -> Mapping[str, Mapping[str, Any]]:
+        """Copilot's model catalog (``GET /models``) by model id, cached for an hour.
+
+        A failed fetch is remembered for a few minutes and yields what was
+        cached before (or nothing), so a gateway hiccup costs one warning
+        rather than a round trip per run; callers treat a missing entry as
+        "no catalog data".
+        """
+
         with self._auto_lock:
-            cached = self._auto_session
+            now = time.monotonic()
+            cached = self._models_catalog
             if (
                 not force
                 and cached is not None
-                and not cached.expires_within(COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS)
+                and now - self._models_catalog_at < COPILOT_MODELS_CATALOG_TTL_SECONDS
             ):
                 return cached
-            session = self._open_auto_session()
-            self._auto_session = session
-            return session
+            failed_at = self._models_catalog_failed_at
+            if (
+                not force
+                and failed_at is not None
+                and now - failed_at < COPILOT_MODELS_CATALOG_RETRY_SECONDS
+            ):
+                return cached or {}
+            try:
+                raw_body = self._capi_request(
+                    "GET",
+                    self.MODELS_PATH,
+                    body=None,
+                    timeout=self._auto_route_timeout(),
+                    label="GitHub Copilot models request",
+                )
+                catalog = _parse_models_catalog(raw_body)
+            except ProviderAutoSessionError as exc:
+                self._models_catalog_failed_at = now
+                logger.warning("GitHub Copilot models catalog unavailable: %s", exc)
+                return cached or {}
+            self._models_catalog = catalog
+            self._models_catalog_at = now
+            self._models_catalog_failed_at = None
+            return catalog
 
-    def _open_auto_session(self) -> CopilotAutoSession:
+    def _auto_route_timeout(self) -> float:
+        if self.timeout is None:
+            return COPILOT_AUTO_ROUTE_TIMEOUT_SECONDS
+        return min(float(self.timeout), COPILOT_AUTO_ROUTE_TIMEOUT_SECONDS)
+
+    def _capi_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: Mapping[str, Any] | None,
+        timeout: float | None,
+        label: str,
+    ) -> bytes:
+        """One JSON request to a Copilot API route other than the chat endpoint."""
+
         self._refresh_source_token_if_needed()
         headers = self._headers()
         headers["Accept"] = "application/json"
-        headers.pop("Copilot-Session-Token", None)
-        body = json.dumps(
-            {"auto_mode": {"model_hints": [AUTO_MODEL_ID]}},
-            separators=(",", ":"),
-        ).encode("utf-8")
+        headers["X-GitHub-Api-Version"] = COPILOT_AUTO_API_VERSION
+        # Chat-only headers stay on the chat calls; these requests carry what
+        # VS Code's CAPI client sends.
+        for chat_only in ("Copilot-Session-Token", "Openai-Intent", "x-initiator"):
+            headers.pop(chat_only, None)
+        data = None
+        if body is not None:
+            data = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        else:
+            headers.pop("Content-Type", None)
         request = urllib_request.Request(
-            "{0}{1}".format(self.base_url, self.AUTO_SESSION_PATH),
-            data=body,
+            "{0}{1}".format(self.base_url, path),
+            data=data,
             headers=headers,
-            method="POST",
+            method=method,
         )
         try:
-            with self._open(request, timeout=self.timeout) as response:
-                raw_body = response.read()
+            with self._open(request, timeout=timeout) as response:
+                return response.read()
         except urllib_error.HTTPError as exc:
             detail = _redact_secret((_read_http_error_body(exc) or "").strip(), self._token)[:500]
             raise ProviderAutoSessionError(
-                "GitHub Copilot auto session request failed with HTTP {0}{1}".format(
+                "{0} failed with HTTP {1}{2}".format(
+                    label,
                     getattr(exc, "code", "?"),
                     ": " + detail if detail else "",
                 ),
@@ -675,14 +779,9 @@ class GitHubCopilotHTTPTransport:
             ) from None
         except urllib_error.URLError as exc:
             reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
-            raise ProviderAutoSessionError(
-                "GitHub Copilot auto session request failed: {0}".format(reason)
-            ) from None
+            raise ProviderAutoSessionError("{0} failed: {1}".format(label, reason)) from None
         except TimeoutError:
-            raise ProviderAutoSessionError(
-                _format_timeout_message("GitHub Copilot auto session request", self.timeout)
-            ) from None
-        return _parse_auto_session(raw_body)
+            raise ProviderAutoSessionError(_format_timeout_message(label, timeout)) from None
 
 
 class OpenAICompatibleProvider:
@@ -816,12 +915,14 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         # The model id the last payload actually carried (auto already
         # resolved); the runner stamps it on the assistant message.
         self.last_payload_model: str | None = None
+        # Which run ``auto_resolution`` was made for (see resolve_auto_model).
+        self._auto_run_key: Any = None
 
     async def invoke(self, request: RuntimeRequest) -> ProviderOutput:
-        if canonicalize_copilot_model_id(_requested_model(request) or self.model) == AUTO_MODEL_ID:
-            # Opening the auto session is blocking HTTP; keep it off the event
-            # loop. build_payload reuses the session the transport now caches.
-            await asyncio.to_thread(self.resolve_auto_model)
+        if is_auto_model_id(canonicalize_copilot_model_id(_requested_model(request) or self.model)):
+            # Routing is blocking HTTP; keep it off the event loop. build_payload
+            # then reuses the decision cached for this run.
+            await asyncio.to_thread(self.resolve_auto_model, request)
         return await super().invoke(request)
 
     def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
@@ -829,57 +930,150 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
 
         payload = super().build_payload(request)
         model = canonicalize_copilot_model_id(payload.get("model"))
-        if model == AUTO_MODEL_ID:
-            model = self.resolve_auto_model().model
+        reasoning_effort = self.reasoning_effort
+        if is_auto_model_id(model):
+            resolution = self.resolve_auto_model(request)
+            model = resolution.model
+            reasoning_effort = resolution.reasoning_effort or reasoning_effort
         else:
             self.auto_resolution = None
+            self._auto_run_key = None
             self._set_transport_auto_session_token(None)
         payload["model"] = model
         self.last_payload_model = model
         if self.endpoint == "responses":
-            payload["reasoning"] = {"effort": self.reasoning_effort}
+            payload["reasoning"] = {"effort": reasoning_effort}
         _inject_copilot_noop_tool_fallback(payload, request)
         return _sanitize_copilot_responses_payload(payload)
 
-    def resolve_auto_model(self) -> AutoModelResolution:
-        """Turn ``auto`` into the model this run sends (see models.select_auto_model).
+    def resolve_auto_model(
+        self,
+        request: RuntimeRequest | None = None,
+        *,
+        prompt: str | None = None,
+        tier: str | None = None,
+        run_key: Any = None,
+        history_chars: int | None = None,
+        has_image: bool = False,
+    ) -> AutoModelResolution:
+        """Turn an auto id into the model this run sends, the way VS Code's Auto does.
 
-        Opens or reuses the transport's auto session and picks the first
-        preferred model in its pool; the transport then adds the
-        Copilot-Session-Token header. Without a session (transport without
-        auto support, the endpoint refusing, a pool with no GPT model the
-        runtime drives) the run degrades to DEFAULT_MODEL_ID with no session
-        header, and ``auto_resolution.fallback_reason`` says why.
+        Routes once per run: ``POST /auto`` with the turn's prompt and the
+        auto id's tier. The model Copilot picks is admitted when the runtime
+        can drive it (served on ``/responses``, tool calls not refused, its
+        prompt budget covering the conversation so far); the transport then
+        carries the session token, the configured reasoning effort is clamped
+        to what the model lists, and the model's context profile (its
+        metadata from the answer, narrowed by the ``GET /models`` row and the
+        static row when they say less) is registered for the runner's budget.
+        Everything else degrades to DEFAULT_MODEL_ID without a session, with
+        ``fallback_reason`` saying why. Later calls for the same ``run_key``
+        (the run id, else the session and prompt) reuse the decision, so the
+        runner's routing at run start and every iteration's payload agree.
         """
 
-        opener = getattr(self.transport, "auto_session", None)
-        if not callable(opener):
-            return self._auto_fallback("transport has no auto-mode session support")
+        if request is not None:
+            if prompt is None:
+                prompt = _latest_user_prompt(request)
+            if tier is None:
+                tier = auto_tier_for(_requested_model(request) or self.model)
+            if run_key is None:
+                run_key = _auto_run_key(request, prompt)
+            if history_chars is None:
+                history_chars = _request_history_chars(request)
+            if not has_image:
+                has_image = bool(request.metadata.get("attached_image_count"))
+        elif tier is None:
+            tier = auto_tier_for(self.model)
+        if run_key is None:
+            run_key = ("prompt", prompt)
+        current = self.auto_resolution
+        if current is not None and self._auto_run_key == run_key and not _resolution_expired(current):
+            return current
+        self._auto_run_key = run_key
+        router = getattr(self.transport, "auto_route", None)
+        if not callable(router):
+            return self._auto_fallback("transport has no auto routing support", tier=tier)
+        text = str(prompt or "").strip()
+        if not text:
+            return self._auto_fallback("no prompt to route", tier=tier)
         try:
-            session = opener()
-        except Exception as exc:  # noqa: BLE001 - any session failure degrades to the default model.
+            decision = router(text, tier=tier, has_image=has_image)
+        except Exception as exc:  # noqa: BLE001 - any routing failure degrades to the default model.
             return self._auto_fallback(
-                "auto session unavailable: {0}".format(str(exc) or exc.__class__.__name__)
+                "auto route unavailable: {0}".format(str(exc) or exc.__class__.__name__),
+                tier=tier,
             )
-        available = tuple(getattr(session, "available_models", ()) or ())
-        model = select_auto_model(available)
-        if model is None:
+        model = str(getattr(decision, "model", "") or "").strip().lower()
+        if not model:
+            return self._auto_fallback("auto route named no model", tier=tier)
+        metadata = getattr(decision, "metadata", None)
+        catalog_entry = self._catalog_entry(model)
+        refusal = _auto_pick_refusal(model, metadata, catalog_entry)
+        if refusal is not None:
+            return self._auto_fallback(refusal, tier=tier)
+        profile = smallest_model_context_profile(
+            (
+                copilot_model_context_profile(metadata),
+                copilot_model_context_profile(catalog_entry),
+                static_model_context_profile(model),
+            )
+        )
+        if profile is None:
             return self._auto_fallback(
-                "no supported GPT model in the auto pool ({0})".format(
-                    ", ".join(str(entry) for entry in available) or "empty"
+                "selected model {0} has no usable context metadata".format(model),
+                tier=tier,
+            )
+        if history_chars is not None:
+            budget_tokens = model_prompt_budget_tokens(profile)
+            history_tokens = max(0, int(history_chars)) // max(1, profile.chars_per_token)
+            if history_tokens > budget_tokens:
+                return self._auto_fallback(
+                    "selected model {0}: prompt budget {1} tokens is below the conversation's ~{2} tokens".format(
+                        model,
+                        budget_tokens,
+                        history_tokens,
+                    ),
+                    tier=tier,
                 )
-            )
-        self._set_transport_auto_session_token(session.session_token)
-        discounts = getattr(session, "discounted_costs", None)
+        register_model_context_profile(profile)
+        self._set_transport_auto_session_token(decision.session_token)
+        discounts = getattr(decision, "discounted_costs", None)
         resolution = AutoModelResolution(
             model=model,
             session_active=True,
             discount=discounts.get(model) if isinstance(discounts, Mapping) else None,
+            tier=tier,
+            reasoning_effort=_clamp_reasoning_effort(
+                self.reasoning_effort,
+                _allowed_reasoning_efforts(metadata, catalog_entry),
+            ),
+            profile=profile,
+            expires_at=getattr(decision, "expires_at", None),
         )
         self.auto_resolution = resolution
+        logger.info(
+            "GitHub Copilot auto (%s): routed to %s (window %s tokens, effort %s)",
+            tier or "server default",
+            model,
+            profile.context_window_tokens,
+            resolution.reasoning_effort,
+        )
         return resolution
 
-    def _auto_fallback(self, reason: str) -> AutoModelResolution:
+    def _catalog_entry(self, model: str) -> Mapping[str, Any] | None:
+        lookup = getattr(self.transport, "models_catalog", None)
+        if not callable(lookup):
+            return None
+        try:
+            catalog = lookup()
+        except Exception as exc:  # noqa: BLE001 - the catalog only narrows metadata.
+            logger.warning("GitHub Copilot models catalog lookup failed: %s", exc)
+            return None
+        entry = catalog.get(model) if isinstance(catalog, Mapping) else None
+        return entry if isinstance(entry, Mapping) else None
+
+    def _auto_fallback(self, reason: str, *, tier: str | None = None) -> AutoModelResolution:
         self._set_transport_auto_session_token(None)
         previous = self.auto_resolution
         if previous is None or previous.fallback_reason != reason:
@@ -892,6 +1086,8 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             model=DEFAULT_MODEL_ID,
             session_active=False,
             fallback_reason=reason,
+            tier=tier,
+            profile=static_model_context_profile(DEFAULT_MODEL_ID),
         )
         self.auto_resolution = resolution
         return resolution
@@ -1985,34 +2181,190 @@ def _is_context_overflow_message(message: str) -> bool:
     return any(marker in text for marker in _CONTEXT_OVERFLOW_MESSAGE_MARKERS)
 
 
-def _parse_auto_session(raw_body: bytes) -> CopilotAutoSession:
+def _parse_auto_decision(raw_body: bytes, *, tier: str | None) -> CopilotAutoDecision:
+    data = _decode_capi_object(raw_body, "GitHub Copilot auto route")
+    session_token = data.get("session_token")
+    if not isinstance(session_token, str) or not session_token.strip():
+        raise ProviderAutoSessionError("GitHub Copilot auto route returned no session_token")
+    expires_at = data.get("expires_at")
+    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)) or expires_at <= 0:
+        raise ProviderAutoSessionError("GitHub Copilot auto route returned an invalid expires_at")
+    selected = data.get("selected_model")
+    if not isinstance(selected, Mapping):
+        raise ProviderAutoSessionError("GitHub Copilot auto route returned no selected_model")
+    model = selected.get("id")
+    if not isinstance(model, str) or not model.strip():
+        raise ProviderAutoSessionError("GitHub Copilot auto route returned a selected_model without an id")
+    discounts = data.get("discounted_costs")
+    return CopilotAutoDecision(
+        model=model.strip().lower(),
+        session_token=session_token.strip(),
+        expires_at=int(expires_at),
+        tier=tier,
+        metadata=dict(selected),
+        discounted_costs=dict(discounts) if isinstance(discounts, Mapping) else {},
+    )
+
+
+def _parse_models_catalog(raw_body: bytes) -> dict[str, Mapping[str, Any]]:
+    data = _decode_capi_object(raw_body, "GitHub Copilot models request")
+    rows = data.get("data")
+    if not isinstance(rows, list):
+        raise ProviderAutoSessionError("GitHub Copilot models request returned no data list")
+    catalog: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        model_id = row.get("id")
+        if isinstance(model_id, str) and model_id.strip():
+            catalog[model_id.strip().lower()] = dict(row)
+    return catalog
+
+
+def _decode_capi_object(raw_body: bytes, label: str) -> Mapping[str, Any]:
     try:
         data = json.loads(raw_body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ProviderAutoSessionError("GitHub Copilot auto session returned invalid JSON") from exc
+        raise ProviderAutoSessionError("{0} returned invalid JSON".format(label)) from exc
     if not isinstance(data, Mapping):
-        raise ProviderAutoSessionError(
-            "GitHub Copilot auto session returned a non-object JSON response"
-        )
-    session_token = data.get("session_token")
-    if not isinstance(session_token, str) or not session_token.strip():
-        raise ProviderAutoSessionError("GitHub Copilot auto session returned no session_token")
-    expires_at = data.get("expires_at")
-    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)) or expires_at <= 0:
-        raise ProviderAutoSessionError("GitHub Copilot auto session returned an invalid expires_at")
-    raw_models = data.get("available_models")
-    available = (
-        tuple(entry.strip() for entry in raw_models if isinstance(entry, str) and entry.strip())
-        if isinstance(raw_models, list)
-        else ()
-    )
-    discounts = data.get("discounted_costs")
-    return CopilotAutoSession(
-        session_token=session_token.strip(),
-        expires_at=int(expires_at),
-        available_models=available,
-        discounted_costs=dict(discounts) if isinstance(discounts, Mapping) else {},
-    )
+        raise ProviderAutoSessionError("{0} returned a non-object JSON response".format(label))
+    return data
+
+
+def _latest_user_prompt(request: RuntimeRequest) -> str:
+    """The text Copilot routes on: the member's words for this turn.
+
+    The gateway keeps them as ``original_user_message`` (the model gets a
+    composed prompt with attachment context first); otherwise the last user
+    message of the provider request, then of the session history.
+    """
+
+    original = request.metadata.get("original_user_message")
+    if isinstance(original, str) and original.strip():
+        return original.strip()
+    provider_request = getattr(request, "provider_request", None)
+    for message in reversed(list(getattr(provider_request, "messages", None) or ())):
+        if getattr(message, "role", None) != "user":
+            continue
+        text = getattr(message, "text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    for message in reversed(list(getattr(request, "messages", None) or ())):
+        role = getattr(message, "role", None)
+        if str(getattr(role, "value", role)) != "user":
+            continue
+        text = " ".join(
+            str(getattr(part, "text", "") or "")
+            for part in (getattr(message, "parts", None) or ())
+            if isinstance(getattr(part, "text", None), str)
+        ).strip()
+        if text:
+            return text
+    return ""
+
+
+def _auto_run_key(request: RuntimeRequest, prompt: str | None) -> Any:
+    run_id = request.metadata.get("run_id")
+    if isinstance(run_id, str) and run_id.strip():
+        return run_id.strip()
+    return ("session", request.session_id, prompt)
+
+
+def _request_history_chars(request: RuntimeRequest) -> int:
+    """A chars/4-style size of the provider request (what the budget rule compares)."""
+
+    provider_request = getattr(request, "provider_request", None)
+    total = 0
+    for message in getattr(provider_request, "messages", None) or ():
+        for part in getattr(message, "parts", None) or ():
+            text = getattr(part, "text", None)
+            if isinstance(text, str):
+                total += len(text)
+            for attr in ("reasoning", "tool_call", "tool_result", "context"):
+                payload = getattr(part, attr, None)
+                if payload is None:
+                    continue
+                for field_name in ("text", "arguments_text", "content", "summary"):
+                    value = getattr(payload, field_name, None)
+                    if isinstance(value, str):
+                        total += len(value)
+    return total
+
+
+def _auto_pick_refusal(model: str, *sources: Any) -> str | None:
+    """Why the runtime cannot drive the model Copilot picked, or None when it can.
+
+    Judged on the model's metadata (the ``/auto`` answer first, then the
+    ``GET /models`` row): a non-chat model, a model not served on
+    ``/responses`` (the only endpoint this provider speaks) or one that
+    refuses tool calls cannot run an agent turn.
+    """
+
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        capabilities = source.get("capabilities")
+        capabilities = capabilities if isinstance(capabilities, Mapping) else {}
+        kind = capabilities.get("type")
+        if isinstance(kind, str) and kind.strip() and kind.strip() != "chat":
+            return "selected model {0} is a {1} model, not a chat model".format(model, kind.strip())
+        endpoints = source.get("supported_endpoints")
+        if isinstance(endpoints, list) and endpoints:
+            served = any(
+                isinstance(entry, str) and entry.strip().lstrip("ws:").startswith("/responses")
+                for entry in endpoints
+            )
+            if not served:
+                return "selected model {0} is not served on /responses (endpoints: {1})".format(
+                    model,
+                    ", ".join(str(entry) for entry in endpoints),
+                )
+        supports = capabilities.get("supports")
+        if isinstance(supports, Mapping) and supports.get("tool_calls") is False:
+            return "selected model {0} does not support tool calls".format(model)
+    return None
+
+
+def _allowed_reasoning_efforts(*sources: Any) -> tuple[str, ...] | None:
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        capabilities = source.get("capabilities")
+        supports = capabilities.get("supports") if isinstance(capabilities, Mapping) else None
+        efforts = supports.get("reasoning_effort") if isinstance(supports, Mapping) else None
+        if isinstance(efforts, list):
+            allowed = tuple(
+                entry.strip().lower() for entry in efforts if isinstance(entry, str) and entry.strip()
+            )
+            if allowed:
+                return allowed
+    return None
+
+
+_REASONING_EFFORT_LADDER = ("none", "low", "medium", "high", "xhigh", "max")
+
+
+def _clamp_reasoning_effort(configured: str, allowed: tuple[str, ...] | None) -> str:
+    """The configured effort, or the nearest one the model lists (lower first)."""
+
+    if not allowed or configured in allowed or configured not in _REASONING_EFFORT_LADDER:
+        return configured
+    index = _REASONING_EFFORT_LADDER.index(configured)
+    for candidate in reversed(_REASONING_EFFORT_LADDER[:index]):
+        # ``none`` is never sent on the runtime's behalf.
+        if candidate in allowed and candidate != "none":
+            return candidate
+    for candidate in _REASONING_EFFORT_LADDER[index + 1 :]:
+        if candidate in allowed:
+            return candidate
+    return configured
+
+
+def _resolution_expired(resolution: AutoModelResolution) -> bool:
+    expires_at = resolution.expires_at
+    if expires_at is None:
+        return False
+    return expires_at - time.time() < COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS
 
 
 def _is_model_unavailable_message(message: str) -> bool:

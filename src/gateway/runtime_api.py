@@ -1244,7 +1244,7 @@ def _normalize_chat_history_message(
         # reads them top-level like the author fields.
         persisted_metadata = normalized_message.get("metadata")
         persisted_metadata = persisted_metadata if isinstance(persisted_metadata, dict) else {}
-        for key in ("model", "requested_model", "model_fallback_reason"):
+        for key in ("model", "requested_model", "model_fallback_reason", "auto_tier"):
             value = persisted_metadata.get(key)
             if isinstance(value, str) and value and not normalized_message.get(key):
                 normalized_message[key] = value
