@@ -712,7 +712,7 @@ def _join_url(host: str, uri: str) -> str:
 
 def _resolve_ai_platform_model(model: str | None) -> str:
     # Coerce to a valid AI Platform model. /api/chat forwards a Copilot default
-    # model id (e.g. gpt-5.6-terra) when llm.model is unset, which AI Platform
+    # model id (e.g. gpt-6-sol) when llm.model is unset, which AI Platform
     # does not serve; fall back to the AI Platform default in that case.
     configured = str(model or config.llm.get("model") or "").strip()
     if configured in AI_PLATFORM_MODEL_IDS:

@@ -95,7 +95,8 @@ Copilot transport base URL; otherwise EFP uses the exchanged token `proxy-ep`
 when present.
 
 Supported GitHub Copilot models are `gpt-6-sol` (default), `gpt-6.1-sol`,
-`gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
+`gpt-6-astra`, and `gpt-6-luna`. The GPT-5.6 line is no longer offered on
+Copilot (AI Platform still serves it).
 
 ### Control-Plane Runtime Settings
 

@@ -255,12 +255,12 @@ async def test_github_copilot_provider_requested_model_only_changes_payload_mode
     result = await runner.run(
         session_id="session-copilot-model-hint",
         user_text="Answer with requested model.",
-        metadata={"requested_model": "gpt-5.6 luna"},
+        metadata={"requested_model": "gpt-6 luna"},
     )
 
     assert result.status == LoopStatus.COMPLETED
     assert provider.model == "gpt-6-sol"
-    assert transport.payloads[0]["model"] == "gpt-5.6-luna"
+    assert transport.payloads[0]["model"] == "gpt-6-luna"
     assert "metadata" not in transport.payloads[0]
 
 
@@ -313,9 +313,6 @@ def test_github_copilot_provider_rejects_invalid_reasoning_effort_locally():
 
 def test_github_copilot_supported_models_and_reasoning_are_exact():
     assert SUPPORTED_COPILOT_MODEL_IDS == (
-        "gpt-5.6-luna",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
         "gpt-6-astra",
         "gpt-6-luna",
         "gpt-6-sol",
@@ -1555,11 +1552,11 @@ def test_github_copilot_provider_from_env_reads_token_and_base_url():
 
 def test_github_copilot_provider_from_env_falls_back_to_github_token():
     provider = github_copilot_provider_from_env(
-        model="gpt-5.6 sol",
+        model="gpt-6.1 sol",
         env={"GITHUB_COPILOT_TOKEN": "github-token"},
     )
 
-    assert provider.model == "gpt-5.6-sol"
+    assert provider.model == "gpt-6.1-sol"
     assert isinstance(provider.transport, GitHubCopilotHTTPTransport)
     assert provider.transport._headers()["Authorization"] == "Bearer github-token"
 
