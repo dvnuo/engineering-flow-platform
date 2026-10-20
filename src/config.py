@@ -959,6 +959,13 @@ DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
         "max_prompt_tokens": 922000,
         "max_output_tokens": 128000,
     },
+    # Copilot auto resolves to one of the GPT-6 line per run; budget as the
+    # smallest of them.
+    "auto": {
+        "max_context_window_tokens": 1050000,
+        "max_prompt_tokens": 922000,
+        "max_output_tokens": 128000,
+    },
     "gemini-2.5-pro": {
         "max_context_window_tokens": 128_000,
         "max_prompt_tokens": 128_000,

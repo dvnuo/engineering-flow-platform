@@ -98,6 +98,16 @@ Supported GitHub Copilot models are `gpt-6-sol` (default), `gpt-6.1-sol`,
 `gpt-6-astra`, and `gpt-6-luna`. The GPT-5.6 line is no longer offered on
 Copilot (AI Platform still serves it).
 
+`model: "auto"` hands the choice to Copilot's auto mode: each run opens an
+auto session (`POST /models/session`), sends the first of `gpt-6.1-sol`,
+`gpt-6-sol`, `gpt-6-luna`, `gpt-6-astra` that Copilot lists as available,
+and carries the session token so the request is billed in the auto pool.
+If the session cannot be opened (for example the endpoint refuses the
+token) or the pool holds no GPT model the runtime drives, the run falls
+back to `gpt-6-sol` without the session and `usage.updated` events report
+`resolved_model_fallback`; `resolved_model` always names the model that
+actually answered.
+
 ### Control-Plane Runtime Settings
 
 ```yaml
