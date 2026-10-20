@@ -14,6 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import inspect
 import json
+import logging
 import os
 import re
 import threading
@@ -29,10 +30,12 @@ from .errors import (
     ProviderTransientError,
 )
 from .models import (
+    AUTO_MODEL_ID,
     DEFAULT_MODEL_ID,
     DEFAULT_PROVIDER_ID,
     SUPPORTED_COPILOT_MODEL_IDS,
     canonicalize_copilot_model_id,
+    select_auto_model,
 )
 from .openai import (
     normalize_responses_call_id,
@@ -49,6 +52,9 @@ TransportOutput = Union[
     Iterable[Mapping[str, Any]],
     AsyncIterable[Mapping[str, Any]],
 ]
+
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderTransport(Protocol):
@@ -125,7 +131,42 @@ class CopilotTokenExchange:
     api_base_url: str | None = None
 
 
+class ProviderAutoSessionError(ProviderTransportError):
+    """Raised when GitHub Copilot refuses or fails to open an auto-mode session."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class CopilotAutoSession:
+    """One GitHub Copilot auto-mode session (``POST /models/session``)."""
+
+    session_token: str
+    expires_at: int
+    available_models: tuple[str, ...]
+    discounted_costs: Mapping[str, Any]
+
+    def expires_within(self, seconds: int, *, now: float | None = None) -> bool:
+        current = time.time() if now is None else now
+        return self.expires_at - current < seconds
+
+
+@dataclass(frozen=True)
+class AutoModelResolution:
+    """What ``auto`` became for one provider instance, i.e. one run."""
+
+    model: str
+    session_active: bool
+    fallback_reason: str | None = None
+    discount: Any = None
+
+
 DEFAULT_COPILOT_REASONING_EFFORT = "high"
+# Auto sessions are reopened this close to ``expires_at`` (VS Code uses the
+# same five-minute margin).
+COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS = 300
 DEFAULT_GITHUB_COPILOT_TIMEOUT_SECONDS = 300
 GITHUB_COPILOT_TOKEN_REFRESH_MARGIN_SECONDS = 300
 SUPPORTED_COPILOT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -220,6 +261,7 @@ class GitHubCopilotHTTPTransport:
     DEFAULT_BASE_URL = "https://api.githubcopilot.com"
     DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com"
     RESPONSES_PATH = "/responses"
+    AUTO_SESSION_PATH = "/models/session"
 
     def __init__(
         self,
@@ -270,6 +312,9 @@ class GitHubCopilotHTTPTransport:
         self._source_credential: str | None = None
         self._refresh_lock = threading.Lock()
         self._token = credential
+        self._auto_session: CopilotAutoSession | None = None
+        self._auto_session_token: str | None = None
+        self._auto_lock = threading.Lock()
         self.base_url = _normalize_base_url(self._explicit_base_url)
         self.endpoint = "{0}{1}".format(self.base_url, self.RESPONSES_PATH)
 
@@ -557,7 +602,7 @@ class GitHubCopilotHTTPTransport:
         return True
 
     def _headers(self, *, stream: bool = False) -> dict[str, str]:
-        return {
+        headers = {
             "Authorization": "Bearer {0}".format(self._token),
             "Content-Type": "application/json",
             "Accept": "text/event-stream" if stream else "application/vnd.github.copilot-chat-preview+json",
@@ -568,6 +613,76 @@ class GitHubCopilotHTTPTransport:
             "Openai-Intent": "conversation-edits",
             "x-initiator": self.initiator,
         }
+        if self._auto_session_token:
+            headers["Copilot-Session-Token"] = self._auto_session_token
+        return headers
+
+    def set_auto_session_token(self, token: str | None) -> None:
+        """Attach (``str``) or drop (``None``) the Copilot-Session-Token header."""
+
+        self._auto_session_token = token or None
+
+    def auto_session(self, *, force: bool = False) -> CopilotAutoSession:
+        """Return the auto-mode session, opening or refreshing it as needed.
+
+        Mirrors VS Code: ``POST {base_url}/models/session`` with the chat headers
+        and ``{"auto_mode": {"model_hints": ["auto"]}}``; the answer names the
+        pool (``available_models``) and the ``session_token`` chat requests
+        then carry. The session is reused until it is within
+        COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS of ``expires_at``. Any
+        failure raises ProviderAutoSessionError; the provider decides the
+        fallback.
+        """
+
+        with self._auto_lock:
+            cached = self._auto_session
+            if (
+                not force
+                and cached is not None
+                and not cached.expires_within(COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS)
+            ):
+                return cached
+            session = self._open_auto_session()
+            self._auto_session = session
+            return session
+
+    def _open_auto_session(self) -> CopilotAutoSession:
+        self._refresh_source_token_if_needed()
+        headers = self._headers()
+        headers["Accept"] = "application/json"
+        headers.pop("Copilot-Session-Token", None)
+        body = json.dumps(
+            {"auto_mode": {"model_hints": [AUTO_MODEL_ID]}},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        request = urllib_request.Request(
+            "{0}{1}".format(self.base_url, self.AUTO_SESSION_PATH),
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with self._open(request, timeout=self.timeout) as response:
+                raw_body = response.read()
+        except urllib_error.HTTPError as exc:
+            detail = _redact_secret((_read_http_error_body(exc) or "").strip(), self._token)[:500]
+            raise ProviderAutoSessionError(
+                "GitHub Copilot auto session request failed with HTTP {0}{1}".format(
+                    getattr(exc, "code", "?"),
+                    ": " + detail if detail else "",
+                ),
+                status_code=getattr(exc, "code", None),
+            ) from None
+        except urllib_error.URLError as exc:
+            reason = _redact_secret(str(getattr(exc, "reason", exc)), self._token)
+            raise ProviderAutoSessionError(
+                "GitHub Copilot auto session request failed: {0}".format(reason)
+            ) from None
+        except TimeoutError:
+            raise ProviderAutoSessionError(
+                _format_timeout_message("GitHub Copilot auto session request", self.timeout)
+            ) from None
+        return _parse_auto_session(raw_body)
 
 
 class OpenAICompatibleProvider:
@@ -695,16 +810,92 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             reasoning_effort=canonical_reasoning_effort,
             adapter=adapter,
         )
+        # What ``auto`` resolved to for this provider instance (one run); None
+        # while no auto request has been built.
+        self.auto_resolution: AutoModelResolution | None = None
+
+    async def invoke(self, request: RuntimeRequest) -> ProviderOutput:
+        if canonicalize_copilot_model_id(_requested_model(request) or self.model) == AUTO_MODEL_ID:
+            # Opening the auto session is blocking HTTP; keep it off the event
+            # loop. build_payload reuses the session the transport now caches.
+            await asyncio.to_thread(self.resolve_auto_model)
+        return await super().invoke(request)
 
     def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
         """Project a request and apply GitHub Copilot request quirks."""
 
         payload = super().build_payload(request)
-        payload["model"] = canonicalize_copilot_model_id(payload.get("model"))
+        model = canonicalize_copilot_model_id(payload.get("model"))
+        if model == AUTO_MODEL_ID:
+            model = self.resolve_auto_model().model
+        else:
+            self.auto_resolution = None
+            self._set_transport_auto_session_token(None)
+        payload["model"] = model
         if self.endpoint == "responses":
             payload["reasoning"] = {"effort": self.reasoning_effort}
         _inject_copilot_noop_tool_fallback(payload, request)
         return _sanitize_copilot_responses_payload(payload)
+
+    def resolve_auto_model(self) -> AutoModelResolution:
+        """Turn ``auto`` into the model this run sends (see models.select_auto_model).
+
+        Opens or reuses the transport's auto session and picks the first
+        preferred model in its pool; the transport then adds the
+        Copilot-Session-Token header. Without a session (transport without
+        auto support, the endpoint refusing, a pool with no GPT model the
+        runtime drives) the run degrades to DEFAULT_MODEL_ID with no session
+        header, and ``auto_resolution.fallback_reason`` says why.
+        """
+
+        opener = getattr(self.transport, "auto_session", None)
+        if not callable(opener):
+            return self._auto_fallback("transport has no auto-mode session support")
+        try:
+            session = opener()
+        except Exception as exc:  # noqa: BLE001 - any session failure degrades to the default model.
+            return self._auto_fallback(
+                "auto session unavailable: {0}".format(str(exc) or exc.__class__.__name__)
+            )
+        available = tuple(getattr(session, "available_models", ()) or ())
+        model = select_auto_model(available)
+        if model is None:
+            return self._auto_fallback(
+                "no supported GPT model in the auto pool ({0})".format(
+                    ", ".join(str(entry) for entry in available) or "empty"
+                )
+            )
+        self._set_transport_auto_session_token(session.session_token)
+        discounts = getattr(session, "discounted_costs", None)
+        resolution = AutoModelResolution(
+            model=model,
+            session_active=True,
+            discount=discounts.get(model) if isinstance(discounts, Mapping) else None,
+        )
+        self.auto_resolution = resolution
+        return resolution
+
+    def _auto_fallback(self, reason: str) -> AutoModelResolution:
+        self._set_transport_auto_session_token(None)
+        previous = self.auto_resolution
+        if previous is None or previous.fallback_reason != reason:
+            logger.warning(
+                "GitHub Copilot auto: sending %s without a session (%s)",
+                DEFAULT_MODEL_ID,
+                reason,
+            )
+        resolution = AutoModelResolution(
+            model=DEFAULT_MODEL_ID,
+            session_active=False,
+            fallback_reason=reason,
+        )
+        self.auto_resolution = resolution
+        return resolution
+
+    def _set_transport_auto_session_token(self, token: str | None) -> None:
+        setter = getattr(self.transport, "set_auto_session_token", None)
+        if callable(setter):
+            setter(token)
 
     def _transport_error_response(self, exc: BaseException) -> dict[str, Any]:
         response = super()._transport_error_response(exc)
@@ -712,6 +903,8 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         if isinstance(metadata, dict):
             metadata["provider"] = DEFAULT_PROVIDER_ID
             metadata["provider_id"] = DEFAULT_PROVIDER_ID
+            if self.auto_resolution is not None:
+                metadata["resolved_model"] = self.auto_resolution.model
         return response
 
 
@@ -1787,11 +1980,42 @@ def _is_context_overflow_message(message: str) -> bool:
     return any(marker in text for marker in _CONTEXT_OVERFLOW_MESSAGE_MARKERS)
 
 
+def _parse_auto_session(raw_body: bytes) -> CopilotAutoSession:
+    try:
+        data = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProviderAutoSessionError("GitHub Copilot auto session returned invalid JSON") from exc
+    if not isinstance(data, Mapping):
+        raise ProviderAutoSessionError(
+            "GitHub Copilot auto session returned a non-object JSON response"
+        )
+    session_token = data.get("session_token")
+    if not isinstance(session_token, str) or not session_token.strip():
+        raise ProviderAutoSessionError("GitHub Copilot auto session returned no session_token")
+    expires_at = data.get("expires_at")
+    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)) or expires_at <= 0:
+        raise ProviderAutoSessionError("GitHub Copilot auto session returned an invalid expires_at")
+    raw_models = data.get("available_models")
+    available = (
+        tuple(entry.strip() for entry in raw_models if isinstance(entry, str) and entry.strip())
+        if isinstance(raw_models, list)
+        else ()
+    )
+    discounts = data.get("discounted_costs")
+    return CopilotAutoSession(
+        session_token=session_token.strip(),
+        expires_at=int(expires_at),
+        available_models=available,
+        discounted_costs=dict(discounts) if isinstance(discounts, Mapping) else {},
+    )
+
+
 def _is_model_unavailable_message(message: str) -> bool:
     text = message.lower()
     return (
         "requested model is not available" in text
         or "model is not available" in text
+        or "not available for session" in text
     )
 
 

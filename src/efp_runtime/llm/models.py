@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -25,6 +26,20 @@ SUPPORTED_COPILOT_MODEL_IDS = (
     "gpt-6-luna",
     "gpt-6-sol",
     "gpt-6.1-sol",
+)
+
+# Copilot "auto" is not a model the chat API accepts but a routing mode: the
+# runtime opens an auto session (POST /models/session), sends the first entry
+# of COPILOT_AUTO_PREFERENCE that Copilot lists as available, and attaches the
+# session token (see GitHubCopilotProvider.resolve_auto_model). The pool
+# Copilot returns also holds Claude, Gemini and MAI models the runtime cannot
+# drive, so only ids in SUPPORTED_COPILOT_MODEL_IDS are ever chosen.
+AUTO_MODEL_ID = "auto"
+COPILOT_AUTO_PREFERENCE = (
+    "gpt-6.1-sol",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-6-astra",
 )
 
 # AI Platform (enterprise gateway) models. Must stay aligned with the Portal
@@ -100,9 +115,47 @@ def canonicalize_copilot_model_id(value: Any) -> str:
             raise ValueError(_unsupported_model_message(value))
         text = model
     model_id = _normalize_model_identifier(text)
+    if model_id == AUTO_MODEL_ID:
+        return AUTO_MODEL_ID
     if model_id not in SUPPORTED_COPILOT_MODEL_IDS:
         raise ValueError(_unsupported_model_message(value))
     return model_id
+
+
+def is_auto_model_id(value: Any) -> bool:
+    """Whether ``value`` names Copilot auto (``auto`` or ``github-copilot/auto``)."""
+
+    _, model_id = _split_model_id(value)
+    return model_id == AUTO_MODEL_ID
+
+
+def select_auto_model(
+    available_models: Iterable[Any] | None,
+    *,
+    preference: tuple[str, ...] = COPILOT_AUTO_PREFERENCE,
+) -> str | None:
+    """Pick the concrete model an auto session should send, or ``None``.
+
+    ``available_models`` is Copilot's pool for the session. The first entry
+    of ``preference`` present in the pool wins, then any other supported id
+    in catalog order; models the runtime cannot drive (anything outside
+    ``SUPPORTED_COPILOT_MODEL_IDS``) are never chosen, so an empty result
+    means the caller must fall back to a concrete default without the
+    session.
+    """
+
+    pool: set[str] = set()
+    for entry in available_models or ():
+        _, model_id = _split_model_id(entry)
+        if model_id:
+            pool.add(model_id)
+    for candidate in preference:
+        if candidate in pool and candidate in SUPPORTED_COPILOT_MODEL_IDS:
+            return candidate
+    for candidate in SUPPORTED_COPILOT_MODEL_IDS:
+        if candidate in pool:
+            return candidate
+    return None
 
 
 def tokens_to_chars(
@@ -251,6 +304,15 @@ _COPILOT_PROFILES = {
         context_window_tokens=1_050_000,
         default_reserve_tokens=128_000,
     ),
+    # Copilot auto resolves to one of COPILOT_AUTO_PREFERENCE per run, but the
+    # context budget is fixed before the call, so it carries the smallest
+    # window of the models it may pick (all 1,050,000 today;
+    # test_copilot_auto_model.py pins that invariant).
+    AUTO_MODEL_ID: _profile(
+        AUTO_MODEL_ID,
+        context_window_tokens=1_050_000,
+        default_reserve_tokens=128_000,
+    ),
 }
 
 _CONSERVATIVE_FALLBACK_PROFILE = _profile(
@@ -294,7 +356,7 @@ def _normalize_model_identifier(value: Any) -> str | None:
 
 
 def _unsupported_model_message(value: Any) -> str:
-    supported = ", ".join(SUPPORTED_COPILOT_MODEL_IDS)
+    supported = ", ".join((*SUPPORTED_COPILOT_MODEL_IDS, AUTO_MODEL_ID))
     return "unsupported GitHub Copilot model {0!r}; supported models: {1}".format(
         value,
         supported,
@@ -312,7 +374,9 @@ def _validate_positive_int(value: Any, field_name: str) -> None:
 
 
 __all__ = [
+    "AUTO_MODEL_ID",
     "CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR",
+    "COPILOT_AUTO_PREFERENCE",
     "DEFAULT_CHARS_PER_TOKEN",
     "DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS",
     "DEFAULT_MODEL_ID",
@@ -324,7 +388,9 @@ __all__ = [
     "canonicalize_copilot_model_id",
     "context_safety_margin_tokens",
     "default_max_context_tokens",
+    "is_auto_model_id",
     "is_catalog_model_context_profile",
     "resolve_model_context_profile",
+    "select_auto_model",
     "tokens_to_chars",
 ]

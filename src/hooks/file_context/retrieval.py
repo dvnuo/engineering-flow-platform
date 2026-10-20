@@ -112,6 +112,7 @@ class RetrievalEngine:
             "gpt-6-luna",
             "gpt-6-sol",
             "gpt-6.1-sol",
+            "auto",
             "gemini-2.5-pro",
             "gemini-3.5-flash",
         )

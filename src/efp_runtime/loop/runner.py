@@ -656,6 +656,7 @@ class RuntimeLoopRunner:
                             "step_usage": _usage_payload(step_usage),
                             "iteration_usage": _usage_payload(iteration_usage),
                             "usage": _usage_payload(run_usage),
+                            **_resolved_model_payload(self.provider),
                         },
                     )
                 )
@@ -2465,6 +2466,24 @@ def _summary_with_estimated_cost(
 
 def _usage_payload(summary: UsageSummary) -> dict[str, Any]:
     return summary.to_dict()
+
+
+def _resolved_model_payload(provider: Any) -> dict[str, Any]:
+    """``resolved_model`` for usage events once the provider has routed ``auto``.
+
+    Absent for a concrete model, so existing payloads are unchanged; carries
+    ``resolved_model_fallback`` when auto degraded to the default model.
+    """
+
+    resolution = getattr(provider, "auto_resolution", None)
+    model = getattr(resolution, "model", None)
+    if not isinstance(model, str) or not model:
+        return {}
+    payload: dict[str, Any] = {"resolved_model": model}
+    reason = getattr(resolution, "fallback_reason", None)
+    if isinstance(reason, str) and reason:
+        payload["resolved_model_fallback"] = reason
+    return payload
 
 
 def _annotate_latest_step_usage_event(
