@@ -944,47 +944,48 @@ DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
         "max_prompt_tokens": 272000,
         "max_output_tokens": 128000,
     },
-    # GPT-6 and GPT-6.1 Sol: OpenAI publishes a 1M-class window, but Copilot's
-    # own catalog (GET /models, Business plan, 2026-10-20) reports 400k with a
-    # 272k prompt cap and the 128k output cap for the whole line, and the
-    # gateway is what the requests answer to.
+    # GPT-6 and GPT-6.1 Sol: Copilot's catalog (GET /models with the
+    # API-version header, 2026-10-20) carries OpenAI's windows, 1,050,000 for
+    # Astra and 6.1 Sol and 1,000,000 for Sol and Luna, with 128k of output
+    # held back; its pricing has a 272k base tier and a long-context tier
+    # above it, the window being the full one either way.
     "gpt-6-astra": {
-        "max_context_window_tokens": 400000,
-        "max_prompt_tokens": 272000,
+        "max_context_window_tokens": 1050000,
+        "max_prompt_tokens": 922000,
         "max_output_tokens": 128000,
     },
     "gpt-6-luna": {
-        "max_context_window_tokens": 400000,
-        "max_prompt_tokens": 272000,
+        "max_context_window_tokens": 1000000,
+        "max_prompt_tokens": 872000,
         "max_output_tokens": 128000,
     },
     "gpt-6-sol": {
-        "max_context_window_tokens": 400000,
-        "max_prompt_tokens": 272000,
+        "max_context_window_tokens": 1000000,
+        "max_prompt_tokens": 872000,
         "max_output_tokens": 128000,
     },
-    # GPT-6.1 Sol (Copilot GA 2026-09-29): the same gateway limits.
+    # GPT-6.1 Sol (Copilot GA 2026-09-29): 922k of input plus the 128k cap.
     "gpt-6.1-sol": {
-        "max_context_window_tokens": 400000,
-        "max_prompt_tokens": 272000,
+        "max_context_window_tokens": 1050000,
+        "max_prompt_tokens": 922000,
         "max_output_tokens": 128000,
     },
     # Copilot auto (Balance, Efficiency and Intelligence tiers) sends the
     # model Copilot picks per turn; without a route it sends gpt-6-sol, so the
     # rows mirror that model.
     "auto": {
-        "max_context_window_tokens": 400000,
-        "max_prompt_tokens": 272000,
+        "max_context_window_tokens": 1000000,
+        "max_prompt_tokens": 872000,
         "max_output_tokens": 128000,
     },
     "auto-efficiency": {
-        "max_context_window_tokens": 400000,
-        "max_prompt_tokens": 272000,
+        "max_context_window_tokens": 1000000,
+        "max_prompt_tokens": 872000,
         "max_output_tokens": 128000,
     },
     "auto-intelligence": {
-        "max_context_window_tokens": 400000,
-        "max_prompt_tokens": 272000,
+        "max_context_window_tokens": 1000000,
+        "max_prompt_tokens": 872000,
         "max_output_tokens": 128000,
     },
     "gemini-2.5-pro": {

@@ -39,11 +39,11 @@ def test_github_copilot_profile_resolution(model: str, expected_model: str):
     assert isinstance(profile, ModelContextProfile)
     assert profile.provider_id == DEFAULT_PROVIDER_ID
     assert profile.model_id == expected_model
-    if expected_model.startswith("gpt-6"):
-        # Copilot's own catalog (GET /models) reports 400,000 tokens (272k
-        # prompt + 128k output) for the whole GPT-6 line, GPT-6.1 Sol
-        # included, whatever OpenAI publishes for the models themselves.
-        assert profile.context_window_tokens == 400_000
+    if expected_model in ("gpt-6-astra", "gpt-6.1-sol"):
+        # Copilot's catalog (GET /models with the API-version header) carries
+        # OpenAI's windows: 1,050,000 for Astra and 6.1 Sol, 1,000,000 for Sol,
+        # Luna and the 5.x line, 128k of output held back in every case.
+        assert profile.context_window_tokens == 1_050_000
     else:
         assert profile.context_window_tokens == 1_000_000
     assert profile.default_reserve_tokens == 128_000

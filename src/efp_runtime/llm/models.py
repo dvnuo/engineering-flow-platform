@@ -197,23 +197,22 @@ def model_prompt_budget_tokens(profile: ModelContextProfile) -> int:
     return max(1, default_max_context_tokens(profile) - profile.default_reserve_tokens)
 
 
-def smallest_model_context_profile(
-    profiles: Iterable[ModelContextProfile | None],
+def preferred_model_context_profile(
+    *profiles: ModelContextProfile | None,
 ) -> ModelContextProfile | None:
-    """The profile with the smallest prompt budget among those given (None skipped).
+    """The first profile given, skipping None: the caller lists its sources by trust.
 
-    Copilot describes a model in more than one place (the ``/auto`` answer,
-    ``GET /models``, this module's rows) and they do not always agree; the
-    smallest budget is the one every description honours.
+    Copilot describes a model in more than one place; the ``GET /models``
+    row is the gateway's own statement and comes first, the ``/auto`` answer
+    embeds the same entry and comes next, this module's rows are the offline
+    default. (Taking the smallest of them instead, as the first cut did, kept
+    the headerless catalog's 400k alive against the gateway's 1M.)
     """
 
-    best: ModelContextProfile | None = None
     for profile in profiles:
-        if profile is None:
-            continue
-        if best is None or model_prompt_budget_tokens(profile) < model_prompt_budget_tokens(best):
-            best = profile
-    return best
+        if profile is not None:
+            return profile
+    return None
 
 
 def register_model_context_profile(profile: ModelContextProfile) -> ModelContextProfile:
@@ -349,35 +348,37 @@ _COPILOT_PROFILES = {
     ),
     # GPT-6 (released 2026-09; in Copilot since 2026-09-04 for Astra and
     # 2026-09-22 for Sol and Luna) and GPT-6.1 Sol (Copilot GA 2026-09-29).
-    # OpenAI publishes a 1,000,000 / 1,050,000-token window for them, but
-    # Copilot's own catalog (``GET /models``, Business plan, 2026-10-20)
-    # reports 400,000 tokens with a 272,000-token prompt cap and the
-    # 128,000-token output cap for the whole line, and the gateway, not
-    # OpenAI, is what the Responses calls answer to. The rows carry the
-    # gateway's numbers; at run time the provider narrows them further from
-    # the catalog when it says less (``copilot_model_context_profile``). Astra
-    # is the flagship reasoning model, Sol the balanced default for
+    # Copilot's catalog (``GET /models`` with the API-version header, Business
+    # plan, 2026-10-20) carries OpenAI's windows: 1,050,000 tokens for Astra
+    # and 6.1 Sol, 1,000,000 for Sol and Luna, a 128,000-token output cap held
+    # back as the reserve in every case. Its ``billing.token_prices`` adds two
+    # pricing tiers: ``default`` up to a 272,000-token prompt and
+    # ``long_context`` above it at twice the input price; the window is the
+    # full one either way (the older, headerless schema reported 400,000).
+    # At run time the provider takes the catalog row over these (see
+    # ``preferred_model_context_profile``); the rows are the offline default.
+    # Astra is the flagship reasoning model, Sol the balanced default for
     # interactive and agentic coding, Luna the fast and cheap one. Sol and
     # Luna also accept reasoning effort ``none``; Astra and 6.1 Sol do not,
     # and the runtime does not offer it for any model.
     "gpt-6-astra": _profile(
         "gpt-6-astra",
-        context_window_tokens=400_000,
+        context_window_tokens=1_050_000,
         default_reserve_tokens=128_000,
     ),
     "gpt-6-luna": _profile(
         "gpt-6-luna",
-        context_window_tokens=400_000,
+        context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
     ),
     "gpt-6-sol": _profile(
         "gpt-6-sol",
-        context_window_tokens=400_000,
+        context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
     ),
     "gpt-6.1-sol": _profile(
         "gpt-6.1-sol",
-        context_window_tokens=400_000,
+        context_window_tokens=1_050_000,
         default_reserve_tokens=128_000,
     ),
     # Copilot auto routes per turn and the runner takes the budget from the
@@ -387,7 +388,7 @@ _COPILOT_PROFILES = {
     **{
         auto_id: _profile(
             auto_id,
-            context_window_tokens=400_000,
+            context_window_tokens=1_000_000,
             default_reserve_tokens=128_000,
         )
         for auto_id in AUTO_MODEL_IDS
@@ -490,7 +491,7 @@ __all__ = [
     "model_prompt_budget_tokens",
     "register_model_context_profile",
     "resolve_model_context_profile",
-    "smallest_model_context_profile",
+    "preferred_model_context_profile",
     "static_model_context_profile",
     "tokens_to_chars",
 ]
