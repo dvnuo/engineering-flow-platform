@@ -170,7 +170,13 @@ def test_portal_field_tree_and_overlay_sections_accept_the_new_sections():
     for section in ("nexus", "splunk", "pgsql"):
         assert section in config_module.Config.MANAGED_OVERLAY_SECTIONS
         tree = config_module.Config.PORTAL_MANAGED_FIELD_TREE[section]
-        assert tree == {"enabled": True, "instances": True, "default_instance": True}
+        assert {"enabled": True, "instances": True, "default_instance": True}.items() <= tree.items()
+    assert config_module.Config.PORTAL_MANAGED_FIELD_TREE["nexus"] == {"enabled": True, "instances": True, "default_instance": True}
+    # pgsql also carries the settings every instance shares.
+    assert config_module.Config.PORTAL_MANAGED_FIELD_TREE["pgsql"] == {
+        "enabled": True, "instances": True, "default_instance": True,
+        "access": True, "sslmode": True, "statement_timeout_seconds": True, "max_rows": True,
+    }
 
 
 def test_enablement_predicates():
