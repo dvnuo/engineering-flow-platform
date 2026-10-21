@@ -15,6 +15,7 @@ from typing import Any, Mapping, Optional
 from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
 from src.utils.proxy_plan import hostname_of
 from src.gateway.runtime_event_projection import RuntimeEventProjector
+from src.gateway.session_title import schedule_session_title
 from src.gateway.workspace_deliverables import (
     attach_deliverable_blocks,
     build_deliverable_display_blocks,
@@ -109,8 +110,14 @@ async def run_runtime_chat(
     model: str | None = None,
     track_usage: bool = True,
     interactive: bool = False,
+    title_after_turn: bool = False,
 ) -> dict[str, Any]:
-    """Run the production chat loop through ``efp_runtime.runtime.AgentRuntime``."""
+    """Run the production chat loop through ``efp_runtime.runtime.AgentRuntime``.
+
+    ``title_after_turn`` is the Portal chat's opt-in to a generated session
+    name after an answered turn; tasks, Jira comments and the other callers
+    of this primitive leave it off.
+    """
 
     provider, runtime_model = _build_llm_provider(model, execution_metadata=execution_metadata)
     event_bus = RuntimeEventBus()
@@ -186,6 +193,14 @@ async def run_runtime_chat(
             result,
             request_id=request_id,
         )
+        if title_after_turn:
+            _schedule_session_title_after_turn(
+                session_id,
+                result,
+                execution_metadata=execution_metadata,
+                agent_id=agent_id,
+                track_usage=track_usage,
+            )
     except ProviderTransportError as exc:
         raise RuntimeChatError(
             str(exc),
@@ -242,8 +257,12 @@ async def resume_runtime_chat(
     model: str | None = None,
     track_usage: bool = True,
     interactive: bool = False,
+    title_after_turn: bool = False,
 ) -> dict[str, Any]:
-    """Resume an existing native runtime session without appending a new user message."""
+    """Resume an existing native runtime session without appending a new user message.
+
+    ``title_after_turn``: see ``run_runtime_chat``.
+    """
 
     provider, runtime_model = _build_llm_provider(model, execution_metadata=execution_metadata)
     event_bus = RuntimeEventBus()
@@ -311,6 +330,15 @@ async def resume_runtime_chat(
             result,
             request_id=request_id,
         )
+        # A turn that paused on a question completes here.
+        if title_after_turn:
+            _schedule_session_title_after_turn(
+                session_id,
+                result,
+                execution_metadata=execution_metadata,
+                agent_id=agent_id,
+                track_usage=track_usage,
+            )
     except ProviderTransportError as exc:
         raise RuntimeChatError(
             str(exc),
@@ -348,6 +376,29 @@ async def resume_runtime_chat(
             },
         )
     return payload
+
+
+def _schedule_session_title_after_turn(
+    session_id: str,
+    result: RuntimeLoopResult,
+    *,
+    execution_metadata: Mapping[str, Any] | None,
+    agent_id: str | None,
+    track_usage: bool,
+) -> None:
+    """Name a still-unnamed session in the background after an answered turn; never raises."""
+
+    try:
+        schedule_session_title(
+            session_id,
+            result=result,
+            provider_builder=_build_llm_provider,
+            execution_metadata=execution_metadata,
+            agent_id=agent_id,
+            track_usage=track_usage,
+        )
+    except Exception:
+        logger.debug("Session title scheduling failed for %s", session_id, exc_info=True)
 
 
 def _seed_runtime_question_response(

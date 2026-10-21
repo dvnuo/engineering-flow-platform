@@ -109,6 +109,27 @@ def resolve_model_context_profile(
     )
 
 
+CHEAP_MODEL_IDS = {
+    # Luna is the fast-and-cheap member of each line (see the catalogs above).
+    "github_copilot": "gpt-6-luna",
+    "ai_platform": "gpt-5.6-luna",
+}
+
+
+def cheap_model_for_family(family: str) -> str:
+    """The cheapest catalog model of a provider family, for one-shot calls such as session titles.
+
+    Falls back to the family's default model when the cheap id leaves the
+    catalog, so a catalog change never breaks the callers.
+    """
+
+    if family == "ai_platform":
+        cheap = CHEAP_MODEL_IDS["ai_platform"]
+        return cheap if cheap in AI_PLATFORM_MODEL_IDS else DEFAULT_AI_PLATFORM_MODEL
+    cheap = CHEAP_MODEL_IDS["github_copilot"]
+    return cheap if cheap in SUPPORTED_COPILOT_MODEL_IDS else DEFAULT_MODEL_ID
+
+
 def canonicalize_copilot_model_id(value: Any) -> str:
     """Return a supported canonical GitHub Copilot model id or raise."""
 
@@ -482,6 +503,7 @@ __all__ = [
     "SUPPORTED_COPILOT_MODEL_IDS",
     "auto_tier_for",
     "canonicalize_copilot_model_id",
+    "cheap_model_for_family",
     "clear_learned_model_context_profiles",
     "context_safety_margin_tokens",
     "copilot_model_context_profile",

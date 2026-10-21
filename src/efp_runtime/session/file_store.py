@@ -62,6 +62,9 @@ class SessionSummary:
     # opening a single session body.
     author_ids: Tuple[str, ...] = ()
     author_names: Tuple[str, ...] = ()
+    # The title the runtime generated after the first turn
+    # (src/gateway/session_title.py); a manual rename (custom_name) wins over it.
+    generated_name: Optional[str] = None
 
 
 # malloc_trim(0) hands freed arenas back to the OS after a large parse burst.
@@ -171,6 +174,8 @@ def build_session_summary(session: Session) -> SessionSummary:
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
     custom_name = metadata.get("custom_session_name")
     custom_name = custom_name.strip() if isinstance(custom_name, str) and custom_name.strip() else None
+    generated_name = metadata.get("generated_session_name")
+    generated_name = generated_name.strip() if isinstance(generated_name, str) and generated_name.strip() else None
     revert_metadata = metadata.get("revert")
     revert_metadata = revert_metadata if isinstance(revert_metadata, Mapping) else {}
     workspace_snapshot_id = revert_metadata.get("workspace_snapshot_id")
@@ -194,6 +199,7 @@ def build_session_summary(session: Session) -> SessionSummary:
         ),
         author_ids=tuple(author_ids),
         author_names=tuple(author_names),
+        generated_name=generated_name,
     )
 
 
@@ -252,7 +258,10 @@ class FileSessionStore:
         title: Optional[str] = None,
         metadata: Optional[Mapping[str, Any]] = None,
         replace_metadata: bool = False,
+        touch: bool = True,
     ) -> Session:
+        """Update the title and/or metadata; ``touch=False`` keeps ``updated_at`` (a bookkeeping write is not activity)."""
+
         with self._lock:
             session = self._read_session_locked_mutable(session_id)
             if title is not None:
@@ -263,7 +272,8 @@ class FileSessionStore:
                 updated_metadata = deepcopy(session.metadata)
                 updated_metadata.update(deepcopy(dict(metadata)))
                 session.metadata = updated_metadata
-            session.touch()
+            if touch:
+                session.touch()
             self._write_session_locked(session)
             return deepcopy(session)
 

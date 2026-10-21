@@ -75,26 +75,45 @@ def reset_runtime_session_singletons() -> None:
         _manager_singletons.clear()
 
 
-def resolve_session_display_name(session: Mapping[str, Any]) -> str:
+def _metadata_name(session: Mapping[str, Any], key: str) -> str:
     metadata = session.get("metadata", {})
-    custom_name = metadata.get("custom_session_name") if isinstance(metadata, Mapping) else None
-    if isinstance(custom_name, str):
-        custom_name = custom_name.strip()
-        if custom_name:
-            return custom_name
+    value = metadata.get(key) if isinstance(metadata, Mapping) else None
+    return value.strip() if isinstance(value, str) else ""
 
+
+def resolve_session_name(session: Mapping[str, Any]) -> tuple[str, str]:
+    """The display name and where it comes from, in one walk of the precedence.
+
+    A manual rename (``custom``), then the title the runtime generated after
+    an answered turn (``generated``), then a title set some other way
+    (``title``), then the first user message cut short (``derived``); a
+    session with none of these is "New Chat" with source ``none``.
+    """
+
+    custom_name = _metadata_name(session, "custom_session_name")
+    if custom_name:
+        return custom_name, "custom"
+    generated_name = _metadata_name(session, "generated_session_name")
+    if generated_name:
+        return generated_name, "generated"
     title = session.get("title")
     if isinstance(title, str) and title.strip():
-        return title.strip()
-
+        return title.strip(), "title"
     history = session.get("history", [])
     if isinstance(history, list):
         for msg in history:
             if isinstance(msg, Mapping) and msg.get("role") == "user":
-                derived = _truncate(str(msg.get("content") or "New Chat"), 30)
-                return derived if derived.strip() else "New Chat"
+                derived = _truncate(str(msg.get("content") or ""), 30).strip()
+                return (derived, "derived") if derived else ("New Chat", "none")
+    return "New Chat", "none"
 
-    return "New Chat"
+
+def resolve_session_display_name(session: Mapping[str, Any]) -> str:
+    return resolve_session_name(session)[0]
+
+
+def resolve_session_name_source(session: Mapping[str, Any]) -> str:
+    return resolve_session_name(session)[1]
 
 
 class RuntimeSessionArtifacts:
@@ -258,16 +277,16 @@ class RuntimeSessionManager:
 
     async def edit_message(self, session_id: str, message_id: str, new_content: str) -> bool:
         messages = self._read_existing_history(session_id)
-        edited = False
-        for message in messages:
-            if message.message_id != message_id:
-                continue
-            self._replace_message_content(message, new_content)
-            edited = True
-            break
-        if edited:
-            self.store.replace_history(session_id, messages)
-        return edited
+        target = next((message for message in messages if message.message_id == message_id), None)
+        if target is None:
+            return False
+        self._replace_message_content(target, new_content)
+        self.store.replace_history(session_id, messages)
+        first_user = next((message for message in messages if message.role is MessageRole.USER), None)
+        if target is first_user:
+            # The generated name described the question that was just replaced.
+            self._drop_generated_name(session_id)
+        return True
 
     async def delete_message(self, session_id: str, message_id: str) -> bool:
         messages = self._read_existing_history(session_id)
@@ -275,6 +294,7 @@ class RuntimeSessionManager:
         if len(updated) == len(messages):
             return False
         self.store.replace_history(session_id, updated)
+        self._forget_generated_name_if_first_turn_changed(session_id, messages)
         return True
 
     async def delete_messages_after(self, session_id: str, message_id: str) -> int:
@@ -298,6 +318,7 @@ class RuntimeSessionManager:
             return 0
         deleted_count = len(messages) - index
         self.store.replace_history(session_id, messages[:index])
+        self._forget_generated_name_if_first_turn_changed(session_id, messages)
         return deleted_count
 
     async def get_active_skill_session(self, session_id: str) -> Optional[dict[str, Any]]:
@@ -317,6 +338,43 @@ class RuntimeSessionManager:
         session = await self.get_session(session_id)
         value = session.get("metadata", {}).get("last_execution_id")
         return value.strip() if isinstance(value, str) and value.strip() else None
+
+    async def get_session_title(self, session_id: str) -> Optional[str]:
+        """The name a member or the runtime gave an existing session; None for a derived one or no session.
+
+        Same precedence as ``resolve_session_name`` short of the derived
+        fallback: manual, generated, then a title set some other way.
+        """
+
+        if not session_id:
+            return None
+        try:
+            summary = self.store.get_session_summary(session_id)
+        except KeyError:
+            return None
+        title = (summary.title or "").strip()
+        return summary.custom_name or summary.generated_name or title or None
+
+    def _drop_generated_name(self, session_id: str) -> None:
+        """Forget the name the runtime generated (a bookkeeping write: ``updated_at`` stays)."""
+
+        session = self.store.get_session(session_id)
+        if "generated_session_name" not in session.metadata:
+            return
+        metadata = deepcopy(session.metadata)
+        metadata.pop("generated_session_name", None)
+        self.store.update_session(session_id, metadata=metadata, replace_metadata=True, touch=False)
+
+    def _forget_generated_name_if_first_turn_changed(self, session_id: str, before: list[Message]) -> None:
+        """A generated name describes the first member message; when that message goes, so does the name."""
+
+        first_before = next((message.message_id for message in before if message.role is MessageRole.USER), None)
+        if first_before is None:
+            return
+        after = self.store.read_history(session_id)
+        first_after = next((message.message_id for message in after if message.role is MessageRole.USER), None)
+        if first_after != first_before:
+            self._drop_generated_name(session_id)
 
     async def set_last_execution_id(self, session_id: str, request_id: Optional[str]) -> None:
         if not session_id or not request_id:
@@ -1114,6 +1172,8 @@ __all__ = [
     "legacy_messages_to_runtime",
     "reset_runtime_session_singletons",
     "resolve_session_display_name",
+    "resolve_session_name",
+    "resolve_session_name_source",
     "runtime_session_manager",
     "runtime_session_root",
 ]

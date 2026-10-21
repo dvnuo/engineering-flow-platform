@@ -44,6 +44,7 @@ from src.runtime.runtime_task_session_coordinator import RuntimeTaskSessionCoord
 from src.runtime.portal_session_metadata_client import (
     extract_session_metadata_publish_fields,
     publish_session_metadata,
+    publish_session_title_in_background,
 )
 from src.runtime.progressive_context import build_portal_context_preview
 from src.gateway.chat_payloads import (
@@ -70,7 +71,7 @@ from src.efp_runtime.connector_bridge import get_connector_bridge_broker
 from src.gateway.personalization import load_personalization
 from src.efp_runtime.session.gateway_facade import (
     RuntimeSessionArtifacts,
-    resolve_session_display_name,
+    resolve_session_name,
     runtime_session_manager as session_manager,
 )
 from src.efp_runtime.questions import normalize_answers
@@ -245,6 +246,11 @@ async def _enrich_publish_metadata_with_context_preview(
     preview = build_portal_context_preview(context_state)
     if preview:
         merged.update(preview)
+    # The manual or generated name travels with every publish, so the Portal
+    # can show it for a session whose pod is stopped.
+    session_title = await session_manager.get_session_title(session_id)
+    if session_title:
+        merged["session_title"] = session_title
     active_skill = await session_manager.get_active_skill_session(session_id)
     if isinstance(active_skill, dict):
         merged.update(
@@ -1140,6 +1146,8 @@ async def _run_chat_via_execution_bus(
         # Only api_chat and api_chat_stream reach this helper, and both have a
         # member watching the transcript who can answer.
         interactive=True,
+        # ... and a sessions panel that lists this session by name.
+        title_after_turn=True,
     )
 
 
@@ -3390,6 +3398,7 @@ async def _resume_chat_after_user_input(
                 # The member just answered a card; a follow-up question is as
                 # answerable as the one they cleared.
                 interactive=True,
+                title_after_turn=True,
             )
             # Everything the run said has to be on the bus and in the registry
             # before the registry calls it finished: record_event ignores a
@@ -3885,29 +3894,18 @@ async def api_sessions(request: web.Request) -> web.Response:
             if summary.user_message_count <= 0:
                 continue
 
-            # Reuse the exact display-name precedence (custom name -> title ->
-            # first user message) via a minimal session_info projection so the
-            # rendered name is byte-for-byte identical to the full-load path.
-            session_info_like = {
-                "metadata": (
-                    {"custom_session_name": summary.custom_name}
-                    if summary.custom_name
-                    else {}
-                ),
-                "title": summary.title,
-                "history": (
-                    [{"role": "user", "content": summary.first_user_preview}]
-                    if summary.user_message_count
-                    else []
-                ),
-            }
-            session_name = resolve_session_display_name(session_info_like)
+            # Reuse the exact display-name precedence (custom name ->
+            # generated name -> title -> first user message) via a minimal
+            # session_info projection so the rendered name is byte-for-byte
+            # identical to the full-load path.
+            session_name, session_name_source = resolve_session_name(_session_info_like_from_summary(summary))
 
             last_message = truncate(summary.last_preview or '', 50)
 
             detailed_sessions.append({
                 'session_id': summary.session_id,
                 'name': session_name,
+                'name_source': session_name_source,
                 'last_message': last_message,
                 'updated_at': summary.updated_at or datetime.utcnow().isoformat(),
                 'message_count': summary.user_message_count,
@@ -3977,11 +3975,12 @@ async def api_load_session(request: web.Request) -> web.Response:
             for msg in history
         ]
         
-        session_name = resolve_session_display_name(session_info)
-        
+        session_name, session_name_source = resolve_session_name(session_info)
+
         return web.json_response({
             'session_id': session_id,
             'name': session_name,
+            'name_source': session_name_source,
             'messages': normalized_history,
             'metadata': session_info.get('metadata', {}),
         })
@@ -4372,9 +4371,130 @@ async def api_rename_session(request: web.Request) -> web.Response:
         if renamed is None:
             return web.json_response({'error': 'Session not found'}, status=404)
 
-        return web.json_response({'success': True, 'session_id': session_id, 'name': renamed})
+        # The Portal keeps the name for the sessions panel and the share page
+        # while the pod is stopped; a rename reaches it without a chat turn.
+        runtime_agent_id, _ = _resolve_runtime_agent_identity(request)
+        if runtime_agent_id:
+            publish_session_title_in_background(agent_id=runtime_agent_id, session_id=session_id, title=renamed)
+
+        return web.json_response({'success': True, 'session_id': session_id, 'name': renamed, 'name_source': 'custom'})
     except Exception as e:
         logger.error(f"Error renaming session: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+def _session_info_like_from_summary(summary: Any) -> Dict[str, Any]:
+    """The minimal session projection the display-name helpers read, from a header only."""
+
+    metadata: Dict[str, Any] = {}
+    if getattr(summary, "custom_name", None):
+        metadata["custom_session_name"] = summary.custom_name
+    if getattr(summary, "generated_name", None):
+        metadata["generated_session_name"] = summary.generated_name
+    return {
+        "metadata": metadata,
+        "title": getattr(summary, "title", None),
+        "history": (
+            [{"role": "user", "content": getattr(summary, "first_user_preview", "") or ""}]
+            if getattr(summary, "user_message_count", 0)
+            else []
+        ),
+    }
+
+
+def _session_name_payload(session_id: str, summary: Any) -> Dict[str, Any]:
+    name, name_source = resolve_session_name(_session_info_like_from_summary(summary))
+    return {'session_id': session_id, 'name': name, 'name_source': name_source}
+
+
+async def api_session_name(request: web.Request) -> web.Response:
+    """The session's display name and where it came from, without its history.
+
+    GET /api/sessions/{session_id}/name
+    Returns: {"session_id", "name", "name_source": custom|generated|title|derived|none}
+
+    The Portal asks this after a session's first turn, when the runtime may
+    still be generating the title in the background.
+    """
+    try:
+        if not session_manager._initialized:
+            await session_manager.initialize()
+
+        session_id = request.match_info.get('session_id', '')
+        if not session_id:
+            return web.json_response({'error': 'Session ID required'}, status=400)
+        try:
+            summary = session_manager.store.get_session_summary(session_id)
+        except KeyError:
+            return web.json_response({'error': 'Session not found'}, status=404)
+        return web.json_response(_session_name_payload(session_id, summary))
+    except Exception as e:
+        logger.error(f"Error reading session name: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_generate_session_title(request: web.Request) -> web.Response:
+    """Generate the session's title now, from its first answered turn.
+
+    POST /api/sessions/{session_id}/title/generate
+    Body: {"force": true} replaces a generated title; a manual name always stays.
+    Returns: the name payload plus "generated": whether a new title was stored.
+    """
+    try:
+        if not session_manager._initialized:
+            await session_manager.initialize()
+
+        session_id = request.match_info.get('session_id', '')
+        if not session_id:
+            return web.json_response({'error': 'Session ID required'}, status=400)
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, ContentTypeError):
+            data = {}
+        if not isinstance(data, dict):
+            return web.json_response({'error': 'Request body must be a JSON object'}, status=400)
+        force = bool(data.get('force'))
+        # The same trust gate as /api/chat: a runtime profile (provider,
+        # credentials, proxy) is honoured from the Portal only.
+        try:
+            execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        except ValueError as exc:
+            return web.json_response({'error': str(exc)}, status=400)
+
+        from src.gateway.session_title import TitleGenerationError, generate_session_title, inflight_title_task
+        from src.gateway.runtime_chat import _build_llm_provider
+
+        runtime_agent_id, _ = _resolve_runtime_agent_identity(request)
+        generated = False
+        try:
+            # The title a chat turn is still generating is the answer, unless
+            # a new one is forced; either way one call runs at a time.
+            inflight = inflight_title_task(session_id)
+            if inflight is not None:
+                generated = (await asyncio.shield(inflight)) is not None
+            if inflight is None or force:
+                title = await generate_session_title(
+                    session_id,
+                    provider_builder=_build_llm_provider,
+                    execution_metadata=execution_metadata,
+                    force=force,
+                    agent_id=runtime_agent_id,
+                )
+                generated = title is not None
+        except KeyError:
+            return web.json_response({'error': 'Session not found'}, status=404)
+        except TitleGenerationError as exc:
+            return web.json_response({'error': exc.message}, status=exc.status_code)
+
+        try:
+            summary = session_manager.store.get_session_summary(session_id)
+        except KeyError:
+            return web.json_response({'error': 'Session not found'}, status=404)
+        payload = _session_name_payload(session_id, summary)
+        payload.update({'success': True, 'generated': generated})
+        return web.json_response(payload)
+    except Exception as e:
+        logger.error(f"Error generating session title: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
 
@@ -4530,6 +4650,7 @@ async def _run_edit_resend_in_background(
             portal_user_id=portal_user_id,
             portal_user_name=portal_user_name,
             interactive=True,
+            title_after_turn=True,
         )
     except Exception as exc:
         logger.error(
@@ -4986,6 +5107,8 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
     app.router.add_post('/api/sessions/{session_id}/rename', api_rename_session)
+    app.router.add_get('/api/sessions/{session_id}/name', api_session_name)
+    app.router.add_post('/api/sessions/{session_id}/title/generate', api_generate_session_title)
     app.router.add_delete('/api/sessions/{session_id}', api_delete_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
     app.router.add_get('/api/sessions/{session_id}/context-usage', api_session_context_usage)
