@@ -135,6 +135,60 @@ def test_projector_maps_permission_and_run_finish_usage_aliases():
     assert finish["data"]["cost"] == 0.01
 
 
+def test_projector_keeps_the_answering_model_on_usage_updated():
+    # The Portal labels a live reply from these; before, the projection kept
+    # only the token counts and stamped the requested id ("auto") as the model.
+    projector = RuntimeEventProjector(request_id="req-1", agent_id="agent-1", model="auto")
+
+    routed = projector.project(
+        RuntimeEvent(
+            type="usage.updated",
+            session_id="s-1",
+            payload={
+                "run_id": "run-1",
+                "iteration": 1,
+                "usage": {"total_tokens": 12},
+                "model": "gpt-6-luna",
+                "resolved_model": "gpt-6-luna",
+                "auto_tier": "balance",
+            },
+            created_at="2026-10-20T01:02:03Z",
+        )
+    )[0]
+    assert routed["type"] == "usage.updated"
+    assert routed["data"]["model"] == "gpt-6-luna"
+    assert routed["data"]["resolved_model"] == "gpt-6-luna"
+    assert routed["data"]["requested_model"] == "auto"
+    assert routed["data"]["auto_tier"] == "balance"
+    assert "resolved_model_fallback" not in routed["data"]
+    assert routed["data"]["usage"] == {"total_tokens": 12}
+
+    fallback = projector.project(
+        RuntimeEvent(
+            type="usage.updated",
+            session_id="s-1",
+            payload={"run_id": "run-1", "iteration": 1, "usage": {}, "model": "gpt-6-sol", "resolved_model": "gpt-6-sol", "resolved_model_fallback": "auto route unavailable: HTTP 404"},
+            created_at="2026-10-20T01:02:04Z",
+        )
+    )[0]
+    assert fallback["data"]["model"] == "gpt-6-sol"
+    assert fallback["data"]["resolved_model_fallback"] == "auto route unavailable: HTTP 404"
+    assert fallback["data"]["requested_model"] == "auto"
+
+    # A concrete-model run reports what it sent and no request field; an older
+    # payload without a model keeps the requested-model stamp.
+    concrete = RuntimeEventProjector(request_id="req-2", model="gpt-6-sol")
+    sent = concrete.project(
+        RuntimeEvent(type="usage.updated", session_id="s-2", payload={"run_id": "run-2", "iteration": 1, "usage": {}, "model": "gpt-6-sol"}, created_at="2026-10-20T01:02:05Z")
+    )[0]
+    assert sent["data"]["model"] == "gpt-6-sol"
+    assert "requested_model" not in sent["data"]
+    legacy = concrete.project(
+        RuntimeEvent(type="usage.updated", session_id="s-2", payload={"run_id": "run-2", "iteration": 1, "usage": {}}, created_at="2026-10-20T01:02:06Z")
+    )[0]
+    assert legacy["data"]["model"] == "gpt-6-sol"
+
+
 def test_projector_maps_new_llm_error_and_finish_events():
     projector = RuntimeEventProjector(request_id="req-1")
 

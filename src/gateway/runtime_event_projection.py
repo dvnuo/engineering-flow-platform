@@ -344,6 +344,12 @@ class RuntimeEventProjector:
             return outputs
 
         if raw_type == "usage.updated":
+            # The runner names the model the step actually used (for a Copilot
+            # auto run the one Copilot picked, with the auto id as the request).
+            # They ride along so the Portal can label a reply while it is still
+            # streaming; ``model`` replaces the requested-model stamp ``_build``
+            # puts on every event, and a payload without one keeps the stamp.
+            resolved_model = _optional_str(payload.get("resolved_model"))
             outputs.append(
                 self._build(
                     raw_event,
@@ -359,6 +365,11 @@ class RuntimeEventProjector:
                         "step_usage": _redacted(payload.get("step_usage")),
                         "iteration_usage": _redacted(payload.get("iteration_usage")),
                         "pricing_enabled": payload.get("pricing_enabled"),
+                        "model": _optional_str(payload.get("model")),
+                        "resolved_model": resolved_model,
+                        "resolved_model_fallback": _optional_str(payload.get("resolved_model_fallback")),
+                        "auto_tier": _optional_str(payload.get("auto_tier")),
+                        "requested_model": self.model if resolved_model else None,
                     },
                 )
             )
