@@ -16,6 +16,31 @@ FILE_BLOCK = {
 }
 
 
+def test_response_payload_keeps_which_model_answered():
+    # The stream's final event is built from this payload; the Portal's badge
+    # reads the attribution off it, so the whitelist must let it through.
+    payload = build_runtime_response_payload(
+        {
+            "response": "Routed.",
+            "usage": {},
+            "model": "gpt-6-luna",
+            "requested_model": "auto",
+            "auto_tier": "balance",
+            "model_fallback_reason": "auto route unavailable: HTTP 404",
+        },
+        "s-model",
+    )
+    assert payload["model"] == "gpt-6-luna"
+    assert payload["requested_model"] == "auto"
+    assert payload["auto_tier"] == "balance"
+    assert payload["model_fallback_reason"] == "auto route unavailable: HTTP 404"
+
+    plain = build_runtime_response_payload({"response": "Plain.", "usage": {}, "model": "gpt-6-sol"}, "s-plain")
+    assert plain["model"] == "gpt-6-sol"
+    assert "requested_model" not in plain
+    assert "model" not in build_runtime_response_payload({"response": "Old.", "usage": {}}, "s-old")
+
+
 def test_response_payload_preserves_markdown_then_file_blocks():
     payload = build_runtime_response_payload(
         {

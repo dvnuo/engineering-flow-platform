@@ -193,6 +193,15 @@ def build_runtime_response_payload(result: Optional[Dict[str, Any]], session_id:
         "author_id",
         "author_name",
         "author_source",
+        # Which model answered. The runner stamps these on the assistant
+        # message and runtime_chat copies them onto the result; the Portal's
+        # badge reads them off the stream's final event the same way it reads
+        # them off history, so dropping them here left live replies unlabelled
+        # until a reload.
+        "model",
+        "requested_model",
+        "model_fallback_reason",
+        "auto_tier",
     ):
         if key in payload_result:
             response_payload[key] = payload_result[key]
