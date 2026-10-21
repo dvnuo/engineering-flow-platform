@@ -258,7 +258,10 @@ class FileSessionStore:
         title: Optional[str] = None,
         metadata: Optional[Mapping[str, Any]] = None,
         replace_metadata: bool = False,
+        touch: bool = True,
     ) -> Session:
+        """Update the title and/or metadata; ``touch=False`` keeps ``updated_at`` (a bookkeeping write is not activity)."""
+
         with self._lock:
             session = self._read_session_locked_mutable(session_id)
             if title is not None:
@@ -269,7 +272,8 @@ class FileSessionStore:
                 updated_metadata = deepcopy(session.metadata)
                 updated_metadata.update(deepcopy(dict(metadata)))
                 session.metadata = updated_metadata
-            session.touch()
+            if touch:
+                session.touch()
             self._write_session_locked(session)
             return deepcopy(session)
 

@@ -1443,6 +1443,11 @@ class AIPlatformProvider(OpenAICompatibleProvider):
         # The AI Platform endpoints reject the EFP/OpenAI-compatible extension
         # field even though it is useful for other providers.
         payload.pop("metadata", None)
+        # A request without tools (a session title, a max-steps final step)
+        # must not carry an empty tools array: OpenAI-compatible gateways
+        # refuse it, and the Responses sanitizer below already drops it.
+        if not payload.get("tools"):
+            payload.pop("tools", None)
         self.last_payload_model = payload.get("model")
         if self.endpoint == "responses":
             # The base projection already carries the effort as

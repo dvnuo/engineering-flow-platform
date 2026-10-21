@@ -477,11 +477,8 @@ def _turn_from_message(
 ) -> SessionTurn | None:
     metadata = message.metadata if isinstance(message.metadata, Mapping) else {}
     if message.role is MessageRole.USER:
-        if metadata.get("source") in SYNTHETIC_USER_SOURCES:
-            return None
-        original = metadata.get("original_user_message")
-        text = original if isinstance(original, str) and original.strip() else _text_parts(message)
-        if not text.strip():
+        text = member_message_text(message)
+        if not text:
             return None
         return SessionTurn(
             index=index,
@@ -516,12 +513,35 @@ def _turn_from_message(
 
 
 def _text_parts(message: Message) -> str:
+    parts = getattr(message, "parts", None) or []
     chunks = [
         part.text
-        for part in message.parts
+        for part in parts
         if part.type is MessagePartType.TEXT and isinstance(part.text, str) and part.text.strip()
     ]
     return "\n".join(chunks)
+
+
+def assistant_message_text(message: Any) -> str:
+    """The text an assistant message carries ("" for None or a message without text parts)."""
+
+    if message is None:
+        return ""
+    return _text_parts(message).strip()
+
+
+def member_message_text(message: Any) -> str:
+    """The member's own words in a user message: never a runtime-injected turn, the original words over a composed prompt."""
+
+    if message is None:
+        return ""
+    metadata = message.metadata if isinstance(getattr(message, "metadata", None), Mapping) else {}
+    if metadata.get("source") in SYNTHETIC_USER_SOURCES:
+        return ""
+    original = metadata.get("original_user_message")
+    if isinstance(original, str) and original.strip():
+        return original.strip()
+    return _text_parts(message).strip()
 
 
 def _compaction_summary(message: Message) -> str:
@@ -613,6 +633,8 @@ __all__ = [
     "SessionTranscript",
     "SessionTurn",
     "TASK_SESSION_ID_PREFIXES",
+    "assistant_message_text",
+    "member_message_text",
     "TurnExcerpt",
     "cached_session_summaries",
     "is_task_session_id",

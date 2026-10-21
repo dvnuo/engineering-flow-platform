@@ -277,6 +277,24 @@ def test_ai_platform_provider_defaults_to_chat_endpoint():
     assert provider.endpoint == "chat"
 
 
+@pytest.mark.parametrize("endpoint", ["chat", "responses"])
+def test_ai_platform_payload_without_tools_carries_no_tools_array(endpoint):
+    # A session title (or a final no-tools step) is a request without tools;
+    # the gateway refuses ``"tools": []`` on both URLs.
+    provider = AIPlatformProvider(transport=RecordingTransport([]), model="gpt-5.4", endpoint=endpoint)
+
+    payload = provider.build_payload(_runtime_request(with_tools=False))
+
+    assert "tools" not in payload
+    assert "tool_choice" not in payload
+
+
+def test_ai_platform_payload_keeps_the_tools_it_was_given():
+    provider = AIPlatformProvider(transport=RecordingTransport([]), model="gpt-5.4")
+    payload = provider.build_payload(_runtime_request(with_tools=True))
+    assert [tool["function"]["name"] for tool in payload["tools"]] == ["read_file"]
+
+
 def test_ai_platform_responses_payload_uses_reasoning_object_not_reasoning_effort():
     provider = AIPlatformProvider(
         transport=RecordingTransport([]),

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, Optional
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientTimeout
 
 from src.runtime.contracts import ExecutionResult
 from src.utils.portal_internal_api import build_portal_internal_api_headers, get_portal_internal_base_url
@@ -14,6 +15,10 @@ from src.utils.portal_internal_api import build_portal_internal_api_headers, get
 logger = logging.getLogger(__name__)
 
 _MAX_RUNTIME_EVENTS = 20
+# A title PATCH is a few bytes to a service on the same network; the default
+# aiohttp total of five minutes would keep a stuck one in flight that long.
+_TITLE_PUBLISH_TIMEOUT_SECONDS = 10.0
+_background_publishes: set[asyncio.Task] = set()
 _CONTROL_PLANE_METADATA_KEYS = {
     "portal_task_id",
     "task_id",
@@ -232,32 +237,18 @@ async def publish_session_metadata(
     if not payload:
         return
 
-    url = f"{base_url}/api/internal/agents/{normalized_agent_id}/sessions/{normalized_session_id}/metadata"
-    headers = build_portal_internal_api_headers(include_content_type=True)
-
-    try:
-        async with ClientSession(headers=headers) as session:
-            async with session.put(url, json=payload) as response:
-                if response.status >= 400:
-                    body = await response.text()
-                    logger.warning(
-                        "Session metadata publish failed: status=%s agent_id=%s session_id=%s body=%s",
-                        response.status,
-                        normalized_agent_id,
-                        normalized_session_id,
-                        body[:500],
-                    )
-    except Exception:
-        logger.warning(
-            "Session metadata publish failed for agent_id=%s session_id=%s",
-            normalized_agent_id,
-            normalized_session_id,
-            exc_info=True,
-        )
+    await _send_portal_json(
+        "put",
+        _session_url(base_url, normalized_agent_id, normalized_session_id, "metadata"),
+        payload,
+        what="Session metadata",
+        agent_id=normalized_agent_id,
+        session_id=normalized_session_id,
+    )
 
 
-async def publish_session_title(*, agent_id: str, session_id: str, title: str) -> None:
-    """Tell the Portal the session's name changed (generated after the first turn, or regenerated).
+async def publish_session_title(*, agent_id: str, session_id: str, title: str) -> bool:
+    """Tell the Portal the session's name changed (generated, regenerated or renamed); True when it took.
 
     Best effort, like ``publish_session_metadata``: a Portal without the title
     endpoint answers 404 and the name still reaches it with the next full
@@ -270,30 +261,75 @@ async def publish_session_title(*, agent_id: str, session_id: str, title: str) -
     normalized_session_id = str(session_id or "").strip()
     normalized_title = str(title or "").strip()
     if not normalized_agent_id or not normalized_session_id or not normalized_title:
-        return
+        return False
 
     base_url = get_portal_internal_base_url()
     if not base_url:
-        return
+        return False
 
-    url = f"{base_url}/api/internal/agents/{normalized_agent_id}/sessions/{normalized_session_id}/title"
-    headers = build_portal_internal_api_headers(include_content_type=True)
+    return await _send_portal_json(
+        "patch",
+        _session_url(base_url, normalized_agent_id, normalized_session_id, "title"),
+        {"title": normalized_title},
+        what="Session title",
+        agent_id=normalized_agent_id,
+        session_id=normalized_session_id,
+        timeout=_TITLE_PUBLISH_TIMEOUT_SECONDS,
+    )
+
+
+def publish_session_title_in_background(*, agent_id: str, session_id: str, title: str) -> Optional[asyncio.Task]:
+    """Send the name without holding up whoever changed it (a chat turn, a rename, the generate endpoint).
+
+    The task is kept referenced until it finishes, so it cannot be collected
+    half way; the result is logged by ``publish_session_title`` itself.
+    """
+
     try:
-        async with ClientSession(headers=headers) as session:
-            async with session.patch(url, json={"title": normalized_title}) as response:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # no running loop (a synchronous caller)
+        return None
+    task = loop.create_task(publish_session_title(agent_id=agent_id, session_id=session_id, title=title))
+    _background_publishes.add(task)
+    task.add_done_callback(_background_publishes.discard)
+    return task
+
+
+def _session_url(base_url: str, agent_id: str, session_id: str, leaf: str) -> str:
+    return f"{base_url}/api/internal/agents/{agent_id}/sessions/{session_id}/{leaf}"
+
+
+async def _send_portal_json(
+    method: str,
+    url: str,
+    payload: Dict[str, Any],
+    *,
+    what: str,
+    agent_id: str,
+    session_id: str,
+    timeout: Optional[float] = None,
+) -> bool:
+    """One JSON request to the Portal's internal API; failures are logged, never raised."""
+
+    headers = build_portal_internal_api_headers(include_content_type=True)
+    session_kwargs: Dict[str, Any] = {"headers": headers}
+    if timeout:
+        session_kwargs["timeout"] = ClientTimeout(total=timeout)
+    try:
+        async with ClientSession(**session_kwargs) as session:
+            async with getattr(session, method)(url, json=payload) as response:
                 if response.status >= 400:
                     body = await response.text()
                     logger.warning(
-                        "Session title publish failed: status=%s agent_id=%s session_id=%s body=%s",
+                        "%s publish failed: status=%s agent_id=%s session_id=%s body=%s",
+                        what,
                         response.status,
-                        normalized_agent_id,
-                        normalized_session_id,
+                        agent_id,
+                        session_id,
                         body[:500],
                     )
+                    return False
+                return True
     except Exception:
-        logger.warning(
-            "Session title publish failed for agent_id=%s session_id=%s",
-            normalized_agent_id,
-            normalized_session_id,
-            exc_info=True,
-        )
+        logger.warning("%s publish failed for agent_id=%s session_id=%s", what, agent_id, session_id, exc_info=True)
+        return False

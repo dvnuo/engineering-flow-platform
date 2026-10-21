@@ -1,13 +1,18 @@
-"""Generated session titles: one small model call after the first completed turn.
+"""Generated session titles: one small model call after the first answered turn.
 
 The Portal lists sessions by name, and until now that name was the first user
 message cut at 30 characters: it said what was asked, not what the conversation
-is about. After the first turn that produced an answer, the runtime asks the
-member's own provider (same credentials and proxy as the chat, a cheap model)
-for a short title and stores it as ``generated_session_name`` in the session
-metadata. A manual rename (``custom_session_name``) always wins and is never
-overwritten; the generated name is written once and can be regenerated on
-request (``POST /api/sessions/{id}/title/generate``).
+is about. After a chat turn that produced an answer in a session that has no
+name yet, the runtime asks the member's own provider (same credentials and
+proxy as the chat; the family's cheap model at low reasoning effort, without
+streaming) for a short title and stores it as ``generated_session_name`` in
+the session metadata. A manual rename (``custom_session_name``) always wins
+and is never overwritten; the generated name is written once and can be
+regenerated on request (``POST /api/sessions/{id}/title/generate``).
+
+Only the Portal's chat entry points opt in (``title_after_turn`` on
+``run_runtime_chat`` / ``resume_runtime_chat``); tasks, Jira comments and
+other callers of the chat primitive never pay for a title.
 
 Everything here is best effort: a timeout or a provider error leaves the
 session as it was, and nothing blocks or fails the chat turn that triggered it.
@@ -16,7 +21,6 @@ session as it was, and nothing blocks or fails the chat turn that triggered it.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 import inspect
 import logging
 import re
@@ -25,20 +29,20 @@ from typing import Any, Callable, Mapping, Optional
 from src.config import config
 from src.efp_runtime.llm.adapter import DefaultLLMEventAdapter
 from src.efp_runtime.llm.events import LLMEventType
+from src.efp_runtime.llm.models import cheap_model_for_family, is_auto_model_id
 from src.efp_runtime.llm.request import PreparedProviderRequest, ProviderRequest, RequestMessage, RequestMessagePart
 from src.efp_runtime.loop.provider import RuntimeRequest
 from src.efp_runtime.loop.runner import LoopStatus
 from src.efp_runtime.session.gateway_facade import get_runtime_session_store
-from src.efp_runtime.session.models import MessagePartType, MessageRole
-from src.efp_runtime.session.search import TASK_SESSION_ID_PREFIXES
-from src.runtime.portal_session_metadata_client import publish_session_title
+from src.efp_runtime.session.models import MessageRole
+from src.efp_runtime.session.search import assistant_message_text, is_task_session_id, member_message_text
+from src.runtime.portal_session_metadata_client import publish_session_title_in_background
+from src.utils.truncate import truncate
 
 logger = logging.getLogger(__name__)
 
 CUSTOM_NAME_KEY = "custom_session_name"
 GENERATED_NAME_KEY = "generated_session_name"
-GENERATED_NAME_AT_KEY = "generated_session_name_at"
-GENERATED_NAME_MODEL_KEY = "generated_session_name_model"
 
 # The prompt asks for 40 characters; the hard cut after cleaning leaves room
 # for a model that counts differently, and the rename endpoint's 120 is the
@@ -46,16 +50,11 @@ GENERATED_NAME_MODEL_KEY = "generated_session_name_model"
 TITLE_MAX_CHARS = 60
 # Of each side of the first turn. A title needs the gist, not the transcript.
 TITLE_INPUT_MAX_CHARS = 1500
-TITLE_TIMEOUT_SECONDS = 10.0
+# A low-effort, non-streaming call for a ten-token reply; a provider that is
+# slower than this keeps the derived name.
+TITLE_TIMEOUT_SECONDS = 20.0
+TITLE_REASONING_EFFORT = "low"
 TITLE_TASK_TYPE = "session_title"
-
-# The cheap model per provider family; each id is one the chat path already
-# accepts (src/efp_runtime/llm/models.py). ``llm.title_model`` in the runtime
-# config overrides both.
-TITLE_MODELS = {
-    "github_copilot": "gpt-6-luna",
-    "ai_platform": "gpt-5.6-luna",
-}
 
 TITLE_INSTRUCTIONS = (
     "You name chat sessions for a list of past conversations. "
@@ -70,11 +69,15 @@ TITLE_INSTRUCTIONS = (
 
 ProviderBuilder = Callable[..., Any]
 
-_TITLE_PREFIX = re.compile(r"^(?:title|session title|session name|name|标题)\s*[:：]\s*", re.IGNORECASE)
-_QUOTES = "\"'`“”‘’「」『』《》"
-_TRAILING_PUNCTUATION = ".。!！"
+_TITLE_PREFIX = re.compile(r"^(?:title|session title|session name|name|\u6807\u9898)\s*[:\uff1a]\s*", re.IGNORECASE)
+_QUOTES = "\"'`\u201c\u201d\u2018\u2019\u300c\u300d\u300e\u300f\u300a\u300b"
+_EMPHASIS = "*_"
+_TRAILING_PUNCTUATION = ".\u3002!\uff01"
 
-_inflight: set[str] = set()
+# In-flight title tasks by session id: the strong references asyncio does not
+# keep, the one-at-a-time guard, and what the generate endpoint waits on when
+# it arrives while the background call is still running.
+_title_tasks: dict[str, asyncio.Task] = {}
 
 
 class TitleGenerationError(RuntimeError):
@@ -95,34 +98,49 @@ def clean_title(raw: Any) -> str:
         if candidate:
             text = candidate
             break
-    if not text:
-        return ""
-    text = _TITLE_PREFIX.sub("", text).strip()
-    text = text.strip(_QUOTES).strip()
+    # Quotes, a "Title:" label, markdown emphasis and a trailing period can
+    # wrap each other ('"Title: Foo".'), so peel them until nothing changes.
+    while text:
+        before = text
+        text = _TITLE_PREFIX.sub("", text).strip()
+        text = text.strip(_QUOTES).strip()
+        text = text.strip(_EMPHASIS).strip()
+        text = text.rstrip(_TRAILING_PUNCTUATION).strip()
+        if text == before:
+            break
     text = re.sub(r"\s+", " ", text)
-    text = text.rstrip(_TRAILING_PUNCTUATION).strip()
     if len(text) > TITLE_MAX_CHARS:
-        text = text[: TITLE_MAX_CHARS - 1].rstrip() + "…"
+        text = text[: TITLE_MAX_CHARS - 3].rstrip() + "..."
     return text
 
 
-def title_model_for_config() -> str:
-    """The cheap model for the configured provider family (``llm.title_model`` overrides)."""
+def _provider_family() -> str:
+    llm = config.llm if isinstance(config.llm, Mapping) else {}
+    provider = str(llm.get("provider") or "").strip().lower()
+    return "ai_platform" if provider in {"ai_platform", "ai-platform"} else "github_copilot"
 
+
+def title_model_for_config() -> str:
+    """The cheap model for the configured provider family.
+
+    ``llm.title_model`` overrides it, except an auto id: auto routing is a
+    per-session Copilot choice with its own token, not a model for a one-shot
+    call, so it falls back to the family's cheap model.
+    """
+
+    family = _provider_family()
     llm = config.llm if isinstance(config.llm, Mapping) else {}
     override = str(llm.get("title_model") or "").strip()
-    if override:
+    if override and not is_auto_model_id(override):
         return override
-    provider = str(llm.get("provider") or "").strip().lower()
-    family = "ai_platform" if provider in {"ai_platform", "ai-platform"} else "github_copilot"
-    return TITLE_MODELS[family]
+    if override:
+        logger.warning("llm.title_model %r is an auto id; titles use the family's cheap model instead", override)
+    return cheap_model_for_family(family)
 
 
 def _excerpt(text: str) -> str:
     collapsed = re.sub(r"[ \t]+", " ", str(text or "")).strip()
-    if len(collapsed) <= TITLE_INPUT_MAX_CHARS:
-        return collapsed
-    return collapsed[:TITLE_INPUT_MAX_CHARS].rstrip() + "…"
+    return truncate(collapsed, TITLE_INPUT_MAX_CHARS, "...")
 
 
 def build_title_request(session_id: str, *, user_text: str, assistant_text: str) -> RuntimeRequest:
@@ -153,43 +171,35 @@ def build_title_request(session_id: str, *, user_text: str, assistant_text: str)
     )
 
 
-def _message_text(message: Any) -> str:
-    parts = getattr(message, "parts", None) or []
-    chunks = [
-        str(part.text)
-        for part in parts
-        if getattr(part, "type", None) is MessagePartType.TEXT and getattr(part, "text", None)
-    ]
-    return "\n".join(chunks).strip()
-
-
-def _user_text(message: Any) -> str:
-    # A turn whose model prompt was expanded (attachment context ahead of the
-    # question) keeps the member's own words in metadata; the title should
-    # come from those, not from the composed prompt.
-    metadata = getattr(message, "metadata", None)
-    if isinstance(metadata, Mapping):
-        original = metadata.get("original_user_message")
-        if isinstance(original, str) and original.strip():
-            return original.strip()
-    return _message_text(message)
-
-
 def first_turn_texts(messages: Any) -> tuple[str, str]:
-    """The first user message and the first assistant text after it ("" when missing)."""
+    """The first member message and the final answer of that turn ("" when missing).
+
+    A tool-using turn stores one assistant message per step (a preamble with
+    the tool call, then the answer); the title comes from the last assistant
+    text before the next member message, not the preamble.
+    """
 
     user_text = ""
+    assistant_text = ""
     for message in messages or []:
         role = getattr(message, "role", None)
-        if not user_text:
-            if role is MessageRole.USER:
-                user_text = _user_text(message)
-            continue
-        if role is MessageRole.ASSISTANT:
-            assistant_text = _message_text(message)
+        if role is MessageRole.USER:
+            if not user_text:
+                user_text = member_message_text(message)
+                continue
             if assistant_text:
-                return user_text, assistant_text
-    return user_text, ""
+                break
+            continue
+        if user_text and role is MessageRole.ASSISTANT:
+            text = assistant_message_text(message)
+            if text:
+                assistant_text = text
+    return user_text, assistant_text
+
+
+def _event_type_value(event: Any) -> str:
+    event_type = getattr(event, "type", None)
+    return event_type.value if isinstance(event_type, LLMEventType) else str(event_type or "")
 
 
 async def _invoke_for_text(provider: Any, request: RuntimeRequest) -> tuple[str, dict[str, Any]]:
@@ -209,12 +219,12 @@ async def _invoke_for_text(provider: Any, request: RuntimeRequest) -> tuple[str,
 
     def consume(event: Any) -> None:
         nonlocal ended_text, usage
-        event_type = getattr(event, "type", None)
-        if event_type in (LLMEventType.PROVIDER_ERROR, LLMEventType.ERROR):
+        event_type = _event_type_value(event)
+        if event_type in (LLMEventType.PROVIDER_ERROR.value, LLMEventType.ERROR.value):
             raise TitleGenerationError(str(getattr(event, "error", None) or "provider error"))
-        if event_type is LLMEventType.TEXT_DELTA:
+        if event_type == LLMEventType.TEXT_DELTA.value:
             deltas.append(str(getattr(event, "delta", "") or ""))
-        elif event_type is LLMEventType.TEXT_END:
+        elif event_type == LLMEventType.TEXT_END.value:
             ended_text = str(getattr(event, "text", "") or "") or ended_text
         event_usage = getattr(event, "usage", None)
         if isinstance(event_usage, Mapping) and event_usage:
@@ -230,8 +240,8 @@ async def _invoke_for_text(provider: Any, request: RuntimeRequest) -> tuple[str,
 
 
 def _record_usage(model: str, usage: Mapping[str, Any], session_id: str) -> None:
-    if not usage:
-        return
+    """Book the title call like a chat turn (usage.jsonl), with its own task type."""
+
     try:
         from src.sessions.usage import usage_tracker
 
@@ -248,8 +258,33 @@ def _record_usage(model: str, usage: Mapping[str, Any], session_id: str) -> None
         logger.debug("session title usage was not recorded", exc_info=True)
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _configure_for_titles(provider: Any) -> None:
+    """A ten-token reply does not need the chat's reasoning effort or an SSE stream."""
+
+    if hasattr(provider, "reasoning_effort"):
+        try:
+            provider.reasoning_effort = TITLE_REASONING_EFFORT
+        except Exception:  # pragma: no cover - a provider that validates on assignment keeps its own
+            logger.debug("title reasoning effort not applied", exc_info=True)
+    if hasattr(provider, "stream"):
+        provider.stream = False
+
+
+async def _build_title_provider(provider_builder: ProviderBuilder, execution_metadata: Mapping[str, Any] | None) -> tuple[Any, str]:
+    """The provider for the title call, built off the loop (a Copilot token exchange blocks) and typed for the endpoint."""
+
+    try:
+        provider, model = await asyncio.to_thread(provider_builder, title_model_for_config(), execution_metadata=execution_metadata)
+    except TitleGenerationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - RuntimeChatError (401/400) and transport errors
+        status_code = getattr(exc, "status_code", None)
+        raise TitleGenerationError(
+            f"Title provider unavailable: {exc}",
+            status_code=status_code if isinstance(status_code, int) and 400 <= status_code < 600 else 502,
+        ) from exc
+    _configure_for_titles(provider)
+    return provider, str(model)
 
 
 async def generate_session_title(
@@ -260,28 +295,31 @@ async def generate_session_title(
     store: Any = None,
     force: bool = False,
     timeout: float = TITLE_TIMEOUT_SECONDS,
+    agent_id: str | None = None,
+    track_usage: bool = True,
 ) -> Optional[str]:
     """Generate and store a title for ``session_id``; the stored name, or None when nothing changed.
 
     None means the session keeps the name it has: a manual name exists, or a
     generated one does and ``force`` is false. A missing session raises
-    ``KeyError``; a session without a completed first turn, a provider failure
-    and a timeout raise ``TitleGenerationError``.
+    ``KeyError``; a session without an answered turn, a provider failure and
+    a timeout raise ``TitleGenerationError``. With ``agent_id`` the new name is
+    also sent to the Portal, in the background.
     """
 
     store = store or get_runtime_session_store()
-    session = store.get_session(session_id)  # KeyError when unknown
-    metadata = session.metadata if isinstance(session.metadata, Mapping) else {}
-    if _non_empty(metadata.get(CUSTOM_NAME_KEY)):
+    summary = store.get_session_summary(session_id)  # KeyError when unknown
+    if summary.custom_name:
         return None
-    if not force and _non_empty(metadata.get(GENERATED_NAME_KEY)):
+    if summary.generated_name and not force:
         return None
 
-    user_text, assistant_text = first_turn_texts(session.messages)
+    messages = await asyncio.to_thread(store.read_history, session_id)
+    user_text, assistant_text = first_turn_texts(messages)
     if not user_text or not assistant_text:
-        raise TitleGenerationError("The session has no completed turn to name yet.", status_code=422)
+        raise TitleGenerationError("The session has no answered turn to name yet.", status_code=422)
 
-    provider, model = provider_builder(title_model_for_config(), execution_metadata=execution_metadata)
+    provider, model = await _build_title_provider(provider_builder, execution_metadata)
     request = build_title_request(session_id, user_text=user_text, assistant_text=assistant_text)
     try:
         text, usage = await asyncio.wait_for(_invoke_for_text(provider, request), timeout)
@@ -292,55 +330,49 @@ async def generate_session_title(
     except Exception as exc:  # noqa: BLE001 - any transport failure is a 502 here
         raise TitleGenerationError(f"Title generation failed: {exc}") from exc
 
+    # The call happened: book it whatever becomes of the reply (an auto model
+    # reports the id it was routed to).
+    if track_usage:
+        _record_usage(str(getattr(provider, "last_payload_model", None) or model), usage, session_id)
+
     title = clean_title(text)
     if not title:
         raise TitleGenerationError("The model returned no usable title.")
 
     # A rename that landed while the model was thinking wins.
-    latest = store.get_session(session_id)
-    latest_metadata = latest.metadata if isinstance(latest.metadata, Mapping) else {}
-    if _non_empty(latest_metadata.get(CUSTOM_NAME_KEY)):
+    if store.get_session_summary(session_id).custom_name:
         return None
-    store.update_session(
-        session_id,
-        metadata={
-            GENERATED_NAME_KEY: title,
-            GENERATED_NAME_AT_KEY: _now_iso(),
-            GENERATED_NAME_MODEL_KEY: str(model),
-        },
-    )
-    _record_usage(str(model), usage, session_id)
+    # A title is not activity: the session keeps its place in the list.
+    await asyncio.to_thread(store.update_session, session_id, metadata={GENERATED_NAME_KEY: title}, touch=False)
+    if agent_id:
+        publish_session_title_in_background(agent_id=agent_id, session_id=session_id, title=title)
     return title
 
 
-def should_generate_after_turn(
-    session_id: str,
-    *,
-    result: Any,
-    execution_metadata: Mapping[str, Any] | None = None,
-    store: Any = None,
-) -> bool:
-    """Only the first completed chat turn with an answer, in a session not yet named."""
+def should_generate_after_turn(session_id: str, *, result: Any, store: Any = None) -> bool:
+    """A completed chat turn with an answer, in a session that has no manual or generated name yet.
 
-    if not session_id or str(session_id).startswith(TASK_SESSION_ID_PREFIXES):
-        return False
-    metadata = execution_metadata if isinstance(execution_metadata, Mapping) else {}
-    if any(metadata.get(key) for key in ("portal_task_id", "task_id")):
+    Any such turn qualifies, not only the first: a first turn that failed, or
+    a title call that did, gets its chance with the next answered turn.
+    """
+
+    if not session_id or is_task_session_id(session_id):
         return False
     if getattr(result, "status", None) != LoopStatus.COMPLETED:
         return False
-    if not _message_text(getattr(result, "final_assistant_message", None)):
+    if not assistant_message_text(getattr(result, "final_assistant_message", None)):
         return False
     store = store or get_runtime_session_store()
     try:
         summary = store.get_session_summary(session_id)
     except KeyError:
         return False
-    if summary.user_message_count != 1:
-        return False
-    if summary.custom_name or getattr(summary, "generated_name", None):
-        return False
-    return True
+    return not summary.custom_name and not summary.generated_name
+
+
+def inflight_title_task(session_id: str) -> Optional[asyncio.Task]:
+    task = _title_tasks.get(session_id)
+    return task if task is not None and not task.done() else None
 
 
 def schedule_session_title(
@@ -351,29 +383,28 @@ def schedule_session_title(
     execution_metadata: Mapping[str, Any] | None = None,
     agent_id: str | None = None,
     store: Any = None,
+    track_usage: bool = True,
 ) -> Optional[asyncio.Task]:
     """Start the title call in the background after a turn; the task, or None when not due."""
 
-    if not should_generate_after_turn(
-        session_id,
-        result=result,
-        execution_metadata=execution_metadata,
-        store=store,
-    ):
+    if not should_generate_after_turn(session_id, result=result, store=store):
         return None
-    if session_id in _inflight:
+    if inflight_title_task(session_id) is not None:
         return None
-    _inflight.add(session_id)
-    return asyncio.create_task(
+    task = asyncio.create_task(
         _generate_in_background(
             session_id,
             provider_builder=provider_builder,
             execution_metadata=execution_metadata,
             agent_id=agent_id,
             store=store,
+            track_usage=track_usage,
         ),
         name=f"session-title:{session_id}",
     )
+    _title_tasks[session_id] = task
+    task.add_done_callback(lambda done, key=session_id: _title_tasks.pop(key, None) if _title_tasks.get(key) is done else None)
+    return task
 
 
 async def _generate_in_background(
@@ -383,39 +414,40 @@ async def _generate_in_background(
     execution_metadata: Mapping[str, Any] | None,
     agent_id: str | None,
     store: Any,
-) -> None:
+    track_usage: bool,
+) -> Optional[str]:
+    """The stored title, or None when the session keeps its name; never raises."""
+
     try:
         title = await generate_session_title(
             session_id,
             provider_builder=provider_builder,
             execution_metadata=execution_metadata,
             store=store,
+            agent_id=agent_id,
+            track_usage=track_usage,
         )
-        if title:
-            logger.info("Session %s titled: %s", session_id, title)
-            if agent_id:
-                await publish_session_title(agent_id=agent_id, session_id=session_id, title=title)
     except TitleGenerationError as exc:
         logger.warning("Session %s keeps its derived name: %s", session_id, exc.message)
+        return None
     except Exception:
         logger.warning("Session %s keeps its derived name (title generation failed)", session_id, exc_info=True)
-    finally:
-        _inflight.discard(session_id)
-
-
-def _non_empty(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip())
+        return None
+    if title:
+        logger.info("Session %s titled: %s", session_id, title)
+    return title
 
 
 __all__ = [
     "CUSTOM_NAME_KEY",
     "GENERATED_NAME_KEY",
-    "TITLE_MODELS",
+    "TITLE_REASONING_EFFORT",
     "TitleGenerationError",
     "build_title_request",
     "clean_title",
     "first_turn_texts",
     "generate_session_title",
+    "inflight_title_task",
     "schedule_session_title",
     "should_generate_after_turn",
     "title_model_for_config",
