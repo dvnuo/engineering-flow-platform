@@ -75,13 +75,43 @@ def reset_runtime_session_singletons() -> None:
         _manager_singletons.clear()
 
 
-def resolve_session_display_name(session: Mapping[str, Any]) -> str:
+def _metadata_name(session: Mapping[str, Any], key: str) -> str:
     metadata = session.get("metadata", {})
-    custom_name = metadata.get("custom_session_name") if isinstance(metadata, Mapping) else None
-    if isinstance(custom_name, str):
-        custom_name = custom_name.strip()
-        if custom_name:
-            return custom_name
+    value = metadata.get(key) if isinstance(metadata, Mapping) else None
+    return value.strip() if isinstance(value, str) else ""
+
+
+def resolve_session_name_source(session: Mapping[str, Any]) -> str:
+    """Where the display name comes from: ``custom``, ``generated``, ``title``, ``derived`` or ``none``.
+
+    The same precedence as ``resolve_session_display_name``: a manual rename,
+    then the title the runtime generated after the first turn, then a title set
+    some other way, then the first user message cut short.
+    """
+
+    if _metadata_name(session, "custom_session_name"):
+        return "custom"
+    if _metadata_name(session, "generated_session_name"):
+        return "generated"
+    title = session.get("title")
+    if isinstance(title, str) and title.strip():
+        return "title"
+    history = session.get("history", [])
+    if isinstance(history, list):
+        for msg in history:
+            if isinstance(msg, Mapping) and msg.get("role") == "user":
+                return "derived"
+    return "none"
+
+
+def resolve_session_display_name(session: Mapping[str, Any]) -> str:
+    custom_name = _metadata_name(session, "custom_session_name")
+    if custom_name:
+        return custom_name
+
+    generated_name = _metadata_name(session, "generated_session_name")
+    if generated_name:
+        return generated_name
 
     title = session.get("title")
     if isinstance(title, str) and title.strip():
@@ -317,6 +347,17 @@ class RuntimeSessionManager:
         session = await self.get_session(session_id)
         value = session.get("metadata", {}).get("last_execution_id")
         return value.strip() if isinstance(value, str) and value.strip() else None
+
+    async def get_session_title(self, session_id: str) -> Optional[str]:
+        """The manual or generated name of an existing session; None for a derived one or no session."""
+
+        if not session_id:
+            return None
+        try:
+            summary = self.store.get_session_summary(session_id)
+        except KeyError:
+            return None
+        return summary.custom_name or summary.generated_name or None
 
     async def set_last_execution_id(self, session_id: str, request_id: Optional[str]) -> None:
         if not session_id or not request_id:
@@ -1114,6 +1155,7 @@ __all__ = [
     "legacy_messages_to_runtime",
     "reset_runtime_session_singletons",
     "resolve_session_display_name",
+    "resolve_session_name_source",
     "runtime_session_manager",
     "runtime_session_root",
 ]

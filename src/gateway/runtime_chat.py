@@ -15,6 +15,7 @@ from typing import Any, Mapping, Optional
 from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
 from src.utils.proxy_plan import hostname_of
 from src.gateway.runtime_event_projection import RuntimeEventProjector
+from src.gateway.session_title import schedule_session_title
 from src.gateway.workspace_deliverables import (
     attach_deliverable_blocks,
     build_deliverable_display_blocks,
@@ -186,6 +187,12 @@ async def run_runtime_chat(
             result,
             request_id=request_id,
         )
+        _schedule_session_title_after_turn(
+            session_id,
+            result,
+            execution_metadata=execution_metadata,
+            agent_id=agent_id,
+        )
     except ProviderTransportError as exc:
         raise RuntimeChatError(
             str(exc),
@@ -311,6 +318,13 @@ async def resume_runtime_chat(
             result,
             request_id=request_id,
         )
+        # A first turn that paused on a question completes here.
+        _schedule_session_title_after_turn(
+            session_id,
+            result,
+            execution_metadata=execution_metadata,
+            agent_id=agent_id,
+        )
     except ProviderTransportError as exc:
         raise RuntimeChatError(
             str(exc),
@@ -348,6 +362,27 @@ async def resume_runtime_chat(
             },
         )
     return payload
+
+
+def _schedule_session_title_after_turn(
+    session_id: str,
+    result: RuntimeLoopResult,
+    *,
+    execution_metadata: Mapping[str, Any] | None,
+    agent_id: str | None,
+) -> None:
+    """Name the session in the background after its first answered turn; never raises."""
+
+    try:
+        schedule_session_title(
+            session_id,
+            result=result,
+            provider_builder=_build_llm_provider,
+            execution_metadata=execution_metadata,
+            agent_id=agent_id,
+        )
+    except Exception:
+        logger.debug("Session title scheduling failed for %s", session_id, exc_info=True)
 
 
 def _seed_runtime_question_response(

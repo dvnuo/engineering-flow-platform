@@ -115,6 +115,7 @@ def load_runtime_api_lightweight():
             "src.efp_runtime.session.gateway_facade",
             RuntimeSessionArtifacts=_RuntimeSessionArtifacts,
             resolve_session_display_name=lambda *_a, **_k: "",
+            resolve_session_name_source=lambda *_a, **_k: "none",
             runtime_session_manager=_RuntimeSessionManager(),
         ),
         "src.utils.file_parser.storage": _module(
@@ -169,6 +170,7 @@ def load_runtime_api_lightweight():
             "src.runtime.portal_session_metadata_client",
             extract_session_metadata_publish_fields=lambda *_a, **_k: {},
             publish_session_metadata=_noop_async,
+            publish_session_title=_noop_async,
         ),
         "src.runtime.progressive_context": _module("src.runtime.progressive_context", build_portal_context_preview=lambda *_a, **_k: {}),
         "src.gateway.chat_payloads": _module(

@@ -139,10 +139,13 @@ class CandidateSelection:
 
 
 def session_display_name(summary: SessionSummary) -> str:
-    """Mirror the gateway's display-name precedence: custom name, title, first words."""
+    """Mirror the gateway's display-name precedence: custom name, generated name, title, first words."""
 
     if summary.custom_name:
         return summary.custom_name
+    generated_name = (getattr(summary, "generated_name", None) or "").strip()
+    if generated_name:
+        return generated_name
     title = (summary.title or "").strip()
     if title:
         return title

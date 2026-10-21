@@ -48,6 +48,9 @@ _CONTROL_PLANE_METADATA_KEYS = {
     "active_skill_turn_count",
     "active_skill_activation_reason",
     "active_skill_tool_policy_declared",
+    # The manual or generated session name, so the Portal can show it while
+    # the pod is stopped (sessions panel, share page).
+    "session_title",
 }
 
 
@@ -247,6 +250,49 @@ async def publish_session_metadata(
     except Exception:
         logger.warning(
             "Session metadata publish failed for agent_id=%s session_id=%s",
+            normalized_agent_id,
+            normalized_session_id,
+            exc_info=True,
+        )
+
+
+async def publish_session_title(*, agent_id: str, session_id: str, title: str) -> None:
+    """Tell the Portal the session's name changed (generated after the first turn, or regenerated).
+
+    Best effort, like ``publish_session_metadata``: a Portal without the title
+    endpoint answers 404 and the name still reaches it with the next full
+    publish (``session_title`` in the metadata). The full publish is not used
+    here because it replaces every column of the Portal's row, and the title
+    arrives in the background with no run state to send alongside it.
+    """
+
+    normalized_agent_id = str(agent_id or "").strip()
+    normalized_session_id = str(session_id or "").strip()
+    normalized_title = str(title or "").strip()
+    if not normalized_agent_id or not normalized_session_id or not normalized_title:
+        return
+
+    base_url = get_portal_internal_base_url()
+    if not base_url:
+        return
+
+    url = f"{base_url}/api/internal/agents/{normalized_agent_id}/sessions/{normalized_session_id}/title"
+    headers = build_portal_internal_api_headers(include_content_type=True)
+    try:
+        async with ClientSession(headers=headers) as session:
+            async with session.patch(url, json={"title": normalized_title}) as response:
+                if response.status >= 400:
+                    body = await response.text()
+                    logger.warning(
+                        "Session title publish failed: status=%s agent_id=%s session_id=%s body=%s",
+                        response.status,
+                        normalized_agent_id,
+                        normalized_session_id,
+                        body[:500],
+                    )
+    except Exception:
+        logger.warning(
+            "Session title publish failed for agent_id=%s session_id=%s",
             normalized_agent_id,
             normalized_session_id,
             exc_info=True,
