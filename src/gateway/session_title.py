@@ -209,7 +209,10 @@ async def _invoke_for_text(provider: Any, request: RuntimeRequest) -> tuple[str,
     if inspect.isawaitable(output):
         output = await output
     if isinstance(output, Mapping):
-        events: Any = DefaultLLMEventAdapter().normalize_response(output)
+        # A non-streaming call answers with the raw JSON (Responses or chat
+        # shape); the provider's own adapter reads it as the chat would.
+        adapter = getattr(provider, "adapter", None) or DefaultLLMEventAdapter()
+        events: Any = adapter.normalize_response(output)
     else:
         events = output
 
@@ -259,9 +262,15 @@ def _record_usage(model: str, usage: Mapping[str, Any], session_id: str) -> None
 
 
 def _configure_for_titles(provider: Any) -> None:
-    """A ten-token reply does not need the chat's reasoning effort or an SSE stream."""
+    """A ten-token reply does not need the chat's reasoning effort or an SSE stream.
 
-    if hasattr(provider, "reasoning_effort"):
+    The effort is only lowered where the chat already sends one, so the title
+    request never carries a parameter the member's chat requests do not. A
+    non-streaming call is the shape the Copilot smoke check uses against the
+    real API (``github_copilot_provider_from_env`` defaults to it).
+    """
+
+    if getattr(provider, "reasoning_effort", None):
         try:
             provider.reasoning_effort = TITLE_REASONING_EFFORT
         except Exception:  # pragma: no cover - a provider that validates on assignment keeps its own

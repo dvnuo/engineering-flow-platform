@@ -262,6 +262,52 @@ async def test_generate_session_title_turns_the_chat_provider_into_a_one_shot(tm
     assert _no_usage_files[0]["model"] == "gpt-6-luna-routed"
 
 
+async def test_generate_session_title_adds_no_reasoning_effort_the_chat_does_not_send(tmp_path):
+    store = _store_with_turn(tmp_path)
+
+    class _NoEffortProvider(_ChatLikeProvider):
+        def __init__(self, reply):
+            super().__init__(reply)
+            self.reasoning_effort = None
+
+    build = _builder({"content": "Deploy stage permissions"}, provider_class=_NoEffortProvider)
+    assert await generate_session_title("s-1", provider_builder=build, store=store) == "Deploy stage permissions"
+    assert build.providers[0].reasoning_effort is None
+    assert build.providers[0].stream is False
+
+
+async def test_generate_session_title_reads_a_non_streaming_responses_answer_with_the_real_provider(tmp_path, _no_usage_files):
+    # The Copilot provider as the chat builds it (streaming, effort high),
+    # answered by a recorded non-streaming /responses body.
+    from src.efp_runtime.llm.provider import GitHubCopilotProvider, RecordingTransport
+
+    store = _store_with_turn(tmp_path)
+    transport = RecordingTransport([
+        {
+            "id": "resp_1",
+            "model": "gpt-6-luna",
+            "output": [
+                {"type": "reasoning", "summary": []},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "\"Deploy stage permissions\""}]},
+            ],
+            "usage": {"input_tokens": 120, "output_tokens": 9},
+        }
+    ])
+
+    def build(requested_model, *, execution_metadata=None):
+        provider = GitHubCopilotProvider(transport=transport, model=requested_model, stream=True, reasoning_effort="high")
+        return provider, requested_model
+
+    assert await generate_session_title("s-1", provider_builder=build, store=store) == "Deploy stage permissions"
+    payload = transport.payloads[0]
+    assert payload["stream"] is False
+    assert payload["reasoning"] == {"effort": "low"}
+    assert payload["model"] == "gpt-6-luna"
+    assert "tools" not in payload or payload["tools"]
+    assert _no_usage_files[0]["input_tokens"] == 120
+    assert _no_usage_files[0]["output_tokens"] == 9
+
+
 async def test_generate_session_title_can_skip_usage_tracking(tmp_path, _no_usage_files):
     store = _store_with_turn(tmp_path)
     await generate_session_title("s-1", provider_builder=_builder({"content": "T"}), store=store, track_usage=False)
