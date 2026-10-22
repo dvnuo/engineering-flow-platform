@@ -184,7 +184,23 @@ async def parse_file(file_id: str, options: dict = None) -> ParseResult:
     metadata = get_metadata(file_id)
     
     content_type = metadata.content_type
-    
+
+    # Forwarded office formats are stored for the agent's analysis skill
+    # (Productivity Suite); the runtime has no parser for them.
+    from .validators import is_forwarded_upload_mime
+
+    if is_forwarded_upload_mime(content_type):
+        return ParseResult(
+            success=False,
+            content_type=content_type,
+            file_id=file_id,
+            filename=metadata.original_filename,
+            error=(
+                f"{metadata.original_filename} is stored for the assistant to analyze through "
+                "Productivity Suite; the runtime does not parse this format"
+            ),
+        )
+
     # Dispatch by type
     if content_type.startswith("image/"):
         image_mod = _get_image_module()
@@ -327,10 +343,20 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
         return "image/gif"
     if header.startswith(b"RIFF") and b"WEBP" in header[8:16]:  # WebP
         return "image/webp"
-    
+    if header.startswith(b"II*\x00") or header.startswith(b"MM\x00*"):  # TIFF
+        return "image/tiff"
+    if header.startswith(b"BM") and len(header) > 14:  # BMP
+        return "image/bmp"
+
     # PDF
     if header.startswith(b"%PDF-"):
         return "application/pdf"
+
+    # Legacy Office (OLE2 compound file): the signature says Office, the
+    # extension says which program; the runtime stores these for the agent's
+    # analysis skill and never parses them.
+    if header.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"):
+        return "application/vnd.ms-excel" if ext == ".xls" else "application/msword"
     
     # Office Open XML documents (DOCX/XLSX/PPTX are ZIP-based); any other valid
     # zip is a plain archive, projected as its listing plus the text inside.

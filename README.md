@@ -198,8 +198,8 @@ boot (no hot apply; config changes require a Portal-triggered restart):
   default proxy is exported as `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` and
   `NO_PROXY` (what `aws`, `kubectl`, `gh` and `git` follow); every other
   connector's proxy is written into its own tool config (`EFP_<PRODUCT>_INSTANCES_<i>_PROXY`,
-  pgsql's per-instance `proxy`, mobile-auto's `browserstack.http_proxy`,
-  inspect-image's `api.proxy`) and used by the LLM transports, so the model
+  pgsql's per-instance `proxy`, mobile-auto's `browserstack.http_proxy`)
+  and used by the LLM transports, so the model
   provider and PostgreSQL can leave through different proxies. The credentials
   of every proxy are exported as `EFP_PROXY_<NAME>_USERNAME`/`_PASSWORD` for
   mobile-auto. `GET /ready` reports the resolved plan without credentials. A

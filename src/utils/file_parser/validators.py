@@ -8,9 +8,14 @@ from typing import Iterable, List, Optional, Tuple
 from .models import ImageConstraints
 
 
+# Office formats the runtime stores but never parses: Productivity Suite
+# reads them, through the attached-files analysis skill in the member's
+# browser, so the gateway lists them in the attachment handoff like images.
+FORWARDED_MIME_TYPES = frozenset({"application/msword", "application/vnd.ms-excel"})
+
 # Allowed MIME types (can be configured)
 ALLOWED_MIME_TYPES = {
-    "image": ["image/jpeg", "image/png", "image/webp", "image/gif"],
+    "image": ["image/jpeg", "image/png", "image/webp", "image/gif", "image/tiff", "image/bmp"],
     "document": [
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -18,6 +23,7 @@ ALLOWED_MIME_TYPES = {
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "application/zip",
     ],
+    "forwarded": sorted(FORWARDED_MIME_TYPES),
     "text": ["text/csv", "text/plain"],
 }
 
@@ -25,7 +31,13 @@ ALLOWED_MIME_TYPES = {
 FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$')
 
 # Allowed image extensions (in sync with ALLOWED_MIME_TYPES["image"])
-IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
+IMAGE_EXTENSIONS = {"jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "tiff", "bmp"}
+
+
+def is_forwarded_upload_mime(mime_type: str) -> bool:
+    """Whether a stored file is one the agent analyzes elsewhere instead of the runtime parsing it."""
+    normalized = str(mime_type or "").lower().split(";")[0].strip()
+    return normalized in FORWARDED_MIME_TYPES
 
 
 # ---------------------------------------------------------------------------
@@ -35,18 +47,21 @@ IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
 # accepts (comma-separated, case-insensitive, leading dots optional). The
 # Portal renders the same setting into its file picker and hands it to every
 # agent pod, so both ends agree on what "ask the model about this file" can
-# carry. Only formats the runtime can actually hand to the model make sense
-# here: pdf/docx/xlsx/pptx/csv go through their parsers, a zip is projected
-# as its listing plus the text files inside, and any other extension whose
-# bytes decode as UTF-8 goes through the text parser. Images (jpg, jpeg,
-# png, webp, gif) are supported but off the default list because the default
-# model has no vision; a deployment whose model can see adds them. A
-# configured extension whose content the runtime cannot parse is still
-# rejected at upload time.
+# carry. pdf/docx/xlsx/pptx/csv go through their parsers, a zip is projected
+# as its listing plus the text files inside, and any other text extension
+# whose bytes decode as UTF-8 goes through the text parser. Images and the
+# office formats the runtime does not parse (doc, dot, xls) are forwarded:
+# stored under the workspace and listed to the agent, which analyzes them
+# through Productivity Suite in the member's browser (the chat model cannot
+# see images). The default is therefore what Productivity Suite accepts plus
+# the text formats; a deployment without it trims the list. A configured
+# extension whose content is neither parsed nor forwarded is still rejected
+# at upload time.
 # ---------------------------------------------------------------------------
 UPLOAD_EXTENSIONS_ENV = "EFP_CHAT_UPLOAD_EXTENSIONS"
 DEFAULT_UPLOAD_EXTENSIONS: Tuple[str, ...] = (
     "pdf", "docx", "xlsx", "csv", "txt", "log", "pptx", "zip", "md", "yaml", "yml", "json", "xml",
+    "doc", "dot", "xls", "png", "jpg", "jpeg", "jpe", "jfif", "tiff", "webp", "bmp",
 )
 
 # User-facing per-file cap shared with the Portal (same env, same default);
@@ -58,9 +73,16 @@ DEFAULT_MAX_UPLOAD_MB = 25
 BINARY_EXTENSION_MIME_TYPES = {
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
+    "jpe": "image/jpeg",
+    "jfif": "image/jpeg",
     "png": "image/png",
     "gif": "image/gif",
     "webp": "image/webp",
+    "tiff": "image/tiff",
+    "bmp": "image/bmp",
+    "doc": "application/msword",
+    "dot": "application/msword",
+    "xls": "application/vnd.ms-excel",
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

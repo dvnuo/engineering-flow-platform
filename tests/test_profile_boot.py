@@ -353,13 +353,6 @@ async def test_ready_endpoint_gates_on_boot_projection(tmp_path, monkeypatch, bo
         "ready": True,
         "runtime_profile_id": "rp_ready",
         "revision": 11,
-        # No AI Platform account in this profile: image analysis says why.
-        "image_analysis": {
-            "configured": False,
-            "reason": "image analysis is off for this profile",
-            "model": None,
-            "config_path": None,
-        },
         # No Proxy connector in this profile: nothing resolved, nothing assigned.
         "proxy": {"enabled": False, "default": None, "proxies": [], "assignments": {}, "warnings": []},
     }
@@ -420,7 +413,8 @@ async def test_ready_endpoint_dev_mode_reports_null_profile(tmp_path, monkeypatc
     assert status == 200
     assert body["ready"] is True
     assert body["runtime_profile_id"] is None and body["revision"] is None
-    assert body["image_analysis"]["configured"] is False
+    # The retired image analysis (inspect-image) no longer reports here.
+    assert "image_analysis" not in body
 
 
 @pytest.mark.asyncio

@@ -48,12 +48,21 @@ def test_get_safe_extension_accepts_known_formats_and_the_configured_allowlist(m
     assert validators.get_safe_extension("a.exe") == ""
 
 
-def test_default_allowlist_is_non_visual_and_includes_office_and_archives():
+def test_default_allowlist_is_the_productivity_suite_list():
     defaults = validators.DEFAULT_UPLOAD_EXTENSIONS
-    assert defaults == ("pdf", "docx", "xlsx", "csv", "txt", "log", "pptx", "zip", "md", "yaml", "yml", "json", "xml")
-    assert not (set(defaults) & validators.IMAGE_EXTENSIONS)
+    assert tuple(defaults) == (
+        "pdf", "docx", "xlsx", "csv", "txt", "log", "pptx", "zip", "md", "yaml", "yml", "json", "xml",
+        "doc", "dot", "xls", "png", "jpg", "jpeg", "jpe", "jfif", "tiff", "webp", "bmp",
+    )
+    # Images and the forwarded office formats are on the list now; gif is not a
+    # Productivity Suite format, so it stays off.
+    assert {"png", "jpg", "jpeg", "jpe", "jfif", "tiff", "webp", "bmp"} <= set(defaults) & set(validators.IMAGE_EXTENSIONS)
+    assert "gif" not in defaults
+    assert {"doc", "dot", "xls"} <= set(defaults)
     assert "pptx" in validators.BINARY_EXTENSION_MIME_TYPES
     assert "zip" in validators.BINARY_EXTENSION_MIME_TYPES
+    assert validators.BINARY_EXTENSION_MIME_TYPES["doc"] == "application/msword"
+    assert validators.BINARY_EXTENSION_MIME_TYPES["xls"] == "application/vnd.ms-excel"
 
 
 def test_resolve_max_upload_mb(monkeypatch):
@@ -81,7 +90,10 @@ def test_resolve_max_upload_mb(monkeypatch):
         ("application/yaml", True),
         ("application/vnd.openxmlformats-officedocument.presentationml.presentation", True),
         ("application/zip", True),
-        ("image/bmp", False),
+        ("image/bmp", True),
+        ("image/tiff", True),
+        ("application/msword", True),
+        ("application/vnd.ms-excel", True),
         ("application/octet-stream", False),
         ("application/x-dosexec", False),
         ("application/x-7z-compressed", False),

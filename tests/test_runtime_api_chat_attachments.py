@@ -559,16 +559,19 @@ async def test_upload_rejects_extension_not_on_the_allowlist(isolated_attachment
         body = await response.json()
         assert body["success"] is False
         assert "File type .exe is not allowed" in body["error"]
-        assert "Allowed: pdf, docx, xlsx, csv, txt, log, pptx, zip, md, yaml, yml, json, xml" in body["error"]
+        assert (
+            "Allowed: pdf, docx, xlsx, csv, txt, log, pptx, zip, md, yaml, yml, json, xml, "
+            "doc, dot, xls, png, jpg, jpeg, jpe, jfif, tiff, webp, bmp"
+        ) in body["error"]
 
-        # Images are off the default list: the default model has no vision.
+        # GIF is not a Productivity Suite format, so it is off the default list.
         response = await client.post(
             "/api/files/upload",
             params={"session_id": "s1"},
-            data=_file_form("shot.png", PNG_BYTES, "image/png"),
+            data=_file_form("clip.gif", b"GIF89a", "image/gif"),
         )
         assert response.status == 415
-        assert "File type .png is not allowed" in (await response.json())["error"]
+        assert "File type .gif is not allowed" in (await response.json())["error"]
 
         response = await client.post(
             "/api/files/upload",

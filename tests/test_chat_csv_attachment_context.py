@@ -222,7 +222,7 @@ def test_failure_notice_builder_includes_failed_attachment():
 async def test_api_chat_image_plus_failed_csv_allows_image_and_warns_model(monkeypatch):
     runtime_api.global_config._config.setdefault("llm", {})
     runtime_api.global_config._config["llm"].update({"api_key": "k", "model": "gpt-4o"})
-    # These turns inline the image: without the flag a non-AI-Platform chat hands images to inspect-image instead.
+    # These turns inline the image: without the flag a non-AI-Platform chat hands images to the attached-files analysis skill instead.
     monkeypatch.setenv("EFP_COPILOT_VISION_VIA_CHAT", "1")
     captured = {}
     async def _fake_images(**kwargs): return ["data:image/png;base64,abc"]
@@ -279,7 +279,7 @@ async def test_api_chat_good_csv_plus_failed_csv_warns_model(monkeypatch):
 async def test_api_chat_stream_image_plus_failed_csv_warns_model(monkeypatch):
     runtime_api.global_config._config.setdefault("llm", {})
     runtime_api.global_config._config["llm"].update({"api_key": "k", "model": "gpt-4o"})
-    # These turns inline the image: without the flag a non-AI-Platform chat hands images to inspect-image instead.
+    # These turns inline the image: without the flag a non-AI-Platform chat hands images to the attached-files analysis skill instead.
     monkeypatch.setenv("EFP_COPILOT_VISION_VIA_CHAT", "1")
     captured = {}
     async def _fake_images(**kwargs): return ["data:image/png;base64,abc"]

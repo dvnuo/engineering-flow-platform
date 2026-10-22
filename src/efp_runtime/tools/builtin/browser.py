@@ -659,7 +659,7 @@ def _prepare_workflow_params(
             raise _ParamError(
                 "invalid_args",
                 "params.workflow or params.workflow_yaml is required for workflow.run.",
-                'Example: {"workflow": "productivity-suite-analyze-file/workflow.yaml", "vars": {...}}',
+                'Example: {"workflow": "<skill>/workflow.yaml", "vars": {...}}',
             )
         yaml_text = _read_workflow(workflow, context, skill_discovery)
     if len(yaml_text.encode("utf-8")) > _MAX_WORKFLOW_YAML_BYTES:
@@ -693,18 +693,40 @@ def _prepare_workflow_params(
     if not isinstance(raw_files, Mapping):
         raise _ParamError(
             "invalid_args",
-            "params.files must map a playbook variable to a workspace file path.",
-            'Example: {"files": {"file": "uploads/contract.pdf"}}',
+            "params.files must map a playbook variable to a workspace file path, or to a list of paths.",
+            'Example: {"files": {"file": "uploads/contract.pdf"}} or {"files": {"files": ["uploads/a.pdf", "uploads/b.png"]}}',
         )
     entries: list[dict[str, Any]] = []
     if raw_files:
         root = _workspace_root(context)
-        for var, raw in _check_file_count(list(raw_files.items())):
+        flat: list[tuple[str, Any]] = []
+        for var, raw in raw_files.items():
             key = str(var).strip()
             if not key or " " in key:
                 raise _ParamError("invalid_args", f"params.files has an invalid variable name: {var!r}.", None)
-            entry = _file_entry(root, raw, max_upload_bytes)
-            entries.append({"var": key, **entry})
+            values = list(raw) if isinstance(raw, (list, tuple)) else [raw]
+            if not values:
+                raise _ParamError("invalid_args", f"params.files.{key} lists no file.", None)
+            flat.extend((key, value) for value in values)
+        for key, raw in _check_file_count(flat):
+            entries.append({"var": key, **_file_entry(root, raw, max_upload_bytes)})
+
+    # A playbook may cap what its site accepts in one go (Productivity Suite:
+    # 40 MB for all files together); the sum is checked here, before any
+    # file leaves the workspace.
+    max_total = params.get("max_total_bytes")
+    if max_total is not None:
+        try:
+            total_limit = int(max_total)
+        except (TypeError, ValueError):
+            raise _ParamError("invalid_args", "params.max_total_bytes must be an integer number of bytes.", None) from None
+        total = sum(int(entry["bytes"]) for entry in entries)
+        if total_limit > 0 and total > total_limit:
+            raise _ParamError(
+                "files_too_large",
+                f"The files total {_human_size(total)}; the playbook allows {_human_size(total_limit)} in one run.",
+                "Attach fewer or smaller files, or run the playbook more than once.",
+            )
 
     prepared: dict[str, Any] = {
         "workflow_yaml": yaml_text,

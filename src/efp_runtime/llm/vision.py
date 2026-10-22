@@ -2,9 +2,10 @@
 
 GitHub Copilot's models no longer accept image input on the enterprise plan,
 so a Copilot chat turn must not inline attachments as image parts: the gateway
-hands the files to the agent for the inspect-image CLI instead (see
-``src/gateway/image_handoff.py``). AI Platform chat/completions is multimodal.
-``EFP_COPILOT_VISION_VIA_CHAT=1`` flips Copilot back on the day vision returns.
+hands the files to the agent for the attached-files analysis skill instead
+(see ``src/gateway/attachment_handoff.py``). AI Platform chat/completions is
+multimodal. ``EFP_COPILOT_VISION_VIA_CHAT=1`` flips Copilot back on the day
+vision returns.
 """
 
 from __future__ import annotations

@@ -138,7 +138,11 @@ class TestIsImageFile:
         assert is_image_file("photo.png") is True
         assert is_image_file("photo.gif") is True
         assert is_image_file("photo.webp") is True
-        assert is_image_file("photo.bmp") is False  # bmp not in allowlist
+        # The Productivity Suite image formats are images too.
+        assert is_image_file("photo.bmp") is True
+        assert is_image_file("photo.tiff") is True
+        assert is_image_file("photo.jfif") is True
+        assert is_image_file("photo.jpe") is True
     
     def test_non_image_extensions(self):
         """Test non-image extensions return False."""
