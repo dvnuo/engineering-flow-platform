@@ -138,6 +138,12 @@ Each capability item includes at least:
   `data.session_id`, `data.request_id`, `data.connector_type`, and
   `data.connector_request.{id, action, params, target_client_id, timeout_seconds}`),
   then blocks on the process-wide `ConnectorBridgeBroker`.
+- For `page.upload` the request's `params.files` is `[{path, name, bytes}]`
+  (workspace-relative paths the tool checked; never file contents), and for
+  `workflow.run` it is `{workflow_yaml, vars, files: [{var, path, name, bytes}],
+  yes, dry_run, continue_on_error, target_id?}`; the page pulls each file
+  through the Server files download, stages it on the bridge, and runs the
+  command with the staged ids.
 - The Portal page answers with
   `POST /api/sessions/{session_id}/connectors/respond`
   `{request_id, client_id, ok, result | error}` → `202`; an unknown, foreign,

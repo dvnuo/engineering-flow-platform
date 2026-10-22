@@ -3191,6 +3191,7 @@ def _resolve_tool_runtime(
                     create_browser_tool(
                         connector_bridge,
                         event_publisher=connector_event_publisher,
+                        skill_discovery=skill_discovery,
                     )
                 )
             if config.enable_session_search:

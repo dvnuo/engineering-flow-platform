@@ -158,6 +158,7 @@ def create_core_tool_registry(
             create_browser_tool(
                 connector_bridge,
                 event_publisher=connector_event_publisher,
+                skill_discovery=resolved_skill_discovery,
             )
         )
     resolved_todo_store = todo_store or SessionTodoStore()
