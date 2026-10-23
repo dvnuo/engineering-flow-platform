@@ -35,9 +35,10 @@ from src.hooks.file_context import inject_context
 from src.hooks.file_context.models import Chunk, SessionFileMeta
 from src.hooks.file_context.retrieval import retrieval_engine
 from src.hooks.file_context.storage import storage as file_context_storage
-from src.config import config as global_config, DEFAULT_LLM_MODEL, get_image_analysis_state
+from src.config import config as global_config, DEFAULT_LLM_MODEL
 from src.efp_runtime.llm.vision import chat_provider_accepts_images
-from src.gateway.image_handoff import build_image_handoff
+from src.gateway.attachment_handoff import build_attachment_handoff
+from src.utils.file_parser.validators import is_forwarded_upload_mime
 from src.runtime.chat_orchestration_adapter import execute_runtime_task_request
 from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 from src.runtime.runtime_task_session_coordinator import RuntimeTaskSessionCoordinator
@@ -680,15 +681,30 @@ async def _collect_attached_images(
     return attached_images
 
 
-def _collect_attached_image_files(
+def _local_bridge_available(metadata: Optional[Dict[str, Any]]) -> bool:
+    """Whether this chat can reach the member's browser (Portal-vouched metadata)."""
+    if not isinstance(metadata, dict):
+        return False
+    connectors = metadata.get("connectors")
+    if not isinstance(connectors, dict):
+        return False
+    bridge = connectors.get("local_bridge")
+    return isinstance(bridge, dict) and bridge.get("enabled") is not False
+
+
+def _collect_attached_handoff_files(
     *,
     session_id: str,
     attachments: Optional[List[str]],
+    include_images: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Where each attached image sits on disk, for the inspect-image handoff.
+    """Where each attachment the model cannot read sits on disk, for the handoff.
 
-    Uploads live under the workspace (``/workspace/uploads``), so the agent's
-    bash can pass the path straight to ``inspect-image``; nothing is copied.
+    The office formats the runtime does not parse (doc, dot, xls) are always
+    handed to the agent; images only when the chat provider cannot see them
+    (``include_images``). Uploads live under the workspace
+    (``/workspace/uploads``), so the agent passes the path to the analysis
+    skill as it is; nothing is copied.
     """
     files: List[Dict[str, Any]] = []
     if not (attachments and isinstance(attachments, list)):
@@ -703,7 +719,9 @@ def _collect_attached_image_files(
             if metadata.session_id and metadata.session_id != session_id:
                 logger.warning(f"[api_chat] File {file_id} belongs to different session")
                 continue
-            if not (metadata.content_type or "").startswith("image/"):
+            content_type = str(metadata.content_type or "")
+            is_image = content_type.startswith("image/")
+            if not ((is_image and include_images) or is_forwarded_upload_mime(content_type)):
                 continue
             file_path = get_file_path(file_id)
             if not file_path.exists():
@@ -720,7 +738,7 @@ def _collect_attached_image_files(
         except StoredFileNotFoundError:
             logger.warning(f"[api_chat] File {file_id} not found")
         except Exception as e:
-            logger.warning(f"[api_chat] Failed to locate image file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
+            logger.warning(f"[api_chat] Failed to locate attachment {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
     return files
 
 
@@ -803,7 +821,10 @@ async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: Li
         if metadata.session_id and metadata.session_id != session_id:
             failures.append({"file_id": file_id, "error": "File not found"})
             continue
-        if (metadata.content_type or "").startswith("image/"):
+        # Images and the forwarded office formats are never parsed: the agent
+        # analyzes them through the attached-files skill (see the handoff).
+        content_type = str(metadata.content_type or "")
+        if content_type.startswith("image/") or is_forwarded_upload_mime(content_type):
             image_file_ids.append(file_id)
             continue
         file_meta = file_context_storage.get_file_meta(session_id, file_id)
@@ -1425,18 +1446,22 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
-        # Copilot's models no longer accept image input: unless the chat provider
-        # can see images, the files are handed to the agent for inspect-image
-        # (AI Platform) instead of being inlined into the model request.
+        # The chat model reads parsed documents and text. Images reach it as
+        # image parts only when the provider can see them (AI Platform, or
+        # Copilot with EFP_COPILOT_VISION_VIA_CHAT); every other image, and the
+        # office formats the runtime does not parse, is handed to the agent for
+        # the attached-files analysis skill (Productivity Suite through the
+        # member's browser) instead.
         vision_via_chat = chat_provider_accepts_images(global_config.llm if isinstance(global_config.llm, dict) else {})
         attached_images = await _collect_attached_images(
             session_id=session_id,
             message=message,
             attachments=attachment_ids,
         ) if vision_via_chat else []
-        attached_image_files = [] if vision_via_chat else _collect_attached_image_files(
+        attached_handoff_files = _collect_attached_handoff_files(
             session_id=session_id,
             attachments=attachment_ids,
+            include_images=not vision_via_chat,
         )
         
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
@@ -1445,21 +1470,21 @@ async def api_chat(request: web.Request) -> web.Response:
         failure_notice = _build_attachment_parse_failure_notice(failures)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
-        if failures and not context_file_ids and not attached_images and not attached_image_files:
+        if failures and not context_file_ids and not attached_images and not attached_handoff_files:
             return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
         if original_user_text:
             history_message = original_user_text
         elif context_file_ids:
             history_message = "[attachment]"
-        elif attached_images or attached_image_files:
+        elif attached_images or attached_handoff_files:
             history_message = "[image]"
         else:
             history_message = ""
 
         model_context_query = original_user_text or ("Please summarize the attached file(s)." if context_file_ids else history_message)
 
-        if not history_message.strip() and not attached_images and not attached_image_files and not attachment_ids:
+        if not history_message.strip() and not attached_images and not attached_handoff_files and not attachment_ids:
             return web.json_response({'error': 'Empty message'}, status=400)
 
         # Inject file context if user has uploaded files
@@ -1494,8 +1519,8 @@ async def api_chat(request: web.Request) -> web.Response:
                 f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
                 f"{failure_notice}"
             )
-        if attached_image_files:
-            handoff = build_image_handoff(attached_image_files, image_analysis=get_image_analysis_state())
+        if attached_handoff_files:
+            handoff = build_attachment_handoff(attached_handoff_files, bridge_available=_local_bridge_available(execution_metadata))
             if transient_model_message:
                 transient_model_message = f"{transient_model_message}\n\n{handoff}"
             elif failure_notice:
@@ -1818,18 +1843,22 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             return await _stream_existing_chat_run(request, session_id=session_id, request_id=request_id)
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
-        # Copilot's models no longer accept image input: unless the chat provider
-        # can see images, the files are handed to the agent for inspect-image
-        # (AI Platform) instead of being inlined into the model request.
+        # The chat model reads parsed documents and text. Images reach it as
+        # image parts only when the provider can see them (AI Platform, or
+        # Copilot with EFP_COPILOT_VISION_VIA_CHAT); every other image, and the
+        # office formats the runtime does not parse, is handed to the agent for
+        # the attached-files analysis skill (Productivity Suite through the
+        # member's browser) instead.
         vision_via_chat = chat_provider_accepts_images(global_config.llm if isinstance(global_config.llm, dict) else {})
         attached_images = await _collect_attached_images(
             session_id=session_id,
             message=message,
             attachments=attachment_ids,
         ) if vision_via_chat else []
-        attached_image_files = [] if vision_via_chat else _collect_attached_image_files(
+        attached_handoff_files = _collect_attached_handoff_files(
             session_id=session_id,
             attachments=attachment_ids,
+            include_images=not vision_via_chat,
         )
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
         context_file_ids = attachment_context.get("context_file_ids", [])
@@ -1837,21 +1866,21 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         failure_notice = _build_attachment_parse_failure_notice(failures)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
-        if failures and not context_file_ids and not attached_images and not attached_image_files:
+        if failures and not context_file_ids and not attached_images and not attached_handoff_files:
             return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
         if original_user_text:
             history_message = original_user_text
         elif context_file_ids:
             history_message = "[attachment]"
-        elif attached_images or attached_image_files:
+        elif attached_images or attached_handoff_files:
             history_message = "[image]"
         else:
             history_message = ""
 
         model_context_query = original_user_text or ("Please summarize the attached file(s)." if context_file_ids else history_message)
 
-        if not history_message.strip() and not attached_images and not attached_image_files and not attachment_ids:
+        if not history_message.strip() and not attached_images and not attached_handoff_files and not attachment_ids:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
         transient_model_message: Optional[str] = None
@@ -1881,8 +1910,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
                 f"{failure_notice}"
             )
-        if attached_image_files:
-            handoff = build_image_handoff(attached_image_files, image_analysis=get_image_analysis_state())
+        if attached_handoff_files:
+            handoff = build_attachment_handoff(attached_handoff_files, bridge_available=_local_bridge_available(execution_metadata))
             if transient_model_message:
                 transient_model_message = f"{transient_model_message}\n\n{handoff}"
             elif failure_notice:

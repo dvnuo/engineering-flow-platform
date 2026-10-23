@@ -1230,7 +1230,7 @@ async def test_api_chat_forwards_all_attached_images(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_api, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(runtime_api, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
-    # The provider accepts images here; without the flag a non-AI-Platform chat hands them to inspect-image instead.
+    # The provider accepts images here; without the flag a non-AI-Platform chat hands them to the attached-files analysis skill instead.
     monkeypatch.setenv("EFP_COPILOT_VISION_VIA_CHAT", "1")
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
@@ -1292,7 +1292,7 @@ async def test_api_chat_stream_forwards_all_attached_images(monkeypatch, tmp_pat
 
     monkeypatch.setattr(runtime_api, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
-    # The provider accepts images here; without the flag a non-AI-Platform chat hands them to inspect-image instead.
+    # The provider accepts images here; without the flag a non-AI-Platform chat hands them to the attached-files analysis skill instead.
     monkeypatch.setenv("EFP_COPILOT_VISION_VIA_CHAT", "1")
     monkeypatch.setattr(runtime_api.web, "StreamResponse", _FakeStreamResponse)
     monkeypatch.setattr(runtime_api, "get_metadata", lambda file_id: metadata_map[file_id])
@@ -1340,7 +1340,7 @@ async def test_api_chat_forwards_all_attached_images_without_local_cap_config(mo
     monkeypatch.setattr(runtime_api, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(runtime_api, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
     monkeypatch.setattr(runtime_api.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
-    # The provider accepts images here; without the flag a non-AI-Platform chat hands them to inspect-image instead.
+    # The provider accepts images here; without the flag a non-AI-Platform chat hands them to the attached-files analysis skill instead.
     monkeypatch.setenv("EFP_COPILOT_VISION_VIA_CHAT", "1")
     monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
     monkeypatch.setattr(runtime_api.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))

@@ -1,4 +1,4 @@
-"""Where each connector's proxy lands: the environment, the tools config, inspect-image, the LLM transports."""
+"""Where each connector's proxy lands: the environment, the tools config, the LLM transports."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import urllib.request
 
 from src.config import Config
 from src.efp_runtime.llm import provider as provider_module
-from src.external_cli import inspect_image_config as iic
 from src.external_cli import profile_config as profile_config_module
 from src.gateway import runtime_chat
 
@@ -237,31 +236,6 @@ def test_cli_environment_gets_the_default_proxy_and_the_credential_variables(mon
         RuntimeError("failed via https://ub:pb@proxy-b.example.test with pb"), {"proxy": proxy_section()}
     )
     assert "pb" not in redacted
-
-
-def test_inspect_image_config_takes_the_model_provider_proxy():
-    llm = {
-        "provider": "github_copilot",
-        "model": "gpt-5.6-terra",
-        "api_key": "ghu",
-        "vision": {"enabled": True, "model": "gpt-5.4"},
-        "ai_platform": {
-            "chat": {"host": "https://chat.int", "uri": "/v1/api/v1/chat/completions"},
-            "ib2b": {"host": "https://ib2b.int", "uri": "/dsp/token"},
-            "auth": {"username": "u", "password": "pw", "usercase": "uc"},
-        },
-    }
-    settings, reason = iic.resolve_image_analysis_settings({"llm": llm, "proxy": proxy_section(llm="corp-b")})
-    assert reason is None and settings.proxy == "https://ub:pb@proxy-b.example.test"
-    payload = iic.build_inspect_image_config(settings, token_file=__import__("pathlib").Path("/tmp/token"))
-    assert payload["inspect_image"]["api"] == {"proxy": "https://ub:pb@proxy-b.example.test"}
-
-    settings, _ = iic.resolve_image_analysis_settings({"llm": llm, "proxy": proxy_section(llm="none")})
-    assert iic.build_inspect_image_config(settings, token_file=__import__("pathlib").Path("/tmp/token"))["inspect_image"]["api"] == {"proxy": "none"}
-
-    settings, _ = iic.resolve_image_analysis_settings({"llm": llm, "proxy": proxy_section()})
-    assert settings.proxy == ""
-    assert "api" not in iic.build_inspect_image_config(settings, token_file=__import__("pathlib").Path("/tmp/token"))["inspect_image"]
 
 
 def _proxy_handler_of(opener):

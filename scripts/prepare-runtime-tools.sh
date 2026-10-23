@@ -105,6 +105,24 @@ if [[ "${#tool_names[@]}" -eq 0 ]]; then
   die "no runtime tools found under $TOOLS_REPO_DIR/cmd/*/main.go"
 fi
 
+# CLIs the tools repo builds for the member's own computer, not for the pod:
+# efp-bridge is the Portal's local bridge, and inspect-image is a local
+# image-analysis CLI (Portal assistants analyze attachments through
+# Productivity Suite in the member's browser instead).
+EXCLUDED_RUNTIME_TOOLS="${EXCLUDED_RUNTIME_TOOLS:-efp-bridge inspect-image}"
+runtime_tool_names=()
+for tool_name in "${tool_names[@]}"; do
+  case " $EXCLUDED_RUNTIME_TOOLS " in
+    *" $tool_name "*) log "Skipping $tool_name: not a runtime tool" ;;
+    *) runtime_tool_names+=("$tool_name") ;;
+  esac
+done
+tool_names=("${runtime_tool_names[@]}")
+
+if [[ "${#tool_names[@]}" -eq 0 ]]; then
+  die "every tool under $TOOLS_REPO_DIR/cmd is excluded (EXCLUDED_RUNTIME_TOOLS=$EXCLUDED_RUNTIME_TOOLS)"
+fi
+
 log "Discovered runtime tools: ${tool_names[*]}"
 
 # runtime-tools/ is a generated Docker build input. Keep README.md, but remove

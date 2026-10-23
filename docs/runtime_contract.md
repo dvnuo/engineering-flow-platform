@@ -27,10 +27,11 @@ Native runtime must support:
   `GET /api/files/{file_id}/preview`, `GET /api/files/{file_id}` and
   `DELETE /api/files/{file_id}` complete the set). The accepted extensions
   come from `EFP_CHAT_UPLOAD_EXTENSIONS` (default
-  `pdf,docx,xlsx,csv,txt,log,pptx,zip,md,yaml,yml,json,xml`; images are
-  supported but only offered when a deployment adds them for a model with
-  vision) and the size cap from `EFP_MAX_UPLOAD_MB`; the Portal sets both
-  on the pod from its own settings.
+  `pdf,docx,xlsx,csv,txt,log,pptx,zip,md,yaml,yml,json,xml,doc,dot,xls,png,jpg,jpeg,jpe,jfif,tiff,webp,bmp`,
+  the formats Productivity Suite takes; images, and the office formats the
+  runtime does not parse (doc, dot, xls), are stored and handed to the agent
+  instead of parsed, see Connectors below) and the size cap from
+  `EFP_MAX_UPLOAD_MB`; the Portal sets both on the pod from its own settings.
 
 ## Runtime Profile Boot Contract
 
@@ -144,6 +145,13 @@ Each capability item includes at least:
   yes, dry_run, continue_on_error, target_id?}`; the page pulls each file
   through the Server files download, stages it on the bridge, and runs the
   command with the staged ids.
+- Chat attachments the model cannot read (images, unless the chat provider
+  can see them; doc, dot, xls) are listed in an "Attached files" block in
+  the prompt (`src/gateway/attachment_handoff.py`). When the trusted metadata
+  carries `connectors.local_bridge` and it is not disabled, the block points
+  the agent at the attached-files analysis skill (Productivity Suite through
+  `workflow.run`); otherwise it says the files cannot be analyzed in this
+  chat and never to guess.
 - The Portal page answers with
   `POST /api/sessions/{session_id}/connectors/respond`
   `{request_id, client_id, ok, result | error}` → `202`; an unknown, foreign,
