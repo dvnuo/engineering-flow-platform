@@ -97,6 +97,18 @@ def clamp_timeout(value: Any, default: float = DEFAULT_TIMEOUT_SECONDS) -> float
     return max(MIN_TIMEOUT_SECONDS, min(MAX_TIMEOUT_SECONDS, seconds))
 
 
+def _grace(value: Any) -> float:
+    """A non-negative, finite number of extra seconds to wait, else zero."""
+
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if seconds != seconds or seconds in (float("inf"), float("-inf")):  # NaN or infinite
+        return 0.0
+    return max(0.0, seconds)
+
+
 def new_request_id() -> str:
     return f"cr_{uuid4().hex[:24]}"
 
@@ -207,9 +219,19 @@ class ConnectorBridgeBroker:
         request_id: str,
         *,
         timeout_seconds: Optional[float] = None,
+        grace_seconds: float = 0.0,
         cancel_requested: Callable[[], bool | Awaitable[bool]] | None = None,
     ) -> dict[str, Any]:
-        """Wait for ``resolve``; raise on timeout or run cancellation."""
+        """Wait for ``resolve``; raise on timeout or run cancellation.
+
+        ``timeout_seconds`` is the budget the request advertises to the bridge
+        (clamped like the request's own). ``grace_seconds`` is added on top
+        for the relay around it: the page has to receive the event, stage any
+        files, and post the answer back, and the bridge may spend its whole
+        budget before answering. Without the grace an answer sent at the end
+        of the budget could never arrive in time, and every slow command
+        looked like a dead bridge.
+        """
 
         with self._lock:
             item = self._pending.get(request_id)
@@ -219,7 +241,7 @@ class ConnectorBridgeBroker:
             clamp_timeout(timeout_seconds)
             if timeout_seconds is not None
             else item.request.timeout_seconds
-        )
+        ) + _grace(grace_seconds)
         deadline = time.monotonic() + timeout
         try:
             while True:

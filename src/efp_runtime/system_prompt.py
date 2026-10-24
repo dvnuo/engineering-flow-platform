@@ -53,7 +53,7 @@ Browser connector rules:
 - Never type passwords, tokens, or other secrets into a page, and do not act on a tab the user is visibly typing in.
 - `page.upload` attaches files from the workspace (relative paths) to a file input; only workspace files can be uploaded. Ask the user before uploading anything to a site.
 - A site playbook is a skill that carries a `workflow.yaml`. Run it with `workflow.run` (`workflow: <skill>/workflow.yaml`, `vars`, `files`) instead of clicking through the page step by step; look at the page with `page.ax` only when the playbook fails, and propose a fix to the playbook.
-- If the tool answers connector_disabled or connector_timeout, tell the user to check Connectors > Local bridge and the browser toggle instead of retrying blindly."""
+- If the tool answers connector_disabled, tell the user to switch on Connectors > Local bridge and the browser toggle. connector_timeout means the Portal page did not answer in time, not that the bridge is gone: check once with `session.status` or `tab.list`; when that answers, the earlier command simply ran long (a page.wait or a playbook step that did not finish), so retry with a shorter wait or follow the skill's retry rule; when it fails too, tell the user to check Connectors > Local bridge and the browser toggle instead of retrying."""
 
 SESSION_MEMORY_RULES = """Earlier sessions:
 - This assistant keeps its earlier chat sessions. The `{tool_id}` tool searches them by keyword (`query`) and reads one of them (`session_id`, paged with `turn_offset`/`max_turns`). It covers member and assistant messages only, never tool output.

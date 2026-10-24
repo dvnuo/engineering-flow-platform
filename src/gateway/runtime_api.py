@@ -3100,6 +3100,39 @@ def _metadata_with_question_response(
     return merged
 
 
+def _metadata_with_pending_input_context(
+    metadata: Optional[Dict[str, Any]],
+    pending_state: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Carry the parked turn's connectors into the run its answer resumes.
+
+    The browser tool exists only on runs whose trusted metadata names
+    ``connectors.local_bridge``. Portal injects that on chat posts; an answer
+    to a question or permission card is another request, and an older Portal
+    sends it without connectors, so the resumed run lost the tool halfway
+    through the turn ("this session has no browser tool" right after the
+    member agreed to an upload). The session keeps the asking turn's
+    connectors as ``pending_input_context`` (see the session facade); an
+    answer that names none falls back to them. An answer that names
+    connectors wins: it says which tab is answering now.
+    """
+    merged = dict(metadata or {})
+    if isinstance(merged.get("connectors"), dict):
+        return merged
+    context = pending_state.get("input_context") if isinstance(pending_state, Mapping) else None
+    if not isinstance(context, dict):
+        return merged
+    connectors = context.get("connectors")
+    if not isinstance(connectors, dict) or not connectors:
+        return merged
+    merged["connectors"] = {
+        key: dict(value) if isinstance(value, dict) else value for key, value in connectors.items()
+    }
+    if context.get("enable_browser_tool") is True or "local_bridge" in connectors:
+        merged["enable_browser_tool"] = True
+    return merged
+
+
 # A question answer is a line or two the member picked or typed. The body cap
 # is ~30MB, and anything stored here is re-read and deep-copied on every
 # session load, so an answer far past this is not an answer.
@@ -3309,10 +3342,12 @@ async def _session_pending_input(session_id: str) -> Dict[str, Any]:
     metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
     question = metadata.get("pending_question_request")
     permission = metadata.get("pending_permission_request")
+    input_context = metadata.get("pending_input_context")
     return {
         "session_id": session_id,
         "question_request": question if isinstance(question, dict) else None,
         "permission_request": permission if isinstance(permission, dict) else None,
+        "input_context": input_context if isinstance(input_context, dict) else None,
         "last_execution_id": metadata.get("last_execution_id"),
     }
 
@@ -3592,7 +3627,10 @@ async def api_session_question_respond(request: web.Request) -> web.Response:
     try:
         await _record_pending_question_answer(session_id, pending_request=pending, answers=answers)
         execution_metadata = _metadata_with_question_response(
-            _extract_trusted_control_plane_metadata(request, data),
+            _metadata_with_pending_input_context(
+                _extract_trusted_control_plane_metadata(request, data),
+                pending_state,
+            ),
             pending_request=pending,
             answers=answers,
         )
@@ -3637,7 +3675,10 @@ async def api_session_permission_respond(request: web.Request) -> web.Response:
             data.get("decision") or data.get("action") or data.get("reply")
         )
         execution_metadata = _metadata_with_permission_response(
-            _extract_trusted_control_plane_metadata(request, data),
+            _metadata_with_pending_input_context(
+                _extract_trusted_control_plane_metadata(request, data),
+                pending_state,
+            ),
             pending_request=pending,
             decision=decision,
             always=bool(data.get("always")),
