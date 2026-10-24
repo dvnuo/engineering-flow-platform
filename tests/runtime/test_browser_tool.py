@@ -22,6 +22,7 @@ from efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from efp_runtime.runtime.agent import BROWSER_TOOL_ID, _config_tool_selection
 from efp_runtime.session.store import InMemorySessionStore
 from efp_runtime.system_prompt import SystemPromptBuilder
+from efp_runtime.tools.builtin import browser as browser_module
 from efp_runtime.tools.builtin import create_browser_tool, create_core_tool_registry
 from efp_runtime.tools.builtin.browser import BROWSER_ACTIONS, CONNECTOR_TYPE
 from efp_runtime.tools.definition import ToolContext
@@ -224,6 +225,7 @@ async def test_tool_passes_bridge_error_through():
 @pytest.mark.asyncio
 async def test_tool_times_out_when_nobody_answers(monkeypatch):
     monkeypatch.setattr(bridge_module, "MIN_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(browser_module, "_RESPONSE_GRACE_SECONDS", 0.0)
     broker = ConnectorBridgeBroker()
     events: list[RuntimeEvent] = []
     tool = create_browser_tool(broker, event_publisher=events.append)
@@ -231,9 +233,71 @@ async def test_tool_times_out_when_nobody_answers(monkeypatch):
     assert result.success is False
     assert result.error == "connector_timeout"
     assert result.output["error"]["code"] == "connector_timeout"
+    # The message names both budgets and the hint sends the model to check
+    # the bridge once, instead of asserting it is down.
+    assert "the bridge had 0 seconds for page.snapshot" in result.output["error"]["message"]
+    assert "session.status" in result.output["error"]["hint"]
     assert events[-1].type == "tool.connector_responded"
     assert events[-1].payload["error_code"] == "connector_timeout"
     assert broker.pending("session-browser") == []
+
+
+class _RecordingBroker(ConnectorBridgeBroker):
+    """Answers every request at once and keeps what the tool waited with."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.waits: list[dict] = []
+
+    async def wait(self, request_id, *, timeout_seconds=None, grace_seconds=0.0, cancel_requested=None):
+        self.waits.append({"timeout_seconds": timeout_seconds, "grace_seconds": grace_seconds})
+        self.cancel(request_id)
+        return {"ok": True, "result": {"tabs": []}}
+
+
+@pytest.mark.asyncio
+async def test_tool_waits_a_grace_beyond_the_bridge_budget():
+    # The page relays `timeout_seconds` to the bridge unchanged; the tool's own
+    # clock runs longer, or an answer sent at the end of the budget (a wait that
+    # never matched, a playbook step that ran long) can never arrive in time.
+    broker = _RecordingBroker()
+    tool = create_browser_tool(broker)
+    result = await tool.execute({"action": "tab.list", "timeout_seconds": 120}, _context())
+    assert result.success is True
+    assert broker.waits == [{"timeout_seconds": None, "grace_seconds": browser_module._RESPONSE_GRACE_SECONDS}]
+    assert browser_module._RESPONSE_GRACE_SECONDS >= 30.0
+
+
+@pytest.mark.asyncio
+async def test_broker_wait_adds_grace_to_the_clamped_timeout(monkeypatch):
+    monkeypatch.setattr(bridge_module, "MIN_TIMEOUT_SECONDS", 0.01)
+    broker = ConnectorBridgeBroker()
+    request = broker.create(session_id="s1", connector_type=CONNECTOR_TYPE, action="tab.list", timeout_seconds=0.02)
+
+    async def answer_late():
+        await asyncio.sleep(0.08)
+        broker.resolve(request.request_id, {"ok": True})
+
+    asyncio.create_task(answer_late())
+    # 0.02 s alone would expire first; the grace keeps the request pending.
+    payload = await broker.wait(request.request_id, grace_seconds=1.0)
+    assert payload == {"ok": True}
+    assert bridge_module._grace("nan") == 0.0
+    assert bridge_module._grace(-5) == 0.0
+    assert bridge_module._grace(float("inf")) == 0.0
+    assert bridge_module._grace(2.5) == 2.5
+
+
+def test_response_grace_allows_for_the_files_the_page_stages():
+    base = browser_module._RESPONSE_GRACE_SECONDS
+    assert browser_module._response_grace_seconds({}) == base
+    assert browser_module._response_grace_seconds({"files": []}) == base
+    ten_mib = [{"path": "uploads/a.pdf", "bytes": 10 * 1024 * 1024}]
+    assert browser_module._response_grace_seconds({"files": ten_mib}) == base + 10.0
+    huge = [{"path": "uploads/big.zip", "bytes": 900 * 1024 * 1024}]
+    assert browser_module._response_grace_seconds({"files": huge}) == base + browser_module._MAX_STAGING_GRACE_SECONDS
+    odd = [{"path": "x", "bytes": True}, {"path": "y", "bytes": -3}, "not-a-file"]
+    assert browser_module._response_grace_seconds({"files": odd}) == base
 
 
 @pytest.mark.asyncio
@@ -339,6 +403,9 @@ def test_system_prompt_mentions_local_bridge_only_when_enabled():
     texts = [part.text for message in with_connector for part in message.parts]
     assert any("Local bridge" in text and "<page-content>" in text for text in texts)
     assert any(message.metadata.get("kind") == "connectors_context" for message in with_connector)
+    # connector_timeout is "the page did not answer", not "the bridge is gone":
+    # the rule sends the model to check once before it tells the member to.
+    assert any("connector_timeout" in text and "session.status" in text for text in texts)
 
     without = builder.build_messages({"connectors": {"local_bridge": {"enabled": False}}})
     assert not any(message.metadata.get("kind") == "connectors_context" for message in without)

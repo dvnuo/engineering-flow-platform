@@ -139,6 +139,18 @@ Each capability item includes at least:
   `data.session_id`, `data.request_id`, `data.connector_type`, and
   `data.connector_request.{id, action, params, target_client_id, timeout_seconds}`),
   then blocks on the process-wide `ConnectorBridgeBroker`.
+- `timeout_seconds` on the request is the bridge's budget for the command
+  (5-120 s). The tool waits that long plus a grace (30 s, plus one second per
+  MiB of files the page stages first) before answering `connector_timeout`,
+  so the bridge's own `timeout` or `workflow_failed` normally arrives first;
+  `connector_timeout` means the page did not answer at all.
+- When a chat turn parks on a question or permission card, the session keeps
+  the turn's trusted `connectors` (and `enable_browser_tool`) as
+  `pending_input_context` in session metadata. An answer (`question/respond`,
+  `permission/respond`) whose trusted metadata names no `connectors` resumes
+  the turn with those, so the resumed run keeps the `browser` tool; an answer
+  that names connectors wins, since it says which tab is answering. The
+  context is dropped once a run ends without a pending card.
 - For `page.upload` the request's `params.files` is `[{path, name, bytes}]`
   (workspace-relative paths the tool checked; never file contents), and for
   `workflow.run` it is `{workflow_yaml, vars, files: [{var, path, name, bytes}],

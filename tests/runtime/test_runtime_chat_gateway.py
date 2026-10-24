@@ -720,7 +720,7 @@ async def test_runtime_error_result_raises_sanitized_chat_error_after_recording(
             return result
 
     class _FakeSessionManager:
-        async def record_runtime_result(self, session_id, runtime_result, *, request_id=None):
+        async def record_runtime_result(self, session_id, runtime_result, *, request_id=None, **_kwargs):
             recorded.append((session_id, runtime_result, request_id))
 
     monkeypatch.setattr(runtime_chat, "AgentRuntime", _FakeRuntime)

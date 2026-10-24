@@ -192,6 +192,7 @@ async def run_runtime_chat(
             session_id,
             result,
             request_id=request_id,
+            execution_metadata=execution_metadata,
         )
         if title_after_turn:
             _schedule_session_title_after_turn(
@@ -329,6 +330,7 @@ async def resume_runtime_chat(
             session_id,
             result,
             request_id=request_id,
+            execution_metadata=execution_metadata,
         )
         # A turn that paused on a question completes here.
         if title_after_turn:
