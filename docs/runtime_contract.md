@@ -151,6 +151,15 @@ Each capability item includes at least:
   the turn with those, so the resumed run keeps the `browser` tool; an answer
   that names connectors wins, since it says which tab is answering. The
   context is dropped once a run ends without a pending card.
+- An accepted answer retires the card at once: before `question/respond` or
+  `permission/respond` returns `202`, `pending_question_request` /
+  `pending_permission_request` (and `pending_input_context`) leave session
+  metadata, so `GET /api/sessions/{session_id}/pending-input` reports nothing
+  while the resumed run is in flight and a page refresh does not rebuild the
+  card. The answer itself stays as `pending_question_answer` until the tool
+  call it answers has a result; the run's end records whatever it stops on
+  next, including the same question re-raised. A second answer while the run
+  is in flight is refused with `409`.
 - For `page.upload` the request's `params.files` is `[{path, name, bytes}]`
   (workspace-relative paths the tool checked; never file contents), and for
   `workflow.run` it is `{workflow_yaml, vars, files: [{var, path, name, bytes}],
