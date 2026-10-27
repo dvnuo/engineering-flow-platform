@@ -29,8 +29,13 @@ from efp_runtime.tools.runtime import ToolRuntime
 
 SOL_WINDOW_TOKENS = 1_000_000
 SOL_SAFETY_TOKENS = 8_000
+# The window ceiling: what an explicit (long-context) budget is clamped to.
 SOL_MAX_CHARS = (SOL_WINDOW_TOKENS - SOL_SAFETY_TOKENS) * 4  # 3_968_000
 SOL_RESERVE_CHARS = 128_000 * 4  # 512_000
+# The unset budget on Copilot stops at the default pricing tier: 272k prompt
+# tokens plus the 128k reserve, minus the safety margin.
+SOL_BILLING_CAP_TOKENS = 272_000
+SOL_TIER_MAX_CHARS = (SOL_BILLING_CAP_TOKENS + 128_000 - SOL_SAFETY_TOKENS) * 4  # 1_568_000
 
 
 def _runner(store, provider, **kwargs) -> RuntimeLoopRunner:
@@ -70,40 +75,48 @@ def test_unconfigured_runtime_derives_char_budget_from_model_catalog():
 
     budget = runner._context_budget()
 
-    assert budget.max_chars == SOL_MAX_CHARS
+    assert budget.max_chars == SOL_TIER_MAX_CHARS
     assert budget.reserve_chars == SOL_RESERVE_CHARS
-    assert budget.effective_max_chars == SOL_MAX_CHARS - SOL_RESERVE_CHARS
+    assert budget.effective_max_chars == SOL_TIER_MAX_CHARS - SOL_RESERVE_CHARS
     # The whole point: a stock config must not leave the request unbounded.
     assert budget.max_chars is not None
+    # Opting into the long-context pricing tier budgets to the window.
+    long_runner = _runner(InMemorySessionStore(), ScriptedLLMProvider([]), copilot_long_context=True)
+    assert long_runner._context_budget().max_chars == SOL_MAX_CHARS
 
 
 def test_default_budget_leaves_room_for_the_declared_response_reserve():
     profile = resolve_model_context_profile("gpt-5.6-sol")
 
-    prompt_tokens = default_max_context_tokens(profile) - profile.default_reserve_tokens
+    prompt_tokens = (
+        default_max_context_tokens(profile, long_context=True) - profile.default_reserve_tokens
+    )
 
     assert context_safety_margin_tokens(profile) == SOL_SAFETY_TOKENS
     assert (
         prompt_tokens + profile.default_reserve_tokens + SOL_SAFETY_TOKENS
         == profile.context_window_tokens
     )
+    # The default (tiered) budget keeps the prompt under the 272k pricing cap.
+    tier_prompt_tokens = default_max_context_tokens(profile) - profile.default_reserve_tokens
+    assert tier_prompt_tokens == SOL_BILLING_CAP_TOKENS - SOL_SAFETY_TOKENS
 
 
 @pytest.mark.parametrize(
-    ("model", "expected_window"),
+    ("model", "expected_window", "billing_cap"),
     [
-        ("gpt-6-astra", 1_050_000),
-        ("gpt-6-sol", 1_000_000),
-        ("gpt-6-luna", 1_000_000),
-        ("gpt-6.1-sol", 1_050_000),
+        ("gpt-6-astra", 1_050_000, 272_000),
+        ("gpt-6-sol", 1_000_000, 272_000),
+        ("gpt-6-luna", 1_000_000, 272_000),
+        ("gpt-6.1-sol", 1_050_000, 272_000),
         # Retired from Copilot but still served by AI Platform.
-        ("gpt-5.4", 1_000_000),
-        ("gpt-5.6-sol", 1_000_000),
-        ("gpt-5.6-terra", 1_000_000),
-        ("gpt-5.6-luna", 1_000_000),
+        ("gpt-5.4", 1_000_000, None),
+        ("gpt-5.6-sol", 1_000_000, 272_000),
+        ("gpt-5.6-terra", 1_000_000, 272_000),
+        ("gpt-5.6-luna", 1_000_000, 200_000),
     ],
 )
-def test_catalog_models_all_produce_a_budget(model, expected_window):
+def test_catalog_models_all_produce_a_budget(model, expected_window, billing_cap):
     runner = _runner(
         InMemorySessionStore(),
         ScriptedLLMProvider([]),
@@ -112,9 +125,22 @@ def test_catalog_models_all_produce_a_budget(model, expected_window):
 
     budget = runner._context_budget()
     margin = min(8_000, expected_window // 20)
+    # On Copilot an unset budget stops at the default pricing tier (the cap
+    # plus the 128k reserve); a model without a cap budgets to its window.
+    tier_window = (
+        expected_window if billing_cap is None else min(expected_window, billing_cap + 128_000)
+    )
 
-    assert budget.max_chars == (expected_window - margin) * 4
+    assert budget.max_chars == (tier_window - margin) * 4
     assert budget.effective_max_chars > 0
+
+    long_runner = _runner(
+        InMemorySessionStore(),
+        ScriptedLLMProvider([]),
+        default_model=model,
+        copilot_long_context=True,
+    )
+    assert long_runner._context_budget().max_chars == (expected_window - margin) * 4
 
 
 def test_catalog_lookup_is_by_model_id_not_provider_id():
@@ -185,7 +211,9 @@ def test_budget_metadata_reports_the_catalog_as_the_source():
         "profile_context_window_tokens"
     )
     assert metadata["context_safety_margin_tokens"] == SOL_SAFETY_TOKENS
-    assert metadata["max_context_tokens"] == SOL_WINDOW_TOKENS - SOL_SAFETY_TOKENS
+    assert metadata["max_context_tokens"] == SOL_BILLING_CAP_TOKENS + 128_000 - SOL_SAFETY_TOKENS
+    assert metadata["billing_default_prompt_cap_tokens"] == SOL_BILLING_CAP_TOKENS
+    assert metadata["long_context_budget"] is False
 
 
 def test_explicit_config_metadata_still_names_the_explicit_source():
@@ -241,9 +269,12 @@ def test_over_window_max_context_tokens_is_clamped_to_the_catalog_ceiling():
     assert budget.max_chars == SOL_MAX_CHARS  # was 40_000_000
     assert budget.reserve_chars == SOL_RESERVE_CHARS
     assert budget.effective_max_chars == SOL_MAX_CHARS - SOL_RESERVE_CHARS
-    # Clamping lands on the same budget as no override at all, not a third value.
+    # Clamping lands on the window ceiling - the same budget as opting into the
+    # long-context tier with nothing set - not a third value. (An explicit
+    # budget above the pricing tier is the member's opt-in, so the unset
+    # tiered budget is deliberately smaller.)
     assert budget.max_chars == _runner(
-        InMemorySessionStore(), ScriptedLLMProvider([])
+        InMemorySessionStore(), ScriptedLLMProvider([]), copilot_long_context=True
     )._context_budget().max_chars
 
 
@@ -522,8 +553,8 @@ def test_oversized_reserve_cannot_zero_the_prompt_budget(kwargs):
 
     budget = runner._context_budget()
 
-    assert budget.reserve_chars == SOL_MAX_CHARS // 2
-    assert budget.effective_max_chars == SOL_MAX_CHARS - SOL_MAX_CHARS // 2
+    assert budget.reserve_chars == SOL_TIER_MAX_CHARS // 2
+    assert budget.effective_max_chars == SOL_TIER_MAX_CHARS - SOL_TIER_MAX_CHARS // 2
 
 
 def test_small_explicit_budget_is_not_zeroed_by_the_catalog_reserve():

@@ -89,6 +89,25 @@ def build_context_usage_snapshot(request: ProviderRequest) -> dict[str, Any]:
 
     provider_id = _text(metadata.get("provider_id") or budget.get("provider_id"))
     model_id = _text(metadata.get("model_id") or budget.get("model_id"))
+    # The estimate is chars/4; the runner learns how far off that is for this
+    # session from the provider's real input token counts (CJK text runs two
+    # to three times denser than the estimate) and carries the ratio here.
+    calibration = _calibration_payload(
+        metadata.get("context_token_calibration"),
+        chars_per_token=chars_per_token,
+    )
+    calibrated_used_tokens = (
+        int(round(used_tokens * calibration["ratio"])) if calibration else None
+    )
+    billing_threshold_tokens = _billing_threshold_tokens(provider_id, model_id)
+    effective_used_tokens = (
+        calibrated_used_tokens if calibrated_used_tokens is not None else used_tokens
+    )
+    billing_tier = None
+    if billing_threshold_tokens is not None:
+        billing_tier = (
+            "long_context" if effective_used_tokens > billing_threshold_tokens else "default"
+        )
     return {
         "engine": "native",
         "scope": "last_request",
@@ -103,6 +122,63 @@ def build_context_usage_snapshot(request: ProviderRequest) -> dict[str, Any]:
             "model_id": model_id,
             "context_window_tokens": context_window_tokens,
         },
+        # The prompt budget the runner enforces (estimated tokens), the
+        # Copilot pricing threshold and the tier this request lands in, so the
+        # Portal can draw the 272k line and say which price the member pays.
+        "budget_tokens": _budget_tokens(budget, chars_per_token=chars_per_token),
+        "calibration": calibration,
+        "calibrated_used_tokens": calibrated_used_tokens,
+        "billing_threshold_tokens": billing_threshold_tokens,
+        "billing_tier": billing_tier,
+        "pruned_tool_outputs": _pruned_tool_outputs(metadata.get("request_prune")),
+    }
+
+
+_COPILOT_PROVIDER_IDS = {"github-copilot", "github_copilot", "copilot"}
+
+
+def _billing_threshold_tokens(provider_id: str | None, model_id: str | None) -> int | None:
+    """Copilot's long-context threshold for ``model_id``; None off Copilot or for an unpriced model."""
+
+    if not model_id:
+        return None
+    if provider_id and provider_id.strip().lower() not in _COPILOT_PROVIDER_IDS:
+        return None
+    from ..llm.pricing import billing_threshold_tokens
+
+    return billing_threshold_tokens(model_id)
+
+
+def _budget_tokens(budget: Mapping[str, Any], *, chars_per_token: float) -> int | None:
+    max_chars = _positive_int(budget.get("max_chars") or budget.get("max_context_chars"))
+    if max_chars is None:
+        return None
+    reserve_chars = _positive_int(
+        budget.get("reserve_chars") or budget.get("context_reserve_chars")
+    ) or 0
+    return max(0, int((max_chars - reserve_chars) / chars_per_token))
+
+
+def _calibration_payload(raw: Any, *, chars_per_token: float) -> dict[str, Any] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    ratio = _positive_float(raw.get("ratio"), default=0.0)
+    if ratio <= 0:
+        return None
+    return {
+        "ratio": round(ratio, 4),
+        "chars_per_token": round(chars_per_token / ratio, 3),
+        "last_input_tokens": _positive_int(raw.get("last_input_tokens")),
+        "samples": _positive_int(raw.get("samples")),
+    }
+
+
+def _pruned_tool_outputs(raw: Any) -> dict[str, int] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    return {
+        "count": _positive_int(raw.get("pruned_result_count")) or 0,
+        "chars": _positive_int(raw.get("pruned_chars")) or 0,
     }
 
 

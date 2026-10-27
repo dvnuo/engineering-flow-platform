@@ -1,6 +1,7 @@
 """API-only runtime gateway routes for Engineering Flow Platform."""
 
 import asyncio
+from copy import deepcopy
 import hashlib
 import json
 import logging
@@ -1615,20 +1616,12 @@ async def api_chat(request: web.Request) -> web.Response:
         usage = response_data.get("usage", {}) or {}
 
         # Record usage if available
-        if usage:
-            provider = global_config.llm.get('provider') or 'github_copilot'
-            actual_model = (
-                ((response_data.get("_llm_debug") or {}).get("request") or {}).get("model")
-                or model
-            )
-            usage_tracker.record_usage(
-                provider=provider,
-                model=actual_model,
-                input_tokens=usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
-                session_id=session_id,
-                task_type="chat"
-            )
+        _record_chat_usage(
+            usage,
+            model=model,
+            session_id=session_id,
+            llm_debug=response_data.get("_llm_debug"),
+        )
         
         # Include events for thinking process display
         events = response_data.get("events", [])
@@ -2054,20 +2047,12 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         usage = result.get("usage", {}) if result else {}
 
         # Record usage
-        if usage:
-            provider = global_config.llm.get('provider') or 'github_copilot'
-            actual_model = (
-                ((result.get("_llm_debug") or {}).get("request") or {}).get("model")
-                or model
-            )
-            usage_tracker.record_usage(
-                provider=provider,
-                model=actual_model,
-                input_tokens=usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
-                session_id=session_id,
-                task_type="chat"
-            )
+        _record_chat_usage(
+            usage,
+            model=model,
+            session_id=session_id,
+            llm_debug=result.get("_llm_debug") if result else None,
+        )
 
         # Send usage data
         usage_data = {
@@ -4141,6 +4126,89 @@ def _session_chatlog_path(session_id: str) -> str:
     )
 
 
+def _usage_int(usage: Mapping[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = usage.get(key)
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _record_chat_usage(
+    usage: Any,
+    *,
+    model: str,
+    session_id: str,
+    llm_debug: Any = None,
+) -> None:
+    """Book a chat run's usage in the tracker behind GET /api/usage.
+
+    The native loop reports ``input_tokens`` / ``output_tokens`` (the
+    OpenAI-style ``prompt_tokens`` / ``completion_tokens`` names are accepted
+    too), plus cached and reasoning tokens, the model Copilot actually billed
+    (``pricing.model``, which differs from the requested id on an auto run),
+    its tier and the credits estimate. Reading only the legacy names booked
+    every native chat as zero tokens.
+    """
+
+    if not isinstance(usage, Mapping) or not usage:
+        return
+    pricing = usage.get("pricing")
+    pricing = pricing if isinstance(pricing, Mapping) else {}
+    debug_request = (llm_debug or {}).get("request") if isinstance(llm_debug, Mapping) else None
+    actual_model = (
+        pricing.get("model")
+        or (debug_request.get("model") if isinstance(debug_request, Mapping) else None)
+        or model
+    )
+    provider = global_config.llm.get('provider') or 'github_copilot'
+    try:
+        usage_tracker.record_usage(
+            provider=provider,
+            model=str(actual_model),
+            input_tokens=_usage_int(usage, "input_tokens", "prompt_tokens"),
+            output_tokens=_usage_int(usage, "output_tokens", "completion_tokens"),
+            session_id=session_id,
+            task_type="chat",
+            cached_input_tokens=_usage_int(usage, "cached_input_tokens"),
+            reasoning_tokens=_usage_int(usage, "reasoning_tokens"),
+            estimated_credits=usage.get("estimated_credits"),
+            pricing_tier=pricing.get("tier"),
+            iterations=usage.get("iterations"),
+        )
+    except Exception:  # noqa: BLE001 - bookkeeping never fails a chat.
+        logger.warning("Usage record failed for session %s", session_id, exc_info=True)
+
+
+async def api_copilot_quota(request: web.Request) -> web.Response:
+    """The member's Copilot plan quota (GET /api/copilot/quota), best effort and cached.
+
+    ``?refresh=1`` bypasses the cache. The payload always answers 200 with
+    ``available`` saying whether GitHub could be asked; see
+    ``src/gateway/copilot_quota.py`` for the fields.
+    """
+
+    from src.gateway.copilot_quota import copilot_quota_for_runtime
+
+    refresh = str(request.query.get("refresh") or "").strip().lower() in {"1", "true", "yes"}
+    try:
+        payload = await asyncio.to_thread(copilot_quota_for_runtime, force=refresh)
+    except Exception as exc:  # noqa: BLE001 - the quota is informational.
+        logger.warning("Copilot quota lookup failed: %s", sanitize_exception_message(exc))
+        payload = {
+            "available": False,
+            "source": "copilot_internal_user",
+            "error": "quota lookup failed",
+            "snapshots": [],
+            "credits": None,
+        }
+    return web.json_response(payload)
+
+
 def _context_usage_from_chatlog(session_id: str) -> Optional[Dict[str, Any]]:
     chatlog_file = _session_chatlog_path(session_id)
     if not os.path.exists(chatlog_file):
@@ -4263,6 +4331,27 @@ def _current_native_context_usage(
             "categories": categories,
         }
     )
+    # The runner's budget, the pricing threshold and the calibration are
+    # request-time facts; carry the last request's forward and re-derive the
+    # calibrated total and the tier for the history as it stands now.
+    if isinstance(baseline, Mapping):
+        for key in ("budget_tokens", "billing_threshold_tokens", "calibration", "pruned_tool_outputs"):
+            if baseline.get(key) is not None:
+                current[key] = deepcopy(baseline.get(key))
+    calibration = current.get("calibration")
+    ratio: Optional[float] = None
+    if isinstance(calibration, Mapping):
+        try:
+            ratio = float(calibration.get("ratio") or 0) or None
+        except (TypeError, ValueError):
+            ratio = None
+    current["calibrated_used_tokens"] = int(round(used_tokens * ratio)) if ratio else None
+    threshold = current.get("billing_threshold_tokens")
+    effective_used = current["calibrated_used_tokens"] if ratio else used_tokens
+    if isinstance(threshold, int) and threshold > 0:
+        current["billing_tier"] = "long_context" if effective_used > threshold else "default"
+    else:
+        current["billing_tier"] = None
     return current
 
 
@@ -5231,6 +5320,7 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit/async', api_edit_message_async)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/usage', api_usage)
+    app.router.add_get('/api/copilot/quota', api_copilot_quota)
     app.router.add_get('/api/sessions/{session_id}/pending-input', api_session_pending_input)
     app.router.add_post('/api/sessions/{session_id}/question/respond', api_session_question_respond)
     app.router.add_post('/api/sessions/{session_id}/permission/respond', api_session_permission_respond)

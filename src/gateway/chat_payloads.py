@@ -205,7 +205,51 @@ def build_runtime_response_payload(result: Optional[Dict[str, Any]], session_id:
     ):
         if key in payload_result:
             response_payload[key] = payload_result[key]
+    # A turn the runner stopped at its credits guard or step cap: the Portal
+    # draws a notice with a "continue" button from these, on the final payload
+    # as well as from the run_budget_paused event while the run was streaming.
+    budget_pause = _budget_pause_from_events(payload_result.get("runtime_events"))
+    if budget_pause is not None:
+        response_payload["budget_pause"] = budget_pause
+        response_payload["terminal_reason"] = (
+            "budget_paused" if budget_pause.get("reason") == "credits_guard" else "max_steps_reached"
+        )
     return response_payload
+
+
+_BUDGET_PAUSE_KEYS = (
+    "reason",
+    "estimated_credits",
+    "credits_limit",
+    "iterations",
+    "iteration_limit",
+    "message",
+)
+
+
+def _budget_pause_from_events(runtime_events: Any) -> Optional[Dict[str, Any]]:
+    """The last ``run_budget_paused`` event's payload (dict or RuntimeEvent), or None."""
+
+    if not isinstance(runtime_events, list):
+        return None
+    for event in reversed(runtime_events):
+        if isinstance(event, dict):
+            event_type = event.get("type")
+            payload = event.get("payload")
+            message = event.get("message")
+        else:
+            event_type = getattr(event, "type", None)
+            payload = getattr(event, "payload", None)
+            message = getattr(event, "message", None)
+        if event_type != "run_budget_paused":
+            continue
+        payload = payload if isinstance(payload, dict) else {}
+        pause = {key: payload.get(key) for key in _BUDGET_PAUSE_KEYS if payload.get(key) is not None}
+        if "message" not in pause and isinstance(message, str) and message:
+            pause["message"] = message
+        pause.setdefault("reason", "credits_guard")
+        return pause
+    return None
 
 
 def normalize_assistant_history_message(message: Dict[str, Any]) -> Dict[str, Any]:

@@ -45,6 +45,32 @@ class RuntimeConfig:
     compaction_prune_min_chars: int = 20000
     compaction_prune_protect_chars: int = 40000
     enable_compaction_summarizer: bool = False
+    # Copilot bills the GPT-6 line per token in two tiers; a request whose
+    # prompt exceeds 272k input tokens costs about twice as much. An unset
+    # context budget therefore stops at the default tier. On, it runs to the
+    # model's window instead. An explicit ``max_context_tokens`` above the
+    # tier (the Portal's 1M preset) is honoured as that opt-in on its own.
+    copilot_long_context: bool = False
+    # Render-time compaction keeps its cut point between requests (prompt
+    # cache friendly) and, when it must cut, cuts down to this share of the
+    # budget so the following requests fit without moving the cut again.
+    compaction_sticky_boundary: bool = True
+    compaction_target_ratio: float = 0.6
+    # Estimated AI credits one run may spend before the loop asks the model
+    # to wrap up with a text summary (the member can say "continue"). None
+    # or 0: no limit. The gateway sets a default for interactive chats only;
+    # background tasks and sub-agents inherit "off".
+    run_credits_limit: float | None = None
+    # On the final iteration (step cap or credits guard) keep the tools array
+    # and send ``tool_choice: none`` instead of dropping the tools: the tools
+    # are part of the cached prompt prefix, and removing them misses the
+    # whole cache on the costliest request of the run.
+    keep_tools_on_final_iteration: bool = True
+    # Replay the model's reasoning items (``include: reasoning.encrypted_content``,
+    # ``store: false``) between tool calls, the way VS Code does, so the model
+    # does not re-reason after every tool result. Off until measured against
+    # Copilot's ``/responses``.
+    copilot_replay_reasoning: bool = False
     provider_max_retries: int = 2
     # Non-zero so a retry after a transient upstream failure does not land in
     # the same instant the provider is still failing. With the 2.0 multiplier
@@ -248,6 +274,21 @@ class RuntimeConfig:
         )
         self.compaction_prune = bool(self.compaction_prune)
         self.enable_compaction_summarizer = bool(self.enable_compaction_summarizer)
+        self.copilot_long_context = bool(self.copilot_long_context)
+        self.compaction_sticky_boundary = bool(self.compaction_sticky_boundary)
+        if (
+            isinstance(self.compaction_target_ratio, bool)
+            or not isinstance(self.compaction_target_ratio, (int, float))
+            or not 0 < float(self.compaction_target_ratio) <= 1
+        ):
+            raise ValueError("compaction_target_ratio must be a number within (0, 1]")
+        self.compaction_target_ratio = float(self.compaction_target_ratio)
+        self.run_credits_limit = _validate_optional_credits_limit(
+            self.run_credits_limit,
+            "run_credits_limit",
+        )
+        self.keep_tools_on_final_iteration = bool(self.keep_tools_on_final_iteration)
+        self.copilot_replay_reasoning = bool(self.copilot_replay_reasoning)
         self.enable_context_overflow_retry = bool(self.enable_context_overflow_retry)
         self.enable_session_revert_snapshots = bool(
             self.enable_session_revert_snapshots
@@ -317,6 +358,22 @@ def _validate_optional_positive_int(value: Any, field_name: str) -> int | None:
     if value is None:
         return None
     return _validate_positive_int(value, field_name)
+
+
+def _validate_optional_credits_limit(value: Any, field_name: str) -> float | None:
+    """A non-negative number of credits, or None; 0 means "no limit" and becomes None."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a non-negative number or None")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a non-negative number or None") from exc
+    if number != number or number < 0:
+        raise ValueError(f"{field_name} must be a non-negative number or None")
+    return number if number > 0 else None
 
 
 def _validate_bool(value: Any, field_name: str) -> bool:

@@ -93,6 +93,16 @@ _RUNTIME_CONFIG_KEYS = {
     "compaction_tool_output_max_chars",
     "compaction_prune_min_chars",
     "compaction_prune_protect_chars",
+    "compaction_sticky_boundary",
+    "compaction_target_ratio",
+    "copilot_long_context",
+    "copilotLongContext",
+    "copilot_replay_reasoning",
+    "copilotReplayReasoning",
+    "run_credits_limit",
+    "runCreditsLimit",
+    "keep_tools_on_final_iteration",
+    "keepToolsOnFinalIteration",
     "instructions",
     "includeEnvironmentContext",
     "include_environment_context",
@@ -508,6 +518,8 @@ def _runtime_config_from_raw(
 
     kwargs.update(_compaction_policy_fields(raw))
 
+    kwargs.update(_credits_fields(raw))
+
     instruction_paths, instruction_texts = _instruction_sources(
         raw.get("instructions"),
         workspace_root=workspace_root,
@@ -746,6 +758,10 @@ _COMPACTION_NESTED_ALIASES = {
     "pruneMinChars": "compaction_prune_min_chars",
     "prune_protect_chars": "compaction_prune_protect_chars",
     "pruneProtectChars": "compaction_prune_protect_chars",
+    "sticky_boundary": "compaction_sticky_boundary",
+    "stickyBoundary": "compaction_sticky_boundary",
+    "target_ratio": "compaction_target_ratio",
+    "targetRatio": "compaction_target_ratio",
 }
 
 _COMPACTION_TOP_LEVEL_FIELDS = {
@@ -759,7 +775,57 @@ _COMPACTION_TOP_LEVEL_FIELDS = {
     "compaction_tool_output_max_chars",
     "compaction_prune_min_chars",
     "compaction_prune_protect_chars",
+    "compaction_sticky_boundary",
+    "compaction_target_ratio",
 }
+
+# Credits and Copilot pricing knobs: (field, aliases). Booleans are coerced
+# here because RuntimeConfig applies bool() to most flags and a config file
+# saying "false" must not come out as True.
+_CREDITS_BOOL_FIELDS = (
+    ("copilot_long_context", ("copilot_long_context", "copilotLongContext")),
+    ("copilot_replay_reasoning", ("copilot_replay_reasoning", "copilotReplayReasoning")),
+    (
+        "keep_tools_on_final_iteration",
+        ("keep_tools_on_final_iteration", "keepToolsOnFinalIteration"),
+    ),
+)
+_CREDITS_LIMIT_ALIASES = ("run_credits_limit", "runCreditsLimit")
+
+
+def _credits_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for field_name, aliases in _CREDITS_BOOL_FIELDS:
+        value = _first_alias_value(raw, aliases)
+        if value is not None:
+            fields[field_name] = _coerce_config_bool(value, field_name=field_name)
+    limit = _first_alias_value(raw, _CREDITS_LIMIT_ALIASES)
+    if limit is not None:
+        if isinstance(limit, str):
+            text = limit.strip()
+            if not text or text.lower() in {"none", "null", "off"}:
+                limit = None
+            else:
+                try:
+                    limit = float(text)
+                except ValueError as exc:
+                    raise ValueError("run_credits_limit must be a non-negative number") from exc
+        fields["run_credits_limit"] = limit
+    return fields
+
+
+def _coerce_config_bool(value: Any, *, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "yes", "on", "1"}:
+            return True
+        if text in {"false", "no", "off", "0"}:
+            return False
+    raise ValueError(f"{field_name} must be a boolean")
 
 _INTEGER_PATTERN = re.compile(r"^[+-]?\d+$")
 

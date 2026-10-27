@@ -26,7 +26,10 @@ llm:
   # EFP uses it directly.
   api_key: "ghp_YOUR_GITHUB_TOKEN"
   model: "gpt-6-sol"
-  reasoning_effort: "high"
+  # medium by default: Copilot bills reasoning tokens as output ($10 per
+  # million on GPT-6 Sol), and most turns do not need high. Members can still
+  # pick high per session in the Portal.
+  reasoning_effort: "medium"
 
   # AI Platform (provider: ai_platform). The Portal-managed runtime profile
   # supplies chat/ib2b/auth; an optional Responses endpoint takes precedence
@@ -232,6 +235,42 @@ llm:
 #   grows with session length. If you previously relied on a size cap to keep
 #   stored sessions small, set this to `true` to keep that behaviour.
 #
+# Copilot bills per token in AI credits (1 credit = $0.01) since 2026-06, and
+# the GPT-6 line costs about twice as much per token once a request's prompt
+# exceeds 272k input tokens (the "long context" pricing tier). The knobs
+# below keep a chat inside the cheaper tier and stop a runaway turn:
+#
+# copilot_long_context: false
+#   With the context knobs above unset, the budget stops at the default
+#   pricing tier (272k prompt tokens + the model's reserve) instead of the
+#   model's 1M window. `true` budgets to the window. An explicit
+#   `max_context_tokens` above the tier (the Portal's 1M preset) is honoured
+#   as that opt-in on its own.
+# compaction_prune: true
+#   Also applies on the REQUEST path now: completed tool results older than
+#   the last two turns are shortened to `compaction_tool_output_max_chars`
+#   in the model request (the stored transcript is unchanged), once the
+#   candidates exceed `compaction_prune_min_chars`, keeping the newest
+#   `compaction_prune_protect_chars` of them intact. Decided once per run so
+#   the prompt prefix stays identical for the provider's cache.
+# compaction_sticky_boundary: true
+# compaction_target_ratio: 0.6
+#   Render-time compaction keeps its cut point between requests and, when it
+#   must cut, cuts down to 60% of the budget - so the following requests fit
+#   without moving the cut (and missing the prompt cache) every time.
+# run_credits_limit: 200
+#   Estimated AI credits one message may spend before the loop asks the model
+#   to wrap up with a summary; the Portal then offers "continue". Interactive
+#   chats default to 200 (EFP_RUN_CREDITS_LIMIT or session.run_credits_limit
+#   change it; 0 turns it off); background tasks and sub-agents have no limit
+#   unless their profile sets one.
+# keep_tools_on_final_iteration: true
+#   The summary turn keeps the tools in the prompt (they are part of the
+#   cached prefix) and sends `tool_choice: none`; `false` drops the tools.
+# copilot_replay_reasoning: false
+#   Replay the model's reasoning items between tool calls (VS Code does), so
+#   it does not re-reason after each tool result. Off until measured.
+#
 # NOTE: the `llm.context_budget` and `llm.model_limits` blocks above are read
 # by the LEGACY progressive-context stack (src/runtime/progressive_context.py,
 # src/config.py:resolve_model_limits), NOT by the native request path. Changing
@@ -246,9 +285,15 @@ session:
   max_history: 5  # Keep last 5 conversation turns
   auto_save: true  # Automatically save sessions to disk
 
-  # Optional maximum agentic steps; omit to keep the loop unbounded until the model stops
+  # Maximum agentic steps per message. Interactive Portal chats default to 30
+  # when this is unset (the model is asked to summarize and the Portal offers
+  # "continue"); background tasks stay unbounded until the model stops. A
+  # value of 0 or less turns the cap off everywhere.
   # Alias-compatible with opencode-style `steps`.
   # max_iterations: 30
+  # Estimated AI credits one interactive message may spend before the loop
+  # wraps up (default 200; 0 turns the guard off). See run_credits_limit above.
+  # run_credits_limit: 200
 
   # Persistence layer settings (per-session files)
   persistence:

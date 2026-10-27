@@ -22,6 +22,7 @@ Native runtime must support:
 - `GET /api/tasks/{task_id}`
 - `POST /api/tasks/{task_id}/cancel`
 - `GET /api/usage`
+- `GET /api/copilot/quota`
 - `GET /api/sessions`
 - `POST /api/files/upload` and `POST /api/files/parse` (chatbox attachments;
   `GET /api/files/{file_id}/preview`, `GET /api/files/{file_id}` and
@@ -32,6 +33,45 @@ Native runtime must support:
   runtime does not parse (doc, dot, xls), are stored and handed to the agent
   instead of parsed, see Connectors below) and the size cap from
   `EFP_MAX_UPLOAD_MB`; the Portal sets both on the pod from its own settings.
+
+## Usage, Credits and Budget Events
+
+Copilot bills per token in GitHub AI credits (1 credit = $0.01); the runtime
+estimates them from GitHub's published prices (`src/efp_runtime/llm/pricing.py`,
+two tiers: the GPT-6 line costs about twice as much per token once a request's
+prompt exceeds 272k input tokens) and reports them wherever it reports usage.
+
+- The chat response's `usage` (and the stored final assistant message's
+  `metadata.run_usage`) carries, next to `input_tokens` / `output_tokens` /
+  `reasoning_tokens` / `cached_input_tokens` / `total_tokens`:
+  `estimated_credits` (float or null), `iterations` (model calls in the run),
+  `cache_hit_ratio` (cached / input, or null) and `pricing`
+  `{model, tier: "default"|"long_context", threshold_tokens, source:
+  "static"|"catalog", tiers_seen}`. The `usage.updated` event adds
+  `estimated_credits` and `pricing` per step.
+- `context_usage` (event and `GET /api/sessions/{id}/context-usage`) adds
+  `budget_tokens` (the prompt budget the runner enforces, estimated tokens),
+  `billing_threshold_tokens`, `billing_tier`, `calibration`
+  `{ratio, chars_per_token, last_input_tokens, samples}` (how far the chars/4
+  estimate is from the provider's real counts), `calibrated_used_tokens` and
+  `pruned_tool_outputs {count, chars}`.
+- `request_tool_outputs_pruned` (once per run): old tool results were
+  shortened in the model request; the transcript is unchanged.
+- `run_credits_limit_reached`: the run's estimated credits passed
+  `run_credits_limit`; the next iteration is the summary turn.
+- `run_budget_paused` `{reason: "credits_guard"|"iteration_cap", iterations,
+  iteration_limit, estimated_credits, credits_limit}`: the run ended with a
+  summary because of the credits guard or the step cap; the response's
+  `terminal_reason` is `budget_paused` for the guard (`max_steps_reached` for
+  the cap). The member continues by sending a message.
+- `GET /api/usage` totals add `total_cached_input_tokens`,
+  `total_reasoning_tokens`, `total_estimated_credits` (also per model).
+- `GET /api/copilot/quota` answers 200 with `{available, source, fetched_at,
+  plan, reset_date, snapshots: [{id, label, entitlement, remaining, used,
+  percent_remaining, unlimited}], credits, error}` from GitHub's undocumented
+  `copilot_internal/user` endpoint for the runtime's GitHub token, cached 60 s
+  (`?refresh=1` bypasses); `available: false` with `error` when it cannot be
+  asked.
 
 ## Runtime Profile Boot Contract
 

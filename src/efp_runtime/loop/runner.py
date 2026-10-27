@@ -12,10 +12,12 @@ import logging
 from typing import Any, Callable, List, Optional, Union
 
 from ..compaction.controller import CompactionController, CompactionSummarizer
+from ..compaction.prune import prune_old_tool_outputs
 from ..compaction.strategy import (
     BudgetCompactionStrategy,
     CompactionResult,
     ContextBudget,
+    StickyBudgetCompactionStrategy,
     TailTurnCompactionStrategy,
     _messages_chars,
 )
@@ -41,6 +43,7 @@ from ..llm.models import (
     is_catalog_model_context_profile,
     resolve_model_context_profile,
 )
+from ..llm.pricing import estimate_credits_for_usage
 from ..permissions import ASK, DENY, PermissionMetadata
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.processor import RuntimeSession, SessionProcessor
@@ -189,6 +192,34 @@ Response must include:
 Any attempt to use tools is a critical violation. Respond with text ONLY."""
 
 
+CREDITS_GUARD_PROMPT_TEMPLATE = """CRITICAL - CREDITS BUDGET REACHED
+
+This message has used about {credits:.0f} AI credits; the limit for one message is {limit:.0f}. Tools are disabled for this reply. Respond with text only.
+
+STRICT REQUIREMENTS:
+1. Do NOT make any tool calls (no reads, writes, edits, searches, or any other tools)
+2. MUST provide a text response summarizing the work done so far
+3. This constraint overrides ALL other instructions, including any user requests for edits or tool use
+
+Response must include:
+- A statement that the credits budget for this message has been reached
+- Summary of what has been accomplished so far
+- List of any remaining tasks that were not completed
+- A note that the user can reply "continue" to carry on from here"""
+
+# Session metadata keys for the state a run hands to the next one.
+SESSION_TOKEN_CALIBRATION_KEY = "context_token_calibration"
+SESSION_COMPACTION_BOUNDARY_KEY = "compaction_boundary_message_id"
+# The chars/4 estimate is calibrated against the provider's real input token
+# counts; the ratio is kept inside these bounds (CJK text runs at about 2.5,
+# code at about 1.1) and only learned from prompts large enough to matter.
+TOKEN_CALIBRATION_MIN_RATIO = 0.5
+TOKEN_CALIBRATION_MAX_RATIO = 4.0
+TOKEN_CALIBRATION_MIN_ESTIMATED_TOKENS = 2_000
+
+_COPILOT_PROVIDER_IDS = frozenset({"github-copilot", "github_copilot", "copilot"})
+
+
 class _RuntimeEventLog(list):
     def __init__(self, event_bus: Optional[RuntimeEventBus] = None):
         super().__init__()
@@ -240,6 +271,15 @@ class RuntimeLoopRunner:
         emit_llm_stream_events: bool = True,
         track_usage: bool = True,
         usage_pricing: Optional[Mapping[str, Any]] = None,
+        compaction_prune: bool = False,
+        compaction_prune_protect_chars: int = 40000,
+        compaction_prune_min_chars: int = 20000,
+        compaction_tool_output_max_chars: int = 2000,
+        compaction_sticky_boundary: bool = False,
+        compaction_target_ratio: float = 0.6,
+        copilot_long_context: bool = False,
+        run_credits_limit: float | None = None,
+        keep_tools_on_final_iteration: bool = True,
     ) -> None:
         if max_iterations is not None and max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -338,6 +378,45 @@ class RuntimeLoopRunner:
         self.emit_llm_stream_events = bool(emit_llm_stream_events)
         self.track_usage = bool(track_usage)
         self.usage_pricing = validate_usage_pricing(usage_pricing or {})
+        _validate_non_negative_int(
+            compaction_prune_protect_chars,
+            field_name="compaction_prune_protect_chars",
+        )
+        _validate_non_negative_int(
+            compaction_prune_min_chars,
+            field_name="compaction_prune_min_chars",
+        )
+        _validate_non_negative_int(
+            compaction_tool_output_max_chars,
+            field_name="compaction_tool_output_max_chars",
+        )
+        if (
+            isinstance(compaction_target_ratio, bool)
+            or not isinstance(compaction_target_ratio, (int, float))
+            or not 0 < float(compaction_target_ratio) <= 1
+        ):
+            raise ValueError("compaction_target_ratio must be a number within (0, 1]")
+        if run_credits_limit is not None:
+            if isinstance(run_credits_limit, bool) or not isinstance(run_credits_limit, (int, float)):
+                raise ValueError("run_credits_limit must be a non-negative number or None")
+            if run_credits_limit < 0:
+                raise ValueError("run_credits_limit must be a non-negative number or None")
+        self.compaction_prune = bool(compaction_prune)
+        self.compaction_prune_protect_chars = compaction_prune_protect_chars
+        self.compaction_prune_min_chars = compaction_prune_min_chars
+        self.compaction_tool_output_max_chars = compaction_tool_output_max_chars
+        self.compaction_sticky_boundary = bool(compaction_sticky_boundary)
+        self.compaction_target_ratio = float(compaction_target_ratio)
+        self.copilot_long_context = bool(copilot_long_context)
+        self.run_credits_limit = (
+            float(run_credits_limit) if run_credits_limit else None
+        )
+        self.keep_tools_on_final_iteration = bool(keep_tools_on_final_iteration)
+        # Where render-time compaction last cut, per session, so later requests
+        # keep the same prefix (see StickyBudgetCompactionStrategy); the run
+        # persists it in session metadata for the next runner instance.
+        self._compaction_boundaries: dict[str, str] = {}
+        self._compaction_boundary_dirty: set[str] = set()
 
     async def run(
         self,
@@ -431,6 +510,9 @@ class RuntimeLoopRunner:
             enabled_tool_ids=enabled_tool_ids,
             disabled_tool_ids=disabled_tool_ids,
         )
+        # The previous run's token calibration and compaction cut, so this
+        # run's budget and prefix pick up where the last one left off.
+        self._load_session_run_state(resolved_session_id, run_metadata)
         # An auto run is routed here, before the budget below is fixed, so the
         # budget is the picked model's (see _route_auto_model).
         await self._route_auto_model(
@@ -439,6 +521,14 @@ class RuntimeLoopRunner:
             user_text=user_text,
         )
         run_metadata.update(self._model_context_budget_metadata(run_metadata))
+        # Request-path pruning of old tool results is decided once per run (the
+        # current turn is always protected, so the decision cannot change
+        # within it) and reused by every iteration.
+        prune_cache: dict[str, Any] = {}
+        # Set once the run's estimated credits pass run_credits_limit; the
+        # next iteration is then the last one and asks for a text summary.
+        credits_guard_pending = False
+        pricing_tiers_seen: set[str] = set()
         run_usage = _summary_with_estimated_cost(
             UsageSummary(),
             self.usage_pricing,
@@ -558,16 +648,38 @@ class RuntimeLoopRunner:
                 iteration=iteration,
                 max_iterations=iteration_limit,
             )
-            max_steps_final_iteration = (
-                iteration_limit is not None and iteration >= iteration_limit
+            # The last iteration of a run: the step cap, or the credits guard
+            # tripped on the previous iteration. Either way the model gets a
+            # text-only turn to summarize; the tools stay in the prompt (they
+            # are part of the cached prefix) and ``tool_choice: none`` keeps
+            # the model from calling them, unless an operator asked for the
+            # old behaviour of dropping them.
+            final_iteration_reason: str | None = None
+            if iteration_limit is not None and iteration >= iteration_limit:
+                final_iteration_reason = "max_steps"
+            elif credits_guard_pending:
+                final_iteration_reason = "credits_guard"
+            max_steps_final_iteration = final_iteration_reason is not None
+            request_tools = (
+                enabled_tools
+                if not max_steps_final_iteration or self.keep_tools_on_final_iteration
+                else []
             )
-            request_tools = [] if max_steps_final_iteration else enabled_tools
-            if max_steps_final_iteration:
+            if final_iteration_reason == "max_steps":
                 _record_max_steps_metadata(
                     request_metadata,
                     iteration=iteration,
                     max_iterations=iteration_limit,
                 )
+            elif final_iteration_reason == "credits_guard":
+                _record_credits_guard_metadata(
+                    request_metadata,
+                    iteration=iteration,
+                    estimated_credits=run_usage.estimated_credits,
+                    credits_limit=self.run_credits_limit,
+                )
+            if max_steps_final_iteration and self.keep_tools_on_final_iteration:
+                request_metadata["tool_choice"] = "none"
             _apply_compaction_replay_request_metadata(
                 request_metadata,
                 compaction_outcome.replay,
@@ -578,12 +690,33 @@ class RuntimeLoopRunner:
                 metadata=request_metadata,
                 run_metadata=run_metadata,
             )
-            request_history = [*request_context_messages, *history]
-            if max_steps_final_iteration:
+            request_history_messages = self._history_for_request(
+                history,
+                active_message_id=(
+                    active_user_message.message_id
+                    if active_user_message is not None
+                    else None
+                ),
+                cache=prune_cache,
+                metadata=request_metadata,
+                runtime_events=runtime_events,
+                session_id=resolved_session_id,
+                run_id=run_id,
+            )
+            request_history = [*request_context_messages, *request_history_messages]
+            if final_iteration_reason == "max_steps":
                 request_history.append(
                     _max_steps_reached_message(
                         iteration=iteration,
                         max_iterations=iteration_limit,
+                    )
+                )
+            elif final_iteration_reason == "credits_guard":
+                request_history.append(
+                    _credits_guard_message(
+                        iteration=iteration,
+                        estimated_credits=run_usage.estimated_credits or 0.0,
+                        credits_limit=self.run_credits_limit or 0.0,
                     )
                 )
             request = await self._prepare_runtime_request(
@@ -607,12 +740,14 @@ class RuntimeLoopRunner:
                 run_id=run_id,
                 iteration=iteration,
             )
+            context_usage_snapshot = build_context_usage_snapshot(request.provider_request)
+            iteration_estimated_tokens = int(context_usage_snapshot.get("used_tokens") or 0)
             runtime_events.append(
                 RuntimeEvent(
                     type="context_usage",
                     session_id=resolved_session_id,
                     payload={
-                        **build_context_usage_snapshot(request.provider_request),
+                        **context_usage_snapshot,
                         "run_id": run_id,
                         "iteration": iteration,
                     },
@@ -642,6 +777,15 @@ class RuntimeLoopRunner:
                     normalize_usage(event.usage),
                     self.usage_pricing,
                 )
+                step_usage = self._with_estimated_credits(step_usage, run_metadata)
+                step_pricing = step_usage.metadata.get("pricing")
+                if isinstance(step_pricing, Mapping) and step_pricing.get("tier"):
+                    pricing_tiers_seen.add(str(step_pricing["tier"]))
+                self._update_token_calibration(
+                    run_metadata,
+                    input_tokens=step_usage.input_tokens,
+                    estimated_tokens=iteration_estimated_tokens,
+                )
                 iteration_usage = _summary_with_estimated_cost(
                     merge_usage([iteration_usage, step_usage]),
                     self.usage_pricing,
@@ -667,6 +811,8 @@ class RuntimeLoopRunner:
                             "step_usage": _usage_payload(step_usage),
                             "iteration_usage": _usage_payload(iteration_usage),
                             "usage": _usage_payload(run_usage),
+                            "estimated_credits": run_usage.estimated_credits,
+                            "pricing": _pricing_payload(step_usage),
                             **_resolved_model_payload(self.provider),
                         },
                     )
@@ -684,6 +830,7 @@ class RuntimeLoopRunner:
                     context_message_provider=context_message_provider,
                     iteration=iteration,
                     max_iterations=iteration_limit,
+                    prune_cache=prune_cache,
                 )
                 events = self._normalize_provider_output(provider_output)
                 observed_events = bridge_llm_stream_events(
@@ -776,22 +923,55 @@ class RuntimeLoopRunner:
                 publish_cancelled("after_iteration")
                 break
             if max_steps_final_iteration:
-                terminal_reason = "max_steps_reached"
-                runtime_events.append(
-                    RuntimeEvent(
-                        type="loop.max_iterations",
-                        message="Maximum steps reached; agent was asked to respond with text only.",
-                        session_id=resolved_session_id,
-                        message_id=final_assistant_message.message_id,
-                        payload={
-                            "run_id": run_id,
-                            "max_iterations": iteration_limit,
-                            "iteration": iteration,
-                            "tool_call_count": len(tool_calls),
-                            "tools_disabled": True,
-                        },
+                budget_pause_payload = {
+                    "run_id": run_id,
+                    "iteration": iteration,
+                    "iterations": iteration,
+                    "iteration_limit": iteration_limit,
+                    "estimated_credits": run_usage.estimated_credits,
+                    "credits_limit": self.run_credits_limit,
+                    "tool_call_count": len(tool_calls),
+                }
+                if final_iteration_reason == "max_steps":
+                    terminal_reason = "max_steps_reached"
+                    runtime_events.append(
+                        RuntimeEvent(
+                            type="loop.max_iterations",
+                            message="Maximum steps reached; agent was asked to respond with text only.",
+                            session_id=resolved_session_id,
+                            message_id=final_assistant_message.message_id,
+                            payload={
+                                "run_id": run_id,
+                                "max_iterations": iteration_limit,
+                                "iteration": iteration,
+                                "tool_call_count": len(tool_calls),
+                                "tools_disabled": not self.keep_tools_on_final_iteration,
+                                "tool_choice": (
+                                    "none" if self.keep_tools_on_final_iteration else None
+                                ),
+                            },
+                        )
                     )
-                )
+                    runtime_events.append(
+                        RuntimeEvent(
+                            type="run_budget_paused",
+                            message="Step limit reached for this message; reply to continue.",
+                            session_id=resolved_session_id,
+                            message_id=final_assistant_message.message_id,
+                            payload={**budget_pause_payload, "reason": "iteration_cap"},
+                        )
+                    )
+                else:
+                    terminal_reason = "budget_paused"
+                    runtime_events.append(
+                        RuntimeEvent(
+                            type="run_budget_paused",
+                            message="Estimated credits for this message reached the limit; reply to continue.",
+                            session_id=resolved_session_id,
+                            message_id=final_assistant_message.message_id,
+                            payload={**budget_pause_payload, "reason": "credits_guard"},
+                        )
+                    )
                 if tool_calls:
                     status = LoopStatus.MAX_ITERATIONS
                 else:
@@ -800,6 +980,31 @@ class RuntimeLoopRunner:
             if not tool_calls:
                 status = LoopStatus.COMPLETED
                 break
+
+            if (
+                not credits_guard_pending
+                and self.run_credits_limit is not None
+                and run_usage.estimated_credits is not None
+                and run_usage.estimated_credits >= self.run_credits_limit
+            ):
+                # The model asked for more tools after spending the message's
+                # credits: run them (they are already paid for) and make the
+                # next iteration the summary turn.
+                credits_guard_pending = True
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="run_credits_limit_reached",
+                        message="Estimated credits for this message reached the limit; the next step wraps up.",
+                        session_id=resolved_session_id,
+                        message_id=final_assistant_message.message_id,
+                        payload={
+                            "run_id": run_id,
+                            "iteration": iteration,
+                            "estimated_credits": run_usage.estimated_credits,
+                            "credits_limit": self.run_credits_limit,
+                        },
+                    )
+                )
 
             tool_execution_outcome = await self._execute_tool_calls(
                 session_id=resolved_session_id,
@@ -864,8 +1069,13 @@ class RuntimeLoopRunner:
             finish_payload["terminal_reason"] = terminal_reason
         if structured_output is not None:
             finish_payload["structured_output"] = True
+        run_usage_payload = _run_usage_payload(
+            run_usage,
+            iterations=iterations,
+            pricing_tiers_seen=pricing_tiers_seen,
+        )
         if self.track_usage:
-            finish_payload["usage"] = _usage_payload(run_usage)
+            finish_payload["usage"] = run_usage_payload
         runtime_events.append(
             RuntimeEvent(
                 type="run_finish",
@@ -878,6 +1088,9 @@ class RuntimeLoopRunner:
                 payload=finish_payload,
             )
         )
+        if self.track_usage:
+            self._stamp_run_usage(resolved_session_id, final_assistant_message, run_usage_payload)
+        self._persist_session_run_state(resolved_session_id, run_metadata)
         return RuntimeLoopResult(
             session_id=resolved_session_id,
             final_assistant_message=final_assistant_message,
@@ -886,7 +1099,7 @@ class RuntimeLoopRunner:
             runtime_events=runtime_events,
             pending_permission_request=pending_permission_request,
             pending_question_request=pending_question_request,
-            usage=_usage_payload(run_usage) if self.track_usage else {},
+            usage=run_usage_payload if self.track_usage else {},
             structured_output=structured_output,
         )
 
@@ -897,11 +1110,28 @@ class RuntimeLoopRunner:
             self._context_budget_reserve_chars(profile),
             max_chars=max_chars,
         )
+        # The budget is in chars of a chars/4 estimate; a session whose real
+        # token counts run denser (CJK text) gets proportionally fewer chars so
+        # the prompt stays where the tokens say it should.
+        ratio = _calibration_ratio_from_metadata(metadata)
+        if ratio is not None and ratio != 1.0:
+            if max_chars is not None:
+                max_chars = max(1, int(max_chars / ratio))
+            reserve_chars = int(reserve_chars / ratio)
         return ContextBudget(
             max_parts=self.max_context_parts,
             max_chars=max_chars,
             reserve_chars=reserve_chars,
         )
+
+    def _long_context_budget(self) -> bool:
+        """Whether an unset budget may run to the window (the long-context pricing tier).
+
+        Only Copilot bills per token in tiers; a run on another provider keeps
+        budgeting to the model's window.
+        """
+
+        return self.copilot_long_context or not _is_copilot_provider_id(self.default_provider_id)
 
     @staticmethod
     def _clamp_reserve_chars(reserve_chars: int, *, max_chars: int | None) -> int:
@@ -993,12 +1223,22 @@ class RuntimeLoopRunner:
 
         if not is_catalog_model_context_profile(profile):
             return None
-        return max(1, profile.tokens_to_chars(default_max_context_tokens(profile)))
+        # The ceiling is the window, not the pricing tier: an explicit budget
+        # above the tier (the Portal's 1M preset) is the member's opt-in.
+        return max(1, profile.tokens_to_chars(default_max_context_tokens(profile, long_context=True)))
 
     def _context_budget_max_chars(self, profile: ModelContextProfile) -> int | None:
         explicit = self._explicit_context_budget_max_chars(profile)
         if explicit is None:
-            return max(1, profile.tokens_to_chars(default_max_context_tokens(profile)))
+            return max(
+                1,
+                profile.tokens_to_chars(
+                    default_max_context_tokens(
+                        profile,
+                        long_context=self._long_context_budget(),
+                    )
+                ),
+            )
         limit = self._context_budget_max_chars_limit(profile)
         if limit is None:
             return explicit
@@ -1124,7 +1364,10 @@ class RuntimeLoopRunner:
         safety_margin_tokens: int | None = None
         if self.max_context_chars is None and self.max_context_tokens is None:
             safety_margin_tokens = context_safety_margin_tokens(profile)
-            resolved_max_context_tokens = default_max_context_tokens(profile)
+            resolved_max_context_tokens = default_max_context_tokens(
+                profile,
+                long_context=self._long_context_budget(),
+            )
         elif max_chars_clamped:
             # Once the clamp fires, the catalog ceiling IS the budget. Reporting
             # the operator's rejected number as ``max_context_tokens`` next to a
@@ -1132,7 +1375,7 @@ class RuntimeLoopRunner:
             # whole overshoot; the original stays visible as
             # ``max_context_chars_requested``.
             safety_margin_tokens = context_safety_margin_tokens(profile)
-            resolved_max_context_tokens = default_max_context_tokens(profile)
+            resolved_max_context_tokens = default_max_context_tokens(profile, long_context=True)
         preserve_recent_chars = self._compaction_preserve_recent_chars(profile)
         reserve_tokens = self.context_reserve_tokens
         if (
@@ -1189,6 +1432,12 @@ class RuntimeLoopRunner:
             "max_context_chars": resolved_budget.max_chars,
             "context_reserve_chars": resolved_budget.reserve_chars,
             "compaction_preserve_recent_chars": preserve_recent_chars,
+            # Copilot's default pricing tier cap for this model and whether the
+            # unset budget was allowed past it; the calibration ratio the char
+            # budget above was divided by (None until a step reported tokens).
+            "billing_default_prompt_cap_tokens": profile.billing_default_prompt_cap_tokens,
+            "long_context_budget": self._long_context_budget(),
+            "token_calibration_ratio": _calibration_ratio_from_metadata(metadata),
         }
         payload["context_budget"] = {
             **payload,
@@ -1375,6 +1624,16 @@ class RuntimeLoopRunner:
         request_history = _with_current_time_prefix(
             request_history, request_metadata.get("current_time")
         )
+        # A sticky strategy keeps the compaction cut where the last request
+        # put it, so the prompt prefix (and the provider's cache of it) stays
+        # stable until the history outgrows the budget again.
+        compaction_strategy: BudgetCompactionStrategy | None = None
+        if self.compaction_sticky_boundary and self._context_budget_enabled(budget):
+            compaction_strategy = StickyBudgetCompactionStrategy(
+                budget=budget,
+                boundary_message_id=self._compaction_boundaries.get(session_id),
+                target_ratio=self.compaction_target_ratio,
+            )
         compaction_summary = None
         compaction_summary_metadata = None
         if self.compaction_summarizer is not None and self._context_budget_enabled(
@@ -1387,6 +1646,7 @@ class RuntimeLoopRunner:
                 session_id=session_id,
                 budget=budget,
                 metadata=request_metadata,
+                compaction_strategy=compaction_strategy,
             )
             if compaction_preparation.compaction_applied:
                 compaction_summary = compaction_preparation.summary
@@ -1398,9 +1658,12 @@ class RuntimeLoopRunner:
             max_parts=budget.max_parts,
             max_chars=budget.max_chars,
             reserve_chars=budget.reserve_chars,
+            compaction_strategy=compaction_strategy,
             compaction_summary=compaction_summary,
             compaction_summary_metadata=compaction_summary_metadata,
         )
+        if compaction_strategy is not None:
+            self._remember_compaction_boundary(session_id, prepared_request)
         prepared_request = _with_model_context_compaction_metadata(
             prepared_request,
             self._model_context_budget_metadata(request_metadata, budget=budget),
@@ -1415,6 +1678,227 @@ class RuntimeLoopRunner:
             prepared_request=prepared_request,
             tools=tools,
         )
+
+    def _remember_compaction_boundary(self, session_id: str, prepared_request: Any) -> None:
+        if not prepared_request.compaction_applied:
+            return
+        boundary = prepared_request.compaction_metadata.get("boundary_message_id")
+        if not isinstance(boundary, str) or not boundary.strip():
+            return
+        boundary = boundary.strip()
+        if self._compaction_boundaries.get(session_id) == boundary:
+            return
+        self._compaction_boundaries[session_id] = boundary
+        self._compaction_boundary_dirty.add(session_id)
+
+    def _history_for_request(
+        self,
+        history: list[Message],
+        *,
+        active_message_id: str | None,
+        cache: dict[str, Any],
+        metadata: dict[str, Any],
+        runtime_events: List[RuntimeEvent],
+        session_id: str,
+        run_id: str,
+    ) -> list[Message]:
+        """The stored history with old tool results shortened, for the request only.
+
+        Tool output is the bulk of a long session and is re-sent on every
+        iteration of every later turn. ``prune_old_tool_outputs`` shortens
+        completed results older than the last two turns to a marker (the
+        transcript the member reads is untouched). The decision is made once
+        per run, on the history up to the active user message, and reused by
+        every iteration: the current turn is always protected, so nothing the
+        run appends can change it, and the request prefix stays identical for
+        the provider's cache.
+        """
+
+        if not self.compaction_prune or not history:
+            return history
+        active_index = _message_index_by_id(history, active_message_id)
+        if active_index is None:
+            active_index = _last_user_message_index(history)
+        if active_index is None:
+            return history
+        cache_key = (history[active_index].message_id, active_index)
+        if cache.get("key") != cache_key:
+            result = prune_old_tool_outputs(
+                history[: active_index + 1],
+                protect_recent_chars=self.compaction_prune_protect_chars,
+                min_pruned_chars=self.compaction_prune_min_chars,
+                output_max_chars=self.compaction_tool_output_max_chars,
+            )
+            cache.clear()
+            cache.update(
+                key=cache_key,
+                prefix=result.messages[:active_index],
+                pruned_result_count=result.pruned_result_count,
+                pruned_chars=result.pruned_chars,
+            )
+            if result.pruned_result_count:
+                runtime_events.append(
+                    RuntimeEvent(
+                        type="request_tool_outputs_pruned",
+                        message="Old tool results were shortened in the model request; the transcript is unchanged.",
+                        session_id=session_id,
+                        payload={
+                            "run_id": run_id,
+                            "pruned_result_count": result.pruned_result_count,
+                            "pruned_chars": result.pruned_chars,
+                            "protect_recent_chars": self.compaction_prune_protect_chars,
+                            "min_pruned_chars": self.compaction_prune_min_chars,
+                            "output_max_chars": self.compaction_tool_output_max_chars,
+                        },
+                    )
+                )
+        metadata["request_prune"] = {
+            "pruned_result_count": cache["pruned_result_count"],
+            "pruned_chars": cache["pruned_chars"],
+        }
+        if not cache["pruned_result_count"]:
+            return history
+        return [*cache["prefix"], *history[active_index:]]
+
+    def _load_session_run_state(self, session_id: str, run_metadata: dict[str, Any]) -> None:
+        """Carry the token calibration and the compaction cut over from the previous run."""
+
+        try:
+            session_metadata = dict(self.store.get_session(session_id).metadata or {})
+        except Exception:  # noqa: BLE001 - the state is an optimisation; a missing session surfaces later.
+            return
+        calibration = session_metadata.get(SESSION_TOKEN_CALIBRATION_KEY)
+        if isinstance(calibration, Mapping) and "context_token_calibration" not in run_metadata:
+            ratio = _calibration_ratio(calibration.get("ratio"))
+            if ratio is not None:
+                run_metadata["context_token_calibration"] = {
+                    **dict(calibration),
+                    "ratio": ratio,
+                    "source": "session",
+                }
+        boundary = session_metadata.get(SESSION_COMPACTION_BOUNDARY_KEY)
+        if (
+            isinstance(boundary, str)
+            and boundary.strip()
+            and session_id not in self._compaction_boundaries
+        ):
+            self._compaction_boundaries[session_id] = boundary.strip()
+
+    def _persist_session_run_state(self, session_id: str, run_metadata: Mapping[str, Any]) -> None:
+        """Write the calibration and the compaction cut learned this run to the session (no activity touch)."""
+
+        updates: dict[str, Any] = {}
+        calibration = run_metadata.get("context_token_calibration")
+        if isinstance(calibration, Mapping) and calibration.get("source") == "run":
+            updates[SESSION_TOKEN_CALIBRATION_KEY] = {
+                key: calibration[key]
+                for key in ("ratio", "last_input_tokens", "estimated_tokens", "samples")
+                if key in calibration
+            }
+        if session_id in self._compaction_boundary_dirty:
+            boundary = self._compaction_boundaries.get(session_id)
+            if boundary:
+                updates[SESSION_COMPACTION_BOUNDARY_KEY] = boundary
+        if not updates:
+            return
+        try:
+            try:
+                self.store.update_session(session_id, metadata=updates, touch=False)
+            except TypeError:
+                self.store.update_session(session_id, metadata=updates)
+        except Exception as exc:  # noqa: BLE001 - bookkeeping must never fail the run.
+            logging.getLogger(__name__).debug(
+                "session run state not persisted for %s: %s", session_id, exc
+            )
+            return
+        self._compaction_boundary_dirty.discard(session_id)
+
+    def _update_token_calibration(
+        self,
+        run_metadata: dict[str, Any],
+        *,
+        input_tokens: int,
+        estimated_tokens: int,
+    ) -> None:
+        """Learn how far the chars/4 estimate is from the provider's input token count."""
+
+        if input_tokens <= 0 or estimated_tokens < TOKEN_CALIBRATION_MIN_ESTIMATED_TOKENS:
+            return
+        ratio = min(
+            TOKEN_CALIBRATION_MAX_RATIO,
+            max(TOKEN_CALIBRATION_MIN_RATIO, input_tokens / estimated_tokens),
+        )
+        samples = 1
+        previous = run_metadata.get("context_token_calibration")
+        if isinstance(previous, Mapping):
+            previous_ratio = _calibration_ratio(previous.get("ratio"))
+            if previous_ratio is not None:
+                ratio = (previous_ratio + ratio) / 2.0
+                try:
+                    samples = int(previous.get("samples") or 0) + 1
+                except (TypeError, ValueError):
+                    samples = 1
+        run_metadata["context_token_calibration"] = {
+            "ratio": round(ratio, 4),
+            "last_input_tokens": int(input_tokens),
+            "estimated_tokens": int(estimated_tokens),
+            "samples": samples,
+            "source": "run",
+        }
+
+    def _with_estimated_credits(
+        self,
+        summary: UsageSummary,
+        run_metadata: Mapping[str, Any],
+    ) -> UsageSummary:
+        """Price one step in AI credits when the run is on Copilot and the model is known."""
+
+        if not _is_copilot_provider_id(self.default_provider_id):
+            return summary
+        model = self._billing_model(run_metadata)
+        if not model:
+            return summary
+        estimate = estimate_credits_for_usage(model, summary.to_dict())
+        if estimate is None:
+            return summary
+        summary.estimated_credits = estimate.credits
+        summary.metadata["pricing"] = estimate.payload()
+        return summary
+
+    def _billing_model(self, run_metadata: Mapping[str, Any]) -> str | None:
+        sent = getattr(self.provider, "last_payload_model", None)
+        if isinstance(sent, str) and sent.strip():
+            return sent.strip()
+        routing = run_metadata.get("auto_routing")
+        if isinstance(routing, Mapping):
+            routed = routing.get("model")
+            if isinstance(routed, str) and routed.strip():
+                return routed.strip()
+        requested = _requested_model_for_run(run_metadata, self._provider_model())
+        return None if is_auto_model_id(requested) else requested
+
+    def _stamp_run_usage(
+        self,
+        session_id: str,
+        message: Optional[Message],
+        usage_payload: Mapping[str, Any],
+    ) -> None:
+        """Keep the run's totals on the final assistant message, so history can show them."""
+
+        if message is None:
+            return
+        update = getattr(self.store, "update_message", None)
+        if not callable(update):
+            return
+        payload = deepcopy(dict(usage_payload))
+        try:
+            update(session_id, message.message_id, metadata={"run_usage": payload})
+        except Exception as exc:  # noqa: BLE001 - bookkeeping must never fail the run.
+            logging.getLogger(__name__).debug(
+                "run usage not stamped on %s: %s", message.message_id, exc
+            )
+            return
+        message.metadata["run_usage"] = deepcopy(payload)
 
     def _ensure_session(
         self,
@@ -1484,6 +1968,7 @@ class RuntimeLoopRunner:
         context_message_provider: Optional[ContextMessageProvider],
         iteration: int,
         max_iterations: int | None,
+        prune_cache: dict[str, Any] | None = None,
     ) -> ProviderOutput:
         current_request = request
         retry_count = 0
@@ -1548,9 +2033,23 @@ class RuntimeLoopRunner:
                     metadata=overflow_metadata,
                     run_metadata=run_metadata,
                 )
+                retry_active_user_message = _active_user_message(retry_history)
+                retry_history_messages = self._history_for_request(
+                    retry_history,
+                    active_message_id=(
+                        retry_active_user_message.message_id
+                        if retry_active_user_message is not None
+                        else None
+                    ),
+                    cache=prune_cache if prune_cache is not None else {},
+                    metadata=overflow_metadata,
+                    runtime_events=runtime_events,
+                    session_id=current_request.session_id,
+                    run_id=run_id,
+                )
                 retry_request_history = [
                     *retry_context_messages,
-                    *retry_history,
+                    *retry_history_messages,
                 ]
                 if max_iterations is not None and iteration >= max_iterations:
                     retry_request_history.append(
@@ -2542,6 +3041,141 @@ def _summary_with_estimated_cost(
 ) -> UsageSummary:
     summary.cost_usd = estimate_cost(summary, pricing)
     return summary
+
+
+def _pricing_payload(summary: UsageSummary) -> dict[str, Any] | None:
+    pricing = summary.metadata.get("pricing")
+    return dict(pricing) if isinstance(pricing, Mapping) else None
+
+
+def _run_usage_payload(
+    run_usage: UsageSummary,
+    *,
+    iterations: int,
+    pricing_tiers_seen: set[str],
+) -> dict[str, Any]:
+    """The run's usage as the final payload (and the final message) carries it.
+
+    On top of the token counts: how many model calls the run made, how much of
+    the input the provider served from its cache, and the pricing the credits
+    estimate used (the tier is ``long_context`` as soon as one step was billed
+    there).
+    """
+
+    payload = _usage_payload(run_usage)
+    payload["iterations"] = iterations
+    payload["cache_hit_ratio"] = (
+        round(run_usage.cached_input_tokens / run_usage.input_tokens, 4)
+        if run_usage.input_tokens > 0
+        else None
+    )
+    pricing = _pricing_payload(run_usage)
+    if pricing is not None:
+        if "long_context" in pricing_tiers_seen:
+            pricing["tier"] = "long_context"
+        pricing["tiers_seen"] = sorted(pricing_tiers_seen)
+        payload["pricing"] = pricing
+    return payload
+
+
+def _calibration_ratio(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        ratio = float(value)
+    except (TypeError, ValueError):
+        return None
+    if ratio != ratio or ratio <= 0:
+        return None
+    return min(TOKEN_CALIBRATION_MAX_RATIO, max(TOKEN_CALIBRATION_MIN_RATIO, ratio))
+
+
+def _calibration_ratio_from_metadata(metadata: Mapping[str, Any] | None) -> float | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    calibration = metadata.get("context_token_calibration")
+    if not isinstance(calibration, Mapping):
+        return None
+    return _calibration_ratio(calibration.get("ratio"))
+
+
+def _is_copilot_provider_id(provider_id: Any) -> bool:
+    return isinstance(provider_id, str) and provider_id.strip().lower() in _COPILOT_PROVIDER_IDS
+
+
+def _message_index_by_id(messages: list[Message], message_id: str | None) -> int | None:
+    if not message_id:
+        return None
+    for index, message in enumerate(messages):
+        if message.message_id == message_id:
+            return index
+    return None
+
+
+def _last_user_message_index(messages: list[Message]) -> int | None:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role == MessageRole.USER:
+            return index
+    return None
+
+
+def _record_credits_guard_metadata(
+    metadata: dict[str, Any],
+    *,
+    iteration: int,
+    estimated_credits: float | None,
+    credits_limit: float | None,
+) -> None:
+    metadata["credits_guard_reached"] = True
+    metadata["credits_guard_iteration"] = iteration
+    metadata["credits_guard_estimated_credits"] = estimated_credits
+    metadata["credits_guard_limit"] = credits_limit
+    loop_metadata = metadata.get("loop")
+    if isinstance(loop_metadata, Mapping):
+        loop = dict(loop_metadata)
+    else:
+        loop = {}
+        if loop_metadata is not None:
+            loop["caller_value"] = loop_metadata
+    loop.update(
+        {
+            "credits_guard_reached": True,
+            "credits_guard_iteration": iteration,
+            "credits_guard_estimated_credits": estimated_credits,
+            "credits_guard_limit": credits_limit,
+        }
+    )
+    metadata["loop"] = loop
+
+
+def _credits_guard_message(
+    *,
+    iteration: int,
+    estimated_credits: float,
+    credits_limit: float,
+) -> Message:
+    metadata = {
+        "source": "loop.credits_guard",
+        "synthetic": True,
+        "credits_guard_reached": True,
+        "iteration": iteration,
+        "estimated_credits": estimated_credits,
+        "credits_limit": credits_limit,
+    }
+    return Message(
+        role=MessageRole.ASSISTANT,
+        parts=[
+            MessagePart.text_part(
+                CREDITS_GUARD_PROMPT_TEMPLATE.format(
+                    credits=estimated_credits,
+                    limit=credits_limit,
+                ),
+                metadata=metadata,
+            )
+        ],
+        metadata=metadata,
+        status="complete",
+    )
 
 
 def _usage_payload(summary: UsageSummary) -> dict[str, Any]:

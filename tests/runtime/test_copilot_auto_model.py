@@ -426,7 +426,7 @@ def test_provider_sends_the_picked_model_with_the_session_token_and_registers_it
     assert provider.model == AUTO_MODEL_ID
     payload = provider.build_payload(_request({"run_id": "run-1"}, prompt="hey"))
     assert payload["model"] == "gpt-6-luna"
-    assert payload["reasoning"] == {"effort": "high"}
+    assert payload["reasoning"] == {"effort": "medium"}
     assert "metadata" not in payload
     assert transport.route_calls == [("hey", "balance", False)]
     assert transport.session_token == "session-1"
@@ -436,7 +436,7 @@ def test_provider_sends_the_picked_model_with_the_session_token_and_registers_it
     assert resolution.fallback_reason is None
     assert resolution.discount == 0.1
     assert resolution.tier == "balance"
-    assert resolution.reasoning_effort == "high"
+    assert resolution.reasoning_effort == "medium"
     assert resolution.expires_at == FAR_FUTURE
     # The gateway's catalog row is the budget, and the runner's lookup now
     # sees it.

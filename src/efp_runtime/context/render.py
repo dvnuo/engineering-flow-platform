@@ -140,6 +140,9 @@ def prepare_history_for_request(
                 "compacted_tool_pair_count": result.compacted_tool_pair_count,
                 "compacted_chars": result.compacted_chars,
                 "kept_chars": result.kept_chars,
+                # Where a sticky strategy cut; None for the plain budget
+                # strategies. The runner carries it to the next request.
+                "boundary_message_id": result.boundary_message_id,
             }
             compaction_metadata.update(_copy_mapping(compaction_summary_metadata or {}))
             request_metadata["compaction"] = dict(compaction_metadata)

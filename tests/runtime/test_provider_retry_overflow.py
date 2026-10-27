@@ -315,8 +315,11 @@ async def test_context_overflow_retry_preserves_max_steps_text_only_request():
 
     assert result.status == LoopStatus.COMPLETED
     assert len(provider.requests) == 2
-    assert provider.requests[0].provider_request.tools == []
-    assert provider.requests[1].provider_request.tools == []
+    # The tools stay in the prompt on the summary turn (cached prefix); the
+    # provider is told not to call them, on the retry as well.
+    assert [tool.name for tool in provider.requests[0].provider_request.tools] == ["again"]
+    assert [tool.name for tool in provider.requests[1].provider_request.tools] == ["again"]
+    assert provider.metadata_snapshots[1]["tool_choice"] == "none"
     assert provider.metadata_snapshots[1]["max_steps_reached"] is True
     assert provider.metadata_snapshots[1]["overflow_retry"] is True
     assert provider.message_snapshots[1][-1][0] == "assistant"
