@@ -3169,32 +3169,70 @@ def _question_answers_error(answers: Any) -> Optional[str]:
     return None
 
 
+# The session metadata key each kind of card lives under while it waits.
+_PENDING_REQUEST_KEYS = {
+    "question": "pending_question_request",
+    "permission": "pending_permission_request",
+}
+
+
+async def _retire_pending_request(
+    session_id: str,
+    *,
+    kind: str,
+    held_answer: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Take an answered card off the session the moment its answer is accepted.
+
+    The request used to stay in session metadata until the resumed run wrote
+    its result, and every reader took it at face value for as long as that
+    run took: ``pending-input`` rebuilt the card after a page refresh, Portal
+    read the run as parked rather than running and never followed it, and the
+    member who answered the rebuilt card was refused with ``already_answered``.
+    The run's end still records whatever it stops on next -- including the
+    same question, re-raised -- so nothing a run genuinely waits on is lost.
+
+    ``held_answer`` is written in the same update; see
+    ``_record_pending_question_answer`` for why it exists.
+    """
+    if not session_id:
+        return
+    updates: Dict[str, Any] = {}
+    if held_answer is not None:
+        updates["pending_question_answer"] = held_answer
+    try:
+        await session_manager.replace_metadata_keys(
+            session_id,
+            updates,
+            # The context travels with the card: the resumed run already has
+            # its copy in the execution metadata, and a later card stores its own.
+            remove_keys={_PENDING_REQUEST_KEYS[kind], "pending_input_context"},
+        )
+    except Exception:
+        # The run about to start still carries the answer in its execution
+        # metadata; a stale card is the lesser failure.
+        logger.warning("Failed to retire the answered %s request", kind, exc_info=True)
+
+
 async def _record_pending_question_answer(
     session_id: str,
     *,
     pending_request: Mapping[str, Any],
     answers: Any,
 ) -> None:
-    """Keep the answer on the session, where the question already lives.
+    """Keep the answer on the session, where the question lived, and retire the question.
 
-    The execution metadata that also carries it reaches only the run started
-    below. If that run does not get as far as replaying the tool call -- a
-    restart, a failure, a cancel -- the answer would be gone while the question
-    stays on disk, and every later run would raise the identical question
-    without ever reaching the model.
+    The execution metadata that also carries the answer reaches only the run
+    started below. If that run does not get as far as replaying the tool call
+    -- a restart, a failure, a cancel -- the answer would be gone while the
+    call stays on disk, and every later run would raise the identical question
+    without ever reaching the model. A request without a tool call id cannot
+    be held for, but it has still been answered, so it still comes off the
+    session.
     """
     tool_call_id = _pending_question_tool_call_id(pending_request)
-    if not tool_call_id or not session_id:
-        return
-    try:
-        await session_manager.merge_metadata(
-            session_id,
-            {"pending_question_answer": {"tool_call_id": tool_call_id, "answers": answers}},
-        )
-    except Exception:
-        # The run about to start still carries the answer in its execution
-        # metadata; this only makes it survive that run.
-        logger.warning("Failed to record the pending question answer", exc_info=True)
+    held = {"tool_call_id": tool_call_id, "answers": answers} if tool_call_id else None
+    await _retire_pending_request(session_id, kind="question", held_answer=held)
 
 
 def _resume_runtime_task_after_user_input(record: Any, *, metadata: Dict[str, Any]) -> Any:
@@ -3691,10 +3729,16 @@ async def api_session_permission_respond(request: web.Request) -> web.Response:
         return web.json_response({"error": "permission_already_answered"}, status=409)
 
     try:
+        await _retire_pending_request(session_id, kind="permission")
         payload = await _resume_chat_after_user_input(
             request,
             session_id=session_id,
             execution_metadata=execution_metadata,
+            # Released when the run ends, like a question's. Held for the life
+            # of the process, it refused every later approval of the same ask
+            # -- and a permission id is a hash of the ask, so a tool asking
+            # again after a failed resume came back under the very same id.
+            release_claim=request_id,
         )
     except Exception:
         _release_pending_claim(session_id, request_id)
