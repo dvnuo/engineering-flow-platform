@@ -318,6 +318,26 @@ class FileSessionStore:
             self._write_session_locked(session)
             return deepcopy(stored_part)
 
+    def update_message(
+        self,
+        session_id: str,
+        message_id: str,
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+        usage: Optional[Mapping[str, Any]] = None,
+    ) -> Message:
+        """Merge ``metadata`` and ``usage`` into a stored message; ``updated_at`` stays (bookkeeping is not activity)."""
+
+        with self._lock:
+            session = self._read_session_locked_mutable(session_id)
+            message = self._require_message(session, message_id)
+            if metadata:
+                message.metadata.update(deepcopy(dict(metadata)))
+            if usage:
+                message.usage.update(deepcopy(dict(usage)))
+            self._write_session_locked(session)
+            return deepcopy(message)
+
     def read_history(self, session_id: str) -> List[Message]:
         with self._lock:
             return deepcopy(self._read_session_locked(session_id).messages)

@@ -17,6 +17,9 @@ class UsageSummary:
     cached_input_tokens: int = 0
     total_tokens: int = 0
     cost_usd: Optional[float] = None
+    # GitHub AI credits (1 credit = $0.01) estimated from the published Copilot
+    # prices (see ``llm/pricing.py``); None when the model has no price row.
+    estimated_credits: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -26,6 +29,9 @@ class UsageSummary:
         self.cached_input_tokens = _coerce_token_count(self.cached_input_tokens)
         self.total_tokens = _coerce_token_count(self.total_tokens)
         self.cost_usd = None if self.cost_usd is None else float(self.cost_usd)
+        self.estimated_credits = (
+            None if self.estimated_credits is None else float(self.estimated_credits)
+        )
         self.metadata = dict(self.metadata)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -36,6 +42,7 @@ class UsageSummary:
             "cached_input_tokens": self.cached_input_tokens,
             "total_tokens": self.total_tokens,
             "cost_usd": self.cost_usd,
+            "estimated_credits": self.estimated_credits,
             "metadata": dict(self.metadata),
         }
 
@@ -99,6 +106,8 @@ def normalize_usage(raw: Mapping[str, Any]) -> UsageSummary:
         reasoning_tokens=reasoning_tokens,
         cached_input_tokens=cached_input_tokens,
         total_tokens=total_tokens,
+        cost_usd=_optional_float(raw.get("cost_usd")),
+        estimated_credits=_optional_float(raw.get("estimated_credits")),
         metadata=metadata,
     )
 
@@ -109,6 +118,8 @@ def merge_usage(summaries: Iterable[UsageInput]) -> UsageSummary:
     merged = UsageSummary()
     cost_usd = 0.0
     has_cost = False
+    credits = 0.0
+    has_credits = False
     metadata: Dict[str, Any] = {}
     for item in summaries:
         summary = item if isinstance(item, UsageSummary) else normalize_usage(item)
@@ -120,10 +131,23 @@ def merge_usage(summaries: Iterable[UsageInput]) -> UsageSummary:
         if summary.cost_usd is not None:
             cost_usd += float(summary.cost_usd)
             has_cost = True
+        if summary.estimated_credits is not None:
+            credits += float(summary.estimated_credits)
+            has_credits = True
         metadata.update(summary.metadata)
     merged.cost_usd = cost_usd if has_cost else None
+    merged.estimated_credits = round(credits, 4) if has_credits else None
     merged.metadata = metadata
     return merged
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def estimate_cost(
@@ -187,6 +211,8 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 
 
 _KNOWN_USAGE_FIELDS = {
+    "cost_usd",
+    "estimated_credits",
     "input_tokens",
     "prompt_tokens",
     "output_tokens",

@@ -499,7 +499,7 @@ def _runtime_config(
         "workspace_root": _runtime_workspace_root(),
         "default_provider_id": "github-copilot",
         "default_model": model,
-        "max_iterations": _resolve_max_iterations(),
+        "max_iterations": _resolve_max_iterations(interactive=interactive),
         "track_usage": track_usage,
     }
     kwargs.update(_runtime_config_profile_kwargs(managed_overlay_config))
@@ -519,6 +519,16 @@ def _runtime_config(
         or _mapping_has_key(profile_config, "track_usage")
     ):
         kwargs["track_usage"] = track_usage
+    # Interactive chats get a per-message credits guard by default: when a
+    # turn's estimated AI credits pass it the loop asks the model to wrap up
+    # and the Portal draws a "continue" card. Background tasks, the Jira
+    # handler and sub-agents have nobody to show the card to and inherit "off"
+    # unless their profile sets a limit.
+    if interactive and not (
+        _mapping_has_key(managed_overlay_config, "run_credits_limit")
+        or _mapping_has_key(profile_config, "run_credits_limit")
+    ):
+        kwargs["run_credits_limit"] = _resolve_default_run_credits_limit()
     # The question tool parks the run until somebody answers, so it is only
     # safe where a person is watching the transcript and Portal can draw the
     # answer card. Background tasks, the Jira handler, and sub-agents share this
@@ -649,14 +659,40 @@ def _runtime_config_profile_kwargs(
     }
 
 
-def _resolve_max_iterations() -> int | None:
+# An interactive chat turn stops after this many model calls and asks the
+# model to summarize; the Portal then offers "continue". Each call re-sends
+# the whole context, so an unbounded loop is an unbounded bill. Background
+# tasks keep the loop unbounded unless `session.max_iterations` says otherwise
+# (a value of 0 or less turns the cap off everywhere).
+DEFAULT_INTERACTIVE_MAX_ITERATIONS = 30
+# Estimated AI credits one interactive message may spend before the loop
+# wraps up (about $2 on GPT-6 Sol; a routine agentic turn is 50-150).
+DEFAULT_INTERACTIVE_RUN_CREDITS_LIMIT = 200.0
+
+
+def _resolve_max_iterations(*, interactive: bool = False) -> int | None:
     value = config.session.get("max_iterations")
     if value is None or (isinstance(value, str) and not value.strip()):
-        return None
+        return DEFAULT_INTERACTIVE_MAX_ITERATIONS if interactive else None
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        return None
+        return DEFAULT_INTERACTIVE_MAX_ITERATIONS if interactive else None
+    return parsed if parsed > 0 else None
+
+
+def _resolve_default_run_credits_limit() -> float | None:
+    """`session.run_credits_limit` (or EFP_RUN_CREDITS_LIMIT), else the interactive default; 0 turns it off."""
+
+    raw = _env_string("EFP_RUN_CREDITS_LIMIT")
+    if raw is None:
+        raw = config.session.get("run_credits_limit")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return DEFAULT_INTERACTIVE_RUN_CREDITS_LIMIT
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_INTERACTIVE_RUN_CREDITS_LIMIT
     return parsed if parsed > 0 else None
 
 
@@ -750,7 +786,26 @@ def _build_github_copilot_provider(
         stream=True,
         metadata={"gateway": "runtime_api"},
         reasoning_effort=_resolve_reasoning_effort(llm_config),
+        replay_reasoning=_resolve_copilot_replay_reasoning(llm_config, execution_metadata),
     )
+
+
+def _resolve_copilot_replay_reasoning(
+    llm_config: Mapping[str, Any],
+    execution_metadata: Mapping[str, Any] | None,
+) -> bool:
+    """EFP_COPILOT_REPLAY_REASONING, else the trusted profile's `copilot_replay_reasoning`, else off."""
+
+    env_value = _env_string("EFP_COPILOT_REPLAY_REASONING")
+    if env_value is not None:
+        return env_value.strip().lower() in {"1", "true", "yes", "on"}
+    profile_config = _trusted_runtime_profile_config(execution_metadata) or {}
+    value = profile_config.get("copilot_replay_reasoning")
+    if value is None:
+        value = llm_config.get("copilot_replay_reasoning")
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _join_url(host: str, uri: str) -> str:

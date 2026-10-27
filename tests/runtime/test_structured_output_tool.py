@@ -266,7 +266,10 @@ async def test_invalid_structured_output_at_max_iterations_becomes_error(
     assert missing_event.payload["prior_status"] == LoopStatus.MAX_ITERATIONS
 
     request = provider.requests[0]
-    assert request.provider_request.tools == []
+    # The summary turn keeps the tools in the prompt (cached prefix) and tells
+    # the provider not to call them.
+    assert "StructuredOutput" in [tool.name for tool in request.provider_request.tools]
+    assert request.metadata["tool_choice"] == "none"
     assert "CRITICAL - MAXIMUM STEPS REACHED" in request.provider_request.messages[-1].text
 
     history = runtime.store.read_history("session-structured-invalid")

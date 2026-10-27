@@ -20,6 +20,7 @@ from .strategy import (
     CompactionResult,
     ContextBudget,
     PartAwareCompactionStrategy,
+    StickyBudgetCompactionStrategy,
     TailTurnCompactionStrategy,
 )
 from .prune import ToolOutputPruneResult, prune_old_tool_outputs
@@ -36,6 +37,7 @@ __all__ = [
     "ContextBudget",
     "DeterministicCompactionSummarizer",
     "PartAwareCompactionStrategy",
+    "StickyBudgetCompactionStrategy",
     "TailTurnCompactionStrategy",
     "ToolOutputPruneResult",
     "build_compaction_prompt",

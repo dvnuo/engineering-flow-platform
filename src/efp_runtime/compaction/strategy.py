@@ -53,6 +53,9 @@ class CompactionResult:
     source_messages: list[Message] = field(default_factory=list)
     compacted_messages: list[Message] = field(default_factory=list)
     kept_messages: list[Message] = field(default_factory=list)
+    # The first message kept for its recency (``StickyBudgetCompactionStrategy``);
+    # handed back to the strategy, it keeps the cut there on later requests.
+    boundary_message_id: str | None = None
 
     @property
     def compacted(self) -> bool:
@@ -127,49 +130,12 @@ class BudgetCompactionStrategy:
         refs = _flatten_messages(messages)
         total_chars = _messages_chars(messages)
         if not self._over_budget(part_count=len(refs), char_count=total_chars):
-            return CompactionResult(
-                messages=list(messages),
-                source_messages=list(messages),
-                kept_messages=list(messages),
-                kept_chars=total_chars,
-            )
+            return _unchanged_result(messages, total_chars=total_chars)
 
         blocks = _group_part_blocks(refs)
         pending_call_ids = _pending_tool_call_ids(refs)
         kept_blocks = self._select_recent_blocks(blocks, pending_call_ids=pending_call_ids)
-        kept_keys = {ref.key for block in kept_blocks for ref in block.refs}
-        compacted_blocks = [
-            block for block in blocks if not any(ref.key in kept_keys for ref in block.refs)
-        ]
-        if not compacted_blocks:
-            return CompactionResult(
-                messages=list(messages),
-                source_messages=list(messages),
-                kept_messages=list(messages),
-                kept_chars=total_chars,
-            )
-
-        compacted_keys = {ref.key for block in compacted_blocks for ref in block.refs}
-        compaction_message = _build_compaction_message(compacted_blocks)
-        remaining_items = _rebuild_message_items(messages, kept_keys)
-        final_messages = _insert_compaction_message(
-            compaction_message,
-            remaining_items,
-            compacted_blocks,
-        )
-        return CompactionResult(
-            messages=final_messages,
-            source_messages=list(messages),
-            compacted_messages=_rebuild_messages(messages, compacted_keys),
-            kept_messages=_rebuild_messages(messages, kept_keys),
-            compacted_part_count=sum(block.part_count for block in compacted_blocks),
-            compacted_message_count=len(
-                {ref.message_index for block in compacted_blocks for ref in block.refs}
-            ),
-            compacted_tool_pair_count=sum(1 for block in compacted_blocks if block.is_tool_pair),
-            compacted_chars=sum(block.char_count for block in compacted_blocks),
-            kept_chars=_messages_chars(final_messages),
-        )
+        return _assemble_result(messages, blocks, kept_blocks, total_chars=total_chars)
 
     def _over_budget(self, *, part_count: int, char_count: int) -> bool:
         if self.budget.max_parts is not None and part_count > self.budget.max_parts:
@@ -234,6 +200,109 @@ class BudgetCompactionStrategy:
         if effective_max_chars is not None and char_count > effective_max_chars:
             return False
         return True
+
+
+class StickyBudgetCompactionStrategy(BudgetCompactionStrategy):
+    """Budget compaction whose cut point stays put between requests.
+
+    ``BudgetCompactionStrategy`` keeps the newest blocks that fit the budget,
+    so once a conversation sits at its budget every new tool result pushes
+    the oldest kept block out: the compaction summary and the first kept
+    message change on every request, and the provider's prompt cache misses
+    on the whole history each iteration - exactly where the history is
+    largest and a miss costs most. This strategy compacts in steps instead.
+    When the history exceeds the budget it keeps only ``target_ratio`` of
+    the effective budget and reports the first kept message as
+    ``boundary_message_id``; given that boundary back, later requests keep
+    everything from that message on, byte for byte, until the history
+    exceeds the budget again. Blocks the base class protects (system
+    messages, pending tool pairs) stay protected on either side of the cut.
+    """
+
+    def __init__(
+        self,
+        *,
+        budget: ContextBudget,
+        boundary_message_id: str | None = None,
+        target_ratio: float = 0.6,
+    ) -> None:
+        super().__init__(budget=budget)
+        if isinstance(target_ratio, bool) or not isinstance(target_ratio, (int, float)):
+            raise ValueError("target_ratio must be a number within (0, 1]")
+        if not 0 < float(target_ratio) <= 1:
+            raise ValueError("target_ratio must be a number within (0, 1]")
+        self.boundary_message_id = boundary_message_id or None
+        self.target_ratio = float(target_ratio)
+
+    def compact(self, messages: list[Message]) -> CompactionResult:
+        refs = _flatten_messages(messages)
+        total_chars = _messages_chars(messages)
+        blocks = _group_part_blocks(refs)
+        pending_call_ids = _pending_tool_call_ids(refs)
+
+        boundary_index = _message_index_by_id(messages, self.boundary_message_id)
+        if boundary_index is not None:
+            kept_indices = {
+                index
+                for index, block in enumerate(blocks)
+                if block.refs[0].message_index >= boundary_index
+                or _is_protected_block(block, pending_call_ids=pending_call_ids)
+            }
+            if len(kept_indices) == len(blocks):
+                if not self._over_budget(part_count=len(refs), char_count=total_chars):
+                    return _unchanged_result(
+                        messages,
+                        total_chars=total_chars,
+                        boundary_message_id=self.boundary_message_id,
+                    )
+            else:
+                kept_parts, kept_chars = _selection_usage(
+                    blocks,
+                    kept_indices,
+                    kept_parts=sum(blocks[index].part_count for index in kept_indices),
+                    kept_chars=sum(blocks[index].char_count for index in kept_indices),
+                    path_candidate_cache={},
+                )
+                if self._fits_budget(part_count=kept_parts, char_count=kept_chars):
+                    return _assemble_result(
+                        messages,
+                        blocks,
+                        [blocks[index] for index in sorted(kept_indices)],
+                        total_chars=total_chars,
+                        boundary_message_id=self.boundary_message_id,
+                    )
+        elif not self._over_budget(part_count=len(refs), char_count=total_chars):
+            return _unchanged_result(messages, total_chars=total_chars)
+
+        # Over the budget, or the remembered cut no longer fits: cut down to
+        # the target so the requests that follow fit without moving the cut.
+        target = BudgetCompactionStrategy(budget=self._target_budget())
+        kept_blocks = target._select_recent_blocks(blocks, pending_call_ids=pending_call_ids)
+        return _assemble_result(
+            messages,
+            blocks,
+            kept_blocks,
+            total_chars=total_chars,
+            boundary_message_id=_boundary_message_id_for(
+                messages,
+                kept_blocks,
+                pending_call_ids=pending_call_ids,
+            ),
+        )
+
+    def _target_budget(self) -> ContextBudget:
+        max_parts = self.budget.max_parts
+        if max_parts is not None:
+            max_parts = max(1, int(max_parts * self.target_ratio))
+        max_chars = self.budget.max_chars
+        if max_chars is not None:
+            effective = self.budget.effective_max_chars or 0
+            max_chars = self.budget.reserve_chars + max(1, int(effective * self.target_ratio))
+        return ContextBudget(
+            max_parts=max_parts,
+            max_chars=max_chars,
+            reserve_chars=self.budget.reserve_chars,
+        )
 
 
 class PartAwareCompactionStrategy(BudgetCompactionStrategy):
@@ -389,6 +458,93 @@ class TailTurnCompactionStrategy(BudgetCompactionStrategy):
                 keep_start = split_start
             break
         return keep_start
+
+
+def _unchanged_result(
+    messages: list[Message],
+    *,
+    total_chars: int,
+    boundary_message_id: str | None = None,
+) -> CompactionResult:
+    return CompactionResult(
+        messages=list(messages),
+        source_messages=list(messages),
+        kept_messages=list(messages),
+        kept_chars=total_chars,
+        boundary_message_id=boundary_message_id,
+    )
+
+
+def _assemble_result(
+    messages: list[Message],
+    blocks: list[_Block],
+    kept_blocks: list[_Block],
+    *,
+    total_chars: int,
+    boundary_message_id: str | None = None,
+) -> CompactionResult:
+    kept_keys = {ref.key for block in kept_blocks for ref in block.refs}
+    compacted_blocks = [
+        block for block in blocks if not any(ref.key in kept_keys for ref in block.refs)
+    ]
+    if not compacted_blocks:
+        return _unchanged_result(
+            messages,
+            total_chars=total_chars,
+            boundary_message_id=boundary_message_id,
+        )
+
+    compacted_keys = {ref.key for block in compacted_blocks for ref in block.refs}
+    compaction_message = _build_compaction_message(compacted_blocks)
+    remaining_items = _rebuild_message_items(messages, kept_keys)
+    final_messages = _insert_compaction_message(
+        compaction_message,
+        remaining_items,
+        compacted_blocks,
+    )
+    return CompactionResult(
+        messages=final_messages,
+        source_messages=list(messages),
+        compacted_messages=_rebuild_messages(messages, compacted_keys),
+        kept_messages=_rebuild_messages(messages, kept_keys),
+        compacted_part_count=sum(block.part_count for block in compacted_blocks),
+        compacted_message_count=len(
+            {ref.message_index for block in compacted_blocks for ref in block.refs}
+        ),
+        compacted_tool_pair_count=sum(1 for block in compacted_blocks if block.is_tool_pair),
+        compacted_chars=sum(block.char_count for block in compacted_blocks),
+        kept_chars=_messages_chars(final_messages),
+        boundary_message_id=boundary_message_id,
+    )
+
+
+def _message_index_by_id(messages: list[Message], message_id: str | None) -> int | None:
+    if not message_id:
+        return None
+    for index, message in enumerate(messages):
+        if message.message_id == message_id:
+            return index
+    return None
+
+
+def _boundary_message_id_for(
+    messages: list[Message],
+    kept_blocks: list[_Block],
+    *,
+    pending_call_ids: set[str],
+) -> str | None:
+    """The first message kept for its recency rather than for its protection."""
+
+    candidates = [
+        block.refs[0].message_index
+        for block in kept_blocks
+        if not _is_protected_block(block, pending_call_ids=pending_call_ids)
+    ]
+    if not candidates:
+        candidates = [block.refs[0].message_index for block in kept_blocks]
+    if not candidates:
+        return None
+    return messages[min(candidates)].message_id
 
 
 def _flatten_messages(messages: list[Message]) -> list[_PartRef]:

@@ -14,6 +14,11 @@ MIN_PRESERVE_RECENT_TOKENS = 2_000
 MAX_PRESERVE_RECENT_TOKENS = 8_000
 DEFAULT_CONTEXT_SAFETY_MARGIN_TOKENS = 8_000
 CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR = 20
+# Copilot bills per token in two tiers (AI credits, since 2026-06): a request
+# whose prompt exceeds this many input tokens is billed at the long-context
+# tier, about twice the default price (see ``llm/pricing.py``). The GPT-6
+# line and GPT-5.6 Sol / Terra share the threshold; GPT-5.6 Luna's is 200k.
+BILLING_DEFAULT_PROMPT_CAP_TOKENS = 272_000
 # GitHub Copilot models a member can pick for the native runtime: the GPT-6
 # line (Astra, Sol, Luna) plus GPT-6.1 Sol, which joined on 2026-09-29.
 # gpt-5.4 and gpt-5.5 left this list when GPT-6 arrived; the GPT-5.6 line
@@ -70,6 +75,10 @@ class ModelContextProfile:
     default_reserve_tokens: int
     default_preserve_recent_tokens: int
     chars_per_token: int = DEFAULT_CHARS_PER_TOKEN
+    # Input tokens per request up to which Copilot bills the model at its
+    # default tier; None for a model without a long-context tier (or one that
+    # is not billed per token here, such as the AI Platform's).
+    billing_default_prompt_cap_tokens: int | None = None
 
     def tokens_to_chars(self, tokens: int) -> int:
         """Convert token counts to deterministic approximate character counts."""
@@ -209,13 +218,61 @@ def copilot_model_context_profile(entry: Any) -> ModelContextProfile | None:
         model_id,
         context_window_tokens=window,
         default_reserve_tokens=reserve,
+        billing_default_prompt_cap_tokens=_billing_default_prompt_cap(entry),
     )
 
 
-def model_prompt_budget_tokens(profile: ModelContextProfile) -> int:
-    """Tokens a prompt may use once the reserve and the safety margin are held back."""
+def _billing_default_prompt_cap(entry: Mapping[str, Any]) -> int | None:
+    """The default pricing tier's prompt cap from a catalog row's ``billing.token_prices``.
 
-    return max(1, default_max_context_tokens(profile) - profile.default_reserve_tokens)
+    Only a row that also lists a ``long_context`` tier has a cap worth
+    budgeting to; a single-tier model is billed the same at any prompt size.
+    """
+
+    billing = entry.get("billing")
+    if not isinstance(billing, Mapping):
+        return None
+    prices = billing.get("token_prices")
+    if not isinstance(prices, Mapping) or not isinstance(prices.get("long_context"), Mapping):
+        return None
+    default_tier = prices.get("default")
+    if not isinstance(default_tier, Mapping):
+        return None
+    return _positive_int_or_none(default_tier.get("max_prompt_tokens"))
+
+
+def model_prompt_budget_tokens(profile: ModelContextProfile) -> int:
+    """Tokens a prompt may use once the reserve and the safety margin are held back.
+
+    This is the model's capacity (the full window), what the auto-routing
+    admission checks a conversation against; the runner's default budget is
+    smaller when the model has a billing cap (``default_max_context_tokens``).
+    """
+
+    return max(
+        1,
+        default_max_context_tokens(profile, long_context=True) - profile.default_reserve_tokens,
+    )
+
+
+def billing_default_prompt_cap_tokens(profile: ModelContextProfile) -> int | None:
+    """Input tokens per request up to which ``profile`` is billed at the default tier, or None."""
+
+    return profile.billing_default_prompt_cap_tokens
+
+
+def default_tier_window_tokens(profile: ModelContextProfile) -> int | None:
+    """The window that keeps a prompt inside the default pricing tier, or None without a cap.
+
+    The cap is a prompt size; the runner subtracts the model's reserve from
+    the window it is given, so the window that lands the prompt on the cap is
+    the cap plus the reserve.
+    """
+
+    cap = profile.billing_default_prompt_cap_tokens
+    if cap is None:
+        return None
+    return cap + profile.default_reserve_tokens
 
 
 def preferred_model_context_profile(
@@ -280,14 +337,33 @@ def context_safety_margin_tokens(profile: ModelContextProfile) -> int:
     )
 
 
-def default_max_context_tokens(profile: ModelContextProfile) -> int:
+def default_max_context_tokens(
+    profile: ModelContextProfile,
+    *,
+    long_context: bool = False,
+) -> int:
     """Return the catalog-derived prompt budget for a model, in tokens.
 
     The model's response headroom (``default_reserve_tokens``) is NOT subtracted
     here; callers subtract it separately via ``ContextBudget.reserve_chars``.
+
+    Copilot bills the GPT-6 line per token in two tiers, and a request whose
+    prompt exceeds ``billing_default_prompt_cap_tokens`` is billed at the
+    long-context tier, about twice the price. Unless ``long_context`` is
+    asked for, the budget therefore stops at the default tier: the cap plus
+    the reserve the caller subtracts again, minus the same safety margin, so
+    the prompt that reaches the model stays under the cap. A model without a
+    cap budgets to its window as before, and so does ``long_context=True``
+    (the ceiling an explicit operator budget is clamped to: a member who
+    picks the 1M preset has opted into the tier).
     """
 
-    return max(1, profile.context_window_tokens - context_safety_margin_tokens(profile))
+    window = profile.context_window_tokens
+    if not long_context:
+        tier_window = default_tier_window_tokens(profile)
+        if tier_window is not None:
+            window = min(window, tier_window)
+    return max(1, window - context_safety_margin_tokens(profile))
 
 
 def is_catalog_model_context_profile(profile: ModelContextProfile) -> bool:
@@ -317,6 +393,7 @@ def _profile(
     context_window_tokens: int,
     default_reserve_tokens: int,
     chars_per_token: int = DEFAULT_CHARS_PER_TOKEN,
+    billing_default_prompt_cap_tokens: int | None = None,
 ) -> ModelContextProfile:
     return ModelContextProfile(
         provider_id=DEFAULT_PROVIDER_ID,
@@ -328,6 +405,7 @@ def _profile(
             reserve_tokens=default_reserve_tokens,
         ),
         chars_per_token=chars_per_token,
+        billing_default_prompt_cap_tokens=billing_default_prompt_cap_tokens,
     )
 
 
@@ -356,16 +434,19 @@ _COPILOT_PROFILES = {
         "gpt-5.6-luna",
         context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
+        billing_default_prompt_cap_tokens=200_000,
     ),
     "gpt-5.6-sol": _profile(
         "gpt-5.6-sol",
         context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
+        billing_default_prompt_cap_tokens=BILLING_DEFAULT_PROMPT_CAP_TOKENS,
     ),
     "gpt-5.6-terra": _profile(
         "gpt-5.6-terra",
         context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
+        billing_default_prompt_cap_tokens=BILLING_DEFAULT_PROMPT_CAP_TOKENS,
     ),
     # GPT-6 (released 2026-09; in Copilot since 2026-09-04 for Astra and
     # 2026-09-22 for Sol and Luna) and GPT-6.1 Sol (Copilot GA 2026-09-29).
@@ -386,21 +467,25 @@ _COPILOT_PROFILES = {
         "gpt-6-astra",
         context_window_tokens=1_050_000,
         default_reserve_tokens=128_000,
+        billing_default_prompt_cap_tokens=BILLING_DEFAULT_PROMPT_CAP_TOKENS,
     ),
     "gpt-6-luna": _profile(
         "gpt-6-luna",
         context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
+        billing_default_prompt_cap_tokens=BILLING_DEFAULT_PROMPT_CAP_TOKENS,
     ),
     "gpt-6-sol": _profile(
         "gpt-6-sol",
         context_window_tokens=1_000_000,
         default_reserve_tokens=128_000,
+        billing_default_prompt_cap_tokens=BILLING_DEFAULT_PROMPT_CAP_TOKENS,
     ),
     "gpt-6.1-sol": _profile(
         "gpt-6.1-sol",
         context_window_tokens=1_050_000,
         default_reserve_tokens=128_000,
+        billing_default_prompt_cap_tokens=BILLING_DEFAULT_PROMPT_CAP_TOKENS,
     ),
     # Copilot auto routes per turn and the runner takes the budget from the
     # model Copilot picked (RuntimeLoopRunner._model_context_profile); these
@@ -411,6 +496,7 @@ _COPILOT_PROFILES = {
             auto_id,
             context_window_tokens=1_000_000,
             default_reserve_tokens=128_000,
+            billing_default_prompt_cap_tokens=BILLING_DEFAULT_PROMPT_CAP_TOKENS,
         )
         for auto_id in AUTO_MODEL_IDS
     },
@@ -490,6 +576,7 @@ def _validate_positive_int(value: Any, field_name: str) -> None:
 __all__ = [
     "AUTO_MODEL_ID",
     "AUTO_MODEL_IDS",
+    "BILLING_DEFAULT_PROMPT_CAP_TOKENS",
     "CONTEXT_SAFETY_MARGIN_WINDOW_DIVISOR",
     "COPILOT_AUTO_TIERS",
     "DEFAULT_AUTO_TIER",
@@ -502,12 +589,14 @@ __all__ = [
     "ModelContextProfile",
     "SUPPORTED_COPILOT_MODEL_IDS",
     "auto_tier_for",
+    "billing_default_prompt_cap_tokens",
     "canonicalize_copilot_model_id",
     "cheap_model_for_family",
     "clear_learned_model_context_profiles",
     "context_safety_margin_tokens",
     "copilot_model_context_profile",
     "default_max_context_tokens",
+    "default_tier_window_tokens",
     "is_auto_model_id",
     "is_catalog_model_context_profile",
     "model_prompt_budget_tokens",

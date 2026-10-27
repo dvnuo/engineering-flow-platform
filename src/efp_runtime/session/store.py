@@ -169,6 +169,25 @@ class InMemorySessionStore:
             session.touch()
             return deepcopy(stored_part)
 
+    def update_message(
+        self,
+        session_id: str,
+        message_id: str,
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+        usage: Optional[Mapping[str, Any]] = None,
+    ) -> Message:
+        """Merge ``metadata`` and ``usage`` into a stored message (bookkeeping, not activity)."""
+
+        with self._lock:
+            session = self._require_session(session_id)
+            message = self._require_message(session, message_id)
+            if metadata:
+                message.metadata.update(deepcopy(dict(metadata)))
+            if usage:
+                message.usage.update(deepcopy(dict(usage)))
+            return deepcopy(message)
+
     def read_history(self, session_id: str) -> List[Message]:
         with self._lock:
             session = self._require_session(session_id)

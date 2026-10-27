@@ -729,6 +729,19 @@ class AgentRuntime:
                     self.config.compaction_preserve_recent_tokens
                 ),
                 compaction_reserved_chars=self.config.compaction_reserved_chars,
+                compaction_prune=self.config.compaction_prune,
+                compaction_prune_protect_chars=self.config.compaction_prune_protect_chars,
+                compaction_prune_min_chars=self.config.compaction_prune_min_chars,
+                compaction_tool_output_max_chars=(
+                    self.config.compaction_tool_output_max_chars
+                ),
+                compaction_sticky_boundary=self.config.compaction_sticky_boundary,
+                compaction_target_ratio=self.config.compaction_target_ratio,
+                copilot_long_context=self.config.copilot_long_context,
+                run_credits_limit=self.config.run_credits_limit,
+                keep_tools_on_final_iteration=(
+                    self.config.keep_tools_on_final_iteration
+                ),
             )
             result = await runner.run(
                 user_text=user_text_for_request,
@@ -968,6 +981,19 @@ class AgentRuntime:
                     self.config.compaction_preserve_recent_tokens
                 ),
                 compaction_reserved_chars=self.config.compaction_reserved_chars,
+                compaction_prune=self.config.compaction_prune,
+                compaction_prune_protect_chars=self.config.compaction_prune_protect_chars,
+                compaction_prune_min_chars=self.config.compaction_prune_min_chars,
+                compaction_tool_output_max_chars=(
+                    self.config.compaction_tool_output_max_chars
+                ),
+                compaction_sticky_boundary=self.config.compaction_sticky_boundary,
+                compaction_target_ratio=self.config.compaction_target_ratio,
+                copilot_long_context=self.config.copilot_long_context,
+                run_credits_limit=self.config.run_credits_limit,
+                keep_tools_on_final_iteration=(
+                    self.config.keep_tools_on_final_iteration
+                ),
             )
             result = await runner.run(
                 user_text="",

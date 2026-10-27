@@ -160,10 +160,11 @@ async def test_max_context_parts_compacts_provider_request_metadata():
     assert request.prepared_request.compaction_applied is True
     assert request.prepared_request.compaction_metadata["max_parts"] == 2
     # A parts-only config leaves the char budget unset, so it now comes from the
-    # model catalog (gpt-6-sol: 1.05M window - 8k safety margin, at 4
-    # chars/token) with the model's 128k reserve. max_parts stays the binding
-    # constraint here; before the catalog default these were None and 0.
-    assert request.prepared_request.compaction_metadata["max_chars"] == 3_968_000
+    # model catalog: gpt-6-sol stops at Copilot's default pricing tier (272k
+    # prompt tokens + the 128k reserve - 8k safety margin, at 4 chars/token).
+    # max_parts stays the binding constraint here; before the catalog default
+    # these were None and 0.
+    assert request.prepared_request.compaction_metadata["max_chars"] == 1_568_000
     assert request.prepared_request.compaction_metadata["reserve_chars"] == 512_000
     assert request.prepared_request.compaction_metadata["compacted_part_count"] == 2
     assert request.prepared_request.compaction_metadata["compacted_message_count"] == 2
@@ -212,7 +213,10 @@ async def test_max_iterations_requests_text_only_summary_on_final_step():
     assert any(event.type == "loop.max_iterations" for event in result.runtime_events)
     request = provider.requests[0]
     assert request.max_iterations == 1
-    assert request.provider_request.tools == []
+    # The tools stay in the prompt (they are part of the cached prefix); the
+    # provider is asked not to call them.
+    assert [tool.name for tool in request.provider_request.tools] == ["again"]
+    assert request.metadata["tool_choice"] == "none"
     assert request.provider_request.messages[-1].role == "assistant"
     assert "CRITICAL - MAXIMUM STEPS REACHED" in request.provider_request.messages[-1].text
     finish = result.runtime_events[-1]

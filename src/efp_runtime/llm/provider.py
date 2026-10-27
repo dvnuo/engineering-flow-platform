@@ -48,6 +48,7 @@ from .openai import (
     provider_request_to_openai_chat,
     provider_request_to_openai_responses,
 )
+from .pricing import register_catalog_pricing
 
 if TYPE_CHECKING:
     from ..loop.provider import ProviderOutput, RuntimeRequest
@@ -180,7 +181,10 @@ class AutoModelResolution:
     expires_at: int | None = None
 
 
-DEFAULT_COPILOT_REASONING_EFFORT = "high"
+# Medium, not high: Copilot bills reasoning tokens as output ($10 per million
+# on GPT-6 Sol) and most chat turns do not need the extra effort. A member or
+# an operator can still pick high per session or per profile.
+DEFAULT_COPILOT_REASONING_EFFORT = "medium"
 # A routed run routes again when its session token is this close to
 # ``expires_at`` (VS Code's five-minute rule; the token lasts 24 h).
 COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS = 300
@@ -650,6 +654,23 @@ class GitHubCopilotHTTPTransport:
 
         self._auto_session_token = token or None
 
+    def set_initiator(self, initiator: str) -> None:
+        """``x-initiator`` for the next chat requests: ``user`` for the first call of a turn, ``agent`` after.
+
+        VS Code marks the request that answers the member's message ``user``
+        and the tool-loop follow-ups ``agent``; legacy request-based plans
+        count premium requests from the ``user`` ones, and token billing
+        ignores the header. Either way the runtime now says what VS Code says.
+        """
+
+        self.initiator = _required_non_empty_string(initiator, "initiator")
+
+    def cached_models_catalog(self) -> Mapping[str, Mapping[str, Any]]:
+        """The ``GET /models`` catalog already fetched this hour, without fetching; empty when none."""
+
+        with self._auto_lock:
+            return dict(self._models_catalog or {})
+
     def auto_route(
         self,
         prompt: str,
@@ -887,11 +908,17 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         metadata: Optional[Mapping[str, Any]] = None,
         reasoning_effort: str = DEFAULT_COPILOT_REASONING_EFFORT,
         adapter: Optional[LLMEventAdapter] = None,
+        replay_reasoning: bool = False,
     ) -> None:
         if endpoint != "responses":
             raise ValueError("GitHub Copilot provider endpoint must be 'responses'")
         canonical_model = canonicalize_copilot_model_id(model)
         canonical_reasoning_effort = validate_copilot_reasoning_effort(reasoning_effort)
+        # Replay the model's reasoning items between tool calls (``include:
+        # reasoning.encrypted_content`` + ``store: false``, the way VS Code
+        # does) so it does not re-reason after every tool result. Off by
+        # default until measured against Copilot's ``/responses``.
+        self.replay_reasoning = bool(replay_reasoning)
         provider_metadata = dict(metadata or {})
         provider_metadata.update(
             {
@@ -923,6 +950,9 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             # Routing is blocking HTTP; keep it off the event loop. build_payload
             # then reuses the decision cached for this run.
             await asyncio.to_thread(self.resolve_auto_model, request)
+        set_initiator = getattr(self.transport, "set_initiator", None)
+        if callable(set_initiator):
+            set_initiator(_copilot_initiator_for(request))
         return await super().invoke(request)
 
     def build_payload(self, request: RuntimeRequest) -> dict[str, Any]:
@@ -943,8 +973,34 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         self.last_payload_model = model
         if self.endpoint == "responses":
             payload["reasoning"] = {"effort": reasoning_effort}
+        # The runner asks for ``tool_choice: none`` on a run's final (summary)
+        # iteration so the tools can stay in the prompt - and in the cache.
+        tool_choice = _requested_tool_choice(request)
+        if tool_choice is not None and payload.get("tools"):
+            payload["tool_choice"] = tool_choice
+        if self.replay_reasoning:
+            payload["include"] = ["reasoning.encrypted_content"]
+            payload["store"] = False
+        self._register_catalog_pricing(model)
         _inject_copilot_noop_tool_fallback(payload, request)
-        return _sanitize_copilot_responses_payload(payload)
+        return _sanitize_copilot_responses_payload(
+            payload,
+            replay_reasoning=self.replay_reasoning,
+        )
+
+    def _register_catalog_pricing(self, model: str) -> None:
+        """Hand the catalog's price row for ``model`` to the credits estimate, when already fetched."""
+
+        cached = getattr(self.transport, "cached_models_catalog", None)
+        if not callable(cached):
+            return
+        try:
+            catalog = cached()
+        except Exception:  # noqa: BLE001 - pricing is an estimate; the static row stands in.
+            return
+        entry = catalog.get(model) if isinstance(catalog, Mapping) else None
+        if isinstance(entry, Mapping):
+            register_catalog_pricing(model, entry)
 
     def resolve_auto_model(
         self,
@@ -1009,6 +1065,8 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             return self._auto_fallback("auto route named no model", tier=tier)
         metadata = getattr(decision, "metadata", None)
         catalog_entry = self._catalog_entry(model)
+        if catalog_entry is not None:
+            register_catalog_pricing(model, catalog_entry)
         refusal = _auto_pick_refusal(model, metadata, catalog_entry)
         if refusal is not None:
             return self._auto_fallback(refusal, tier=tier)
@@ -1617,34 +1675,91 @@ def _inject_copilot_noop_tool_fallback(
     payload["tools"] = [_copilot_noop_tool_payload(payload)]
 
 
-def _sanitize_copilot_responses_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _sanitize_copilot_responses_payload(
+    payload: Mapping[str, Any],
+    *,
+    replay_reasoning: bool = False,
+) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     if "model" in payload:
         sanitized["model"] = payload["model"]
     if "input" in payload:
-        sanitized["input"] = _sanitize_copilot_responses_input(payload.get("input"))
+        sanitized["input"] = _sanitize_copilot_responses_input(
+            payload.get("input"),
+            replay_reasoning=replay_reasoning,
+        )
     tools = _sanitize_copilot_tools(payload.get("tools"))
     if tools:
         sanitized["tools"] = tools
+        tool_choice = _sanitize_copilot_tool_choice(payload.get("tool_choice"))
+        if tool_choice is not None:
+            sanitized["tool_choice"] = tool_choice
     if "stream" in payload:
         sanitized["stream"] = payload["stream"]
     if payload.get("instructions") is not None:
         sanitized["instructions"] = payload["instructions"]
     if payload.get("reasoning") is not None:
         sanitized["reasoning"] = deepcopy(payload["reasoning"])
+    include = payload.get("include")
+    if isinstance(include, list):
+        includes = [str(value) for value in include if isinstance(value, str) and value.strip()]
+        if includes:
+            sanitized["include"] = includes
+    if isinstance(payload.get("store"), bool):
+        sanitized["store"] = payload["store"]
     return sanitized
 
 
-def _sanitize_copilot_responses_input(input_value: Any) -> list[dict[str, Any]]:
+def _sanitize_copilot_tool_choice(value: Any) -> Any:
+    if isinstance(value, str):
+        choice = value.strip().lower()
+        return choice if choice in {"none", "auto", "required"} else None
+    if isinstance(value, Mapping) and value.get("type") == "function" and value.get("name"):
+        return {"type": "function", "name": str(value["name"])}
+    return None
+
+
+def _requested_tool_choice(request: RuntimeRequest) -> Any:
+    value = request.metadata.get("tool_choice")
+    return _sanitize_copilot_tool_choice(value)
+
+
+def _copilot_initiator_for(request: RuntimeRequest) -> str:
+    """``user`` for the request that answers the member's message, ``agent`` for the rest.
+
+    The loop's first iteration answers the member; tool-loop follow-ups, the
+    session-title call and anything that says ``background`` are agent work.
+    """
+
+    metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+    if metadata.get("background") or metadata.get("task_type") == "session_title":
+        return "agent"
+    override = metadata.get("copilot_initiator")
+    if isinstance(override, str) and override.strip().lower() in {"user", "agent"}:
+        return override.strip().lower()
+    return "user" if int(getattr(request, "iteration", 0) or 0) == 1 else "agent"
+
+
+def _sanitize_copilot_responses_input(
+    input_value: Any,
+    *,
+    replay_reasoning: bool = False,
+) -> list[dict[str, Any]]:
     if not isinstance(input_value, list):
         return []
     sanitized: list[dict[str, Any]] = []
     for item in input_value:
-        sanitized.extend(_sanitize_copilot_responses_input_item(item))
+        sanitized.extend(
+            _sanitize_copilot_responses_input_item(item, replay_reasoning=replay_reasoning)
+        )
     return sanitized
 
 
-def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
+def _sanitize_copilot_responses_input_item(
+    item: Any,
+    *,
+    replay_reasoning: bool = False,
+) -> list[dict[str, Any]]:
     if not isinstance(item, Mapping):
         return []
     item_type = item.get("type")
@@ -1673,6 +1788,11 @@ def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
 
     sanitized: list[dict[str, Any]] = []
     buffered_content: list[dict[str, Any]] = []
+    # Reasoning items replayed from the stored message go out as top-level
+    # input items ahead of what the model produced after them (its text or
+    # its function calls); a reasoning item with nothing after it is dropped,
+    # the API rejects a dangling one.
+    pending_reasoning: list[dict[str, Any]] = []
 
     def flush_message() -> None:
         if not buffered_content:
@@ -1680,8 +1800,16 @@ def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
         sanitized.append({"role": role, "content": list(buffered_content)})
         buffered_content.clear()
 
+    def flush_reasoning() -> None:
+        if not pending_reasoning:
+            return
+        flush_message()
+        sanitized.extend(pending_reasoning)
+        pending_reasoning.clear()
+
     for content_item in content:
         if isinstance(content_item, str):
+            flush_reasoning()
             buffered_content.append(
                 {
                     "type": _copilot_text_content_type(role),
@@ -1692,7 +1820,14 @@ def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
         if not isinstance(content_item, Mapping):
             continue
         content_type = content_item.get("type")
+        if content_type == "reasoning":
+            if replay_reasoning and role == "assistant":
+                replay_item = _copilot_reasoning_replay_item(content_item)
+                if replay_item is not None:
+                    pending_reasoning.append(replay_item)
+            continue
         if content_type == "function_call":
+            flush_reasoning()
             flush_message()
             sanitized.append(_sanitize_copilot_function_call_item(content_item))
             continue
@@ -1702,10 +1837,53 @@ def _sanitize_copilot_responses_input_item(item: Any) -> list[dict[str, Any]]:
             continue
         projected = _sanitize_copilot_message_content_item(content_item, role=role)
         if projected is not None:
+            flush_reasoning()
             buffered_content.append(projected)
 
     flush_message()
     return sanitized
+
+
+def _copilot_reasoning_replay_item(content_item: Mapping[str, Any]) -> dict[str, Any] | None:
+    """A stored reasoning part as the Responses ``reasoning`` input item, or None without encrypted content.
+
+    The adapter keeps what the stream returned on the part's metadata
+    (``encrypted_content`` / ``item_id``, mirrored under
+    ``provider_metadata.openai``); the renderer nests the part metadata under
+    ``metadata.part_metadata``.
+    """
+
+    metadata = content_item.get("metadata")
+    candidates: list[Mapping[str, Any]] = []
+    if isinstance(metadata, Mapping):
+        candidates.append(metadata)
+        part_metadata = metadata.get("part_metadata")
+        if isinstance(part_metadata, Mapping):
+            candidates.append(part_metadata)
+            provider_metadata = part_metadata.get("provider_metadata")
+            if isinstance(provider_metadata, Mapping):
+                openai = provider_metadata.get("openai")
+                if isinstance(openai, Mapping):
+                    candidates.append(openai)
+    encrypted = None
+    item_id = None
+    for candidate in candidates:
+        if encrypted is None:
+            value = candidate.get("encrypted_content") or candidate.get("reasoningEncryptedContent")
+            if isinstance(value, str) and value:
+                encrypted = value
+        if item_id is None:
+            value = candidate.get("item_id") or candidate.get("itemId")
+            if isinstance(value, str) and value:
+                item_id = value
+    if not encrypted or not item_id:
+        return None
+    return {
+        "type": "reasoning",
+        "id": item_id,
+        "summary": [],
+        "encrypted_content": encrypted,
+    }
 
 
 def _sanitize_copilot_message_content_item(

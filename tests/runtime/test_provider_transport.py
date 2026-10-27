@@ -232,7 +232,7 @@ async def test_github_copilot_provider_defaults_strict_responses_payload():
     assert payload["model"] == "gpt-6-sol"
     assert "input" in payload
     assert "messages" not in payload
-    assert payload["reasoning"] == {"effort": "high"}
+    assert payload["reasoning"] == {"effort": "medium"}
     assert "metadata" not in payload
     assert "tools" not in payload
     input_item = payload["input"][0]["content"][0]
@@ -1625,9 +1625,9 @@ def test_github_copilot_smoke_dry_run_outputs_payload_without_token():
     assert payload["model"] == "gpt-6-sol"
     assert payload["payload_summary"]["tool_count"] == 0
     assert payload["payload_summary"]["stream"] is False
-    assert payload["payload_summary"]["reasoning"] == {"effort": "high"}
+    assert payload["payload_summary"]["reasoning"] == {"effort": "medium"}
     assert payload["payload"]["model"] == "gpt-6-sol"
-    assert payload["payload"]["reasoning"] == {"effort": "high"}
+    assert payload["payload"]["reasoning"] == {"effort": "medium"}
     assert payload["payload"]["input"][-1]["role"] == "user"
     input_item = payload["payload"]["input"][-1]["content"][0]
     assert input_item == {"type": "input_text", "text": "Say ok"}
@@ -2173,7 +2173,7 @@ def _assert_strict_copilot_responses_payload(payload):
     assert "input" in payload
     assert "messages" not in payload
     assert "metadata" not in payload
-    assert payload["reasoning"] == {"effort": "high"}
+    assert payload["reasoning"] == {"effort": "medium"}
     assert payload["stream"] is False
 
 
