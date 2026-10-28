@@ -33,6 +33,7 @@ from src.efp_runtime.llm.models import cheap_model_for_family, is_auto_model_id
 from src.efp_runtime.llm.request import PreparedProviderRequest, ProviderRequest, RequestMessage, RequestMessagePart
 from src.efp_runtime.loop.provider import RuntimeRequest
 from src.efp_runtime.loop.runner import LoopStatus
+from src.efp_runtime.reply_language import ReplyLanguage
 from src.efp_runtime.session.gateway_facade import get_runtime_session_store
 from src.efp_runtime.session.models import MessageRole
 from src.efp_runtime.session.search import assistant_message_text, is_task_session_id, member_message_text
@@ -56,16 +57,30 @@ TITLE_TIMEOUT_SECONDS = 20.0
 TITLE_REASONING_EFFORT = "low"
 TITLE_TASK_TYPE = "session_title"
 
+# The answer was written under the member's "Reply language" block (strict,
+# or following the member's message), so with that setting the title follows
+# the answer; without it the user's message is the only language signal.
+TITLE_LANGUAGE_RULE = "- The same language as the user's message."
+TITLE_LANGUAGE_RULE_REPLY_LANGUAGE = "- The same language as the assistant's answer."
+
 TITLE_INSTRUCTIONS = (
     "You name chat sessions for a list of past conversations. "
     "Given the first message of a conversation and the assistant's answer, reply with a short title.\n"
     "Rules:\n"
     "- A noun phrase of at most 40 characters (about 20 characters for Chinese, Japanese or Korean).\n"
-    "- The same language as the user's message.\n"
+    f"{TITLE_LANGUAGE_RULE}\n"
     "- Name the topic or task, not the fact that it was asked or answered.\n"
     "- No quotes, no trailing period, no prefix such as 'Title:' or 'Session about'.\n"
     "Reply with the title only."
 )
+
+
+def title_instructions(reply_language: ReplyLanguage | None = None) -> str:
+    """The system instructions for the title call, for the member's reply language if one applies."""
+
+    if reply_language is None:
+        return TITLE_INSTRUCTIONS
+    return TITLE_INSTRUCTIONS.replace(TITLE_LANGUAGE_RULE, TITLE_LANGUAGE_RULE_REPLY_LANGUAGE, 1)
 
 ProviderBuilder = Callable[..., Any]
 
@@ -143,7 +158,13 @@ def _excerpt(text: str) -> str:
     return truncate(collapsed, TITLE_INPUT_MAX_CHARS, "...")
 
 
-def build_title_request(session_id: str, *, user_text: str, assistant_text: str) -> RuntimeRequest:
+def build_title_request(
+    session_id: str,
+    *,
+    user_text: str,
+    assistant_text: str,
+    reply_language: ReplyLanguage | None = None,
+) -> RuntimeRequest:
     """The one-shot provider request: instructions plus the first turn's excerpts."""
 
     prompt = (
@@ -155,7 +176,7 @@ def build_title_request(session_id: str, *, user_text: str, assistant_text: str)
     )
     provider_request = ProviderRequest(
         messages=[
-            RequestMessage(role="system", parts=[RequestMessagePart(type="text", text=TITLE_INSTRUCTIONS)]),
+            RequestMessage(role="system", parts=[RequestMessagePart(type="text", text=title_instructions(reply_language))]),
             RequestMessage(role="user", parts=[RequestMessagePart(type="text", text=prompt)]),
         ],
         metadata={"task_type": TITLE_TASK_TYPE},
@@ -306,6 +327,7 @@ async def generate_session_title(
     timeout: float = TITLE_TIMEOUT_SECONDS,
     agent_id: str | None = None,
     track_usage: bool = True,
+    reply_language: ReplyLanguage | None = None,
 ) -> Optional[str]:
     """Generate and store a title for ``session_id``; the stored name, or None when nothing changed.
 
@@ -313,7 +335,9 @@ async def generate_session_title(
     generated one does and ``force`` is false. A missing session raises
     ``KeyError``; a session without an answered turn, a provider failure and
     a timeout raise ``TitleGenerationError``. With ``agent_id`` the new name is
-    also sent to the Portal, in the background.
+    also sent to the Portal, in the background. ``reply_language`` is the
+    member's resolved reply language when one applies to the session's
+    prompt; the title then follows the answer instead of the question.
     """
 
     store = store or get_runtime_session_store()
@@ -329,7 +353,12 @@ async def generate_session_title(
         raise TitleGenerationError("The session has no answered turn to name yet.", status_code=422)
 
     provider, model = await _build_title_provider(provider_builder, execution_metadata)
-    request = build_title_request(session_id, user_text=user_text, assistant_text=assistant_text)
+    request = build_title_request(
+        session_id,
+        user_text=user_text,
+        assistant_text=assistant_text,
+        reply_language=reply_language,
+    )
     try:
         text, usage = await asyncio.wait_for(_invoke_for_text(provider, request), timeout)
     except asyncio.TimeoutError as exc:
@@ -393,6 +422,7 @@ def schedule_session_title(
     agent_id: str | None = None,
     store: Any = None,
     track_usage: bool = True,
+    reply_language: ReplyLanguage | None = None,
 ) -> Optional[asyncio.Task]:
     """Start the title call in the background after a turn; the task, or None when not due."""
 
@@ -408,6 +438,7 @@ def schedule_session_title(
             agent_id=agent_id,
             store=store,
             track_usage=track_usage,
+            reply_language=reply_language,
         ),
         name=f"session-title:{session_id}",
     )
@@ -424,6 +455,7 @@ async def _generate_in_background(
     agent_id: str | None,
     store: Any,
     track_usage: bool,
+    reply_language: ReplyLanguage | None = None,
 ) -> Optional[str]:
     """The stored title, or None when the session keeps its name; never raises."""
 
@@ -435,6 +467,7 @@ async def _generate_in_background(
             store=store,
             agent_id=agent_id,
             track_usage=track_usage,
+            reply_language=reply_language,
         )
     except TitleGenerationError as exc:
         logger.warning("Session %s keeps its derived name: %s", session_id, exc.message)
@@ -450,6 +483,8 @@ async def _generate_in_background(
 __all__ = [
     "CUSTOM_NAME_KEY",
     "GENERATED_NAME_KEY",
+    "TITLE_LANGUAGE_RULE",
+    "TITLE_LANGUAGE_RULE_REPLY_LANGUAGE",
     "TITLE_REASONING_EFFORT",
     "TitleGenerationError",
     "build_title_request",
@@ -459,5 +494,6 @@ __all__ = [
     "inflight_title_task",
     "schedule_session_title",
     "should_generate_after_turn",
+    "title_instructions",
     "title_model_for_config",
 ]

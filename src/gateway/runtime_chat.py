@@ -40,6 +40,7 @@ from src.efp_runtime.llm.provider import (
 )
 from src.efp_runtime.llm.models import AI_PLATFORM_MODEL_IDS, DEFAULT_AI_PLATFORM_MODEL, canonicalize_copilot_model_id
 from src.efp_runtime.loop.runner import LoopStatus, RuntimeLoopResult
+from src.efp_runtime.reply_language import resolve_reply_language
 from src.efp_runtime.runtime import AgentRuntime, RuntimeConfig
 from src.efp_runtime.session.gateway_facade import (
     get_runtime_session_manager,
@@ -398,6 +399,9 @@ def _schedule_session_title_after_turn(
             execution_metadata=execution_metadata,
             agent_id=agent_id,
             track_usage=track_usage,
+            # The trusted metadata the turn ran with: the same portal_user the
+            # run metadata carried into the "Reply language" prompt block.
+            reply_language=resolve_reply_language(execution_metadata),
         )
     except Exception:
         logger.debug("Session title scheduling failed for %s", session_id, exc_info=True)

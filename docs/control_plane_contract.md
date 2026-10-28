@@ -14,6 +14,12 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
   form of the identity headers. EFP renders it (or, failing that, the header values) into a `Session user:`
   system message with identity rules, so the model treats `jira myself` / `currentUser()` as the shared service
   account and filters "my" requests by the session user explicitly. Untrusted requests cannot set it.
+- The same `portal_user` object may carry `reply_language` (`en`, `zh-Hans`, `zh-Hant-HK`) and
+  `reply_language_strict` (boolean; `true` when the member chose the language explicitly), the Portal's resolved
+  reply language for the member. EFP renders a `Reply language:` system message directly after `Session user:`
+  (omitted when the field is absent or unknown, and for English unless chosen explicitly) and names sessions in
+  the language of the assistant's answer. The Portal sends it on chat, question/permission answers, message edits
+  and `title/generate`; untrusted requests cannot set it.
 - Untrusted requests cannot inject governance metadata.
 
 ## 2) Runtime Internal Endpoints

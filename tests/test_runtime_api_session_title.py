@@ -213,7 +213,25 @@ async def test_generate_endpoint_stores_the_title(store, generation):
     assert kwargs["force"] is True
     assert kwargs["execution_metadata"] == {}
     assert kwargs["agent_id"] == "agent-1"  # the Portal is told from inside the generator, in the background
+    assert kwargs["reply_language"] is None
     assert callable(kwargs["provider_builder"])
+
+
+async def test_generate_endpoint_takes_the_members_reply_language_from_the_portal_only(store, generation):
+    store["s-1"] = _summary()
+    body = {"metadata": {"portal_user": {"id": "77", "reply_language": "zh-Hant-HK", "reply_language_strict": True}}}
+
+    await runtime_api.api_generate_session_title(_Request("s-1", body=body))
+    assert generation.calls[-1][1]["reply_language"] is None
+
+    await runtime_api.api_generate_session_title(_Request("s-1", body=body, headers={"X-Portal-Author-Source": "portal"}))
+    reply_language = generation.calls[-1][1]["reply_language"]
+    assert (reply_language.tag, reply_language.strict) == ("zh-Hant-HK", True)
+
+    # The same selection as the prompt block: English by UI language adds nothing.
+    body = {"metadata": {"portal_user": {"id": "77", "reply_language": "en", "reply_language_strict": False}}}
+    await runtime_api.api_generate_session_title(_Request("s-1", body=body, headers={"X-Portal-Author-Source": "portal"}))
+    assert generation.calls[-1][1]["reply_language"] is None
 
 
 async def test_generate_endpoint_honours_a_runtime_profile_from_the_portal_only(store, generation):

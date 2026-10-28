@@ -11,6 +11,7 @@ import sys
 from typing import Any
 
 from .member_memory import render_note_line
+from .reply_language import render_reply_language_block, resolve_reply_language
 from .session.models import Message, MessagePart, MessageRole
 from .session.search import short_timestamp
 
@@ -123,6 +124,10 @@ class SystemPromptBuilder:
         session_user = self._session_user_message(runtime_metadata)
         if session_user is not None:
             messages.append(session_user)
+
+        reply_language = self._reply_language_message(runtime_metadata)
+        if reply_language is not None:
+            messages.append(reply_language)
 
         connectors = self._connectors_message(runtime_metadata)
         if connectors is not None:
@@ -290,6 +295,37 @@ class SystemPromptBuilder:
             truncated=False,
             original_chars=len(content),
             metadata=source_metadata,
+        )
+        return _system_text_message(source)
+
+    def _reply_language_message(
+        self,
+        metadata: Mapping[str, Any],
+    ) -> Message | None:
+        """Tell the model which language the member wants prose in.
+
+        Portal resolves the member's language preference and sends it as
+        ``portal_user.reply_language`` (``reply_language_strict`` when the
+        member chose it explicitly); without this block the model answers in
+        whatever language the conversation happens to be in. English without
+        an explicit choice adds nothing, so those members' prompts stay
+        byte-identical to what they were before the setting existed.
+        """
+        reply_language = resolve_reply_language(metadata)
+        if reply_language is None:
+            return None
+        content = render_reply_language_block(reply_language)
+        source = SystemPromptSource(
+            path=None,
+            content=content,
+            truncated=False,
+            original_chars=len(content),
+            metadata={
+                "source": "reply_language_context",
+                "kind": "reply_language_context",
+                "reply_language": reply_language.tag,
+                "reply_language_strict": reply_language.strict,
+            },
         )
         return _system_text_message(source)
 
@@ -592,12 +628,14 @@ def resolve_member_id(metadata: Mapping[str, Any] | None) -> str | None:
     """The Portal member id the runtime may keep per-member state for.
 
     Only the header-derived ``portal_user_id`` counts. The structured
-    ``portal_user`` object is also trusted chat metadata, but on the non-chat
-    POSTs (question and permission answers, edit-regenerate) the Portal
-    forwards the browser's body verbatim, so a value in there could name
-    another member. Scoping earlier sessions and keeping notes select whose
-    private state is read and written, so they follow the header alone, the
-    same way ``author_id`` is stamped on member turns.
+    ``portal_user`` object is also trusted chat metadata, and since Portal
+    #493 its proxy fills it in on question and permission answers as it does
+    on chat, but it still travels in the request body: a path the proxy does
+    not enrich (an edit from an older Portal) forwards what the browser sent,
+    so a value in there could name another member. Scoping earlier sessions
+    and keeping notes select whose private state is read and written, so
+    they follow the header alone, the same way ``author_id`` is stamped on
+    member turns.
     """
     if not isinstance(metadata, Mapping):
         return None

@@ -5312,6 +5312,72 @@ async def test_api_edit_message_async_truncates_and_starts_regeneration(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_api_edit_message_async_carries_the_reply_language_into_the_regenerated_prompt(monkeypatch):
+    from src.efp_runtime.system_prompt import SystemPromptBuilder
+    from src.gateway import runtime_chat
+
+    runtime_api = _patch_message_endpoint_common(monkeypatch)
+    calls = {}
+
+    async def _fake_get_history(_session_id):
+        return [
+            {"id": "u1", "role": "user", "content": "old"},
+            {"id": "a1", "role": "assistant", "content": "reply"},
+        ]
+
+    async def _fake_delete_from(session_id, message_id, wait_for_save=False):
+        return 2
+
+    async def _fake_background(**kwargs):
+        calls["background"] = kwargs
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_history", _fake_get_history)
+    monkeypatch.setattr(runtime_api.session_manager, "delete_messages_from", _fake_delete_from)
+    monkeypatch.setattr(runtime_api, "_run_edit_resend_in_background", _fake_background)
+    body = {
+        "content": "edited text",
+        "metadata": {
+            "portal_user": {"id": "77", "username": "alice", "reply_language": "zh-Hans", "reply_language_strict": True},
+        },
+    }
+
+    resp = await runtime_api.api_edit_message_async(_MessageEndpointRequest("s1", "u1", body=body))
+    await asyncio.sleep(0)
+
+    assert resp.status == 202
+    # The regeneration resumes with the edit body's trusted metadata, which
+    # becomes the run metadata the system prompt is rebuilt from.
+    execution_metadata = calls["background"]["execution_metadata"]
+    assert execution_metadata["portal_user"]["reply_language"] == "zh-Hans"
+    run_metadata = runtime_chat._run_metadata(
+        request_path="/api/sessions/messages/edit/async",
+        request_id="req-edit-2",
+        user_name=None,
+        portal_user_id="77",
+        portal_user_name="alice",
+        attached_images=None,
+        attachments=None,
+        transient_model_message=None,
+        reasoning_replay=None,
+        execution_metadata=execution_metadata,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        model="gpt-6-luna",
+    )
+    prompt = SystemPromptBuilder(workspace_root=None).build_messages(run_metadata)
+    assert [message.metadata["source"] for message in prompt] == ["session_user_context", "reply_language_context"]
+    assert prompt[1].parts[0].text.startswith("Reply language: Simplified Chinese.\n")
+    assert "Always reply in Simplified Chinese" in prompt[1].parts[0].text
+
+    # An edit body from outside the Portal never reaches the prompt.
+    await runtime_api.api_edit_message_async(
+        _MessageEndpointRequest("s1", "u1", body=body, headers={"X-Portal-Author-Source": "browser"})
+    )
+    await asyncio.sleep(0)
+    assert calls["background"]["execution_metadata"] == {}
+
+
+@pytest.mark.asyncio
 async def test_api_edit_message_async_404_when_message_missing(monkeypatch):
     runtime_api = _patch_message_endpoint_common(monkeypatch)
 
