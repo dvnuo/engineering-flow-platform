@@ -308,14 +308,24 @@ def _extract_trusted_client_request_id(request: web.Request, data: Dict[str, Any
     return extract_trusted_client_request_id(_is_trusted_portal_request(request), data)
 
 
-def _extract_trusted_model_override(request: web.Request, data: Dict[str, Any]) -> Optional[str]:
+def _extract_trusted_model_override(
+    request: web.Request,
+    data: Dict[str, Any],
+    keys: Tuple[str, ...] = ("model_override",),
+) -> Optional[str]:
+    """The request-scoped model, honoured only for requests that came through the Portal.
+
+    ``keys`` are tried in order and the first non-blank string wins. Chat
+    posts carry the member's choice as ``model_override``; a message edit also
+    reads ``model`` (see ``api_edit_message_async``).
+    """
     if not _is_trusted_portal_request(request):
         return None
-    value = data.get("model_override")
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    return value or None
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _resolve_runtime_session_id(data: Dict[str, Any]) -> str:
@@ -4889,7 +4899,10 @@ async def api_edit_message_async(request: web.Request) -> web.Response:
 
     Truncates the conversation from the edited message (inclusive), then starts
     a detached regeneration whose result the chat UI observes by polling the
-    session. Matches the opencode adapter contract.
+    session. Matches the opencode adapter contract: ``model`` is the model the
+    chat UI's composer shows, ``model_override`` (what the chat proxy fills in
+    from the session's saved run settings) stands in when ``model`` is absent,
+    and both count only behind the Portal's trusted header.
     """
     message_id = request.match_info.get('message_id')
     try:
@@ -4928,7 +4941,11 @@ async def api_edit_message_async(request: web.Request) -> web.Response:
 
         client_request_id = _extract_trusted_client_request_id(request, data)
         request_id = client_request_id or str(data.get('request_id') or '').strip() or f"edit-{uuid.uuid4()}"
-        model_override = _extract_trusted_model_override(request, data)
+        # chat_ui.js sends the composer's ad-hoc choice as ``model`` (the
+        # opencode adapter reads it the same way); ``model_override`` is what
+        # the chat proxy fills in from the session's saved run settings, so an
+        # explicit ``model`` wins over it.
+        model_override = _extract_trusted_model_override(request, data, keys=("model", "model_override"))
         model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
