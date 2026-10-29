@@ -15,10 +15,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 REPLY_LANGUAGE_TEXTS_PATH = Path(__file__).resolve().parent / "prompts" / "reply_language.json"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -78,8 +81,17 @@ def render_reply_language_block(reply_language: ReplyLanguage) -> str:
 
 @lru_cache(maxsize=1)
 def _texts() -> dict[str, Any]:
-    with REPLY_LANGUAGE_TEXTS_PATH.open(encoding="utf-8") as handle:
-        return json.load(handle)
+    # A missing or unreadable texts file must not fail the run: with no
+    # languages known, no tag resolves and every run keeps today's prompt.
+    try:
+        with REPLY_LANGUAGE_TEXTS_PATH.open(encoding="utf-8") as handle:
+            texts = json.load(handle)
+        if not isinstance(texts, dict) or not isinstance(texts.get("languages"), dict):
+            raise ValueError("no languages table")
+        return texts
+    except (OSError, ValueError) as exc:
+        logger.warning("reply language texts unavailable at %s; no Reply language block: %s", REPLY_LANGUAGE_TEXTS_PATH, exc)
+        return {"languages": {}}
 
 
 __all__ = [

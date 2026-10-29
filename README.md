@@ -141,10 +141,13 @@ as `metadata.portal_user.reply_language` (`en`, `zh-Hans` or `zh-Hant-HK`)
 and `metadata.portal_user.reply_language_strict` (`true` when the member chose
 the language explicitly, `false` when the Portal resolved it from the UI
 language or the browser). The runtime renders a `Reply language:` system
-block directly after `Session user:` that names the language, says whether
-the assistant may follow the language of the member's latest message instead
-(strict says no), and what stays in English: code, identifiers, error text,
-and everything written into a repository or an external system. An absent or
+block directly after `Session user:` that names the language, says what may
+change it, and what stays in English: code, identifiers, error text, and
+everything written into a repository or an external system. A resolved
+language is only a default: the member's own messages, requests and saved
+notes about the reply language win over it, while messages the Portal sends
+on the member's behalf, such as "Continue", do not. An explicit choice holds
+until the member asks to switch in the chat, and wins over saved notes. An absent or
 unknown value, and English unless chosen explicitly, adds nothing, so those
 prompts are unchanged. The block is rebuilt from trusted metadata on every
 request (chat, question and permission answers, message edits), and a

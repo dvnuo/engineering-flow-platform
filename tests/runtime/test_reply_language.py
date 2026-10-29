@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import efp_runtime.reply_language as reply_language_module
+
 from efp_runtime.reply_language import (
     REPLY_LANGUAGE_TEXTS_PATH,
     ReplyLanguage,
@@ -31,15 +33,18 @@ LANGUAGE_SENTENCES = {
     ),
 }
 SOFT_SENTENCE = (
-    "This is the member's default; when the user's latest message is clearly written in another language, "
-    "reply in that language instead."
+    "This is the member's default, taken from their Portal language rather than chosen for replies. "
+    "When the member clearly writes to you in another language, or asks for a particular reply language "
+    "in this chat or in a saved note, reply in that language instead. "
+    "Messages the Portal sends on the member's behalf, such as \"Continue\", a request to fix a diagram "
+    "or a notice from a panel, do not change the language."
 )
 FIXED_LINES = [
     "Keep code, commands, file paths, identifiers, error text, product names and established technical terms "
     "exactly as they are, usually in English.",
     "Everything you write into a repository or an external system stays in English unless the user asks otherwise: "
     "code and comments, commit messages, pull request titles and descriptions, documentation, tickets and wiki pages.",
-    "This setting comes from the member's Portal language preference and wins over earlier notes about reply language.",
+    "This setting comes from the member's Portal language preference.",
 ]
 
 
@@ -135,7 +140,8 @@ def test_render_reply_language_block_text(tag, strict):
     display_name = DISPLAY_NAMES[tag]
     mode_sentence = (
         f"Always reply in {display_name}, even when the user writes in another language, "
-        "unless the user explicitly asks you to switch."
+        "unless the user explicitly asks you to switch. "
+        "The member chose this in the Portal, so it wins over earlier notes about reply language."
         if strict
         else SOFT_SENTENCE
     )
@@ -156,14 +162,24 @@ def test_render_reply_language_block_verbatim_for_the_simplified_chinese_default
     assert render_reply_language_block(ReplyLanguage("zh-Hans", False)) == (
         "Reply language: Simplified Chinese.\n"
         "Write your prose in Simplified Chinese as used in mainland China (\u7b80\u4f53\u4e2d\u6587).\n"
-        "This is the member's default; when the user's latest message is clearly written in another language, "
-        "reply in that language instead.\n"
+        f"{SOFT_SENTENCE}\n"
         "Keep code, commands, file paths, identifiers, error text, product names and established technical terms "
         "exactly as they are, usually in English.\n"
         "Everything you write into a repository or an external system stays in English unless the user asks otherwise: "
         "code and comments, commit messages, pull request titles and descriptions, documentation, tickets and wiki pages.\n"
-        "This setting comes from the member's Portal language preference and wins over earlier notes about reply language."
+        "This setting comes from the member's Portal language preference."
     )
+
+
+def test_only_an_explicit_choice_wins_over_a_saved_note():
+    soft = render_reply_language_block(ReplyLanguage("zh-Hans", False))
+    strict = render_reply_language_block(ReplyLanguage("zh-Hans", True))
+    # A language derived from the browser or the UI is only a default: the
+    # member's own request or saved note still decides.
+    assert "wins over earlier notes" not in soft
+    assert "or asks for a particular reply language in this chat or in a saved note" in soft
+    assert 'such as "Continue"' in soft
+    assert "wins over earlier notes about reply language" in strict
 
 
 def test_display_name_comes_from_the_texts_file():
@@ -179,3 +195,13 @@ def test_texts_file_ships_inside_the_package_and_stays_ascii():
     raw = REPLY_LANGUAGE_TEXTS_PATH.read_bytes()
     assert raw.isascii()
     assert b"\\u7b80\\u4f53\\u4e2d\\u6587" in raw
+
+
+def test_a_missing_texts_file_keeps_todays_prompt(monkeypatch, tmp_path):
+    monkeypatch.setattr(reply_language_module, "REPLY_LANGUAGE_TEXTS_PATH", tmp_path / "missing.json")
+    reply_language_module._texts.cache_clear()
+    try:
+        metadata = {"portal_user": {"id": "77", "reply_language": "zh-Hans", "reply_language_strict": True}}
+        assert reply_language_module.resolve_reply_language(metadata) is None
+    finally:
+        reply_language_module._texts.cache_clear()

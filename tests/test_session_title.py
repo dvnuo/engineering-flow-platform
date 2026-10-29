@@ -36,7 +36,7 @@ from src.gateway.session_title import (
 )
 
 
-USER_TEXT ="Our release pipeline fails at the deploy stage with a permissions error, how do I fix it?"
+USER_TEXT = "Our release pipeline fails at the deploy stage with a permissions error, how do I fix it?"
 ASSISTANT_TEXT = "The deploy stage runs as the jenkins user; grant it the deploy role or run the stage with the service account."
 
 
