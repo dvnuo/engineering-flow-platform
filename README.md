@@ -134,6 +134,28 @@ the second; the loop prefixes it to the request copy of the member's message
 only, so transcripts and the cached system prefix are untouched. Set
 `include_environment_context: false` in the runtime config to drop the block.
 
+### Reply Language
+
+The Portal sends the member's language preference with every proxied request
+as `metadata.portal_user.reply_language` (`en`, `zh-Hans` or `zh-Hant-HK`)
+and `metadata.portal_user.reply_language_strict` (`true` when the member chose
+the language explicitly, `false` when the Portal resolved it from the UI
+language or the browser). The runtime renders a `Reply language:` system
+block directly after `Session user:` that names the language, says what may
+change it, and what stays in English: code, identifiers, error text, and
+everything written into a repository or an external system. A resolved
+language is only a default: the member's own messages, requests and saved
+notes about the reply language win over it, while messages the Portal sends
+on the member's behalf, such as "Continue", do not. An explicit choice holds
+until the member asks to switch in the chat, and wins over saved notes. An absent or
+unknown value, and English unless chosen explicitly, adds nothing, so those
+prompts are unchanged. The block is rebuilt from trusted metadata on every
+request (chat, question and permission answers, message edits), and a
+generated session title then follows the language of the assistant's answer
+rather than the user's message. The texts live in
+`src/efp_runtime/prompts/reply_language.json`, shared with the opencode
+runtime.
+
 ### Integrations
 
 #### Jira (Multiple Instances)
@@ -290,6 +312,7 @@ and are not loaded through `EFP_TOOLS_DIR` or `EFP_EXTERNAL_TOOLS_*`.
   - `X-Portal-Author-Source: portal`.
 - `portal_user_id` / `portal_user_name` are trusted identity headers only (`X-Portal-User-Id`, `X-Portal-User-Name`).
 - Trusted chat `metadata.portal_user` (`{id, username, display_name}`) is the structured form of the same identity. The runtime renders it as a `Session user:` system message so the model can resolve "my"/"me" against the signed-in Portal member instead of the shared CLI service account; the header fields are the fallback when Portal sends no structured object.
+- The same object may carry `reply_language` (`en`, `zh-Hans`, `zh-Hant-HK`) and `reply_language_strict` (boolean), the Portal's resolved reply language for the member; the runtime renders them as the `Reply language:` system message after `Session user:` (see "Reply Language" above) and names sessions in the answer's language. Absent or unknown values change nothing.
 
 For complete control-plane contract details, see `docs/control_plane_contract.md`.
 

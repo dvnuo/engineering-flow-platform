@@ -769,6 +769,179 @@ async def test_runtime_places_session_user_after_environment_and_before_instruct
     assert request.metadata["environment_context_count"] == 1
 
 
+def _portal_user(**fields):
+    return {"portal_user": {"id": "77", "username": "runtime-user", "display_name": "Runtime User", **fields}}
+
+
+def test_reply_language_block_follows_the_session_user_block(tmp_path: Path):
+    builder = SystemPromptBuilder(workspace_root=tmp_path)
+
+    messages = builder.build_messages(
+        {
+            **_portal_user(reply_language="zh-Hant-HK", reply_language_strict=True),
+            "connectors": {"local_bridge": {"enabled": True}},
+        }
+    )
+
+    assert [message.metadata["source"] for message in messages] == [
+        "session_user_context",
+        "reply_language_context",
+        "connectors_context",
+    ]
+    block = messages[1]
+    text = _session_message_text(block)
+    assert text.startswith("Reply language: Traditional Chinese (Hong Kong).\n")
+    assert "\u9999\u6e2f\u7528\u8a9e" in text
+    assert "Always reply in Traditional Chinese (Hong Kong), even when the user writes in another language" in text
+    assert "wins over earlier notes about reply language" in text
+    assert block.role is MessageRole.SYSTEM
+    assert block.metadata["context_type"] == "system_prompt"
+    assert block.metadata["kind"] == "reply_language_context"
+    assert block.metadata["reply_language"] == "zh-Hant-HK"
+    assert block.metadata["reply_language_strict"] is True
+    assert block.metadata["truncated"] is False
+    assert block.parts[0].metadata == block.metadata
+
+
+@pytest.mark.parametrize(
+    ("fields", "display_name", "strict"),
+    [
+        ({"reply_language": "en", "reply_language_strict": True}, "English", True),
+        ({"reply_language": "zh-Hans"}, "Simplified Chinese", False),
+        ({"reply_language": "zh-Hans", "reply_language_strict": False}, "Simplified Chinese", False),
+        ({"reply_language": "zh-Hans", "reply_language_strict": True}, "Simplified Chinese", True),
+        ({"reply_language": "zh-Hant-HK"}, "Traditional Chinese (Hong Kong)", False),
+        ({"reply_language": "zh-Hant-HK", "reply_language_strict": False}, "Traditional Chinese (Hong Kong)", False),
+        ({"reply_language": "zh-Hant-HK", "reply_language_strict": True}, "Traditional Chinese (Hong Kong)", True),
+    ],
+    ids=["en strict", "zh-Hans", "zh-Hans soft", "zh-Hans strict", "zh-Hant-HK", "zh-Hant-HK soft", "zh-Hant-HK strict"],
+)
+def test_reply_language_block_rows_that_apply(tmp_path: Path, fields, display_name, strict):
+    messages = SystemPromptBuilder(workspace_root=tmp_path).build_messages(_portal_user(**fields))
+
+    assert [message.metadata["source"] for message in messages] == ["session_user_context", "reply_language_context"]
+    text = _session_message_text(messages[1])
+    assert text.startswith(f"Reply language: {display_name}.\n")
+    if strict:
+        assert f"Always reply in {display_name}," in text
+        assert "This is the member's default" not in text
+    else:
+        assert "This is the member's default" in text
+        assert "Always reply in" not in text
+    assert messages[1].metadata["reply_language"] == fields["reply_language"]
+    assert messages[1].metadata["reply_language_strict"] is strict
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"reply_language_strict": True},
+        {"reply_language": "en"},
+        {"reply_language": "en", "reply_language_strict": False},
+        {"reply_language": "en", "reply_language_strict": "true"},
+        {"reply_language": "fr", "reply_language_strict": True},
+        {"reply_language": None},
+        {"reply_language": 42, "reply_language_strict": True},
+    ],
+    ids=["absent", "strict without a tag", "en", "en soft", "en with a string flag", "unknown", "null", "not a string"],
+)
+def test_reply_language_block_is_omitted_when_nothing_applies(tmp_path: Path, fields):
+    builder = SystemPromptBuilder(workspace_root=tmp_path)
+
+    messages = builder.build_messages(_portal_user(**fields))
+    baseline = builder.build_messages(_portal_user())
+
+    # Byte-identical to the prompt without the fields: the session user block alone.
+    assert [message.metadata["source"] for message in messages] == ["session_user_context"]
+    assert [_session_message_text(message) for message in messages] == [
+        _session_message_text(message) for message in baseline
+    ]
+    assert [message.metadata for message in messages] == [message.metadata for message in baseline]
+
+
+def test_reply_language_block_needs_the_structured_portal_user(tmp_path: Path):
+    builder = SystemPromptBuilder(workspace_root=tmp_path)
+
+    # portal_user missing: a top-level field is not the Portal's object.
+    assert builder.build_messages({"reply_language": "zh-Hans", "reply_language_strict": True}) == []
+    assert [
+        _session_message_text(message)
+        for message in builder.build_messages({"portal_user_id": "12", "reply_language": "zh-Hans"})
+    ] == [_session_message_text(message) for message in builder.build_messages({"portal_user_id": "12"})]
+    # portal_user not a dict.
+    assert builder.build_messages({"portal_user": "zh-Hans"}) == []
+    assert builder.build_messages({"portal_user": ["zh-Hans"]}) == []
+    messages = builder.build_messages({"portal_user_id": "12", "portal_user": "zh-Hans"})
+    assert [message.metadata["source"] for message in messages] == ["session_user_context"]
+
+
+def test_reply_language_block_does_not_depend_on_the_identity_fields(tmp_path: Path):
+    messages = SystemPromptBuilder(workspace_root=tmp_path).build_messages(
+        {"portal_user": {"reply_language": "zh-Hans", "reply_language_strict": True}}
+    )
+
+    assert [message.metadata["source"] for message in messages] == ["reply_language_context"]
+    assert _session_message_text(messages[0]).startswith("Reply language: Simplified Chinese.\n")
+
+
+@pytest.mark.asyncio
+async def test_runtime_places_reply_language_right_after_session_user_and_before_instructions(
+    tmp_path: Path,
+):
+    (tmp_path / "AGENTS.md").write_text("Project instructions.", encoding="utf-8")
+    provider = ScriptedLLMProvider([{"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(
+            workspace_root=tmp_path,
+            max_iterations=2,
+            include_environment_context=True,
+        ),
+    )
+
+    result = await runtime.run(
+        "Which tickets are assigned to me?",
+        session_id="session-reply-language",
+        metadata=_portal_user(reply_language="zh-Hans"),
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    request = provider.requests[0]
+    messages = request.provider_request.messages
+    environment_index = _message_index(messages, "Environment:")
+    session_user_index = _message_index(messages, "Session user:")
+    reply_language_index = _message_index(messages, "Reply language:")
+    instruction_index = _message_index(messages, "Instructions from:")
+    assert environment_index < session_user_index < reply_language_index < instruction_index
+    assert reply_language_index == session_user_index + 1
+    reply_language_message = messages[reply_language_index]
+    assert reply_language_message.role == "system"
+    assert reply_language_message.metadata["message_metadata"]["kind"] == "reply_language_context"
+    assert "This is the member's default" in reply_language_message.text
+    assert request.metadata["system_prompt_context_count"] == 3
+    assert request.metadata["environment_context_count"] == 1
+    # The block is transient like the other system context: never stored.
+    assert all(message.role is not MessageRole.SYSTEM for message in runtime.store.read_history("session-reply-language"))
+
+
+@pytest.mark.asyncio
+async def test_runtime_prompt_is_unchanged_for_english_without_an_explicit_choice(tmp_path: Path):
+    provider = ScriptedLLMProvider([{"content": "Done."}, {"content": "Done."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=2, include_environment_context=False),
+    )
+
+    await runtime.run("Hello.", session_id="session-en-default", metadata=_portal_user(reply_language="en"))
+    await runtime.run("Hello.", session_id="session-no-language", metadata=_portal_user())
+
+    with_field = [message.text for message in provider.requests[0].provider_request.messages]
+    without_field = [message.text for message in provider.requests[1].provider_request.messages]
+    assert with_field == without_field
+    assert not any("Reply language:" in text for text in with_field)
+
+
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 

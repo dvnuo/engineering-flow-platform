@@ -4664,6 +4664,7 @@ async def api_generate_session_title(request: web.Request) -> web.Response:
         except ValueError as exc:
             return web.json_response({'error': str(exc)}, status=400)
 
+        from src.efp_runtime.reply_language import resolve_reply_language
         from src.gateway.session_title import TitleGenerationError, generate_session_title, inflight_title_task
         from src.gateway.runtime_chat import _build_llm_provider
 
@@ -4682,6 +4683,10 @@ async def api_generate_session_title(request: web.Request) -> web.Response:
                     execution_metadata=execution_metadata,
                     force=force,
                     agent_id=runtime_agent_id,
+                    # The Portal enriches this body with the same portal_user
+                    # object as a chat turn, so the title follows the answer
+                    # when the member has a reply language.
+                    reply_language=resolve_reply_language(execution_metadata),
                 )
                 generated = title is not None
         except KeyError:

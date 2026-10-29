@@ -10,6 +10,7 @@ import pytest
 
 from src.efp_runtime.llm.events import LLMEvent, LLMEventType
 from src.efp_runtime.llm.models import cheap_model_for_family
+from src.efp_runtime.reply_language import ReplyLanguage
 from src.efp_runtime.session.file_store import FileSessionStore, build_session_summary
 from src.efp_runtime.session.gateway_facade import (
     RuntimeSessionManager,
@@ -31,6 +32,7 @@ from src.gateway.session_title import (
     inflight_title_task,
     schedule_session_title,
     should_generate_after_turn,
+    title_instructions,
 )
 
 
@@ -174,6 +176,34 @@ def test_build_title_request_cuts_long_inputs():
     assert "u" * (session_title.TITLE_INPUT_MAX_CHARS + 1) not in prompt
 
 
+USER_LANGUAGE_RULE = "- The same language as the user's message."
+ANSWER_LANGUAGE_RULE = "- The same language as the assistant's answer."
+
+
+def test_title_instructions_follow_the_users_message_by_default():
+    instructions = title_instructions()
+
+    assert instructions == title_instructions(None) == session_title.TITLE_INSTRUCTIONS
+    assert f"{USER_LANGUAGE_RULE}\n" in instructions
+    assert ANSWER_LANGUAGE_RULE not in instructions
+    assert build_title_request("s-1", user_text=USER_TEXT, assistant_text=ASSISTANT_TEXT).provider_request.messages[0].text == instructions
+
+
+@pytest.mark.parametrize("reply_language", [ReplyLanguage("zh-Hans", False), ReplyLanguage("zh-Hant-HK", True), ReplyLanguage("en", True)])
+def test_title_instructions_follow_the_answer_when_a_reply_language_applies(reply_language):
+    # The answer was written under the "Reply language" block (strict, or
+    # following the member's message), so it is the language signal.
+    instructions = title_instructions(reply_language)
+
+    assert f"{ANSWER_LANGUAGE_RULE}\n" in instructions
+    assert USER_LANGUAGE_RULE not in instructions
+    # Only that one line changes.
+    assert instructions.replace(ANSWER_LANGUAGE_RULE, USER_LANGUAGE_RULE, 1) == session_title.TITLE_INSTRUCTIONS
+    request = build_title_request("s-1", user_text=USER_TEXT, assistant_text=ASSISTANT_TEXT, reply_language=reply_language)
+    assert request.provider_request.messages[0].text == instructions
+    assert USER_TEXT in request.provider_request.messages[1].text
+
+
 def test_first_turn_texts_prefers_the_members_own_words():
     messages = legacy_messages_to_runtime(
         "s-1",
@@ -312,6 +342,24 @@ async def test_generate_session_title_can_skip_usage_tracking(tmp_path, _no_usag
     store = _store_with_turn(tmp_path)
     await generate_session_title("s-1", provider_builder=_builder({"content": "T"}), store=store, track_usage=False)
     assert _no_usage_files == []
+
+
+def _system_text(build):
+    return build.providers[0].requests[0].provider_request.messages[0].text
+
+
+async def test_generate_session_title_asks_for_the_answers_language_with_a_reply_language(tmp_path):
+    store = _store_with_turn(tmp_path)
+    build = _builder({"content": "T"})
+
+    await generate_session_title("s-1", provider_builder=build, store=store, reply_language=ReplyLanguage("zh-Hans", True))
+    assert ANSWER_LANGUAGE_RULE in _system_text(build)
+    assert USER_LANGUAGE_RULE not in _system_text(build)
+
+    plain = _builder({"content": "T"})
+    await generate_session_title("s-1", provider_builder=plain, store=store, force=True)
+    assert USER_LANGUAGE_RULE in _system_text(plain)
+    assert ANSWER_LANGUAGE_RULE not in _system_text(plain)
 
 
 async def test_generate_session_title_books_usage_even_when_the_reply_is_unusable(tmp_path, _no_usage_files):
@@ -551,6 +599,20 @@ async def test_schedule_session_title_passes_usage_tracking_through(tmp_path, _n
     assert _no_usage_files == []
 
 
+async def test_schedule_session_title_passes_the_reply_language_through(tmp_path):
+    store = _store_with_turn(tmp_path)
+    build = _builder({"content": "T"})
+    task = schedule_session_title(
+        "s-1",
+        result=_completed_result(),
+        provider_builder=build,
+        store=store,
+        reply_language=ReplyLanguage("zh-Hant-HK", False),
+    )
+    assert await task == "T"
+    assert ANSWER_LANGUAGE_RULE in _system_text(build)
+
+
 # --- only the Portal's chat opts in -------------------------------------------
 
 
@@ -566,6 +628,28 @@ def test_after_turn_hook_never_raises(monkeypatch):
 
     monkeypatch.setattr(runtime_chat, "schedule_session_title", explode)
     runtime_chat._schedule_session_title_after_turn("s-1", _completed_result(), execution_metadata=None, agent_id=None, track_usage=True)
+
+
+def test_after_turn_hook_resolves_the_reply_language_from_the_turns_trusted_metadata(monkeypatch):
+    captured = []
+    monkeypatch.setattr(runtime_chat, "schedule_session_title", lambda session_id, **kwargs: captured.append(kwargs))
+
+    def after_turn(execution_metadata):
+        runtime_chat._schedule_session_title_after_turn(
+            "s-1", _completed_result(), execution_metadata=execution_metadata, agent_id="agent-1", track_usage=True
+        )
+        return captured[-1]
+
+    strict = after_turn({"portal_user": {"id": "77", "reply_language": "zh-Hans", "reply_language_strict": True}})
+    assert strict["reply_language"] == ReplyLanguage("zh-Hans", True)
+    assert strict["execution_metadata"] == {"portal_user": {"id": "77", "reply_language": "zh-Hans", "reply_language_strict": True}}
+    assert strict["agent_id"] == "agent-1"
+    assert after_turn({"portal_user": {"id": "77", "reply_language": "zh-Hant-HK"}})["reply_language"] == ReplyLanguage("zh-Hant-HK", False)
+    # English without an explicit choice, an unknown tag, no portal_user: the instructions stay as they were.
+    assert after_turn({"portal_user": {"id": "77", "reply_language": "en"}})["reply_language"] is None
+    assert after_turn({"portal_user": {"id": "77", "reply_language": "fr", "reply_language_strict": True}})["reply_language"] is None
+    assert after_turn({"portal_user_id": "77"})["reply_language"] is None
+    assert after_turn(None)["reply_language"] is None
 
 
 # --- the name everywhere ------------------------------------------------------

@@ -118,7 +118,17 @@ is only a build input for PATH binaries.
    turn with the current Hong Kong time to the second (`current_time` in the
    run metadata); the loop prefixes it to the request copy of the member's
    message only, so the stored transcript and the cached system prefix stay
-   untouched.
+   untouched. The same layer renders the per-member blocks from trusted
+   Portal metadata: `Session user:` (identity and the rules for "my"/"me")
+   and, directly after it, `Reply language:` from
+   `metadata.portal_user.reply_language` / `reply_language_strict` (texts in
+   `src/efp_runtime/prompts/reply_language.json`; omitted when the field is
+   absent or unknown, and for English unless the member chose it explicitly,
+   so those prompts stay as they were). Both are rebuilt from the request's
+   metadata on every run, including the resumes after a question or
+   permission answer and after a message edit. When the reply-language block
+   applies, the generated session title follows the language of the
+   assistant's answer instead of the user's message.
 2. Workspace instruction files and configured instruction text.
 3. Available-skill and active-skill context.
 4. Persisted session history.
