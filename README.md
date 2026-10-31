@@ -139,8 +139,8 @@ only, so transcripts and the cached system prefix are untouched. Set
 The Portal sends the member's language preference with every proxied request
 as `metadata.portal_user.reply_language` (`en`, `zh-Hans` or `zh-Hant-HK`)
 and `metadata.portal_user.reply_language_strict` (`true` when the member chose
-the language explicitly, `false` when the Portal resolved it from the UI
-language or the browser). The runtime renders a `Reply language:` system
+the Portal's language, the account menu's only language setting, `false` when
+it follows the browser). The runtime renders a `Reply language:` system
 block directly after `Session user:` that names the language, says what may
 change it, and what stays in English: code, identifiers, error text, and
 everything written into a repository or an external system. A resolved
