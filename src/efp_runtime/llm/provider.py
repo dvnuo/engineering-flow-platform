@@ -49,6 +49,7 @@ from .openai import (
     provider_request_to_openai_responses,
 )
 from .pricing import register_catalog_pricing
+from .quota_headers import record_quota_headers
 
 if TYPE_CHECKING:
     from ..loop.provider import ProviderOutput, RuntimeRequest
@@ -410,6 +411,7 @@ class GitHubCopilotHTTPTransport:
         )
         try:
             with self._open(request, timeout=self.timeout) as response:
+                self._observe_response_headers(response)
                 yield from parse_sse_json_events(_iter_response_lines(response))
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
@@ -422,6 +424,7 @@ class GitHubCopilotHTTPTransport:
                 )
                 try:
                     with self._open(request, timeout=self.timeout) as response:
+                        self._observe_response_headers(response)
                         yield from parse_sse_json_events(_iter_response_lines(response))
                         return
                 except urllib_error.HTTPError as retry_exc:
@@ -490,6 +493,7 @@ class GitHubCopilotHTTPTransport:
         )
         try:
             with self._open(request, timeout=self.timeout) as response:
+                self._observe_response_headers(response)
                 raw_body = response.read()
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
@@ -502,6 +506,7 @@ class GitHubCopilotHTTPTransport:
                 )
                 try:
                     with self._open(request, timeout=self.timeout) as response:
+                        self._observe_response_headers(response)
                         raw_body = response.read()
                 except urllib_error.HTTPError as retry_exc:
                     exc = retry_exc
@@ -664,6 +669,17 @@ class GitHubCopilotHTTPTransport:
         """
 
         self.initiator = _required_non_empty_string(initiator, "initiator")
+
+    def _observe_response_headers(self, response: Any) -> None:
+        """Keep the quota snapshot Copilot stamps on every answer (never fails a request)."""
+
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return
+        try:
+            record_quota_headers(self._source_credential or self._token, headers)
+        except Exception:  # noqa: BLE001 - the snapshot is a courtesy.
+            logger.debug("Copilot quota header not recorded", exc_info=True)
 
     def cached_models_catalog(self) -> Mapping[str, Mapping[str, Any]]:
         """The ``GET /models`` catalog already fetched this hour, without fetching; empty when none."""

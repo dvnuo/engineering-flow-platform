@@ -43,7 +43,7 @@ from ..llm.models import (
     is_catalog_model_context_profile,
     resolve_model_context_profile,
 )
-from ..llm.pricing import estimate_credits_for_usage
+from ..llm.pricing import USD_PER_CREDIT, estimate_credits_for_usage
 from ..permissions import ASK, DENY, PermissionMetadata
 from ..session.models import Message, MessagePart, MessagePartType, MessageRole, Session
 from ..session.processor import RuntimeSession, SessionProcessor
@@ -138,6 +138,11 @@ class RuntimeLoopResult:
     pending_question_request: Optional[dict[str, Any]] = None
     usage: dict[str, Any] = field(default_factory=dict)
     structured_output: Optional[dict[str, Any]] = None
+    # The stored user turn this run answered: the message appended for
+    # ``user_text`` / ``user_parts``, else the active user message of a
+    # resumed run. The gateway reports it so the Portal can attach the
+    # per-message actions (edit, retry) without reloading the transcript.
+    user_message_id: Optional[str] = None
 
 
 ProviderCallable = Callable[[RuntimeRequest], ProviderResult]
@@ -492,6 +497,9 @@ class RuntimeLoopRunner:
                 metadata=_user_message_metadata(run_metadata),
                 status="complete",
             )
+        user_message_id: str | None = (
+            appended_user_message.message_id if appended_user_message is not None else None
+        )
 
         runtime_events: List[RuntimeEvent] = _RuntimeEventLog(self.event_bus)
         final_assistant_message: Optional[Message] = None
@@ -629,6 +637,8 @@ class RuntimeLoopRunner:
                     else None
                 ),
             )
+            if user_message_id is None and active_user_message is not None:
+                user_message_id = active_user_message.message_id
             compaction_outcome = await self._maybe_compact_stored_session_history(
                 session_id=resolved_session_id,
                 history=history,
@@ -1101,6 +1111,7 @@ class RuntimeLoopRunner:
             pending_question_request=pending_question_request,
             usage=run_usage_payload if self.track_usage else {},
             structured_output=structured_output,
+            user_message_id=user_message_id,
         )
 
     def _context_budget(self, metadata: Mapping[str, Any] | None = None) -> ContextBudget:
@@ -1856,9 +1867,30 @@ class RuntimeLoopRunner:
         if not _is_copilot_provider_id(self.default_provider_id):
             return summary
         model = self._billing_model(run_metadata)
-        if not model:
+        estimate = estimate_credits_for_usage(model, summary.to_dict()) if model else None
+        if summary.actual_credits is not None:
+            # Copilot said what the step cost (``usage.copilot_usage.total_nano_aiu``,
+            # the number VS Code shows per request). That is the bill, so it
+            # replaces the estimate everywhere the estimate is read: the
+            # credits guard, the cost line, the usage record. The estimate
+            # rides along for comparison.
+            pricing: dict[str, Any] = dict(
+                estimate.payload()
+                if estimate is not None
+                else {
+                    "model": model,
+                    "tier": None,
+                    "threshold_tokens": None,
+                    "unit": "credits",
+                    "usd_per_credit": USD_PER_CREDIT,
+                }
+            )
+            if estimate is not None:
+                pricing["estimated_credits"] = estimate.credits
+            pricing["source"] = "copilot_usage"
+            summary.estimated_credits = summary.actual_credits
+            summary.metadata["pricing"] = pricing
             return summary
-        estimate = estimate_credits_for_usage(model, summary.to_dict())
         if estimate is None:
             return summary
         summary.estimated_credits = estimate.credits
@@ -3068,6 +3100,13 @@ def _run_usage_payload(
         round(run_usage.cached_input_tokens / run_usage.input_tokens, 4)
         if run_usage.input_tokens > 0
         else None
+    )
+    # Where the credits figure comes from: Copilot's own charge
+    # (``copilot_usage`` on the usage object) or the published price table.
+    payload["credits_source"] = (
+        "copilot_usage"
+        if run_usage.actual_credits is not None
+        else ("estimate" if run_usage.estimated_credits is not None else None)
     )
     pricing = _pricing_payload(run_usage)
     if pricing is not None:

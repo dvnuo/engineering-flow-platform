@@ -52,6 +52,46 @@ COPILOT_AUTO_TIERS = {
 }
 AUTO_MODEL_IDS = tuple(COPILOT_AUTO_TIERS)
 
+# Models Copilot's own catalog (``GET /models``) lists for the runtime's
+# credential and the gateway admitted (chat models served on /responses with
+# tool calls, policy enabled, shown in the picker). They widen the allowlist
+# above at run time, so a model GitHub adds reaches the Portal picker without
+# a code change; the static tuple stays the offline default. See
+# src/gateway/copilot_models.py.
+_CATALOG_MODEL_IDS: set[str] = set()
+
+
+def register_catalog_model_ids(model_ids: Any) -> tuple[str, ...]:
+    """Admit catalog model ids; returns the ids registered (normalized)."""
+
+    registered: list[str] = []
+    for value in model_ids or ():
+        model_id = _normalize_model_identifier(value)
+        if model_id and model_id not in COPILOT_AUTO_TIERS:
+            _CATALOG_MODEL_IDS.add(model_id)
+            registered.append(model_id)
+    return tuple(registered)
+
+
+def catalog_model_ids() -> tuple[str, ...]:
+    """The catalog ids admitted so far, sorted."""
+
+    return tuple(sorted(_CATALOG_MODEL_IDS))
+
+
+def clear_catalog_model_ids() -> None:
+    _CATALOG_MODEL_IDS.clear()
+
+
+def is_supported_copilot_model_id(value: Any) -> bool:
+    """Whether ``value`` names a model the runtime will send to Copilot (static list, catalog or auto)."""
+
+    try:
+        canonicalize_copilot_model_id(value)
+    except ValueError:
+        return False
+    return True
+
 # AI Platform (enterprise gateway) models. Must stay aligned with the Portal
 # catalog (app/contracts/llm_catalog.py AI_PLATFORM_MODELS): the runtime coerces
 # any model outside this tuple back to DEFAULT_AI_PLATFORM_MODEL, so a model the
@@ -157,7 +197,7 @@ def canonicalize_copilot_model_id(value: Any) -> str:
     model_id = _normalize_model_identifier(text)
     if model_id in COPILOT_AUTO_TIERS:
         return model_id
-    if model_id not in SUPPORTED_COPILOT_MODEL_IDS:
+    if model_id not in SUPPORTED_COPILOT_MODEL_IDS and model_id not in _CATALOG_MODEL_IDS:
         raise ValueError(_unsupported_model_message(value))
     return model_id
 
@@ -591,7 +631,9 @@ __all__ = [
     "auto_tier_for",
     "billing_default_prompt_cap_tokens",
     "canonicalize_copilot_model_id",
+    "catalog_model_ids",
     "cheap_model_for_family",
+    "clear_catalog_model_ids",
     "clear_learned_model_context_profiles",
     "context_safety_margin_tokens",
     "copilot_model_context_profile",
@@ -599,7 +641,9 @@ __all__ = [
     "default_tier_window_tokens",
     "is_auto_model_id",
     "is_catalog_model_context_profile",
+    "is_supported_copilot_model_id",
     "model_prompt_budget_tokens",
+    "register_catalog_model_ids",
     "register_model_context_profile",
     "resolve_model_context_profile",
     "preferred_model_context_profile",

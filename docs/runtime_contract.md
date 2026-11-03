@@ -23,6 +23,7 @@ Native runtime must support:
 - `POST /api/tasks/{task_id}/cancel`
 - `GET /api/usage`
 - `GET /api/copilot/quota`
+- `GET /api/models`
 - `GET /api/sessions`
 - `POST /api/files/upload` and `POST /api/files/parse` (chatbox attachments;
   `GET /api/files/{file_id}/preview`, `GET /api/files/{file_id}` and
@@ -47,8 +48,19 @@ prompt exceeds 272k input tokens) and reports them wherever it reports usage.
   `estimated_credits` (float or null), `iterations` (model calls in the run),
   `cache_hit_ratio` (cached / input, or null) and `pricing`
   `{model, tier: "default"|"long_context", threshold_tokens, source:
-  "static"|"catalog", tiers_seen}`. The `usage.updated` event adds
-  `estimated_credits` and `pricing` per step.
+  "static"|"catalog"|"copilot_usage", tiers_seen}`. The `usage.updated` event
+  adds `estimated_credits` and `pricing` per step. When Copilot's usage object
+  carries its own charge (`copilot_usage.total_nano_aiu`, 1 credit =
+  10^9 nano-AIU, the number VS Code shows per request) that charge *is*
+  `estimated_credits` for the step and the run: `actual_credits` carries it
+  separately, `pricing.source` is `copilot_usage` (the table's figure rides
+  along as `pricing.estimated_credits`) and the run's usage says
+  `credits_source: "copilot_usage"` (else `"estimate"`).
+- The chat response (and the stream's `final` event) carries
+  `user_message_id`, the id of the stored user turn the run answered, and
+  `assistant_message_id`, so the Portal can attach its per-message actions
+  (edit, retry, delete from here) to the bubble it drew when the member sent
+  the message, without reloading the transcript.
 - `context_usage` (event and `GET /api/sessions/{id}/context-usage`) adds
   `budget_tokens` (the prompt budget the runner enforces, estimated tokens),
   `billing_threshold_tokens`, `billing_tier`, `calibration`
@@ -67,11 +79,40 @@ prompt exceeds 272k input tokens) and reports them wherever it reports usage.
 - `GET /api/usage` totals add `total_cached_input_tokens`,
   `total_reasoning_tokens`, `total_estimated_credits` (also per model).
 - `GET /api/copilot/quota` answers 200 with `{available, source, fetched_at,
-  plan, reset_date, snapshots: [{id, label, entitlement, remaining, used,
-  percent_remaining, unlimited}], credits, error}` from GitHub's undocumented
+  plan, reset_date, reset_date_utc, token_based_billing, snapshots: [{id,
+  label, entitlement, remaining, used, credits_used, percent_remaining,
+  unlimited, has_quota, token_based_billing, reset_at, overage_count,
+  overage_permitted}], credits, live, error}` from GitHub's undocumented
   `copilot_internal/user` endpoint for the runtime's GitHub token, cached 60 s
   (`?refresh=1` bypasses); `available: false` with `error` when it cannot be
-  asked.
+  asked. Under usage-based billing (`token_based_billing: true`, every plan
+  since 2026-06-01) the `premium_interactions` snapshot counts AI credits and
+  is projected as `credits` `{id, label: "AI credits", included, used,
+  remaining, percent_remaining, unlimited, pooled, has_quota, exhausted,
+  overage_count, overage_permitted, reset_at}`: a per-seat allotment has
+  `included` / `remaining`; a pooled organization allotment is `unlimited`
+  per user (`included` and `remaining` null), `used` is `credits_used` and
+  `exhausted` means `has_quota: false`, the pool is spent. `live` is the quota
+  snapshot header of the latest chat answer (`{id, entitlement, unlimited,
+  percent_remaining, overage_count, overage_permitted, reset_date,
+  observed_at}` or null), fresher than the endpoint's cached answer.
+- `GET /api/models` answers 200 with `{available, source: "catalog"|"static",
+  fetched_at, provider, default_model, auto: [{id, label, tier}], models:
+  [{id, name, vendor, version, preview, selectable, reasons, picker_enabled,
+  policy, category, limits: {context_window_tokens, prompt_tokens,
+  output_tokens}, supports: {tool_calls, vision, parallel_tool_calls,
+  streaming, structured_outputs, reasoning_efforts}, endpoints, pricing:
+  {default|long_context: {prompt_cap_tokens, input, output, cached_input,
+  cache_write} (credits per million tokens)}, billing_threshold_tokens}],
+  selectable: [ids], error}`. `source: "catalog"` is Copilot's own `GET
+  /models` for the runtime's credential (what VS Code's picker shows: the
+  organization's model policy applied), cached for an hour (`?refresh=1`
+  bypasses); a model is `selectable` when it is a chat model served on
+  `/responses` with tool calls, policy enabled and shown in the picker, and
+  selectable ids are accepted as `requested_model` / `model_override` next to
+  the static list (their limits and prices feed the budget and the credits
+  estimate). `source: "static"` is the hand-maintained list, returned without
+  a credential or when the catalog cannot be fetched (`error` says why).
 
 ## Runtime Profile Boot Contract
 

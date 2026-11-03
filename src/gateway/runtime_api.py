@@ -4194,6 +4194,25 @@ def _record_chat_usage(
         logger.warning("Usage record failed for session %s", session_id, exc_info=True)
 
 
+async def api_models(request: web.Request) -> web.Response:
+    """The Copilot models this runtime's credential can use (GET /api/models), cached.
+
+    From Copilot's own catalog (``GET /models``) when it answers, else the
+    hand-maintained list; ``?refresh=1`` bypasses the cache. See
+    ``src/gateway/copilot_models.py`` for the fields.
+    """
+
+    from src.gateway.copilot_models import copilot_models_for_runtime, static_models_payload
+
+    refresh = str(request.query.get("refresh") or "").strip().lower() in {"1", "true", "yes"}
+    try:
+        payload = await asyncio.to_thread(copilot_models_for_runtime, force=refresh)
+    except Exception as exc:  # noqa: BLE001 - the catalog is informational; the static list stands in.
+        logger.warning("Copilot models lookup failed: %s", sanitize_exception_message(exc))
+        payload = static_models_payload(error="models lookup failed")
+    return web.json_response(payload)
+
+
 async def api_copilot_quota(request: web.Request) -> web.Response:
     """The member's Copilot plan quota (GET /api/copilot/quota), best effort and cached.
 
@@ -5343,6 +5362,7 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_get('/api/copilot/quota', api_copilot_quota)
+    app.router.add_get('/api/models', api_models)
     app.router.add_get('/api/sessions/{session_id}/pending-input', api_session_pending_input)
     app.router.add_post('/api/sessions/{session_id}/question/respond', api_session_question_respond)
     app.router.add_post('/api/sessions/{session_id}/permission/respond', api_session_permission_respond)
@@ -5371,6 +5391,8 @@ def setup_runtime_api_routes(app: web.Application):
     logger.info("  POST /api/sessions/{id}/rename - Rename existing session")
     logger.info("  DELETE /api/sessions/{id} - Delete existing session")
     logger.info("  GET  /api/usage   - Get usage stats")
+    logger.info("  GET  /api/models  - Copilot models for this credential (catalog, else the static list)")
+    logger.info("  GET  /api/copilot/quota - The member's Copilot AI-credit balance")
     logger.info("  GET  /api/skills  - Get available skills")
     logger.info("  POST /api/files/upload - Upload chat attachment (one-shot)")
     logger.info("  POST /api/files/parse - Parse chat attachment into session file context")

@@ -95,8 +95,11 @@ Copilot transport base URL; otherwise EFP uses the exchanged token `proxy-ep`
 when present.
 
 Supported GitHub Copilot models are `gpt-6-sol` (default), `gpt-6.1-sol`,
-`gpt-6-astra`, and `gpt-6-luna`. The GPT-5.6 line is no longer offered on
-Copilot (AI Platform still serves it).
+`gpt-6-astra`, and `gpt-6-luna`, plus whatever Copilot's own catalog lists for
+the credential and the runtime can drive: `GET /api/models` serves that
+catalog (chat models on `/responses` with tool calls, policy enabled) and its
+models are accepted as `requested_model` next to the list above. The GPT-5.6
+line is no longer offered on Copilot (AI Platform still serves it).
 
 `model: "auto"` hands the choice to Copilot's auto mode, the way VS Code's
 Auto picker works: each user turn posts the prompt and a tier to Copilot's

@@ -260,3 +260,24 @@ print(json.dumps([name for name in blocked if name in sys.modules]))
     source = (ROOT / "src/efp_runtime/usage.py").read_text(encoding="utf-8")
     assert "from src.efp_runtime" not in source
     assert "import src.efp_runtime" not in source
+
+
+def test_copilot_usage_nano_aiu_becomes_actual_credits():
+    from efp_runtime.usage import merge_usage
+
+    summary = normalize_usage(
+        {"input_tokens": 10, "output_tokens": 5, "copilot_usage": {"total_nano_aiu": 1_250_000_000}}
+    )
+    assert summary.actual_credits == 1.25
+    assert summary.to_dict()["actual_credits"] == 1.25
+    # The raw block rides along in metadata; nothing else about it is known.
+    assert summary.metadata["copilot_usage"] == {"total_nano_aiu": 1_250_000_000}
+    assert normalize_usage({"input_tokens": 1}).actual_credits is None
+    assert normalize_usage({"input_tokens": 1, "copilot_usage": {"total_nano_aiu": -5}}).actual_credits is None
+    assert normalize_usage({"input_tokens": 1, "actual_credits": "0.5"}).actual_credits == 0.5
+
+    merged = merge_usage(
+        [summary, normalize_usage({"input_tokens": 1, "copilot_usage": {"total_nano_aiu": 750_000_000}})]
+    )
+    assert merged.actual_credits == 2.0
+    assert merge_usage([normalize_usage({"input_tokens": 1})]).actual_credits is None

@@ -20,6 +20,10 @@ class UsageSummary:
     # GitHub AI credits (1 credit = $0.01) estimated from the published Copilot
     # prices (see ``llm/pricing.py``); None when the model has no price row.
     estimated_credits: Optional[float] = None
+    # What Copilot itself charged for the step, when its usage object carries
+    # ``copilot_usage.total_nano_aiu`` (1 credit = 10^9 nano-AIU); None when
+    # the provider reports no charge.
+    actual_credits: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -32,6 +36,9 @@ class UsageSummary:
         self.estimated_credits = (
             None if self.estimated_credits is None else float(self.estimated_credits)
         )
+        self.actual_credits = (
+            None if self.actual_credits is None else float(self.actual_credits)
+        )
         self.metadata = dict(self.metadata)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -43,6 +50,7 @@ class UsageSummary:
             "total_tokens": self.total_tokens,
             "cost_usd": self.cost_usd,
             "estimated_credits": self.estimated_credits,
+            "actual_credits": self.actual_credits,
             "metadata": dict(self.metadata),
         }
 
@@ -108,8 +116,30 @@ def normalize_usage(raw: Mapping[str, Any]) -> UsageSummary:
         total_tokens=total_tokens,
         cost_usd=_optional_float(raw.get("cost_usd")),
         estimated_credits=_optional_float(raw.get("estimated_credits")),
+        actual_credits=_actual_credits(raw),
         metadata=metadata,
     )
+
+
+NANO_AIU_PER_CREDIT = 1_000_000_000
+
+
+def _actual_credits(raw: Mapping[str, Any]) -> Optional[float]:
+    """Credits Copilot charged for the step, from ``copilot_usage.total_nano_aiu``.
+
+    GitHub's gateway stamps the charge on the usage object in nano-AIU
+    (``1 credit = 1_000_000_000 nano-AIU``), the number VS Code shows per
+    request. An explicit ``actual_credits`` (a merged summary) is honoured too.
+    """
+
+    explicit = _optional_float(raw.get("actual_credits"))
+    if explicit is not None:
+        return explicit
+    copilot_usage = _mapping(raw.get("copilot_usage"))
+    nano = _optional_float(copilot_usage.get("total_nano_aiu"))
+    if nano is None or nano < 0:
+        return None
+    return round(nano / NANO_AIU_PER_CREDIT, 6)
 
 
 def merge_usage(summaries: Iterable[UsageInput]) -> UsageSummary:
@@ -120,6 +150,8 @@ def merge_usage(summaries: Iterable[UsageInput]) -> UsageSummary:
     has_cost = False
     credits = 0.0
     has_credits = False
+    actual = 0.0
+    has_actual = False
     metadata: Dict[str, Any] = {}
     for item in summaries:
         summary = item if isinstance(item, UsageSummary) else normalize_usage(item)
@@ -134,9 +166,13 @@ def merge_usage(summaries: Iterable[UsageInput]) -> UsageSummary:
         if summary.estimated_credits is not None:
             credits += float(summary.estimated_credits)
             has_credits = True
+        if summary.actual_credits is not None:
+            actual += float(summary.actual_credits)
+            has_actual = True
         metadata.update(summary.metadata)
     merged.cost_usd = cost_usd if has_cost else None
     merged.estimated_credits = round(credits, 4) if has_credits else None
+    merged.actual_credits = round(actual, 6) if has_actual else None
     merged.metadata = metadata
     return merged
 
@@ -211,6 +247,7 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 
 
 _KNOWN_USAGE_FIELDS = {
+    "actual_credits",
     "cost_usd",
     "estimated_credits",
     "input_tokens",

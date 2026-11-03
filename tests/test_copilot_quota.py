@@ -196,3 +196,133 @@ def test_runtime_lookup_without_a_credential_is_unavailable(monkeypatch):
 
     assert result["available"] is False
     assert "no Copilot credential" in result["error"]
+
+
+# What ``copilot_internal/user`` answered on 2026-11-02 for an individual plan
+# after Copilot's move to usage-based billing: the premium snapshot counts AI
+# credits (1500 = the plan's $15), every snapshot says token_based_billing.
+TOKEN_BILLING_PAYLOAD = {
+    "copilot_plan": "individual",
+    "quota_reset_date": "2026-12-01",
+    "quota_reset_date_utc": "2026-12-01T00:00:00Z",
+    "token_based_billing": True,
+    "quota_snapshots": {
+        "chat": {
+            "credits_used": 0, "entitlement": 0, "has_quota": True, "overage_count": 0,
+            "overage_entitlement": 0, "overage_permitted": False, "percent_remaining": 100,
+            "quota_id": "chat", "quota_remaining": 0, "quota_reset_at": 0, "remaining": 0,
+            "token_based_billing": True, "unlimited": True,
+        },
+        "completions": {
+            "credits_used": 0, "entitlement": 0, "has_quota": True, "percent_remaining": 100,
+            "quota_id": "completions", "quota_remaining": 0, "remaining": 0,
+            "token_based_billing": True, "unlimited": True,
+        },
+        "premium_interactions": {
+            "credits_used": 320.5, "entitlement": 1500, "has_quota": True, "overage_count": 0,
+            "overage_entitlement": 0, "overage_permitted": False, "percent_remaining": 78.63,
+            "quota_id": "premium_interactions", "quota_remaining": 1179.5, "quota_reset_at": 0,
+            "remaining": 1179.5, "token_based_billing": True, "unlimited": False,
+        },
+    },
+}
+
+# A Business seat whose organization pools the allotment, as VS Code reads it:
+# unlimited per user, credits_used the only moving number, has_quota false
+# once the pool is spent.
+POOLED_PAYLOAD = {
+    "copilot_plan": "business",
+    "quota_reset_date": "2026-12-01",
+    "token_based_billing": True,
+    "quota_snapshots": {
+        "premium_interactions": {
+            "credits_used": 412.25, "entitlement": 0, "has_quota": True, "overage_count": 0,
+            "overage_permitted": False, "percent_remaining": 100, "quota_id": "premium_interactions",
+            "quota_remaining": 0, "quota_reset_at": 1764547200, "remaining": 0,
+            "token_based_billing": True, "unlimited": True,
+        },
+    },
+}
+
+
+def test_token_based_billing_reads_the_premium_snapshot_as_credits():
+    parsed = copilot_quota.parse_copilot_quota(TOKEN_BILLING_PAYLOAD, fetched_at="t")
+
+    assert parsed["available"] is True
+    assert parsed["token_based_billing"] is True
+    assert parsed["plan"] == "individual"
+    assert parsed["reset_date"] == "2026-12-01"
+    assert parsed["reset_date_utc"] == "2026-12-01T00:00:00Z"
+    by_id = {snapshot["id"]: snapshot for snapshot in parsed["snapshots"]}
+    premium = by_id["premium_interactions"]
+    assert premium["label"] == "AI credits"
+    assert premium["entitlement"] == 1500
+    assert premium["remaining"] == 1179.5
+    assert premium["used"] == 320.5
+    assert premium["credits_used"] == 320.5
+    assert premium["percent_remaining"] == 78.63
+    assert premium["has_quota"] is True
+    assert premium["token_based_billing"] is True
+    assert premium["reset_at"] is None
+    assert by_id["chat"]["unlimited"] is True
+    assert by_id["chat"]["used"] == 0
+
+    credits = parsed["credits"]
+    assert credits["id"] == "premium_interactions"
+    assert credits["label"] == "AI credits"
+    assert credits["included"] == 1500
+    assert credits["used"] == 320.5
+    assert credits["remaining"] == 1179.5
+    assert credits["percent_remaining"] == 78.63
+    assert credits["pooled"] is False
+    assert credits["unlimited"] is False
+    assert credits["exhausted"] is False
+    assert credits["overage_permitted"] is False
+
+
+def test_a_pooled_allotment_shows_credits_used_and_exhaustion():
+    parsed = copilot_quota.parse_copilot_quota(POOLED_PAYLOAD, fetched_at="t")
+    credits = parsed["credits"]
+    assert credits["id"] == "premium_interactions"
+    assert credits["pooled"] is True
+    assert credits["unlimited"] is True
+    assert credits["included"] is None
+    assert credits["remaining"] is None
+    assert credits["percent_remaining"] is None
+    assert credits["used"] == 412.25
+    assert credits["has_quota"] is True
+    assert credits["exhausted"] is False
+    assert credits["reset_at"] == 1764547200
+
+    spent = json.loads(json.dumps(POOLED_PAYLOAD))
+    spent["quota_snapshots"]["premium_interactions"]["has_quota"] = False
+    spent["quota_snapshots"]["premium_interactions"]["overage_permitted"] = True
+    exhausted = copilot_quota.parse_copilot_quota(spent, fetched_at="t")["credits"]
+    assert exhausted["exhausted"] is True
+    assert exhausted["has_quota"] is False
+    assert exhausted["overage_permitted"] is True
+
+
+def test_without_token_billing_the_premium_snapshot_stays_premium_requests():
+    parsed = copilot_quota.parse_copilot_quota(PAYLOAD, fetched_at="t")
+    assert parsed["token_based_billing"] is None
+    premium = next(snapshot for snapshot in parsed["snapshots"] if snapshot["id"] == "premium_interactions")
+    assert premium["label"] == "Premium requests"
+    assert premium["credits_used"] is None
+    # Legacy request-based plans have no credits block unless a snapshot names them.
+    legacy = copilot_quota.parse_copilot_quota(
+        {"copilot_plan": "pro", "quota_snapshots": {"premium_interactions": {"entitlement": 300, "remaining": 100}}},
+        fetched_at="t",
+    )
+    assert legacy["credits"] is None
+
+
+def test_the_snapshot_flag_counts_when_the_top_level_one_is_missing():
+    payload = json.loads(json.dumps(TOKEN_BILLING_PAYLOAD))
+    del payload["token_based_billing"]
+    parsed = copilot_quota.parse_copilot_quota(payload, fetched_at="t")
+    assert parsed["token_based_billing"] is True
+    assert parsed["credits"]["label"] == "AI credits"
+    unavailable = copilot_quota.parse_copilot_quota("nope", fetched_at="t")
+    assert unavailable["token_based_billing"] is None
+    assert unavailable["reset_date_utc"] is None
