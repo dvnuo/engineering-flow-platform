@@ -706,12 +706,29 @@ def _resolve_model(model: str | None = None) -> str:
     try:
         return canonicalize_copilot_model_id(text or DEFAULT_LLM_MODEL)
     except ValueError as exc:
+        # Not on the hand-maintained list: Copilot's own catalog may still
+        # serve it (a model GitHub added since the list was written).
+        admitted = _admit_model_from_copilot_catalog(text)
+        if admitted:
+            return admitted
         raise RuntimeChatError(
             str(exc),
             status_code=400,
             error_type="invalid_model",
             details={"provider": "github-copilot"},
         ) from exc
+
+
+def _admit_model_from_copilot_catalog(text: str) -> str | None:
+    """The canonical id when Copilot's catalog lists ``text`` as a model this runtime can drive."""
+
+    try:
+        from src.gateway.copilot_models import admit_model_from_catalog
+
+        return admit_model_from_catalog(text)
+    except Exception as exc:  # noqa: BLE001 - the catalog only widens the allowlist.
+        logger.debug("Copilot catalog admission skipped for %s: %s", text, exc)
+        return None
 
 
 def _llm_proxy_setting(endpoint: str | None) -> str:
@@ -1231,7 +1248,27 @@ def _result_payload(
     if result.structured_output is not None:
         payload["structured_output"] = result.structured_output
     payload.update(_model_attribution_from_result(result, model))
+    payload.update(_message_ids_from_result(result))
     return payload
+
+
+def _message_ids_from_result(result: RuntimeLoopResult) -> dict[str, str]:
+    """``user_message_id`` / ``assistant_message_id`` of the stored turn, when known.
+
+    The Portal draws its per-message actions (edit, retry, delete from here)
+    off these ids; without them the optimistic bubble stays anonymous until
+    the transcript is reloaded.
+    """
+
+    ids: dict[str, str] = {}
+    user_message_id = getattr(result, "user_message_id", None)
+    if isinstance(user_message_id, str) and user_message_id:
+        ids["user_message_id"] = user_message_id
+    message = result.final_assistant_message
+    assistant_message_id = getattr(message, "message_id", None) if message is not None else None
+    if isinstance(assistant_message_id, str) and assistant_message_id:
+        ids["assistant_message_id"] = assistant_message_id
+    return ids
 
 
 def _model_attribution_from_result(result: RuntimeLoopResult, model: str) -> dict[str, str]:

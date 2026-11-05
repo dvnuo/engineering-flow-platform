@@ -95,8 +95,11 @@ Copilot transport base URL; otherwise EFP uses the exchanged token `proxy-ep`
 when present.
 
 Supported GitHub Copilot models are `gpt-6-sol` (default), `gpt-6.1-sol`,
-`gpt-6-astra`, and `gpt-6-luna`. The GPT-5.6 line is no longer offered on
-Copilot (AI Platform still serves it).
+`gpt-6-astra`, and `gpt-6-luna`, plus whatever Copilot's own catalog lists for
+the credential and the runtime can drive: `GET /api/models` serves that
+catalog (chat models on `/responses` with tool calls, policy enabled) and its
+models are accepted as `requested_model` next to the list above. The GPT-5.6
+line is no longer offered on Copilot (AI Platform still serves it).
 
 `model: "auto"` hands the choice to Copilot's auto mode, the way VS Code's
 Auto picker works: each user turn posts the prompt and a tier to Copilot's
@@ -111,6 +114,12 @@ metadata. If the route fails or the pick cannot be driven, the run falls
 back to `gpt-6-sol` without the session and `usage.updated` events report
 `resolved_model_fallback`; `resolved_model` always names the model that
 actually answered and `auto_tier` the tier that was asked for.
+
+A model named outright (the profile's `model`, or the Portal's per-run
+override) follows its own `GET /models` row the same way: the configured
+`reasoning_effort` is clamped to the efforts the row lists and the row's
+limits set the context budget; without a catalog row the configured values
+go as is and Copilot has the final word.
 
 ### Control-Plane Runtime Settings
 

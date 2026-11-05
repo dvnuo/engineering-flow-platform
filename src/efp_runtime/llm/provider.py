@@ -49,6 +49,7 @@ from .openai import (
     provider_request_to_openai_responses,
 )
 from .pricing import register_catalog_pricing
+from .quota_headers import credential_key, record_quota_headers
 
 if TYPE_CHECKING:
     from ..loop.provider import ProviderOutput, RuntimeRequest
@@ -284,6 +285,19 @@ def _open_request(
     return opener.open(request, timeout=timeout)
 
 
+# Copilot's model catalog (``GET /models``) per credential and API base,
+# shared by every transport built for that credential: the gateway builds one
+# transport per chat request, so a per-instance cache would fetch the catalog
+# once per run. Entries: {"catalog", "at", "failed_at"} on the monotonic clock.
+_MODELS_CATALOG_LOCK = threading.Lock()
+_MODELS_CATALOG_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def clear_models_catalog_cache() -> None:
+    with _MODELS_CATALOG_LOCK:
+        _MODELS_CATALOG_CACHE.clear()
+
+
 class GitHubCopilotHTTPTransport:
     """Standard-library HTTP JSON transport for GitHub Copilot Responses."""
 
@@ -342,9 +356,6 @@ class GitHubCopilotHTTPTransport:
         self._source_credential: str | None = None
         self._refresh_lock = threading.Lock()
         self._token = credential
-        self._models_catalog: dict[str, Mapping[str, Any]] | None = None
-        self._models_catalog_at = 0.0
-        self._models_catalog_failed_at: float | None = None
         self._auto_session_token: str | None = None
         self._auto_lock = threading.Lock()
         self.base_url = _normalize_base_url(self._explicit_base_url)
@@ -410,6 +421,7 @@ class GitHubCopilotHTTPTransport:
         )
         try:
             with self._open(request, timeout=self.timeout) as response:
+                self._observe_response_headers(response)
                 yield from parse_sse_json_events(_iter_response_lines(response))
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
@@ -422,6 +434,7 @@ class GitHubCopilotHTTPTransport:
                 )
                 try:
                     with self._open(request, timeout=self.timeout) as response:
+                        self._observe_response_headers(response)
                         yield from parse_sse_json_events(_iter_response_lines(response))
                         return
                 except urllib_error.HTTPError as retry_exc:
@@ -490,6 +503,7 @@ class GitHubCopilotHTTPTransport:
         )
         try:
             with self._open(request, timeout=self.timeout) as response:
+                self._observe_response_headers(response)
                 raw_body = response.read()
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
@@ -502,6 +516,7 @@ class GitHubCopilotHTTPTransport:
                 )
                 try:
                     with self._open(request, timeout=self.timeout) as response:
+                        self._observe_response_headers(response)
                         raw_body = response.read()
                 except urllib_error.HTTPError as retry_exc:
                     exc = retry_exc
@@ -665,11 +680,28 @@ class GitHubCopilotHTTPTransport:
 
         self.initiator = _required_non_empty_string(initiator, "initiator")
 
-    def cached_models_catalog(self) -> Mapping[str, Mapping[str, Any]]:
-        """The ``GET /models`` catalog already fetched this hour, without fetching; empty when none."""
+    def _observe_response_headers(self, response: Any) -> None:
+        """Keep the quota snapshot Copilot stamps on every answer (never fails a request)."""
 
-        with self._auto_lock:
-            return dict(self._models_catalog or {})
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return
+        try:
+            record_quota_headers(self._source_credential or self._token, headers)
+        except Exception:  # noqa: BLE001 - the snapshot is a courtesy.
+            logger.debug("Copilot quota header not recorded", exc_info=True)
+
+    def _models_cache_key(self) -> str:
+        digest = credential_key(self._source_credential or self._token) or "anonymous"
+        return "{0}|{1}".format(digest, self.base_url)
+
+    def cached_models_catalog(self) -> Mapping[str, Mapping[str, Any]]:
+        """The ``GET /models`` catalog already fetched for this credential, without fetching; empty when none."""
+
+        with _MODELS_CATALOG_LOCK:
+            entry = _MODELS_CATALOG_CACHE.get(self._models_cache_key())
+            catalog = entry.get("catalog") if entry else None
+        return dict(catalog or {})
 
     def auto_route(
         self,
@@ -708,47 +740,51 @@ class GitHubCopilotHTTPTransport:
         return _parse_auto_decision(raw_body, tier=tier)
 
     def models_catalog(self, *, force: bool = False) -> Mapping[str, Mapping[str, Any]]:
-        """Copilot's model catalog (``GET /models``) by model id, cached for an hour.
+        """Copilot's model catalog (``GET /models``) by model id, cached for an hour per credential.
 
         A failed fetch is remembered for a few minutes and yields what was
         cached before (or nothing), so a gateway hiccup costs one warning
         rather than a round trip per run; callers treat a missing entry as
-        "no catalog data".
+        "no catalog data". The cache is shared by every transport built for
+        the credential (see ``_MODELS_CATALOG_CACHE``); the fetch itself runs
+        outside the lock, so one slow answer does not hold up other lookups.
         """
 
-        with self._auto_lock:
-            now = time.monotonic()
-            cached = self._models_catalog
-            if (
-                not force
-                and cached is not None
-                and now - self._models_catalog_at < COPILOT_MODELS_CATALOG_TTL_SECONDS
-            ):
-                return cached
-            failed_at = self._models_catalog_failed_at
-            if (
-                not force
-                and failed_at is not None
-                and now - failed_at < COPILOT_MODELS_CATALOG_RETRY_SECONDS
-            ):
-                return cached or {}
-            try:
-                raw_body = self._capi_request(
-                    "GET",
-                    self.MODELS_PATH,
-                    body=None,
-                    timeout=self._auto_route_timeout(),
-                    label="GitHub Copilot models request",
-                )
-                catalog = _parse_models_catalog(raw_body)
-            except ProviderAutoSessionError as exc:
-                self._models_catalog_failed_at = now
-                logger.warning("GitHub Copilot models catalog unavailable: %s", exc)
-                return cached or {}
-            self._models_catalog = catalog
-            self._models_catalog_at = now
-            self._models_catalog_failed_at = None
-            return catalog
+        key = self._models_cache_key()
+        now = time.monotonic()
+        with _MODELS_CATALOG_LOCK:
+            entry = dict(_MODELS_CATALOG_CACHE.get(key) or {})
+        cached = entry.get("catalog")
+        if (
+            not force
+            and cached is not None
+            and now - float(entry.get("at") or 0.0) < COPILOT_MODELS_CATALOG_TTL_SECONDS
+        ):
+            return cached
+        failed_at = entry.get("failed_at")
+        if (
+            not force
+            and failed_at is not None
+            and now - float(failed_at) < COPILOT_MODELS_CATALOG_RETRY_SECONDS
+        ):
+            return cached or {}
+        try:
+            raw_body = self._capi_request(
+                "GET",
+                self.MODELS_PATH,
+                body=None,
+                timeout=self._auto_route_timeout(),
+                label="GitHub Copilot models request",
+            )
+            catalog = _parse_models_catalog(raw_body)
+        except ProviderAutoSessionError as exc:
+            with _MODELS_CATALOG_LOCK:
+                _MODELS_CATALOG_CACHE[key] = {**entry, "failed_at": now}
+            logger.warning("GitHub Copilot models catalog unavailable: %s", exc)
+            return cached or {}
+        with _MODELS_CATALOG_LOCK:
+            _MODELS_CATALOG_CACHE[key] = {"catalog": catalog, "at": now, "failed_at": None}
+        return catalog
 
     def _auto_route_timeout(self) -> float:
         if self.timeout is None:
@@ -942,14 +978,23 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         # The model id the last payload actually carried (auto already
         # resolved); the runner stamps it on the assistant message.
         self.last_payload_model: str | None = None
+        # The last (model, configured, sent) effort clamp logged, so a run
+        # says once, not per iteration, that a pick took a lower effort.
+        self._last_effort_clamp: tuple[str, str, str] | None = None
         # Which run ``auto_resolution`` was made for (see resolve_auto_model).
         self._auto_run_key: Any = None
 
     async def invoke(self, request: RuntimeRequest) -> ProviderOutput:
-        if is_auto_model_id(canonicalize_copilot_model_id(_requested_model(request) or self.model)):
+        requested = canonicalize_copilot_model_id(_requested_model(request) or self.model)
+        if is_auto_model_id(requested):
             # Routing is blocking HTTP; keep it off the event loop. build_payload
             # then reuses the decision cached for this run.
             await asyncio.to_thread(self.resolve_auto_model, request)
+        else:
+            # The pick's catalog row may need a fetch (blocking HTTP, once an
+            # hour per credential); warm it off the loop so build_payload only
+            # reads the cache.
+            await asyncio.to_thread(self._catalog_entry, requested)
         set_initiator = getattr(self.transport, "set_initiator", None)
         if callable(set_initiator):
             set_initiator(_copilot_initiator_for(request))
@@ -969,6 +1014,7 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             self.auto_resolution = None
             self._auto_run_key = None
             self._set_transport_auto_session_token(None)
+            reasoning_effort = self._concrete_pick_reasoning_effort(model, reasoning_effort)
         payload["model"] = model
         self.last_payload_model = model
         if self.endpoint == "responses":
@@ -987,6 +1033,53 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             payload,
             replay_reasoning=self.replay_reasoning,
         )
+
+    def _concrete_pick_reasoning_effort(self, model: str, configured: str) -> str:
+        """The effort a concrete pick sends: ``configured`` clamped to what its ``GET /models`` row lists.
+
+        The Auto path clamps to the efforts of the model Copilot picked; a
+        model the member or the profile names gets the same rule, so a model
+        that takes only ``low``/``medium``/``high`` is not asked for ``max``.
+        The row's limits join the runner's budget as well
+        (``register_model_context_profile``), as they do for an Auto pick.
+        Without a row (no catalog on the transport, a fetch that failed, a
+        model the catalog does not list) the configured effort goes as is and
+        Copilot has the final word. Only the catalog already fetched is read
+        here (``invoke`` warms it off the event loop): build_payload never
+        performs HTTP.
+        """
+
+        entry = self._cached_catalog_entry(model)
+        if entry is None:
+            return configured
+        profile = copilot_model_context_profile({**entry, "id": model})
+        if profile is not None:
+            register_model_context_profile(profile)
+        allowed = _allowed_reasoning_efforts(entry)
+        effort = _clamp_reasoning_effort(configured, allowed)
+        if effort != configured and self._last_effort_clamp != (model, configured, effort):
+            self._last_effort_clamp = (model, configured, effort)
+            logger.info(
+                "GitHub Copilot: %s lists reasoning efforts %s; sending %s instead of %s",
+                model,
+                ", ".join(allowed or ()),
+                effort,
+                configured,
+            )
+        return effort
+
+    def _cached_catalog_entry(self, model: str) -> Mapping[str, Any] | None:
+        """The model's ``GET /models`` row from the catalog already fetched; never a fetch."""
+
+        cached = getattr(self.transport, "cached_models_catalog", None)
+        if not callable(cached):
+            return None
+        try:
+            catalog = cached()
+        except Exception:  # noqa: BLE001 - the row only narrows the effort and the budget.
+            return None
+        entry = catalog.get(model) if isinstance(catalog, Mapping) else None
+        return entry if isinstance(entry, Mapping) else None
 
     def _register_catalog_pricing(self, model: str) -> None:
         """Hand the catalog's price row for ``model`` to the credits estimate, when already fetched."""
@@ -2660,5 +2753,6 @@ __all__ = [
     "is_github_source_token",
     "parse_sse_json_events",
     "parse_copilot_api_base_url",
+    "clear_models_catalog_cache",
     "validate_copilot_reasoning_effort",
 ]

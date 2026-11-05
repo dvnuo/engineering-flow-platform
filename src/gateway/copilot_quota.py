@@ -5,11 +5,18 @@ not a documented API: the fields below (``quota_snapshots`` keyed by quota id
 with ``entitlement`` / ``remaining`` / ``percent_remaining`` / ``unlimited``,
 ``quota_reset_date``, ``copilot_plan``) are what the endpoint has been observed
 to return, so the parser is defensive and a renamed field degrades to
-``available: false`` with a reason rather than an error. Whether an AI-credits
-snapshot exists, and under which id, is unverified; a snapshot whose id
-contains ``credit`` is surfaced as ``credits``, nothing else is guessed. The
-answer is cached briefly per credential so a Portal that polls does not hammer
-GitHub, and failures are cached for a shorter while.
+``available: false`` with a reason rather than an error. Since Copilot moved
+to usage-based billing (``token_based_billing``) the ``premium_interactions``
+snapshot is the AI-credits quota, the way VS Code's status bar reads it:
+``entitlement`` and ``remaining`` count credits for a per-seat allotment,
+while a pooled organization allotment reports ``unlimited`` per user with
+``credits_used`` as the only moving number and ``has_quota: false`` once the
+pool is spent. That snapshot (or one whose id names credits) is surfaced as
+``credits``. Every chat answer also carries the current snapshot as a header;
+the transport keeps the latest one and it rides along as ``live`` (see
+``src/efp_runtime/llm/quota_headers.py``). The answer is cached briefly per
+credential so a Portal that polls does not hammer GitHub, and failures are
+cached for a shorter while.
 
 Only a GitHub source token can ask ``api.github.com``; a Copilot plugin token
 (what the runtime holds after the exchange) cannot, and says so.
@@ -29,6 +36,7 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from src.efp_runtime.llm.quota_headers import latest_quota_header
 from src.efp_runtime.llm.provider import (
     GITHUB_SOURCE_TOKEN_PREFIXES,
     GitHubCopilotHTTPTransport,
@@ -55,9 +63,14 @@ _INTEGRATION_ID = "vscode-chat"
 
 _SNAPSHOT_LABELS = {
     "premium_interactions": "Premium requests",
+    "premium_models": "Premium requests",
     "chat": "Chat",
     "completions": "Code completions",
 }
+_CREDITS_LABEL = "AI credits"
+# Under usage-based billing these snapshots count AI credits (VS Code reads
+# ``premium_models`` first, then ``premium_interactions``).
+_CREDIT_SNAPSHOT_IDS = ("premium_models", "premium_interactions")
 _ENTITLEMENT_KEYS = ("entitlement", "quota_entitlement", "limit", "included")
 _REMAINING_KEYS = ("remaining", "quota_remaining")
 _PERCENT_KEYS = ("percent_remaining", "quota_percent_remaining")
@@ -99,7 +112,7 @@ def fetch_copilot_quota(
     with _cache_lock:
         cached = _cache.get(key)
         if cached is not None and not force and current < cached[0]:
-            return {**cached[1], "cached": True}
+            return _with_live({**cached[1], "cached": True}, token)
     payload = _fetch(
         token,
         github_api_base_url=github_api_base_url,
@@ -109,7 +122,17 @@ def fetch_copilot_quota(
     ttl = CACHE_TTL_SECONDS if payload.get("available") else FAILURE_TTL_SECONDS
     with _cache_lock:
         _cache[key] = (current + ttl, payload)
-    return {**payload, "cached": False}
+    return _with_live({**payload, "cached": False}, token)
+
+
+def _with_live(payload: dict[str, Any], token: str) -> dict[str, Any]:
+    """Attach the quota header of the latest chat answer (fresher than the cached endpoint)."""
+
+    try:
+        payload["live"] = latest_quota_header(token)
+    except Exception:  # noqa: BLE001 - the header is a courtesy.
+        payload["live"] = None
+    return payload
 
 
 def clear_quota_cache() -> None:
@@ -123,8 +146,11 @@ def parse_copilot_quota(payload: Any, *, fetched_at: str | None = None) -> dict[
     stamp = fetched_at or _now_iso()
     if not isinstance(payload, Mapping):
         return _unavailable("unexpected quota payload", fetched_at=stamp)
-    snapshots = _snapshots(payload.get("quota_snapshots"))
-    credits = next((snapshot for snapshot in snapshots if "credit" in snapshot["id"]), None)
+    token_based_billing = _flag(payload.get("token_based_billing"))
+    snapshots = _snapshots(payload.get("quota_snapshots"), token_based_billing=token_based_billing)
+    if token_based_billing is None:
+        flags = [snapshot["token_based_billing"] for snapshot in snapshots if snapshot["token_based_billing"] is not None]
+        token_based_billing = any(flags) if flags else None
     return {
         "available": True,
         "source": SOURCE,
@@ -140,10 +166,51 @@ def parse_copilot_quota(payload: Any, *, fetched_at: str | None = None) -> dict[
             payload.get("quota_reset_date_utc"),
             payload.get("reset_date"),
         ),
+        "reset_date_utc": _first_text(payload.get("quota_reset_date_utc")),
+        "token_based_billing": token_based_billing,
         "snapshots": snapshots,
-        "credits": credits,
+        "credits": _credits_snapshot(snapshots, token_based_billing=token_based_billing),
         "error": None,
         "raw_keys": sorted(str(key) for key in payload.keys()),
+    }
+
+
+def _credits_snapshot(snapshots: list[dict[str, Any]], *, token_based_billing: bool | None) -> dict[str, Any] | None:
+    """The snapshot that counts AI credits, as the Portal's balance chip reads it.
+
+    A snapshot whose id names credits wins; under usage-based billing the
+    premium snapshot is the credits quota (VS Code's reading). ``included`` /
+    ``remaining`` are None for a pooled (per-user unlimited) allotment, whose
+    only moving number is ``credits_used`` and whose exhaustion shows as
+    ``has_quota: false``.
+    """
+
+    chosen = next((snapshot for snapshot in snapshots if "credit" in snapshot["id"]), None)
+    if chosen is None and token_based_billing:
+        by_id = {snapshot["id"]: snapshot for snapshot in snapshots}
+        chosen = next((by_id[identifier] for identifier in _CREDIT_SNAPSHOT_IDS if identifier in by_id), None)
+    if chosen is None:
+        return None
+    unlimited = bool(chosen.get("unlimited"))
+    has_quota = chosen.get("has_quota")
+    percent_remaining = None if unlimited else chosen.get("percent_remaining")
+    exhausted = (has_quota is False) if unlimited else (
+        percent_remaining is not None and percent_remaining <= 0
+    )
+    return {
+        "id": chosen["id"],
+        "label": _CREDITS_LABEL,
+        "included": None if unlimited else chosen.get("entitlement"),
+        "used": chosen.get("used"),
+        "remaining": None if unlimited else chosen.get("remaining"),
+        "percent_remaining": percent_remaining,
+        "unlimited": unlimited,
+        "pooled": unlimited,
+        "has_quota": has_quota,
+        "exhausted": exhausted,
+        "overage_count": chosen.get("overage_count"),
+        "overage_permitted": chosen.get("overage_permitted"),
+        "reset_at": chosen.get("reset_at"),
     }
 
 
@@ -205,7 +272,7 @@ def _fetch(
     return parse_copilot_quota(payload, fetched_at=fetched_at)
 
 
-def _snapshots(raw: Any) -> list[dict[str, Any]]:
+def _snapshots(raw: Any, *, token_based_billing: bool | None = None) -> list[dict[str, Any]]:
     items: list[tuple[str, Mapping[str, Any]]] = []
     if isinstance(raw, Mapping):
         for key, value in raw.items():
@@ -223,24 +290,41 @@ def _snapshots(raw: Any) -> list[dict[str, Any]]:
         snapshot_id = identifier.strip().lower()
         entitlement = _number(value, *_ENTITLEMENT_KEYS)
         remaining = _number(value, *_REMAINING_KEYS)
+        unlimited = bool(value.get("unlimited"))
+        snapshot_billing = _flag(value.get("token_based_billing"))
+        credits_billing = token_based_billing if token_based_billing is not None else snapshot_billing
+        credits_used = _number(value, "credits_used")
+        # A per-seat allotment counts down: used is what left the entitlement
+        # (the basis percent_remaining shares). A pooled allotment has no
+        # per-user entitlement, so credits_used is the only number that moves.
         used = None
-        if entitlement is not None and remaining is not None:
+        if not unlimited and entitlement is not None and remaining is not None:
             used = round(max(0.0, entitlement - remaining), 2)
+        elif credits_used is not None:
+            used = round(credits_used, 2)
         percent_remaining = _number(value, *_PERCENT_KEYS)
-        if percent_remaining is None and entitlement and remaining is not None:
+        if percent_remaining is None and not unlimited and entitlement and remaining is not None:
             percent_remaining = round(100.0 * remaining / entitlement, 1)
+        reset_at = _number(value, "quota_reset_at", "reset_at")
+        label = _SNAPSHOT_LABELS.get(
+            snapshot_id,
+            snapshot_id.replace("_", " ").strip().capitalize() or snapshot_id,
+        )
+        if credits_billing and snapshot_id in _CREDIT_SNAPSHOT_IDS:
+            label = _CREDITS_LABEL
         snapshots.append(
             {
                 "id": snapshot_id,
-                "label": _SNAPSHOT_LABELS.get(
-                    snapshot_id,
-                    snapshot_id.replace("_", " ").strip().capitalize() or snapshot_id,
-                ),
+                "label": label,
                 "entitlement": entitlement,
                 "remaining": remaining,
                 "used": used,
+                "credits_used": credits_used,
                 "percent_remaining": percent_remaining,
-                "unlimited": bool(value.get("unlimited")),
+                "unlimited": unlimited,
+                "has_quota": _flag(value.get("has_quota")),
+                "token_based_billing": snapshot_billing,
+                "reset_at": int(reset_at) if reset_at is not None and reset_at > 0 else None,
                 "overage_count": _number(value, "overage_count"),
                 "overage_permitted": (
                     bool(value.get("overage_permitted"))
@@ -252,6 +336,12 @@ def _snapshots(raw: Any) -> list[dict[str, Any]]:
     return snapshots
 
 
+def _flag(value: Any) -> bool | None:
+    """A JSON boolean, or None when the field is missing or not a boolean."""
+
+    return value if isinstance(value, bool) else None
+
+
 def _unavailable(error: str, *, fetched_at: str | None = None) -> dict[str, Any]:
     return {
         "available": False,
@@ -259,6 +349,8 @@ def _unavailable(error: str, *, fetched_at: str | None = None) -> dict[str, Any]
         "fetched_at": fetched_at or _now_iso(),
         "plan": None,
         "reset_date": None,
+        "reset_date_utc": None,
+        "token_based_billing": None,
         "snapshots": [],
         "credits": None,
         "error": error,

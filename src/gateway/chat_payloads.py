@@ -180,6 +180,7 @@ def build_runtime_response_payload(result: Optional[Dict[str, Any]], session_id:
         response_payload["request_id"] = request_id
     for key in (
         "user_message_id",
+        "assistant_message_id",
         "events",
         "context_state",
         "context_usage",
