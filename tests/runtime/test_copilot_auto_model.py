@@ -605,6 +605,51 @@ def test_latest_user_prompt_prefers_the_members_words_then_the_last_user_message
     assert provider_module._request_history_chars(request) == len("firstreplysecondoutput")
 
 
+# --- concrete picks ----------------------------------------------------------
+
+
+LUNA_THREE_EFFORTS = _entry("gpt-6-luna", window=400_000, prompt=272_000, output=128_000,
+                            efforts=("low", "medium", "high"))
+
+
+def test_a_concrete_pick_is_clamped_to_the_efforts_its_catalog_row_lists_and_budgets_by_it():
+    # The member (or the profile) named the model: no routing, no session,
+    # but the same catalog rules as an Auto pick. This row says Luna takes
+    # low/medium/high, so "max" becomes "high", and its 400k window reaches
+    # the runner's lookup over the static 1M row.
+    transport = _RoutingTransport([], catalog=(LUNA_THREE_EFFORTS, SOL61_AUTO))
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-6-luna", reasoning_effort="max")
+    payload = provider.build_payload(_request({"run_id": "r1"}))
+    assert payload["model"] == "gpt-6-luna"
+    assert payload["reasoning"] == {"effort": "high"}
+    assert transport.route_calls == []
+    assert transport.session_token is None
+    assert provider.auto_resolution is None
+    assert resolve_model_context_profile("gpt-6-luna").context_window_tokens == 400_000
+    # A per-request pick is clamped by its own row: Sol lists max and keeps it.
+    assert provider.build_payload(_request({"requested_model": "gpt-6.1-sol", "run_id": "r1"}))["reasoning"] == {"effort": "max"}
+    # A model the catalog does not describe sends the configured effort as is.
+    assert provider.build_payload(_request({"requested_model": "gpt-6-astra", "run_id": "r1"}))["reasoning"] == {"effort": "max"}
+    # A listed effort is kept.
+    provider = GitHubCopilotProvider(transport=_RoutingTransport([], catalog=(LUNA_THREE_EFFORTS,)), model="gpt-6-luna", reasoning_effort="low")
+    assert provider.build_payload(_request({"run_id": "r1"}))["reasoning"] == {"effort": "low"}
+
+
+def test_a_concrete_pick_without_a_catalog_sends_the_configured_effort():
+    # RecordingTransport has no GET /models; a transport whose fetch fails
+    # answers the same way. Either way the configured effort goes as is.
+    provider = GitHubCopilotProvider(transport=RecordingTransport([]), model="gpt-6-luna", reasoning_effort="xhigh")
+    assert provider.build_payload(_request())["reasoning"] == {"effort": "xhigh"}
+
+    class _FailingCatalog(RecordingTransport):
+        def models_catalog(self, *, force=False):
+            raise ProviderAutoSessionError("GitHub Copilot models request failed with HTTP 503")
+
+    provider = GitHubCopilotProvider(transport=_FailingCatalog([]), model="gpt-6-luna", reasoning_effort="xhigh")
+    assert provider.build_payload(_request())["reasoning"] == {"effort": "xhigh"}
+    assert resolve_model_context_profile("gpt-6-luna") == static_model_context_profile("gpt-6-luna")
+
+
 # --- runner ------------------------------------------------------------------
 
 

@@ -115,6 +115,12 @@ back to `gpt-6-sol` without the session and `usage.updated` events report
 `resolved_model_fallback`; `resolved_model` always names the model that
 actually answered and `auto_tier` the tier that was asked for.
 
+A model named outright (the profile's `model`, or the Portal's per-run
+override) follows its own `GET /models` row the same way: the configured
+`reasoning_effort` is clamped to the efforts the row lists and the row's
+limits set the context budget; without a catalog row the configured values
+go as is and Copilot has the final word.
+
 ### Control-Plane Runtime Settings
 
 ```yaml

@@ -958,6 +958,9 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         # The model id the last payload actually carried (auto already
         # resolved); the runner stamps it on the assistant message.
         self.last_payload_model: str | None = None
+        # The last (model, configured, sent) effort clamp logged, so a run
+        # says once, not per iteration, that a pick took a lower effort.
+        self._last_effort_clamp: tuple[str, str, str] | None = None
         # Which run ``auto_resolution`` was made for (see resolve_auto_model).
         self._auto_run_key: Any = None
 
@@ -985,6 +988,7 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             self.auto_resolution = None
             self._auto_run_key = None
             self._set_transport_auto_session_token(None)
+            reasoning_effort = self._concrete_pick_reasoning_effort(model, reasoning_effort)
         payload["model"] = model
         self.last_payload_model = model
         if self.endpoint == "responses":
@@ -1003,6 +1007,38 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
             payload,
             replay_reasoning=self.replay_reasoning,
         )
+
+    def _concrete_pick_reasoning_effort(self, model: str, configured: str) -> str:
+        """The effort a concrete pick sends: ``configured`` clamped to what its ``GET /models`` row lists.
+
+        The Auto path clamps to the efforts of the model Copilot picked; a
+        model the member or the profile names gets the same rule, so a model
+        that takes only ``low``/``medium``/``high`` is not asked for ``max``.
+        The row's limits join the runner's budget as well
+        (``register_model_context_profile``), as they do for an Auto pick.
+        Without a row (no catalog on the transport, a fetch that failed, a
+        model the catalog does not list) the configured effort goes as is and
+        Copilot has the final word.
+        """
+
+        entry = self._catalog_entry(model)
+        if entry is None:
+            return configured
+        profile = copilot_model_context_profile({**entry, "id": model})
+        if profile is not None:
+            register_model_context_profile(profile)
+        allowed = _allowed_reasoning_efforts(entry)
+        effort = _clamp_reasoning_effort(configured, allowed)
+        if effort != configured and self._last_effort_clamp != (model, configured, effort):
+            self._last_effort_clamp = (model, configured, effort)
+            logger.info(
+                "GitHub Copilot: %s lists reasoning efforts %s; sending %s instead of %s",
+                model,
+                ", ".join(allowed or ()),
+                effort,
+                configured,
+            )
+        return effort
 
     def _register_catalog_pricing(self, model: str) -> None:
         """Hand the catalog's price row for ``model`` to the credits estimate, when already fetched."""
