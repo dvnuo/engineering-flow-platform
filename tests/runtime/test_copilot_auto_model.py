@@ -612,12 +612,29 @@ LUNA_THREE_EFFORTS = _entry("gpt-6-luna", window=400_000, prompt=272_000, output
                             efforts=("low", "medium", "high"))
 
 
+class _CatalogTransport(_RoutingTransport):
+    """A transport whose catalog must be fetched (``models_catalog``) before it is cached."""
+
+    def __init__(self, responses, *, catalog=(), warmed=False, **kwargs):
+        super().__init__(responses, catalog=catalog, **kwargs)
+        self.catalog_fetches = 0
+        self.warmed = warmed
+
+    def models_catalog(self, *, force=False):
+        self.catalog_fetches += 1
+        self.warmed = True
+        return dict(self.catalog)
+
+    def cached_models_catalog(self):
+        return dict(self.catalog) if self.warmed else {}
+
+
 def test_a_concrete_pick_is_clamped_to_the_efforts_its_catalog_row_lists_and_budgets_by_it():
     # The member (or the profile) named the model: no routing, no session,
     # but the same catalog rules as an Auto pick. This row says Luna takes
     # low/medium/high, so "max" becomes "high", and its 400k window reaches
     # the runner's lookup over the static 1M row.
-    transport = _RoutingTransport([], catalog=(LUNA_THREE_EFFORTS, SOL61_AUTO))
+    transport = _CatalogTransport([], catalog=(LUNA_THREE_EFFORTS, SOL61_AUTO), warmed=True)
     provider = GitHubCopilotProvider(transport=transport, model="gpt-6-luna", reasoning_effort="max")
     payload = provider.build_payload(_request({"run_id": "r1"}))
     assert payload["model"] == "gpt-6-luna"
@@ -631,8 +648,52 @@ def test_a_concrete_pick_is_clamped_to_the_efforts_its_catalog_row_lists_and_bud
     # A model the catalog does not describe sends the configured effort as is.
     assert provider.build_payload(_request({"requested_model": "gpt-6-astra", "run_id": "r1"}))["reasoning"] == {"effort": "max"}
     # A listed effort is kept.
-    provider = GitHubCopilotProvider(transport=_RoutingTransport([], catalog=(LUNA_THREE_EFFORTS,)), model="gpt-6-luna", reasoning_effort="low")
+    provider = GitHubCopilotProvider(transport=_CatalogTransport([], catalog=(LUNA_THREE_EFFORTS,), warmed=True), model="gpt-6-luna", reasoning_effort="low")
     assert provider.build_payload(_request({"run_id": "r1"}))["reasoning"] == {"effort": "low"}
+    # build_payload never fetches: a catalog not yet fetched leaves the effort alone.
+    cold = _CatalogTransport([], catalog=(LUNA_THREE_EFFORTS,))
+    provider = GitHubCopilotProvider(transport=cold, model="gpt-6-luna", reasoning_effort="max")
+    assert provider.build_payload(_request({"run_id": "r1"}))["reasoning"] == {"effort": "max"}
+    assert cold.catalog_fetches == 0
+
+
+@pytest.mark.asyncio
+async def test_invoke_warms_the_catalog_off_the_loop_before_building_a_concrete_payload():
+    # The fetch happens in invoke (in a thread), once; build_payload then
+    # reads the cache and clamps.
+    transport = _CatalogTransport([_responses_answer("ok"), _responses_answer("ok")], catalog=(LUNA_THREE_EFFORTS,))
+    provider = GitHubCopilotProvider(transport=transport, model="gpt-6-luna", reasoning_effort="max")
+    await provider.invoke(_request({"run_id": "r1"}))
+    assert transport.payloads[0]["reasoning"] == {"effort": "high"}
+    assert transport.catalog_fetches == 1
+    assert transport.route_calls == []
+    await provider.invoke(_request({"run_id": "r1"}))
+    assert transport.payloads[1]["reasoning"] == {"effort": "high"}
+
+
+def test_the_models_catalog_cache_is_shared_by_transports_of_the_same_credential(monkeypatch):
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        return _FakeHTTPResponse({"data": [LUNA_CATALOG]})
+
+    monkeypatch.setattr(provider_module.urllib_request, "urlopen", fake_urlopen)
+    first = GitHubCopilotHTTPTransport(token="copilot-token")
+    assert set(first.models_catalog()) == {"gpt-6-luna"}
+    # The gateway builds a transport per chat request: the second one reads
+    # the first one's answer instead of asking Copilot again.
+    second = GitHubCopilotHTTPTransport(token="copilot-token")
+    assert second.cached_models_catalog() == {"gpt-6-luna": LUNA_CATALOG}
+    assert set(second.models_catalog()) == {"gpt-6-luna"}
+    assert len(requests) == 1
+    # Another credential (or another API base) has its own entry.
+    other = GitHubCopilotHTTPTransport(token="other-token")
+    assert other.cached_models_catalog() == {}
+    assert set(other.models_catalog()) == {"gpt-6-luna"}
+    assert len(requests) == 2
+    provider_module.clear_models_catalog_cache()
+    assert first.cached_models_catalog() == {}
 
 
 def test_a_concrete_pick_without_a_catalog_sends_the_configured_effort():
