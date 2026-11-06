@@ -1031,6 +1031,30 @@ def resolve_llm_temperature(explicit: Optional[Any] = None) -> float:
     return float(parsed)
 
 
+def learned_model_limits(model: Optional[str] = None) -> Optional[Dict[str, int]]:
+    """The limits Copilot's catalog reported for ``model`` at run time, or None.
+
+    ``src.efp_runtime.llm.models`` keeps the profiles the runtime learns from
+    ``GET /models``: every selectable row when the gateway serves the catalog,
+    a concrete pick's row when the provider warms it, the ``/auto`` answer's
+    ``selected_model``. A model only the catalog lists has no row in
+    ``DEFAULT_MODEL_LIMITS``, so ``resolve_model_limits`` would hand it the
+    generic fallback and ``resolve_context_window_tokens`` a 4k window, and the
+    progressive-context pass after a task, skill, subagent or event turn would
+    compact it on every turn; this is what lets them read the row instead.
+    Imported lazily because the runtime package imports this module.
+    """
+
+    key = _canonical_model_limit_key(model)
+    if not key:
+        return None
+    try:
+        from src.efp_runtime.llm.models import learned_model_limits as _learned_model_limits
+    except Exception:  # noqa: BLE001 - config stays usable without the runtime package
+        return None
+    return _learned_model_limits(key)
+
+
 def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
     llm_cfg = config.llm if isinstance(config.llm, dict) else {}
     configured_model = _canonical_model_limit_key(
@@ -1038,6 +1062,12 @@ def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
     )
     configured_limits = llm_cfg.get("model_limits") if isinstance(llm_cfg.get("model_limits"), dict) else {}
     candidates: Dict[str, Dict[str, int]] = dict(DEFAULT_MODEL_LIMITS)
+    learned = learned_model_limits(configured_model)
+    if learned:
+        # What Copilot's catalog said about the model at run time beats the
+        # table above; an operator's ``llm.model_limits`` row (next) still
+        # beats both.
+        candidates[configured_model] = dict(learned)
     for key, raw in configured_limits.items():
         if not isinstance(raw, dict):
             continue

@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
 from src.runtime.context_summary import build_context_state_from_messages, build_structured_summary
-from src.config import resolve_model_limits
+from src.config import learned_model_limits, resolve_model_limits
 
 logger = logging.getLogger(__name__)
 
@@ -804,7 +804,9 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
 
     Explicit model names use deterministic supported-model mapping so unknown
     strings do not inherit the configured default model's large fallback
-    window. ``model=None`` keeps configured-runtime behavior.
+    window. ``model=None`` keeps configured-runtime behavior. The window
+    Copilot's catalog reported for the model at run time (``learned_model_limits``)
+    beats the table below, and is the only window a model outside it has.
     """
     context_windows = {
         "gpt-5-mini": 264000,
@@ -834,6 +836,9 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
 
     model_lower = "-".join(str(model).lower().split())
     model_name = model_lower.split("/", 1)[1] if "/" in model_lower else model_lower
+    learned = learned_model_limits(model_name)
+    if learned and learned.get("max_context_window_tokens"):
+        return int(learned["max_context_window_tokens"])
     return context_windows.get(model_name, 4096)
 
 
