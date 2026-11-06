@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from typing import List, Dict, Set, Tuple
 
-from src.config import config, resolve_model_limits, DEFAULT_LLM_MODEL
+from src.config import config, learned_model_limits, resolve_model_limits, DEFAULT_LLM_MODEL
 
 from .models import Chunk, RetrievalRequest, RetrievalResult
 from .storage import storage
@@ -119,7 +119,10 @@ class RetrievalEngine:
             "gemini-3.5-flash",
         )
         model_limits = resolve_model_limits(model or None)
-        prompt_budget = int(model_limits.get("max_prompt_tokens") or 0) if any(k in model.lower() for k in known_model_keys) else 0
+        # A model Copilot's catalog described at run time is known too, with
+        # the prompt cap its row lists (resolve_model_limits reads it).
+        known = any(k in model.lower() for k in known_model_keys) or learned_model_limits(model) is not None
+        prompt_budget = int(model_limits.get("max_prompt_tokens") or 0) if known else 0
         if prompt_budget <= 0:
             try:
                 prompt_budget = int(request.max_tokens or 0)

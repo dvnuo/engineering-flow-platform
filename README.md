@@ -119,7 +119,11 @@ A model named outright (the profile's `model`, or the Portal's per-run
 override) follows its own `GET /models` row the same way: the configured
 `reasoning_effort` is clamped to the efforts the row lists and the row's
 limits set the context budget; without a catalog row the configured values
-go as is and Copilot has the final word.
+go as is and Copilot has the final word. The row also feeds the
+hand-maintained limits table in `src/config.py` that the progressive-context
+pass after a task, skill, subagent or event turn and the file-context
+retrieval thresholds budget from, so a model only the catalog lists is no
+longer compacted as a 4k-window model.
 
 ### Control-Plane Runtime Settings
 

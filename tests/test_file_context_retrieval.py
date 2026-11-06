@@ -106,3 +106,46 @@ def test_retrieval_engine_knows_gpt_6_1_sol():
             config.llm.pop("model", None)
         else:
             config.llm["model"] = original_model
+
+
+def test_retrieval_engine_budgets_a_catalog_only_default_model_from_its_learned_row():
+    # mai-code-1-flash-2026-06-02 is in no hand-written table: the known-model
+    # check skipped it, so the request's own max_tokens (4000) set the tiers.
+    # The row the runtime learned from Copilot's catalog makes it known, with
+    # the prompt cap the row lists (128k -> 6400 / 25600 / 64000).
+    from src.efp_runtime.llm.models import (
+        clear_learned_model_context_profiles,
+        copilot_model_context_profile,
+        register_model_context_profile,
+    )
+
+    engine = RetrievalEngine()
+    request = RetrievalRequest(session_id="s1", query="A", top_k=1)
+    original_model = config.llm.get("model")
+    config.llm["model"] = "mai-code-1-flash-2026-06-02"
+    clear_learned_model_context_profiles()
+    try:
+        assert engine._resolve_budget_thresholds(request) == (1000, 1001, 2000)
+
+        register_model_context_profile(
+            copilot_model_context_profile(
+                {
+                    "id": "mai-code-1-flash-2026-06-02",
+                    "capabilities": {
+                        "limits": {
+                            "max_context_window_tokens": 256_000,
+                            "max_prompt_tokens": 128_000,
+                            "max_output_tokens": 64_000,
+                        }
+                    },
+                }
+            )
+        )
+
+        assert engine._resolve_budget_thresholds(request) == (6400, 25600, 64000)
+    finally:
+        clear_learned_model_context_profiles()
+        if original_model is None:
+            config.llm.pop("model", None)
+        else:
+            config.llm["model"] = original_model

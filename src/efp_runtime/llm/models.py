@@ -119,6 +119,12 @@ class ModelContextProfile:
     # default tier; None for a model without a long-context tier (or one that
     # is not billed per token here, such as the AI Platform's).
     billing_default_prompt_cap_tokens: int | None = None
+    # The prompt and output caps the Copilot API lists for the model
+    # (``capabilities.limits.max_prompt_tokens`` / ``max_output_tokens``),
+    # kept for the legacy budget path (``learned_model_limits``); None on a
+    # hand-maintained row, which carries only the reserve.
+    max_prompt_tokens: int | None = None
+    max_output_tokens: int | None = None
 
     def tokens_to_chars(self, tokens: int) -> int:
         """Convert token counts to deterministic approximate character counts."""
@@ -231,7 +237,8 @@ def copilot_model_context_profile(entry: Any) -> ModelContextProfile | None:
     "max_context_window_tokens", "max_prompt_tokens", "max_output_tokens"}}}``.
     The output cap becomes the reserve; without one the gap between the
     window and the prompt cap does, and failing both a quarter of the window
-    (at most 128k) keeps the reply from starving.
+    (at most 128k) keeps the reply from starving. The caps the row lists
+    stay on the profile for the legacy budget path (``learned_model_limits``).
     """
 
     if not isinstance(entry, Mapping):
@@ -259,6 +266,8 @@ def copilot_model_context_profile(entry: Any) -> ModelContextProfile | None:
         context_window_tokens=window,
         default_reserve_tokens=reserve,
         billing_default_prompt_cap_tokens=_billing_default_prompt_cap(entry),
+        max_prompt_tokens=prompt,
+        max_output_tokens=output,
     )
 
 
@@ -344,6 +353,36 @@ def clear_learned_model_context_profiles() -> None:
     """Forget every learned profile (tests)."""
 
     _LEARNED_PROFILES.clear()
+
+
+def learned_model_limits(model: Any) -> dict[str, int] | None:
+    """The limits Copilot's catalog reported for ``model``, as a ``src.config`` model-limits row, or None.
+
+    The keys are those of ``DEFAULT_MODEL_LIMITS`` (``max_context_window_tokens``,
+    ``max_prompt_tokens``, ``max_output_tokens``), so the legacy budget path
+    (``resolve_model_limits``, ``resolve_context_window_tokens`` and the
+    progressive-context thresholds built on them) reads the row the runtime
+    learned instead of its hand-written table, which knows nothing about a
+    model only the catalog lists and would budget it as a 4k window. Only a
+    learned profile answers: the hand-maintained rows here disagree with
+    that table on purpose (see ``context_safety_margin_tokens``) and are not
+    what this is for. A cap the row did not list is derived from the
+    profile: the prompt cap is the window less the reserve, the output cap
+    is the reserve; a prompt cap above the window is held to the window.
+    """
+
+    _, model_id = _split_model_id(model)
+    profile = _LEARNED_PROFILES.get(model_id) if model_id else None
+    if profile is None:
+        return None
+    window = profile.context_window_tokens
+    prompt = profile.max_prompt_tokens or max(1, window - profile.default_reserve_tokens)
+    output = profile.max_output_tokens or profile.default_reserve_tokens
+    return {
+        "max_context_window_tokens": window,
+        "max_prompt_tokens": min(prompt, window),
+        "max_output_tokens": output,
+    }
 
 
 def tokens_to_chars(
@@ -434,6 +473,8 @@ def _profile(
     default_reserve_tokens: int,
     chars_per_token: int = DEFAULT_CHARS_PER_TOKEN,
     billing_default_prompt_cap_tokens: int | None = None,
+    max_prompt_tokens: int | None = None,
+    max_output_tokens: int | None = None,
 ) -> ModelContextProfile:
     return ModelContextProfile(
         provider_id=DEFAULT_PROVIDER_ID,
@@ -446,6 +487,8 @@ def _profile(
         ),
         chars_per_token=chars_per_token,
         billing_default_prompt_cap_tokens=billing_default_prompt_cap_tokens,
+        max_prompt_tokens=max_prompt_tokens,
+        max_output_tokens=max_output_tokens,
     )
 
 
@@ -642,6 +685,7 @@ __all__ = [
     "is_auto_model_id",
     "is_catalog_model_context_profile",
     "is_supported_copilot_model_id",
+    "learned_model_limits",
     "model_prompt_budget_tokens",
     "register_catalog_model_ids",
     "register_model_context_profile",
