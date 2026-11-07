@@ -57,7 +57,7 @@ from ..tools.selection import (
     resolve_model_aware_tool_selection,
     resolve_tool_selection,
 )
-from ..types import ToolCall, ToolResult, new_id
+from ..types import ToolCall, ToolResult, new_id, utc_now_iso
 from ..usage import (
     UsageSummary,
     estimate_cost,
@@ -422,6 +422,10 @@ class RuntimeLoopRunner:
         # persists it in session metadata for the next runner instance.
         self._compaction_boundaries: dict[str, str] = {}
         self._compaction_boundary_dirty: set[str] = set()
+        # Whether ``is_cancelled`` takes the session id, decided once: the
+        # flag is now read per streamed event, and ``inspect.signature`` per
+        # token is not free.
+        self._cancel_callback_signature_cache: tuple[Any, bool] | None = None
 
     async def run(
         self,
@@ -828,6 +832,7 @@ class RuntimeLoopRunner:
                     )
                 )
 
+            stream_cancel: dict[str, bool] = {}
             try:
                 provider_output = await self._invoke_provider_with_retries(
                     request,
@@ -855,6 +860,12 @@ class RuntimeLoopRunner:
                     observed_events,
                     on_event=record_step_usage,
                 )
+                observed_events = self._stop_stream_on_cancel(
+                    observed_events,
+                    session_id=resolved_session_id,
+                    source=events,
+                    outcome=stream_cancel,
+                )
                 processor_session = RuntimeSession(
                     session_id=resolved_session_id,
                     messages=self.store.read_history(resolved_session_id),
@@ -877,6 +888,30 @@ class RuntimeLoopRunner:
                         },
                     )
                 )
+                break
+
+            if stream_cancel.get("cancelled"):
+                # The stop landed while the model was still talking. Keep
+                # what it had said, marked cancelled so the transcript can
+                # say so and the next turn does not run its half-formed tool
+                # calls (``_settle_cancelled_tool_calls`` answers those below),
+                # and end the run here.
+                status = LoopStatus.CANCELLED
+                publish_cancelled("provider_stream")
+                if assistant_message is not None and assistant_message.parts:
+                    _mark_message_cancelled(assistant_message)
+                    _annotate_assistant_model(
+                        assistant_message,
+                        provider=self.provider,
+                        requested_model=_requested_model_for_run(
+                            run_metadata,
+                            self._provider_model(),
+                        ),
+                    )
+                    final_assistant_message = self._append_processed_message(
+                        resolved_session_id,
+                        assistant_message,
+                    )
                 break
 
             if assistant_message is None:
@@ -1048,6 +1083,11 @@ class RuntimeLoopRunner:
 
         if status == LoopStatus.CANCELLED:
             publish_cancelled("finish")
+            self._settle_cancelled_tool_calls(
+                session_id=resolved_session_id,
+                runtime_events=runtime_events,
+                run_id=run_id,
+            )
         if structured_output_required and structured_output is None:
             prior_status = status
             if prior_status in (LoopStatus.COMPLETED, LoopStatus.MAX_ITERATIONS):
@@ -2214,6 +2254,19 @@ class RuntimeLoopRunner:
         if self.is_cancelled is None:
             return False
         callback = self.is_cancelled
+        result = (
+            callback(session_id)
+            if self._cancel_callback_accepts_session(callback)
+            else callback()
+        )
+        if inspect.isawaitable(result):
+            result = await result
+        return bool(result)
+
+    def _cancel_callback_accepts_session(self, callback: Any) -> bool:
+        cached = self._cancel_callback_signature_cache
+        if cached is not None and cached[0] is callback:
+            return cached[1]
         try:
             signature = inspect.signature(callback)
             accepts_session = any(
@@ -2227,11 +2280,64 @@ class RuntimeLoopRunner:
             )
         except (TypeError, ValueError):
             accepts_session = True
+        self._cancel_callback_signature_cache = (callback, accepts_session)
+        return accepts_session
 
-        result = callback(session_id) if accepts_session else callback()
-        if inspect.isawaitable(result):
-            result = await result
-        return bool(result)
+    async def _stop_stream_on_cancel(
+        self,
+        events: Union[AsyncIterable[LLMEvent], Iterable[LLMEvent]],
+        *,
+        session_id: str,
+        source: Any,
+        outcome: dict[str, bool],
+    ) -> AsyncIterator[LLMEvent]:
+        """Yield the provider's events until the run is cancelled.
+
+        A stop asked for while the model was still talking used to take effect
+        only after the whole reply had streamed in: the cancel flag was read
+        between iterations and between tool calls, never inside the stream.
+        This reads it per event and, on a stop, closes the provider's stream
+        (``source``) so the transport stops reading and the provider stops
+        generating, then ends the stream; the processor keeps what had
+        arrived. ``outcome["cancelled"]`` tells the caller which way it ended.
+        """
+
+        if self.is_cancelled is None:
+            async for event in _iterate_llm_events(events):
+                yield event
+            return
+        async for event in _iterate_llm_events(events):
+            if await self._cancel_requested(session_id):
+                outcome["cancelled"] = True
+                await _aclose_quietly(source)
+                return
+            yield event
+
+    def _settle_cancelled_tool_calls(
+        self,
+        *,
+        session_id: str,
+        runtime_events: List[RuntimeEvent],
+        run_id: str,
+    ) -> None:
+        """Answer every tool call the stopped run left open with a cancelled result.
+
+        Without these the next turn's ``_pending_tool_calls`` found them and
+        ran them before reading the member's new message, so a stop became a
+        deferral. See ``settle_cancelled_tool_calls`` for the forced path.
+        """
+
+        for _ in range(_SETTLE_CANCELLED_PASSES):
+            pending = _dangling_tool_calls(self.store, session_id)
+            if not pending:
+                return
+            for tool_call in pending:
+                self._append_tool_result(
+                    session_id=session_id,
+                    result=_cancelled_tool_result(tool_call),
+                    runtime_events=runtime_events,
+                    run_id=run_id,
+                )
 
     def _append_processed_message(self, session_id: str, message: Message) -> Message:
         stored_message = _message_with_unique_part_ids(
@@ -2252,21 +2358,7 @@ class RuntimeLoopRunner:
         return stored_message
 
     def _pending_tool_calls(self, session_id: str) -> List[ToolCall]:
-        history = self.store.read_history(session_id)
-        pairs = self.store.tool_pairs(session_id)
-        for message in reversed(history):
-            if message.role is not MessageRole.ASSISTANT:
-                continue
-            calls: List[ToolCall] = []
-            for part in message.parts:
-                if part.type is not MessagePartType.TOOL_CALL or part.tool_call is None:
-                    continue
-                pair = pairs.get(part.tool_call.call_id)
-                if pair is None or pair[1] is None:
-                    calls.append(part.tool_call)
-            if calls:
-                return calls
-        return []
+        return _dangling_tool_calls(self.store, session_id)
 
     async def _execute_tool_calls(
         self,
@@ -3317,6 +3409,114 @@ def _annotate_latest_step_usage_event(
     event.payload["run_usage"] = _usage_payload(run_usage)
 
 
+_SETTLE_CANCELLED_PASSES = 8
+
+
+async def _iterate_llm_events(
+    events: Union[AsyncIterable[LLMEvent], Iterable[LLMEvent]],
+) -> AsyncIterator[LLMEvent]:
+    if hasattr(events, "__aiter__"):
+        async for event in events:  # type: ignore[union-attr]
+            yield event
+        return
+    for event in events:  # type: ignore[union-attr]
+        yield event
+
+
+async def _aclose_quietly(stream: Any) -> None:
+    """Close a provider stream that will not be read further; errors are moot."""
+
+    aclose = getattr(stream, "aclose", None)
+    if callable(aclose):
+        try:
+            await aclose()
+        except Exception:  # noqa: BLE001 - the stream is being abandoned either way.
+            pass
+        return
+    close = getattr(stream, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _dangling_tool_calls(store: SessionStore, session_id: str) -> List[ToolCall]:
+    """The latest assistant message's tool calls that have no result yet."""
+
+    history = store.read_history(session_id)
+    pairs = store.tool_pairs(session_id)
+    for message in reversed(history):
+        if message.role is not MessageRole.ASSISTANT:
+            continue
+        calls: List[ToolCall] = []
+        for part in message.parts:
+            if part.type is not MessagePartType.TOOL_CALL or part.tool_call is None:
+                continue
+            pair = pairs.get(part.tool_call.call_id)
+            if pair is None or pair[1] is None:
+                calls.append(part.tool_call)
+        if calls:
+            return calls
+    return []
+
+
+def _mark_message_cancelled(message: Message) -> None:
+    """Stamp an assistant message the member cut off; it is kept, not completed."""
+
+    message.status = "cancelled"
+    message.metadata["cancelled"] = True
+    message.metadata["cancel_reason"] = "user_cancelled"
+    if message.completed_at is None:
+        message.completed_at = utc_now_iso()
+
+
+def _cancelled_tool_result(tool_call: ToolCall) -> ToolResult:
+    message = "Cancelled: the member stopped the run before this tool call ran."
+    return ToolResult(
+        call_id=tool_call.call_id,
+        tool_name=tool_call.tool_name,
+        status="cancelled",
+        success=False,
+        error=message,
+        content=message,
+        output={"cancelled": True},
+        metadata={"cancelled": True, "cancel_reason": "user_cancelled"},
+    )
+
+
+def settle_cancelled_tool_calls(store: SessionStore, session_id: str) -> int:
+    """Answer the tool calls a force-cancelled run left open; the count settled.
+
+    The cooperative stop lets the runner do this itself with events. When the
+    run's task is cancelled outright instead (the grace period ran out), the
+    runtime calls this on its way out so the session is left the same way:
+    no tool call waits for a result, and the next turn starts from the
+    member's message instead of resuming the stopped work.
+    """
+
+    settled = 0
+    for _ in range(_SETTLE_CANCELLED_PASSES):
+        pending = _dangling_tool_calls(store, session_id)
+        if not pending:
+            break
+        for tool_call in pending:
+            result = _cancelled_tool_result(tool_call)
+            history = store.read_history(session_id)
+            if _apply_tool_result_state(history, result):
+                store.replace_history(session_id, history)
+            store.append_message(
+                session_id,
+                role=MessageRole.TOOL,
+                parts=[MessagePart.tool_result_part(result)],
+                metadata={"tool_call_id": result.call_id},
+                status="complete",
+                completed_at=result.created_at,
+            )
+            settled += 1
+    return settled
+
+
 def _disabled_tool_result(tool_call: ToolCall) -> ToolResult:
     message = f"Tool is disabled: {tool_call.tool_name}"
     return ToolResult(
@@ -3363,7 +3563,10 @@ def _set_completed_tool_part_state(part: MessagePart, result: ToolResult) -> Non
     previous_state = dict(previous_state) if isinstance(previous_state, Mapping) else {}
     previous_time = previous_state.get("time")
     previous_time = dict(previous_time) if isinstance(previous_time, Mapping) else {}
-    status = "completed" if result.success else "error"
+    if result.status == "cancelled":
+        status = "cancelled"
+    else:
+        status = "completed" if result.success else "error"
     part.tool_call.status = status
     state: dict[str, Any] = {
         "status": status,

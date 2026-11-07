@@ -186,6 +186,10 @@ def build_runtime_response_payload(result: Optional[Dict[str, Any]], session_id:
         "context_usage",
         "runtime_events",
         "status",
+        # A run the member stopped says so here (``completion_state:
+        # "cancelled"``), on the stream's final event and in the registry.
+        "completion_state",
+        "cancel_reason",
         "error",
         "error_type",
         "details",

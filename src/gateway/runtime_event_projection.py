@@ -15,7 +15,8 @@ from src.utils.redaction import redact_value, safe_preview
 DEFAULT_ENGINE = "efp-native"
 MAX_SHORT_ID_LENGTH = 64
 MAX_PREVIEW_LENGTH = 500
-FAILED_RUN_STATUSES = {"error", "failed", "cancelled"}
+FAILED_RUN_STATUSES = {"error", "failed"}
+CANCELLED_RUN_STATUSES = {"cancelled", "canceled"}
 PENDING_RUN_STATUSES = {"waiting_for_permission", "waiting_for_question"}
 FAILED_TOOL_STATUSES = {
     "error",
@@ -377,15 +378,25 @@ class RuntimeEventProjector:
 
         if raw_type == "run_finish":
             status = str(payload.get("status") or "").strip().lower()
+            cancelled = status in CANCELLED_RUN_STATUSES
             failed = status in FAILED_RUN_STATUSES
             pending = status in PENDING_RUN_STATUSES
             outputs.extend(self._project_open_parts_ended(raw_event, payload, created_at))
+            if cancelled:
+                target_type = "session.next.step.cancelled"
+                state = "cancelled"
+            elif failed:
+                target_type = "session.next.step.failed"
+                state = "failed"
+            else:
+                target_type = "session.next.step.ended"
+                state = "pending" if pending else "success"
             outputs.append(
                 self._build(
                     raw_event,
                     payload,
-                    "session.next.step.failed" if failed else "session.next.step.ended",
-                    state="failed" if failed else "pending" if pending else "success",
+                    target_type,
+                    state=state,
                     summary=f"Runtime step {status or 'finished'}",
                     created_at=created_at,
                     data={
@@ -405,7 +416,30 @@ class RuntimeEventProjector:
             outputs.extend(self._project_open_parts_ended(raw_event, payload, created_at))
             return outputs
 
-        if raw_type in {"error", "llm.error", "llm.provider_error", "run_cancelled"}:
+        if raw_type == "run_cancelled":
+            # A stop the member asked for, not a failure: its own lifecycle
+            # type and state, so the timeline and the registry say "stopped"
+            # rather than drawing the red failure marker.
+            outputs.extend(self._project_open_parts_ended(raw_event, payload, created_at))
+            outputs.append(
+                self._build(
+                    raw_event,
+                    payload,
+                    "session.next.step.cancelled",
+                    state="cancelled",
+                    summary=raw_event.get("message") or "Runtime run cancelled",
+                    created_at=created_at,
+                    data={
+                        "run_id": payload.get("run_id"),
+                        "iteration": payload.get("iteration"),
+                        "iterations": payload.get("iterations"),
+                        "phase": payload.get("phase"),
+                    },
+                )
+            )
+            return outputs
+
+        if raw_type in {"error", "llm.error", "llm.provider_error"}:
             outputs.extend(self._project_open_parts_ended(raw_event, payload, created_at))
             outputs.append(
                 self._build(
@@ -854,6 +888,8 @@ def _cost_from_usage(usage: Any) -> Any:
 
 def _state_from_payload(payload: Mapping[str, Any]) -> str:
     status = str(payload.get("status") or payload.get("state") or "").strip().lower()
+    if status in CANCELLED_RUN_STATUSES:
+        return "cancelled"
     if status in FAILED_RUN_STATUSES or status in FAILED_TOOL_STATUSES:
         return "failed"
     if status in PENDING_RUN_STATUSES or status == "pending":

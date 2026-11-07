@@ -33,7 +33,13 @@ from ..events import RuntimeEvent
 from ..instructions import InstructionContextBuilder, ReadInstructionResolver
 from ..llm.adapter import LLMEventAdapter
 from ..loop.provider import LLMProvider
-from ..loop.runner import LoopStatus, ProviderCallable, RuntimeLoopResult, RuntimeLoopRunner
+from ..loop.runner import (
+    LoopStatus,
+    ProviderCallable,
+    RuntimeLoopResult,
+    RuntimeLoopRunner,
+    settle_cancelled_tool_calls,
+)
 from ..lsp import LSPClient
 from ..permissions import (
     AGENT_PERMISSION_OVERLAY_METADATA_KEY,
@@ -760,6 +766,7 @@ class AgentRuntime:
         except asyncio.CancelledError:
             self._release_session_revert_record(revert_record)
             self.run_state.finish(resolved_session_id, LoopStatus.CANCELLED)
+            self._settle_cancelled_run(resolved_session_id)
             raise
         except Exception:
             self._release_session_revert_record(revert_record)
@@ -1012,6 +1019,7 @@ class AgentRuntime:
         except asyncio.CancelledError:
             self._release_session_revert_record(revert_record)
             self.run_state.finish(session_id, LoopStatus.CANCELLED)
+            self._settle_cancelled_run(session_id)
             raise
         except Exception:
             self._release_session_revert_record(revert_record)
@@ -1381,7 +1389,31 @@ class AgentRuntime:
         return injected_task_ids
 
     def cancel(self, session_id: str) -> bool:
+        """Ask the active run of ``session_id`` to stop at its next checkpoint.
+
+        The runner reads the flag between iterations, between tool calls and
+        per streamed event; the shell tool polls it and kills its command.
+        """
+
         return self.run_state.cancel(session_id)
+
+    def _settle_cancelled_run(self, session_id: str) -> None:
+        """Leave a force-cancelled session consistent on the way out.
+
+        The task was cancelled outright, so the runner never reached the
+        point where it answers the tool calls it left open. Do it here, best
+        effort: the next turn must start from the member's message, not by
+        resuming the stopped work.
+        """
+
+        try:
+            settle_cancelled_tool_calls(self.store, session_id)
+        except Exception:  # noqa: BLE001 - best effort while the task is dying.
+            logging.getLogger(__name__).debug(
+                "settling the cancelled run's tool calls failed for %s",
+                session_id,
+                exc_info=True,
+            )
 
     def create_checkpoint(
         self,
