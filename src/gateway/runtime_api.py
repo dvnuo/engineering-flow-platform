@@ -1155,6 +1155,7 @@ async def _run_chat_via_execution_bus(
     agent_name: Optional[str] = None,
     request_id: Optional[str] = None,
     model: Optional[str] = None,
+    register_canceller: Optional[Any] = None,
 ) -> Dict[str, Any]:
     resolved_request_id = request_id or f"chat-{uuid.uuid4()}"
     return await run_runtime_chat(
@@ -1175,6 +1176,7 @@ async def _run_chat_via_execution_bus(
         agent_id=agent_id,
         agent_name=agent_name,
         model=model,
+        register_canceller=register_canceller,
         # Only api_chat and api_chat_stream reach this helper, and both have a
         # member watching the transcript who can answer.
         interactive=True,
@@ -1428,6 +1430,13 @@ async def api_chat(request: web.Request) -> web.Response:
                     },
                     status=409,
                 )
+        busy_response = await _refuse_or_interrupt_in_flight_run(
+            session_id=session_id,
+            request_id=request_id,
+            data=data,
+        )
+        if busy_response is not None:
+            return busy_response
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
@@ -1573,6 +1582,7 @@ async def api_chat(request: web.Request) -> web.Response:
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for chat.started", exc_info=True)
         display_attachments = _build_display_attachments(attachment_ids, attachment_context) if attachment_ids else None
+        register_run_canceller = _chat_run_canceller_registrar(request_id)
         result = await _run_chat_via_execution_bus(
                 message=history_message,
                 session_id=session_id,
@@ -1580,6 +1590,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 portal_user_id=portal_user_id,
                 portal_user_name=portal_user_name,
                 reasoning_replay=reasoning_replay,
+                register_canceller=register_run_canceller,
                 attached_images=attached_images if attached_images else None,
                 attachments=attachment_ids if attachment_ids else None,
                 display_attachments=display_attachments,
@@ -1844,6 +1855,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         existing_run = chat_run_registry.get(request_id, session_id=session_id)
         if existing_run is not None or data.get("reconnect") is True:
             return await _stream_existing_chat_run(request, session_id=session_id, request_id=request_id)
+        busy_response = await _refuse_or_interrupt_in_flight_run(
+            session_id=session_id,
+            request_id=request_id,
+            data=data,
+        )
+        if busy_response is not None:
+            return busy_response
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
         # The chat model reads parsed documents and text. Images reach it as
@@ -1978,6 +1996,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 logger.warning("Best-effort session metadata publish failed for streaming chat.started", exc_info=True)
 
         display_attachments = _build_display_attachments(attachment_ids, attachment_context) if attachment_ids else None
+        register_run_canceller = _chat_run_canceller_registrar(request_id)
         run_task = asyncio.create_task(
             _run_chat_via_execution_bus(
                 message=history_message,
@@ -1996,12 +2015,16 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 request_id=request_id,
                 model=model,
                 transient_model_message=transient_model_message,
+                register_canceller=register_run_canceller,
             )
         )
         chat_run_registry.attach_task(request_id, run_task)
 
         keepalive_interval = _chat_sse_keepalive_interval_seconds()
         last_sse_write_monotonic = time.monotonic()
+        # The run's usage so far, from its usage.updated events: what a forced
+        # stop books, since the run then never returns a result to book from.
+        latest_usage: Optional[Dict[str, Any]] = None
         while not run_task.done() or not event_queue.empty():
             try:
                 event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
@@ -2010,6 +2033,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 else:
                     event_payloads = runtime_event_projector.project(event)
                 for event_payload in event_payloads:
+                    usage_snapshot = _usage_from_projected_event(event_payload)
+                    if usage_snapshot is not None:
+                        latest_usage = usage_snapshot
                     await _emit_gateway_runtime_event(event_payload)
                     chat_run_registry.record_event(request_id, event_payload)
                     if client_connected:
@@ -2032,7 +2058,23 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                     last_sse_write_monotonic = time.monotonic()
                 continue
 
-        result = await run_task
+        try:
+            result = await run_task
+        except asyncio.CancelledError:
+            if not (run_task.cancelled() and _chat_run_cancel_requested(request_id)):
+                # This handler is being cancelled (client gone), not the run.
+                raise
+            # A forced stop: the run's task was cancelled after the grace
+            # period. The run wrote its own session state on the way out;
+            # this closes the stream and the registry record for it.
+            return await _finish_cancelled_chat_stream(
+                response,
+                client_connected=client_connected,
+                session_id=session_id,
+                request_id=request_id,
+                model=model,
+                usage=latest_usage,
+            )
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
             publish_metadata = await _enrich_publish_metadata_with_context_preview(
@@ -2184,6 +2226,178 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             clear_log_context()
 
 
+DEFAULT_CHAT_CANCEL_GRACE_SECONDS = 3.0
+MAX_CHAT_CANCEL_GRACE_SECONDS = 30.0
+# How long a forced stop waits for the cancelled task to unwind before answering.
+_FORCED_CANCEL_SETTLE_SECONDS = 1.0
+
+
+def _chat_cancel_grace_seconds(raw: Optional[str] = None) -> float:
+    """Seconds a stop gives the run to end on its own before its task is cancelled.
+
+    ``raw`` is the request's ``grace`` query parameter; without one the
+    ``EFP_CHAT_CANCEL_GRACE_SECONDS`` setting applies, default 3. Clamped to
+    0..30: zero means force at once, and no stop waits half a minute.
+    """
+
+    source = str(raw if raw is not None else os.getenv("EFP_CHAT_CANCEL_GRACE_SECONDS", "")).strip()
+    try:
+        value = float(source) if source else DEFAULT_CHAT_CANCEL_GRACE_SECONDS
+    except (TypeError, ValueError):
+        value = DEFAULT_CHAT_CANCEL_GRACE_SECONDS
+    if value != value:  # NaN
+        value = DEFAULT_CHAT_CANCEL_GRACE_SECONDS
+    return min(MAX_CHAT_CANCEL_GRACE_SECONDS, max(0.0, value))
+
+
+async def _stop_chat_run(request_id: str, *, grace_seconds: float) -> str:
+    """Stop a registered chat run; the mode the stop ended in.
+
+    "cooperative": the run ended at a checkpoint within ``grace_seconds``.
+    "forced": it had not, and its task was cancelled. "settled": it was
+    already over.
+    """
+
+    record = chat_run_registry.get(request_id)
+    if record is None or record.terminal:
+        return "settled"
+    chat_run_registry.request_cancel(request_id)
+    if await chat_run_registry.wait_terminal(request_id, grace_seconds):
+        return "cooperative"
+    logger.warning(
+        "Chat run did not stop within %.1fs; cancelling its task | request_id=%s session_id=%s",
+        grace_seconds,
+        request_id,
+        record.session_id,
+    )
+    chat_run_registry.cancel(request_id)
+    await chat_run_registry.wait_terminal(request_id, _FORCED_CANCEL_SETTLE_SECONDS)
+    return "forced"
+
+
+def _chat_run_cancel_requested(request_id: Optional[str]) -> bool:
+    record = chat_run_registry.get(request_id or "")
+    return bool(record is not None and record.cancel_requested)
+
+
+def _chat_run_canceller_registrar(request_id: str) -> Any:
+    """The hook a chat run calls with its canceller, so a stop can reach the run."""
+
+    def register(canceller: Any) -> None:
+        chat_run_registry.register_canceller(request_id, canceller)
+
+    return register
+
+
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _refuse_or_interrupt_in_flight_run(
+    *,
+    session_id: str,
+    request_id: str,
+    data: Mapping[str, Any],
+) -> Optional[web.Response]:
+    """One chat run per session: refuse a second one, or stop the first when asked to.
+
+    Two runs on one session would append to the same history at once. A
+    plain second message gets 409 ``session_busy`` naming the active run.
+    ``interrupt_in_flight_run: true`` in the body is the Portal's "send now":
+    the active run is stopped (cooperatively, then by force) before this one
+    starts, so the stop and the new message cannot race each other.
+    """
+
+    active = chat_run_registry.active_for_session(session_id)
+    if active is None or active.request_id == request_id:
+        return None
+    if _truthy_flag(data.get("interrupt_in_flight_run")):
+        await _stop_chat_run(active.request_id, grace_seconds=_chat_cancel_grace_seconds())
+        active = chat_run_registry.active_for_session(session_id)
+        if active is None or active.request_id == request_id:
+            return None
+    return web.json_response(
+        {
+            "error": "session_busy",
+            "message": "This session is still answering a previous message. Stop it or wait for it to finish.",
+            "session_id": session_id,
+            "request_id": request_id,
+            "active_request_id": active.request_id,
+            "active_state": active.state,
+        },
+        status=409,
+    )
+
+
+def _usage_from_projected_event(event_payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The run's usage so far from a projected ``usage.updated`` event, else None."""
+
+    event_type = str(event_payload.get("type") or event_payload.get("event_type") or "")
+    if event_type != "usage.updated":
+        return None
+    data = event_payload.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    usage = data.get("usage")
+    if not isinstance(usage, Mapping):
+        return None
+    snapshot: Dict[str, Any] = dict(usage)
+    model = data.get("resolved_model") or data.get("model")
+    if isinstance(model, str) and model:
+        pricing = snapshot.get("pricing")
+        snapshot["pricing"] = {**(dict(pricing) if isinstance(pricing, Mapping) else {}), "model": model}
+    iteration = data.get("iteration")
+    if isinstance(iteration, int) and not isinstance(iteration, bool):
+        snapshot.setdefault("iterations", iteration)
+    return snapshot
+
+
+async def _finish_cancelled_chat_stream(
+    response: web.StreamResponse,
+    *,
+    client_connected: bool,
+    session_id: str,
+    request_id: str,
+    model: str,
+    usage: Optional[Dict[str, Any]],
+) -> web.StreamResponse:
+    """Close the stream and the registry record of a run whose task was cancelled outright."""
+
+    usage_payload = dict(usage or {})
+    if usage_payload:
+        _record_chat_usage(usage_payload, model=model, session_id=session_id)
+    final_payload: Dict[str, Any] = {
+        "response": "",
+        "session_id": session_id,
+        "request_id": request_id,
+        "status": "cancelled",
+        "completion_state": "cancelled",
+        "cancel_reason": "user_cancelled",
+        "usage": usage_payload,
+        "display_blocks": [],
+    }
+    chat_run_registry.complete(request_id, final_payload)
+    if client_connected:
+        client_connected = await _try_write_sse_event(
+            response,
+            "usage",
+            {"usage": usage_payload, "session_id": session_id, "request_id": request_id},
+            request_id=request_id,
+        )
+    if client_connected:
+        client_connected = await _try_write_sse_event(response, "final", final_payload, request_id=request_id)
+    if client_connected:
+        await _try_write_sse_event(
+            response,
+            "done",
+            {"ok": True, "session_id": session_id, "request_id": request_id},
+            request_id=request_id,
+        )
+    return response
+
+
 async def api_chat_run_status(request: web.Request) -> web.Response:
     request_id = str(request.match_info.get("request_id") or "").strip()
     session_id = str(request.query.get("session_id") or "").strip()
@@ -2195,6 +2409,19 @@ async def api_chat_run_status(request: web.Request) -> web.Response:
 
 
 async def api_chat_run_cancel(request: web.Request) -> web.Response:
+    """Stop a chat run: ask it to end at its next checkpoint, then cancel its task if it has not.
+
+    POST /api/chat/runs/{request_id}/cancel?session_id=...&grace=<seconds>
+
+    The cooperative half lets the run end the way a run ends: the shell tool
+    kills its command, the streaming reply is cut off with what arrived kept,
+    the usage is booked and the session is left consistent. A run that has
+    not ended within the grace period (``EFP_CHAT_CANCEL_GRACE_SECONDS``,
+    default 3) gets its task cancelled outright. The response's
+    ``cancel_mode`` says which it was; the endpoint returns once the run has
+    settled, so the caller can rely on it being gone.
+    """
+
     request_id = str(request.match_info.get("request_id") or "").strip()
     session_id = str(request.query.get("session_id") or "").strip()
     if not request_id:
@@ -2202,14 +2429,29 @@ async def api_chat_run_cancel(request: web.Request) -> web.Response:
     record = chat_run_registry.get(request_id, session_id=session_id or None)
     if record is None:
         return web.json_response({"ok": False, "error": "chat_run_not_found", "request_id": request_id, "session_id": session_id}, status=404)
-    cancelled = chat_run_registry.cancel(request_id)
+    if record.terminal:
+        return web.json_response({
+            "ok": False,
+            "engine": "native",
+            "request_id": request_id,
+            "session_id": record.session_id,
+            "state": record.state,
+            "terminal": True,
+            "cancel_mode": record.cancel_mode,
+            "settled": True,
+        })
+    grace_seconds = _chat_cancel_grace_seconds(request.query.get("grace"))
+    cancel_mode = await _stop_chat_run(request_id, grace_seconds=grace_seconds)
+    record = chat_run_registry.get(request_id) or record
     return web.json_response({
-        "ok": cancelled,
+        "ok": True,
         "engine": "native",
         "request_id": request_id,
         "session_id": record.session_id,
-        "state": "cancelled" if cancelled else record.state,
-        "terminal": True if cancelled else record.terminal,
+        "state": record.state,
+        "terminal": record.terminal,
+        "cancel_mode": cancel_mode,
+        "settled": record.terminal,
     })
 
 

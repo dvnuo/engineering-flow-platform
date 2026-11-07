@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
+
+logger = logging.getLogger(__name__)
 
 TERMINAL_STATES = {"completed", "failed", "cancelled"}
+CANCELLED_STATUSES = {"cancelled", "canceled"}
 RETAINED_EVENT_LIST_KEYS = ("events", "runtime_events", "thinking_events")
 RETAINED_EVENT_TAIL_ITEMS = 100
 DEFAULT_STALE_RUNNING_SECONDS = 6 * 3600
+# How often ``wait_terminal`` looks again while a stop settles.
+_WAIT_POLL_SECONDS = 0.05
+
+# A callback the run registers so a stop can reach it: asking the runtime to
+# end the run at its next checkpoint. Sync, or returning an awaitable.
+Canceller = Callable[[], Any]
 
 
 def utc_now_iso() -> str:
@@ -47,6 +58,30 @@ def compact_final_payload(payload: Dict[str, Any] | None) -> Dict[str, Any]:
     return compact
 
 
+def payload_says_cancelled(payload: Dict[str, Any] | None) -> bool:
+    """Whether a terminal payload describes a run that ended because it was stopped."""
+    if not isinstance(payload, dict):
+        return False
+    for key in ("completion_state", "status"):
+        value = str(payload.get(key) or "").strip().lower()
+        if value in CANCELLED_STATUSES:
+            return True
+    return False
+
+
+def _invoke_canceller(canceller: Canceller, request_id: str) -> None:
+    try:
+        result = canceller()
+    except Exception:  # noqa: BLE001 - a failing canceller must not block the stop.
+        logger.warning("Chat run canceller failed | request_id=%s", request_id, exc_info=True)
+        return
+    if inspect.isawaitable(result):
+        try:
+            asyncio.ensure_future(result)
+        except RuntimeError:
+            logger.debug("Chat run canceller returned an awaitable outside a loop | request_id=%s", request_id)
+
+
 @dataclass
 class ChatRunRecord:
     request_id: str
@@ -62,6 +97,13 @@ class ChatRunRecord:
     final_payload: Optional[Dict[str, Any]] = None
     error_payload: Optional[Dict[str, Any]] = None
     task: Optional[asyncio.Task] = field(default=None, repr=False)
+    # A stop was asked for. ``cancel_mode`` says how far it had to go:
+    # "cooperative" (the run ended at a checkpoint) or "forced" (its task was
+    # cancelled outright after the grace period).
+    cancel_requested: bool = False
+    cancel_requested_at: str = ""
+    cancel_mode: str = ""
+    cancellers: List[Canceller] = field(default_factory=list, repr=False)
 
     @property
     def terminal(self) -> bool:
@@ -83,6 +125,8 @@ class ChatRunRecord:
             "detached_viewers": self.detached_viewers,
             "final_payload": self.final_payload,
             "error_payload": self.error_payload,
+            "cancel_requested": self.cancel_requested,
+            "cancel_mode": self.cancel_mode,
         }
 
 
@@ -133,6 +177,7 @@ class ChatRunRegistry:
             }
             record.updated_at = utc_now_iso()
             record.task = None
+            record.cancellers.clear()
 
     def _prune_terminal_records(self) -> None:
         if len(self._records) <= self._max_records:
@@ -156,11 +201,50 @@ class ChatRunRegistry:
             return None
         return record
 
+    def active_for_session(self, session_id: str) -> ChatRunRecord | None:
+        """The run still in flight for a session, if any.
+
+        One chat run per session: a second message while one is answering is
+        refused (or interrupts the first) instead of the two runs writing the
+        same history at once. A record whose task already ended without a
+        terminal outcome is finalized here rather than counted as active.
+        """
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return None
+        for record in list(self._records.values()):
+            if record.session_id != normalized_session_id or record.terminal:
+                continue
+            task = record.task
+            if task is not None and task.done():
+                self.fail(
+                    record.request_id,
+                    {
+                        "error": "chat_run_lost",
+                        "detail": "The run's task ended without recording an outcome.",
+                        "session_id": record.session_id,
+                        "request_id": record.request_id,
+                    },
+                )
+                continue
+            return record
+        return None
+
     def attach_task(self, request_id: str, task: asyncio.Task) -> None:
         record = self.get(request_id)
         if record is not None:
             record.task = task
             record.updated_at = utc_now_iso()
+
+    def register_canceller(self, request_id: str, canceller: Canceller) -> None:
+        """Let a stop reach the run: ``canceller`` asks it to end at its next checkpoint."""
+        record = self.get(request_id)
+        if record is None or record.terminal:
+            return
+        record.cancellers.append(canceller)
+        if record.cancel_requested:
+            # The run registered after the stop was asked for: tell it now.
+            _invoke_canceller(canceller, request_id)
 
     def record_event(self, request_id: str, event: Dict[str, Any]) -> None:
         record = self.get(request_id)
@@ -182,10 +266,14 @@ class ChatRunRegistry:
         record = self.get(request_id)
         if record is None:
             return
-        record.state = "completed"
+        # A run that ended because it was stopped is "cancelled", whichever
+        # path recorded it. One that finished its answer just as the stop
+        # arrived did complete: the answer landed, and that is what it says.
+        record.state = "cancelled" if payload_says_cancelled(final_payload) else "completed"
         record.final_payload = compact_final_payload(final_payload)
         record.updated_at = utc_now_iso()
         record.task = None
+        record.cancellers.clear()
 
     def fail(self, request_id: str, error_payload: Dict[str, Any]) -> None:
         record = self.get(request_id)
@@ -193,22 +281,65 @@ class ChatRunRegistry:
             return
         if record.state == "cancelled":
             return
-        record.state = "failed"
+        # Whatever broke while the run was being stopped, the member asked
+        # for a stop and got one: the record says cancelled, with the error
+        # kept for diagnostics.
+        record.state = "cancelled" if record.cancel_requested else "failed"
         record.error_payload = compact_final_payload(error_payload)
         record.updated_at = utc_now_iso()
         record.task = None
+        record.cancellers.clear()
+
+    def request_cancel(self, request_id: str) -> ChatRunRecord | None:
+        """Ask the run to stop at its next checkpoint (cooperative).
+
+        The runtime ends the run on its own: the shell tool kills its command,
+        the streaming reply is cut off and what streamed so far is kept, the
+        usage is booked and the session is left consistent. ``cancel`` is the
+        forced fallback for a run that does not get there in time.
+        """
+        record = self.get(request_id)
+        if record is None or record.terminal:
+            return record
+        if not record.cancel_requested:
+            record.cancel_requested = True
+            record.cancel_requested_at = utc_now_iso()
+            record.cancel_mode = "cooperative"
+        record.state = "cancelling"
+        record.updated_at = utc_now_iso()
+        for canceller in list(record.cancellers):
+            _invoke_canceller(canceller, request_id)
+        return record
 
     def cancel(self, request_id: str) -> bool:
+        """Stop the run now: mark it cancelled and cancel its task (forced)."""
         record = self.get(request_id)
         if record is None or record.terminal:
             return False
         record.state = "cancelled"
+        if not record.cancel_requested:
+            record.cancel_requested = True
+            record.cancel_requested_at = utc_now_iso()
+        record.cancel_mode = "forced"
         record.updated_at = utc_now_iso()
         task = record.task
         record.task = None
+        record.cancellers.clear()
         if task is not None and not task.done():
             task.cancel()
         return True
+
+    async def wait_terminal(self, request_id: str, timeout: float) -> bool:
+        """Wait up to ``timeout`` seconds for the run to reach a terminal state."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(timeout))
+        while True:
+            record = self.get(request_id)
+            if record is None or record.terminal:
+                return True
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(_WAIT_POLL_SECONDS)
 
 
 chat_run_registry = ChatRunRegistry()
