@@ -78,6 +78,8 @@ jobs:
         id: tools
         uses: ./.github/actions/runtime-tools-source
         with:
+          repository: dvnuo/engineering-flow-platform-tools
+          path: engineering-flow-platform-tools
           token: ${{ secrets.TOOLS_REPO_TOKEN || github.token }}
           required: ${{ github.event_name != 'pull_request' }}
       - name: Set up Go for runtime tools

@@ -13,12 +13,10 @@ inputs:
     required: true
   repository:
     description: The tools repository, as owner/name.
-    required: false
-    default: dvnuo/engineering-flow-platform-tools
+    required: true
   path:
     description: Where to check the tools repository out, relative to the workspace.
-    required: false
-    default: engineering-flow-platform-tools
+    required: true
   required:
     description: >-
       "true" fails the step when the repository cannot be read; "false" skips

@@ -218,3 +218,23 @@ def test_workflows_prepare_runtime_tools_before_docker_builds():
             "EFP_TOOLS_REPO_DIR=engineering-flow-platform-tools "
             "scripts/prepare-runtime-tools.sh"
         ) in text
+
+
+def test_workflows_check_the_tools_repo_out_through_the_access_probe():
+    # The tools repo is private. Both image jobs reach it through one composite
+    # action that probes access with the TOOLS_REPO_TOKEN secret (GITHUB_TOKEN as
+    # the fallback) and reports it, so a pull request without the secret skips the
+    # image steps instead of failing at the checkout.
+    action = _text(".github/actions/runtime-tools-source/action.yml")
+    assert "using: composite" in action
+    assert 'gh api "repos/${TOOLS_REPOSITORY}"' in action
+    assert "TOOLS_REPO_TOKEN" in action
+    assert "actions/checkout@v4" in action
+    assert "available=false" in action
+
+    for workflow_path in (".github/workflows/ci.yml", ".github/workflows/docker-image.yml"):
+        text = _text(workflow_path)
+        assert "uses: ./.github/actions/runtime-tools-source" in text
+        assert "token: ${{ secrets.TOOLS_REPO_TOKEN || github.token }}" in text
+        assert "required: ${{ github.event_name != 'pull_request' }}" in text
+        assert "if: steps.tools.outputs.available == 'true'" in text
