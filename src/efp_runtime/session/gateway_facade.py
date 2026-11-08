@@ -628,6 +628,30 @@ class RuntimeSessionManager:
         _drop_answered_question_answer(metadata, pending_tool_calls)
         self.store.update_session(session_id, metadata=metadata, replace_metadata=True)
 
+    async def record_runtime_cancelled(
+        self,
+        session_id: str,
+        *,
+        request_id: str | None = None,
+        execution_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Write the outcome of a run whose task was cancelled outright.
+
+        The cooperative stop returns a result with status ``cancelled`` and
+        goes through ``record_runtime_result``. The forced stop has no result:
+        the task died with ``CancelledError``. Without this the session kept
+        the ``running`` that ``mark_runtime_running`` wrote, which read as a
+        run still in flight (compaction refused, Portal reconnecting, and a
+        restart turning it into a failure).
+        """
+
+        await self.record_runtime_result(
+            session_id,
+            _CancelledRunOutcome(),
+            request_id=request_id,
+            execution_metadata=execution_metadata,
+        )
+
     async def recover_session_state(self, session_id: str) -> dict[str, Any]:
         pipeline_payload = await _recover_session_via_runtime_pipeline(session_id, self)
         if pipeline_payload is not None:
@@ -925,6 +949,15 @@ def _drop_answered_question_answer(
     unpaired = {str(call.get("call_id") or "") for call in pending_tool_calls}
     if str(held.get("tool_call_id") or "") not in unpaired:
         metadata.pop("pending_question_answer", None)
+
+
+class _CancelledRunOutcome:
+    """The shape ``record_runtime_result`` reads, for a run that ended by force."""
+
+    status = "cancelled"
+    runtime_events: list[Any] = []
+    pending_permission_request = None
+    pending_question_request = None
 
 
 def _pending_tool_call_payloads(history: Iterable[Message]) -> list[dict[str, Any]]:

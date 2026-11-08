@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from pathlib import Path
+import signal
 import time
 from typing import Any
 
@@ -24,6 +26,7 @@ from .redaction import redact_tool_output
 
 DEFAULT_TIMEOUT_MS = 30_000
 _CANCEL_POLL_SECONDS = 0.05
+_POSIX = os.name == "posix"
 
 
 def create_bash_tool(
@@ -68,6 +71,9 @@ def _create_shell_tool(
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # Its own process group on POSIX, so a stop or a timeout kills
+            # the whole pipeline the shell started, not only the shell.
+            start_new_session=_POSIX,
         )
         stdout_bytes, stderr_bytes, timed_out, cancelled, exit_code = (
             await _communicate_with_timeout_and_cancel(
@@ -215,7 +221,19 @@ async def _communicate_with_timeout_and_cancel(
     cancel_task = asyncio.create_task(_wait_for_cancel(context))
     tasks = {communicate_task, timeout_task, cancel_task}
 
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        # The run's task was cancelled outright (a forced stop, or the
+        # process shutting down). ``asyncio.wait`` does not cancel what it
+        # waits on, so without this the command kept running to completion
+        # with nobody reading its output. Kill it and release the helpers.
+        _kill_process(process)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     if communicate_task in done:
         for task in pending:
             task.cancel()
@@ -246,6 +264,12 @@ async def _wait_for_cancel(context: ToolContext) -> bool:
 
 
 def _kill_process(process: asyncio.subprocess.Process) -> None:
+    if _POSIX:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
     try:
         process.kill()
     except ProcessLookupError:

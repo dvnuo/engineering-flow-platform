@@ -10,7 +10,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from src.config import DEFAULT_LLM_MODEL, PORTAL_MANAGED_RUNTIME_FIELDS, config
 from src.utils.proxy_plan import hostname_of
@@ -112,12 +112,18 @@ async def run_runtime_chat(
     track_usage: bool = True,
     interactive: bool = False,
     title_after_turn: bool = False,
+    register_canceller: Callable[[Callable[[], Any]], Any] | None = None,
 ) -> dict[str, Any]:
     """Run the production chat loop through ``efp_runtime.runtime.AgentRuntime``.
 
     ``title_after_turn`` is the Portal chat's opt-in to a generated session
     name after an answered turn; tasks, Jira comments and the other callers
     of this primitive leave it off.
+
+    ``register_canceller`` receives a callable that asks this run to stop at
+    its next checkpoint (the cooperative half of a stop); the gateway hands
+    it to the chat run registry so ``/api/chat/runs/{id}/cancel`` can reach
+    the run instead of only cancelling its task.
     """
 
     provider, runtime_model = _build_llm_provider(model, execution_metadata=execution_metadata)
@@ -139,6 +145,8 @@ async def run_runtime_chat(
             "agent_name": agent_name,
         },
     )
+    if register_canceller is not None:
+        register_canceller(lambda: runtime.cancel(session_id))
 
     forwarder: asyncio.Task | None = None
     subscription = None
@@ -195,7 +203,8 @@ async def run_runtime_chat(
             request_id=request_id,
             execution_metadata=execution_metadata,
         )
-        if title_after_turn:
+        # A stopped turn has no answer to name the session after.
+        if title_after_turn and result.status != LoopStatus.CANCELLED:
             _schedule_session_title_after_turn(
                 session_id,
                 result,
@@ -203,6 +212,13 @@ async def run_runtime_chat(
                 agent_id=agent_id,
                 track_usage=track_usage,
             )
+    except asyncio.CancelledError:
+        await _record_cancelled_run(
+            session_id,
+            request_id=request_id,
+            execution_metadata=execution_metadata,
+        )
+        raise
     except ProviderTransportError as exc:
         raise RuntimeChatError(
             str(exc),
@@ -260,10 +276,11 @@ async def resume_runtime_chat(
     track_usage: bool = True,
     interactive: bool = False,
     title_after_turn: bool = False,
+    register_canceller: Callable[[Callable[[], Any]], Any] | None = None,
 ) -> dict[str, Any]:
     """Resume an existing native runtime session without appending a new user message.
 
-    ``title_after_turn``: see ``run_runtime_chat``.
+    ``title_after_turn`` and ``register_canceller``: see ``run_runtime_chat``.
     """
 
     provider, runtime_model = _build_llm_provider(model, execution_metadata=execution_metadata)
@@ -285,6 +302,8 @@ async def resume_runtime_chat(
             "agent_name": agent_name,
         },
     )
+    if register_canceller is not None:
+        register_canceller(lambda: runtime.cancel(session_id))
     _seed_runtime_question_response(runtime, session_id=session_id, execution_metadata=execution_metadata)
 
     forwarder: asyncio.Task | None = None
@@ -334,7 +353,7 @@ async def resume_runtime_chat(
             execution_metadata=execution_metadata,
         )
         # A turn that paused on a question completes here.
-        if title_after_turn:
+        if title_after_turn and result.status != LoopStatus.CANCELLED:
             _schedule_session_title_after_turn(
                 session_id,
                 result,
@@ -342,6 +361,13 @@ async def resume_runtime_chat(
                 agent_id=agent_id,
                 track_usage=track_usage,
             )
+    except asyncio.CancelledError:
+        await _record_cancelled_run(
+            session_id,
+            request_id=request_id,
+            execution_metadata=execution_metadata,
+        )
+        raise
     except ProviderTransportError as exc:
         raise RuntimeChatError(
             str(exc),
@@ -1247,9 +1273,38 @@ def _result_payload(
         payload["pending_question_request"] = result.pending_question_request
     if result.structured_output is not None:
         payload["structured_output"] = result.structured_output
+    if result.status == LoopStatus.CANCELLED:
+        # The member stopped the run. ``response`` is what had streamed in
+        # before the stop (possibly nothing); the Portal draws the row as
+        # stopped, not as a failure or an incomplete answer.
+        payload["completion_state"] = "cancelled"
+        payload["cancel_reason"] = "user_cancelled"
     payload.update(_model_attribution_from_result(result, model))
     payload.update(_message_ids_from_result(result))
     return payload
+
+
+async def _record_cancelled_run(
+    session_id: str,
+    *,
+    request_id: str | None,
+    execution_metadata: Mapping[str, Any] | None,
+) -> None:
+    """Session metadata for a run whose task was cancelled outright (best effort)."""
+
+    try:
+        await get_runtime_session_manager().record_runtime_cancelled(
+            session_id,
+            request_id=request_id,
+            execution_metadata=execution_metadata,
+        )
+    except Exception:  # noqa: BLE001 - the stop already happened; this is bookkeeping.
+        logger.warning(
+            "Failed to record the cancelled run | session_id=%s request_id=%s",
+            session_id,
+            request_id,
+            exc_info=True,
+        )
 
 
 def _message_ids_from_result(result: RuntimeLoopResult) -> dict[str, str]:

@@ -1,0 +1,67 @@
+name: Runtime tools source
+description: >-
+  Checks out the private engineering-flow-platform-tools repository next to the
+  runtime when the given token can read it. The default GITHUB_TOKEN cannot read
+  another private repository, so the workflows pass the TOOLS_REPO_TOKEN secret
+  when it is set. Without access, a validating run (pull_request) skips the
+  image steps with a warning and a job-summary note; a publishing run fails with
+  the same message.
+
+inputs:
+  token:
+    description: Token with Contents read access to the tools repository.
+    required: true
+  repository:
+    description: The tools repository, as owner/name.
+    required: true
+  path:
+    description: Where to check the tools repository out, relative to the workspace.
+    required: true
+  required:
+    description: >-
+      "true" fails the step when the repository cannot be read; "false" skips
+      with a warning and sets the available output to "false".
+    required: false
+    default: "true"
+
+outputs:
+  available:
+    description: '"true" when the tools repository was checked out to the given path.'
+    value: ${{ steps.probe.outputs.available }}
+
+runs:
+  using: composite
+  steps:
+    - name: Probe access to the tools repository
+      id: probe
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TOOLS_REPOSITORY: ${{ inputs.repository }}
+        ACCESS_REQUIRED: ${{ inputs.required }}
+      run: |
+        set -euo pipefail
+        if gh api "repos/${TOOLS_REPOSITORY}" --silent 2>/dev/null; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "available=false" >> "$GITHUB_OUTPUT"
+        reason="The workflow token cannot read ${TOOLS_REPOSITORY}, which is private. Add the repository secret TOOLS_REPO_TOKEN: a fine-grained personal access token with Contents: read on ${TOOLS_REPOSITORY} (renew it if it expired). GITHUB_TOKEN cannot read another private repository."
+        if [ "${ACCESS_REQUIRED}" = "true" ]; then
+          echo "::error title=Runtime tools source unavailable::${reason}"
+          exit 1
+        fi
+        echo "::warning title=Runtime image steps skipped::${reason}"
+        {
+          echo "### Runtime image steps skipped"
+          echo
+          echo "${reason}"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Checkout the tools repository
+      if: steps.probe.outputs.available == 'true'
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repository }}
+        path: ${{ inputs.path }}
+        token: ${{ inputs.token }}

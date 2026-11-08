@@ -376,9 +376,11 @@ class GitHubCopilotHTTPTransport:
         done = object()
         loop = asyncio.get_running_loop()
 
+        abort = _StreamAbort()
+
         def worker() -> None:
             try:
-                for chunk in self._send_stream_sync(payload):
+                for chunk in self._send_stream_sync(payload, abort=abort):
                     loop.call_soon_threadsafe(queue.put_nowait, chunk)
             except BaseException as exc:  # noqa: BLE001 - propagated through async iterator.
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
@@ -395,6 +397,10 @@ class GitHubCopilotHTTPTransport:
                     raise item
                 yield item
         finally:
+            # Reached on a normal end as well as when the consumer closes the
+            # stream early (a stopped run): the reader thread stops at once
+            # instead of draining the rest of the reply.
+            abort.trigger()
             if not task.done():
                 task.cancel()
                 try:
@@ -404,7 +410,11 @@ class GitHubCopilotHTTPTransport:
         if not task.done():
             await task
 
-    def _send_stream_sync(self, payload: dict[str, Any]) -> Iterable[Mapping[str, Any]]:
+    def _send_stream_sync(
+        self,
+        payload: dict[str, Any],
+        abort: _StreamAbort | None = None,
+    ) -> Iterable[Mapping[str, Any]]:
         try:
             body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         except (TypeError, ValueError) as exc:
@@ -421,8 +431,10 @@ class GitHubCopilotHTTPTransport:
         )
         try:
             with self._open(request, timeout=self.timeout) as response:
+                if abort is not None:
+                    abort.attach(response)
                 self._observe_response_headers(response)
-                yield from parse_sse_json_events(_iter_response_lines(response))
+                yield from parse_sse_json_events(_iter_response_lines(response, abort))
         except urllib_error.HTTPError as exc:
             response_text = _read_http_error_body(exc)
             if self._refresh_after_token_expired_http_error(exc, response_text):
@@ -434,8 +446,10 @@ class GitHubCopilotHTTPTransport:
                 )
                 try:
                     with self._open(request, timeout=self.timeout) as response:
+                        if abort is not None:
+                            abort.attach(response)
                         self._observe_response_headers(response)
-                        yield from parse_sse_json_events(_iter_response_lines(response))
+                        yield from parse_sse_json_events(_iter_response_lines(response, abort))
                         return
                 except urllib_error.HTTPError as retry_exc:
                     exc = retry_exc
@@ -906,7 +920,7 @@ class OpenAICompatibleProvider:
         if self.stream:
             if isinstance(raw_output, Mapping):
                 return self.adapter.normalize_response(raw_output)
-            return self.adapter.normalize_stream(raw_output)
+            return _ClosingEventStream(self.adapter.normalize_stream(raw_output), raw_output)
 
         if not isinstance(raw_output, Mapping):
             return self._transport_error_response(
@@ -1431,9 +1445,11 @@ class AIPlatformHTTPTransport:
         done = object()
         loop = asyncio.get_running_loop()
 
+        abort = _StreamAbort()
+
         def worker() -> None:
             try:
-                for chunk in self._send_stream_sync(payload):
+                for chunk in self._send_stream_sync(payload, abort=abort):
                     loop.call_soon_threadsafe(queue.put_nowait, chunk)
             except BaseException as exc:  # noqa: BLE001 - propagated through async iterator.
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
@@ -1450,6 +1466,9 @@ class AIPlatformHTTPTransport:
                     raise item
                 yield item
         finally:
+            # See GitHubCopilotHTTPTransport._send_stream: a consumer that
+            # closes the stream early stops the reader thread with it.
+            abort.trigger()
             if not task.done():
                 task.cancel()
                 try:
@@ -1465,7 +1484,11 @@ class AIPlatformHTTPTransport:
                 "AI Platform HTTP transport received a non-JSON payload"
             ) from exc
 
-    def _send_stream_sync(self, payload: dict[str, Any]) -> Iterable[Mapping[str, Any]]:
+    def _send_stream_sync(
+        self,
+        payload: dict[str, Any],
+        abort: _StreamAbort | None = None,
+    ) -> Iterable[Mapping[str, Any]]:
         body = self._encode_payload(payload)
         self._ensure_token()
         for attempt in range(2):
@@ -1474,7 +1497,9 @@ class AIPlatformHTTPTransport:
             )
             try:
                 with self._open(request, timeout=self.timeout) as response:
-                    yield from parse_sse_json_events(_iter_response_lines(response))
+                    if abort is not None:
+                        abort.attach(response)
+                    yield from parse_sse_json_events(_iter_response_lines(response, abort))
                 return
             except urllib_error.HTTPError as exc:
                 if attempt == 0 and self._should_reexchange(exc):
@@ -2671,9 +2696,102 @@ def _read_http_error_body(exc: urllib_error.HTTPError) -> str:
         return ""
 
 
-def _iter_response_lines(response: Any) -> Iterable[bytes]:
+class _StreamAbort:
+    """Lets the event loop stop a streaming transport read running in a worker thread.
+
+    The worker iterates the HTTP response with blocking ``readline`` calls.
+    Cancelling the asyncio task that consumes the stream never reached that
+    thread, so it read the model's reply to the end and the provider kept
+    generating (and billing) for a run nobody was waiting on. ``trigger``
+    sets the flag the reader checks between lines and closes the response,
+    so a read blocked on the socket returns at once.
+    """
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self._response: Any = None
+        self._lock = threading.Lock()
+
+    @property
+    def triggered(self) -> bool:
+        return self._event.is_set()
+
+    def attach(self, response: Any) -> None:
+        with self._lock:
+            self._response = response
+            close_now = self._event.is_set()
+        if close_now:
+            self._close()
+
+    def trigger(self) -> None:
+        self._event.set()
+        self._close()
+
+    def _close(self) -> None:
+        with self._lock:
+            response, self._response = self._response, None
+        close = getattr(response, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # noqa: BLE001 - closing a dying response is best effort.
+                pass
+
+
+async def _aclose_quietly(stream: Any) -> None:
+    aclose = getattr(stream, "aclose", None)
+    if callable(aclose):
+        try:
+            await aclose()
+        except Exception:  # noqa: BLE001 - the stream is being abandoned either way.
+            pass
+        return
+    close = getattr(stream, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class _ClosingEventStream:
+    """An event stream whose ``aclose`` also closes the transport stream under it.
+
+    ``normalize_stream`` is an async generator over the transport's chunks;
+    closing it alone left the transport generator, and the reader thread it
+    drives, to the garbage collector. The runner closes this wrapper when a
+    run is stopped mid-reply, and both layers end right away.
+    """
+
+    def __init__(self, events: AsyncIterator[Any], source: Any) -> None:
+        self._events = events
+        self._source = source
+
+    def __aiter__(self) -> "_ClosingEventStream":
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._events.__anext__()
+
+    async def aclose(self) -> None:
+        try:
+            await _aclose_quietly(self._events)
+        finally:
+            await _aclose_quietly(self._source)
+
+
+def _iter_response_lines(response: Any, abort: _StreamAbort | None = None) -> Iterable[bytes]:
     while True:
-        line = response.readline()
+        if abort is not None and abort.triggered:
+            break
+        try:
+            line = response.readline()
+        except Exception:
+            # The response was closed under the read by ``_StreamAbort``:
+            # that is the stop taking effect, not a transport failure.
+            if abort is not None and abort.triggered:
+                break
+            raise
         if not line:
             break
         yield line
