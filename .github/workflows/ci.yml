@@ -68,23 +68,30 @@ jobs:
     needs: native-runtime-tests
     # Heavy full-image integration smoke (builds the tools repo + Docker image).
     # Informational but non-blocking so it cannot red the run; the unit-test job
-    # is the gating check.
+    # is the gating check. The tools repo is private: the TOOLS_REPO_TOKEN secret
+    # reads it (GITHUB_TOKEN cannot). Without it a pull request skips the image
+    # steps with a warning; a push fails here so the gap stays visible.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Checkout runtime tools source
-        uses: actions/checkout@v4
+        id: tools
+        uses: ./.github/actions/runtime-tools-source
         with:
-          repository: dvnuo/engineering-flow-platform-tools
-          path: engineering-flow-platform-tools
+          token: ${{ secrets.TOOLS_REPO_TOKEN || github.token }}
+          required: ${{ github.event_name != 'pull_request' }}
       - name: Set up Go for runtime tools
+        if: steps.tools.outputs.available == 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: engineering-flow-platform-tools/go.mod
       - name: Prepare runtime tool binaries
+        if: steps.tools.outputs.available == 'true'
         run: EFP_TOOLS_REPO_DIR=engineering-flow-platform-tools scripts/prepare-runtime-tools.sh
-      - run: docker build -t efp-native-runtime-ci .
-      - run: |
+      - if: steps.tools.outputs.available == 'true'
+        run: docker build -t efp-native-runtime-ci .
+      - if: steps.tools.outputs.available == 'true'
+        run: |
           set -euo pipefail
           trap 'docker logs efp-native-runtime-ci || true; docker rm -f efp-native-runtime-ci || true' EXIT
           docker run -d \

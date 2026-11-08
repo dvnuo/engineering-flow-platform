@@ -3,6 +3,15 @@ script discovers every `cmd/<tool>/main.go` in the adjacent, checked-out, or
 cloned `engineering-flow-platform-tools` repository and writes Linux amd64
 runtime binaries here by default.
 
+In GitHub Actions the tools repository is private, so the image jobs (`docker`
+in Build Docker Image, `native-runtime-docker-smoke` in CI) read it with the
+repository secret `TOOLS_REPO_TOKEN`: a fine-grained personal access token with
+Contents: read on `dvnuo/engineering-flow-platform-tools`. The default
+`GITHUB_TOKEN` cannot read another private repository. Without the secret, or
+with an expired one, a pull request skips the image steps and leaves a warning
+on the run; a push to master fails the image jobs with the same message
+(`.github/actions/runtime-tools-source`).
+
 Current generated binaries include `jira`, `confluence`, `browser`, and `mobile-auto`. Future
 tools added under `cmd/<tool>` are prepared the same way.
 
