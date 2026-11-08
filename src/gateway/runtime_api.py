@@ -703,19 +703,22 @@ def _local_bridge_available(metadata: Optional[Dict[str, Any]]) -> bool:
     return isinstance(bridge, dict) and bridge.get("enabled") is not False
 
 
-def _collect_attached_handoff_files(
+def _collect_attached_files(
     *,
     session_id: str,
     attachments: Optional[List[str]],
-    include_images: bool = True,
+    images_unreadable: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Where each attachment the model cannot read sits on disk, for the handoff.
+    """Where each attachment of this message sits on disk, for the attached-files block.
 
-    The office formats the runtime does not parse (doc, dot, xls) are always
-    handed to the agent; images only when the chat provider cannot see them
-    (``include_images``). Uploads live under the workspace
-    (``/workspace/uploads``), so the agent passes the path to the analysis
-    skill as it is; nothing is copied.
+    Every file the member attached is listed, whatever its type: the member
+    may ask for it to be processed, which takes the file itself rather than
+    the excerpt the model gets. ``unreadable`` marks the files the chat model
+    cannot read, the office formats the runtime does not parse (doc, dot,
+    xls) and, when the chat provider cannot see images
+    (``images_unreadable``), the images; the block tells the agent how those
+    are analyzed. Uploads live under the workspace (``/workspace/uploads``),
+    so the agent reads the path as it is; nothing is copied.
     """
     files: List[Dict[str, Any]] = []
     if not (attachments and isinstance(attachments, list)):
@@ -732,8 +735,6 @@ def _collect_attached_handoff_files(
                 continue
             content_type = str(metadata.content_type or "")
             is_image = content_type.startswith("image/")
-            if not ((is_image and include_images) or is_forwarded_upload_mime(content_type)):
-                continue
             file_path = get_file_path(file_id)
             if not file_path.exists():
                 continue
@@ -744,6 +745,7 @@ def _collect_attached_handoff_files(
                     "name": str(getattr(metadata, "original_filename", "") or file_path.name),
                     "content_type": metadata.content_type,
                     "size_bytes": file_path.stat().st_size,
+                    "unreadable": bool((is_image and images_unreadable) or is_forwarded_upload_mime(content_type)),
                 }
             )
         except StoredFileNotFoundError:
@@ -751,6 +753,39 @@ def _collect_attached_handoff_files(
         except Exception as e:
             logger.warning(f"[api_chat] Failed to locate attachment {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
     return files
+
+
+def _attached_files_block(
+    files: List[Dict[str, Any]],
+    *,
+    attachment_context: Dict[str, Any],
+    bridge_available: bool,
+) -> str:
+    """The attached-files block of this message: each file's path and what of it reached the model."""
+    parsed = {str(file_id) for file_id in (attachment_context.get("context_file_ids") or [])}
+    failed = {str(item.get("file_id")) for item in (attachment_context.get("failures") or []) if isinstance(item, dict)}
+    described: List[Dict[str, Any]] = []
+    for item in files:
+        entry = dict(item)
+        file_id = str(entry.get("file_id") or "")
+        if entry.get("unreadable"):
+            entry["status"] = "unreadable"
+        elif file_id in parsed:
+            entry["status"] = "excerpt"
+        elif str(entry.get("content_type") or "").startswith("image/"):
+            entry["status"] = "image_sent"
+        elif file_id in failed:
+            entry["status"] = "not_parsed"
+        else:
+            entry["status"] = ""
+        described.append(entry)
+    return build_attachment_handoff(described, bridge_available=bridge_available)
+
+
+def _with_attached_files_block(block: str, rest: Optional[str]) -> str:
+    """The attached-files block leads the model message; the excerpt or the parse notice follows."""
+    rest_text = (rest or "").strip()
+    return f"{block}\n\n{rest_text}" if rest_text else block
 
 
 def _chunk_context_text(chunk: Chunk) -> str:
@@ -940,7 +975,12 @@ def _build_attachment_parse_failure_notice(failures: List[Dict[str, Any]]) -> st
         error = safe_preview(str(item.get("error") or "unknown error"), 240)
         lines.append(f"- {file_id}: {error}")
     lines.append("")
-    lines.append("Do not claim to have read or summarized those failed attachment(s). Answer only from the available text context, image attachment(s), and the user's message.")
+    lines.append(
+        "Do not claim to have read or summarized those failed attachment(s) from this prompt. Their bytes are still "
+        "in the workspace at the paths listed under attached files: read them from there with your tools when the "
+        "user's request needs their content; otherwise answer from the available text context, image "
+        "attachment(s), and the user's message."
+    )
     return "\n".join(lines)
 
 
@@ -1457,23 +1497,26 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
-        # The chat model reads parsed documents and text. Images reach it as
-        # image parts only when the provider can see them (AI Platform, or
-        # Copilot with EFP_COPILOT_VISION_VIA_CHAT); every other image, and the
-        # office formats the runtime does not parse, is handed to the agent for
-        # the attached-files analysis skill (Productivity Suite through the
-        # member's browser) instead.
+        # The chat model reads parsed documents and text as an excerpt. Images
+        # reach it as image parts only when the provider can see them (AI
+        # Platform, or Copilot with EFP_COPILOT_VISION_VIA_CHAT); every other
+        # image, and the office formats the runtime does not parse, is handed
+        # to the agent for the attached-files analysis skill (Productivity
+        # Suite through the member's browser) instead. Every attachment is
+        # listed with its workspace path, whatever reached the model: a request
+        # to process the file takes the file, not the excerpt.
         vision_via_chat = chat_provider_accepts_images(global_config.llm if isinstance(global_config.llm, dict) else {})
         attached_images = await _collect_attached_images(
             session_id=session_id,
             message=message,
             attachments=attachment_ids,
         ) if vision_via_chat else []
-        attached_handoff_files = _collect_attached_handoff_files(
+        attached_files = _collect_attached_files(
             session_id=session_id,
             attachments=attachment_ids,
-            include_images=not vision_via_chat,
+            images_unreadable=not vision_via_chat,
         )
+        attached_handoff_files = [item for item in attached_files if item.get("unreadable")]
         
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
         context_file_ids = attachment_context.get("context_file_ids", [])
@@ -1530,14 +1573,13 @@ async def api_chat(request: web.Request) -> web.Response:
                 f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
                 f"{failure_notice}"
             )
-        if attached_handoff_files:
-            handoff = build_attachment_handoff(attached_handoff_files, bridge_available=_local_bridge_available(execution_metadata))
-            if transient_model_message:
-                transient_model_message = f"{transient_model_message}\n\n{handoff}"
-            elif failure_notice:
-                transient_model_message = f"{failure_notice}\n\n{handoff}"
-            else:
-                transient_model_message = handoff
+        if attached_files:
+            block = _attached_files_block(
+                attached_files,
+                attachment_context=attachment_context,
+                bridge_available=_local_bridge_available(execution_metadata),
+            )
+            transient_model_message = _with_attached_files_block(block, transient_model_message or failure_notice)
         # Revalidate message is not empty to prevent downstream LLM input from being empty
         if not history_message.strip() and not transient_model_message:
             logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
@@ -1846,23 +1888,26 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             return await _stream_existing_chat_run(request, session_id=session_id, request_id=request_id)
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
-        # The chat model reads parsed documents and text. Images reach it as
-        # image parts only when the provider can see them (AI Platform, or
-        # Copilot with EFP_COPILOT_VISION_VIA_CHAT); every other image, and the
-        # office formats the runtime does not parse, is handed to the agent for
-        # the attached-files analysis skill (Productivity Suite through the
-        # member's browser) instead.
+        # The chat model reads parsed documents and text as an excerpt. Images
+        # reach it as image parts only when the provider can see them (AI
+        # Platform, or Copilot with EFP_COPILOT_VISION_VIA_CHAT); every other
+        # image, and the office formats the runtime does not parse, is handed
+        # to the agent for the attached-files analysis skill (Productivity
+        # Suite through the member's browser) instead. Every attachment is
+        # listed with its workspace path, whatever reached the model: a request
+        # to process the file takes the file, not the excerpt.
         vision_via_chat = chat_provider_accepts_images(global_config.llm if isinstance(global_config.llm, dict) else {})
         attached_images = await _collect_attached_images(
             session_id=session_id,
             message=message,
             attachments=attachment_ids,
         ) if vision_via_chat else []
-        attached_handoff_files = _collect_attached_handoff_files(
+        attached_files = _collect_attached_files(
             session_id=session_id,
             attachments=attachment_ids,
-            include_images=not vision_via_chat,
+            images_unreadable=not vision_via_chat,
         )
+        attached_handoff_files = [item for item in attached_files if item.get("unreadable")]
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
         context_file_ids = attachment_context.get("context_file_ids", [])
         failures = attachment_context.get("failures", [])
@@ -1913,14 +1958,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 f"{model_context_query or history_message or 'Please answer using the available image attachment(s).'}\n\n"
                 f"{failure_notice}"
             )
-        if attached_handoff_files:
-            handoff = build_attachment_handoff(attached_handoff_files, bridge_available=_local_bridge_available(execution_metadata))
-            if transient_model_message:
-                transient_model_message = f"{transient_model_message}\n\n{handoff}"
-            elif failure_notice:
-                transient_model_message = f"{failure_notice}\n\n{handoff}"
-            else:
-                transient_model_message = handoff
+        if attached_files:
+            block = _attached_files_block(
+                attached_files,
+                attachment_context=attachment_context,
+                bridge_available=_local_bridge_available(execution_metadata),
+            )
+            transient_model_message = _with_attached_files_block(block, transient_model_message or failure_notice)
 
         # Create streaming response
         response = web.StreamResponse(
