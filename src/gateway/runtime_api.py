@@ -11,7 +11,7 @@ import uuid
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple, Sequence
 from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -760,9 +760,18 @@ def _attached_files_block(
     *,
     attachment_context: Dict[str, Any],
     bridge_available: bool,
+    excerpt_file_ids: Sequence[str] = (),
 ) -> str:
-    """The attached-files block of this message: each file's path and what of it reached the model."""
+    """The attached-files block of this message: each file's path and what of it reached the model.
+
+    ``excerpt_file_ids`` are the parsed files whose text the transient model
+    message holds. Retrieval keeps the top-k chunks across all the files and the
+    direct fallback stops at its character budget, so a parsed file can have no
+    excerpt in the prompt; it is marked so rather than sending the model to look
+    for text that is not there.
+    """
     parsed = {str(file_id) for file_id in (attachment_context.get("context_file_ids") or [])}
+    excerpted = {str(file_id) for file_id in excerpt_file_ids}
     failed = {str(item.get("file_id")) for item in (attachment_context.get("failures") or []) if isinstance(item, dict)}
     described: List[Dict[str, Any]] = []
     for item in files:
@@ -770,8 +779,10 @@ def _attached_files_block(
         file_id = str(entry.get("file_id") or "")
         if entry.get("unreadable"):
             entry["status"] = "unreadable"
-        elif file_id in parsed:
+        elif file_id in excerpted:
             entry["status"] = "excerpt"
+        elif file_id in parsed:
+            entry["status"] = "not_in_prompt"
         elif str(entry.get("content_type") or "").startswith("image/"):
             entry["status"] = "image_sent"
         elif file_id in failed:
@@ -898,10 +909,18 @@ async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: Li
     return {"context_file_ids": context_file_ids, "image_file_ids": image_file_ids, "failures": failures, "parsed_file_ids": parsed_file_ids, "already_ready_file_ids": already_ready_file_ids}
 
 
-def _build_direct_attachment_context_prompt(*, session_id: str, file_ids: List[str], user_question: str, max_chars: int = 12000) -> Optional[str]:
+def _direct_attachment_context(
+    *, session_id: str, file_ids: List[str], user_question: str, max_chars: int = 12000
+) -> Tuple[Optional[str], List[str]]:
+    """The direct fallback prompt and the ids of the files whose text fitted in it.
+
+    Files are rendered in attachment order until ``max_chars`` is used up, so a
+    later file can be left out entirely; the caller marks such a file as not
+    excerpted instead of telling the model its text is in the prompt.
+    """
     parts: List[str] = []
     used = 0
-    has_chunk_text = False
+    included: List[str] = []
     for file_id in file_ids:
         meta = file_context_storage.get_file_meta(session_id, file_id)
         header = f"--- File: {(meta.filename if meta else file_id)} ({(meta.content_type if meta else 'unknown')}) ---"
@@ -909,6 +928,7 @@ def _build_direct_attachment_context_prompt(*, session_id: str, file_ids: List[s
             break
         parts.append(header)
         used += len(header) + 1
+        file_has_text = False
         for idx, chunk in enumerate(file_context_storage.get_file_chunks(file_id), 1):
             text = _chunk_context_text(chunk)
             if not text:
@@ -919,17 +939,28 @@ def _build_direct_attachment_context_prompt(*, session_id: str, file_ids: List[s
                 remain = max_chars - used
                 if remain > 64:
                     parts.append(candidate[:remain])
-                    has_chunk_text = True
+                    file_has_text = True
                 used = max_chars
                 break
             parts.append(candidate)
             used += len(candidate)
-            has_chunk_text = True
+            file_has_text = True
+        if file_has_text:
+            included.append(file_id)
         if used >= max_chars:
             break
-    if not has_chunk_text:
-        return None
-    return f"Based on the attached file context, answer the user's request.\n\nUser request:\n{user_question}\n\nAttached file context:\n" + "\n".join(parts) + "\n\nAnswer:"
+    if not included:
+        return None, []
+    prompt = (
+        f"Based on the attached file context, answer the user's request.\n\nUser request:\n{user_question}\n\nAttached file context:\n"
+        + "\n".join(parts)
+        + "\n\nAnswer:"
+    )
+    return prompt, included
+
+
+def _build_direct_attachment_context_prompt(*, session_id: str, file_ids: List[str], user_question: str, max_chars: int = 12000) -> Optional[str]:
+    return _direct_attachment_context(session_id=session_id, file_ids=file_ids, user_question=user_question, max_chars=max_chars)[0]
 
 
 def _prepare_attachment_transient_model_message(
@@ -939,9 +970,17 @@ def _prepare_attachment_transient_model_message(
     model_context_query: str,
     top_k: int = 5,
     max_tokens: int = 4000,
-) -> Tuple[Optional[str], List[Dict[str, Any]], str]:
+) -> Tuple[Optional[str], List[Dict[str, Any]], str, List[str]]:
+    """The excerpt prompt for the parsed attachments.
+
+    Returns the prompt, the chunk citations, where the prompt came from and the
+    ids of the files whose text is in it. Retrieval keeps the top-k chunks across
+    all the files and the direct fallback stops at its character budget, so a
+    parsed file can contribute nothing; the attached-files block marks it so.
+    """
     transient_model_message: Optional[str] = None
     citations: List[Dict[str, Any]] = []
+    excerpt_file_ids: List[str] = []
     source = "none"
     try:
         enhanced_message, _budget_status, citations = inject_context(
@@ -954,31 +993,47 @@ def _prepare_attachment_transient_model_message(
         if enhanced_message and enhanced_message != model_context_query:
             transient_model_message = enhanced_message
             source = "inject_context"
+            cited = {str(item.get("file_id")) for item in citations if isinstance(item, dict) and item.get("file_id")}
+            # Retrieval cites every chunk it rendered; without citations (a
+            # patched retriever) every parsed file counts as excerpted, as before.
+            excerpt_file_ids = [file_id for file_id in context_file_ids if file_id in cited] if cited else list(context_file_ids)
     except Exception:
         logger.warning("[attachment_context] Failed to inject file context", exc_info=True)
 
     if not transient_model_message:
-        transient_model_message = _build_direct_attachment_context_prompt(
+        transient_model_message, excerpt_file_ids = _direct_attachment_context(
             session_id=session_id, file_ids=context_file_ids, user_question=model_context_query
         )
         if transient_model_message:
             source = "direct_fallback"
-    return transient_model_message, citations, source
+    return transient_model_message, citations, source, excerpt_file_ids
 
 
-def _build_attachment_parse_failure_notice(failures: List[Dict[str, Any]]) -> str:
+def _build_attachment_parse_failure_notice(
+    failures: List[Dict[str, Any]], attached_files: Sequence[Dict[str, Any]] = ()
+) -> str:
+    """The notice for the attachments that could not be parsed.
+
+    A failed file that is still stored for this session is named with its
+    workspace path (it is also in the attached-files block); one the runtime
+    could not find, or that belongs to another session, never reaches that block,
+    so the notice says it is not available instead of promising a path.
+    """
     if not failures:
         return ""
+    stored = {str(item.get("file_id")): str(item.get("path") or "") for item in attached_files if isinstance(item, dict)}
     lines = ["Some attached file(s) could not be parsed and are not available to the model:"]
     for item in failures:
         file_id = str(item.get("file_id") or "unknown")
         error = safe_preview(str(item.get("error") or "unknown error"), 240)
-        lines.append(f"- {file_id}: {error}")
+        path = stored.get(file_id)
+        where = f" (still in the workspace at {path})" if path else " (not available in the workspace)"
+        lines.append(f"- {file_id}: {error}{where}")
     lines.append("")
     lines.append(
-        "Do not claim to have read or summarized those failed attachment(s) from this prompt. Their bytes are still "
-        "in the workspace at the paths listed under attached files: read them from there with your tools when the "
-        "user's request needs their content; otherwise answer from the available text context, image "
+        "Do not claim to have read or summarized those failed attachment(s) from this prompt. A failed file that is "
+        "still in the workspace can be read from its path with your tools when the user's request needs its content; "
+        "one that is not available cannot be recovered here. Otherwise answer from the available text context, image "
         "attachment(s), and the user's message."
     )
     return "\n".join(lines)
@@ -1521,7 +1576,7 @@ async def api_chat(request: web.Request) -> web.Response:
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
         context_file_ids = attachment_context.get("context_file_ids", [])
         failures = attachment_context.get("failures", [])
-        failure_notice = _build_attachment_parse_failure_notice(failures)
+        failure_notice = _build_attachment_parse_failure_notice(failures, attached_files)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
         if failures and not context_file_ids and not attached_images and not attached_handoff_files:
@@ -1546,8 +1601,9 @@ async def api_chat(request: web.Request) -> web.Response:
         logger.info("[api_chat] Message summary: session_id=%s attached_images=%d message_length=%d preview=%s", safe_log_field(session_id, 120), len(attached_images) if attached_images else 0, len(original_msg_for_history), safe_preview(original_msg_for_history, 120))
         transient_model_message: Optional[str] = None
         citations: List[Dict[str, Any]] = []
+        excerpt_file_ids: List[str] = []
         if context_file_ids:
-            transient_model_message, citations, _source = _prepare_attachment_transient_model_message(
+            transient_model_message, citations, _source, excerpt_file_ids = _prepare_attachment_transient_model_message(
                 session_id=session_id,
                 context_file_ids=context_file_ids,
                 model_context_query=model_context_query,
@@ -1578,6 +1634,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 attached_files,
                 attachment_context=attachment_context,
                 bridge_available=_local_bridge_available(execution_metadata),
+                excerpt_file_ids=excerpt_file_ids,
             )
             transient_model_message = _with_attached_files_block(block, transient_model_message or failure_notice)
         # Revalidate message is not empty to prevent downstream LLM input from being empty
@@ -1911,7 +1968,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         attachment_context = await _ensure_chat_attachment_context(session_id=session_id, attachment_ids=attachment_ids) if attachment_ids else {"context_file_ids": [], "failures": []}
         context_file_ids = attachment_context.get("context_file_ids", [])
         failures = attachment_context.get("failures", [])
-        failure_notice = _build_attachment_parse_failure_notice(failures)
+        failure_notice = _build_attachment_parse_failure_notice(failures, attached_files)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
         if failures and not context_file_ids and not attached_images and not attached_handoff_files:
@@ -1932,8 +1989,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
         transient_model_message: Optional[str] = None
+        excerpt_file_ids: List[str] = []
         if context_file_ids:
-            transient_model_message, _citations, _source = _prepare_attachment_transient_model_message(
+            transient_model_message, _citations, _source, excerpt_file_ids = _prepare_attachment_transient_model_message(
                 session_id=session_id,
                 context_file_ids=context_file_ids,
                 model_context_query=model_context_query,
@@ -1963,6 +2021,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 attached_files,
                 attachment_context=attachment_context,
                 bridge_available=_local_bridge_available(execution_metadata),
+                excerpt_file_ids=excerpt_file_ids,
             )
             transient_model_message = _with_attached_files_block(block, transient_model_message or failure_notice)
 

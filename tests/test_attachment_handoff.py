@@ -3,6 +3,8 @@
 - The block lists each attached file with its path, type, size, the member's
   file name and what of it reached the model: a parsed document travels as an
   excerpt, which is a preview; processing the file takes the path.
+- A parsed file that the top-k retrieval or the fallback budget left out of
+  the prompt is marked so instead of being called excerpted.
 - Images reach the model as image parts only when the chat provider can see
   them (AI Platform, or Copilot with EFP_COPILOT_VISION_VIA_CHAT); otherwise
   they are marked as not readable.
@@ -145,9 +147,11 @@ def _handoff_chat_fixture(monkeypatch, tmp_path, *, provider, bridge: bool):
     shot = tmp_path / "shot.png"
     book = tmp_path / "book.xls"
     sheet = tmp_path / "sheet.xlsx"
+    notes = tmp_path / "notes.csv"
     shot.write_bytes(b"one")
     book.write_bytes(b"two")
     sheet.write_bytes(b"four")
+    notes.write_bytes(b"a,b\n")
 
     class _Meta:
         def __init__(self, file_id: str, content_type: str, name: str):
@@ -160,8 +164,9 @@ def _handoff_chat_fixture(monkeypatch, tmp_path, *, provider, bridge: bool):
         "f1": _Meta("f1", "image/png", "f1-shot.png"),
         "f2": _Meta("f2", "application/vnd.ms-excel", "f2-book.xls"),
         "f3": _Meta("f3", XLSX_MIME, "f3-sales.xlsx"),
+        "f4": _Meta("f4", "text/csv", "f4-notes.csv"),
     }
-    file_map = {"f1": shot, "f2": book, "f3": sheet}
+    file_map = {"f1": shot, "f2": book, "f3": sheet, "f4": notes}
 
     async def _fake_run_chat_via_execution_bus(**kwargs):
         captured.update(kwargs)
@@ -268,7 +273,7 @@ async def test_api_chat_lists_a_parsed_spreadsheet_with_its_path_before_the_exce
     monkeypatch.setattr(
         runtime_api,
         "_prepare_attachment_transient_model_message",
-        lambda **kwargs: (f"EXCERPT for: {kwargs['model_context_query']}", [], "inject_context"),
+        lambda **kwargs: (f"EXCERPT for: {kwargs['model_context_query']}", [], "inject_context", ["f3"]),
     )
 
     response = await runtime_api.api_chat(_Request({"message": "turn this into a csv", "session_id": "s1", "attachments": ["f3", "f1"]}))
@@ -295,7 +300,7 @@ async def test_api_chat_with_only_a_parsed_file_lists_it_without_the_analysis_wo
         return {"context_file_ids": ["f3"], "image_file_ids": [], "failures": [], "parsed_file_ids": ["f3"], "already_ready_file_ids": []}
 
     monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _context)
-    monkeypatch.setattr(runtime_api, "_prepare_attachment_transient_model_message", lambda **kwargs: ("EXCERPT", [], "inject_context"))
+    monkeypatch.setattr(runtime_api, "_prepare_attachment_transient_model_message", lambda **kwargs: ("EXCERPT", [], "inject_context", ["f3"]))
 
     response = await runtime_api.api_chat(_Request({"message": "", "session_id": "s1", "attachments": ["f3"]}))
     assert response.status == 200
@@ -304,3 +309,25 @@ async def test_api_chat_with_only_a_parsed_file_lists_it_without_the_analysis_wo
     assert prompt.startswith(ATTACHED_FILES_HEADER) and str(sheet) in prompt
     assert prompt.endswith("EXCERPT")
     assert HANDOFF_HEADER not in prompt and HANDOFF_WITHOUT_BRIDGE not in prompt
+
+
+@pytest.mark.asyncio
+async def test_api_chat_marks_a_parsed_file_that_retrieval_left_out_of_the_prompt(monkeypatch, tmp_path):
+    """Top-k retrieval across two parsed files can cite only one: the other is not called excerpted."""
+    monkeypatch.delenv(COPILOT_VISION_VIA_CHAT_ENV, raising=False)
+    runtime_api, captured, _shot, _book = _handoff_chat_fixture(monkeypatch, tmp_path, provider="github_copilot", bridge=False)
+    sheet = tmp_path / "sheet.xlsx"
+    notes = tmp_path / "notes.csv"
+
+    async def _context(*, session_id, attachment_ids):
+        return {"context_file_ids": ["f3", "f4"], "image_file_ids": [], "failures": [], "parsed_file_ids": ["f3", "f4"], "already_ready_file_ids": []}
+
+    monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _context)
+    monkeypatch.setattr(runtime_api, "_prepare_attachment_transient_model_message", lambda **kwargs: ("EXCERPT of f3", [], "inject_context", ["f3"]))
+
+    response = await runtime_api.api_chat(_Request({"message": "compare them", "session_id": "s1", "attachments": ["f3", "f4"]}))
+    assert response.status == 200
+    prompt = captured["transient_model_message"]
+    assert f"- {sheet} ({XLSX_MIME}, 4 bytes, attached as \"f3-sales.xlsx\"; an excerpt of it is in this prompt)" in prompt
+    assert f"- {notes} (text/csv, 4 bytes, attached as \"f4-notes.csv\"; parsed, but no excerpt of it is in this prompt; read it from its path)" in prompt
+    assert prompt.endswith("EXCERPT of f3")

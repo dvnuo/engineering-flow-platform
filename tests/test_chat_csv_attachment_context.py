@@ -87,11 +87,12 @@ def test_prepare_transient_model_message_fallback_on_inject_exception(monkeypatc
     monkeypatch.setattr(runtime_api, "inject_context", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(runtime_api.file_context_storage, "get_file_meta", lambda s, f: SimpleNamespace(filename="a.csv", content_type="text/csv"))
     monkeypatch.setattr(runtime_api.file_context_storage, "get_file_chunks", lambda _f: [Chunk(chunk_id="c1", file_id="f1", session_id="s1", type="table", content="", markdown="|name|age|\n|---|---|\n|alice|30|", source="x", content_hash="h")])
-    transient, citations, source = runtime_api._prepare_attachment_transient_model_message(session_id="s1", context_file_ids=["f1"], model_context_query="Please summarize the attached file(s).")
+    transient, citations, source, excerpt_file_ids = runtime_api._prepare_attachment_transient_model_message(session_id="s1", context_file_ids=["f1"], model_context_query="Please summarize the attached file(s).")
     assert transient and "alice" in transient and "name" in transient
     assert transient != "[attachment]"
     assert isinstance(citations, list)
     assert source == "direct_fallback"
+    assert excerpt_file_ids == ["f1"]
 
 
 @pytest.mark.asyncio
@@ -131,7 +132,7 @@ async def test_api_chat_and_stream_use_unavailable_context_guard(monkeypatch):
         return []
     monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _fake_ensure)
     monkeypatch.setattr(runtime_api, "_collect_attached_images", _fake_images)
-    monkeypatch.setattr(runtime_api, "_prepare_attachment_transient_model_message", lambda **kwargs: (None, [], "none"))
+    monkeypatch.setattr(runtime_api, "_prepare_attachment_transient_model_message", lambda **kwargs: (None, [], "none", []))
     called = {"run": 0}
     async def fake_run(*args, **kwargs):
         called["run"] += 1
@@ -159,7 +160,7 @@ async def test_api_chat_empty_message_csv_attachment_builds_transient_context(mo
         return {"context_file_ids": ["f1"], "failures": []}
     def _fake_prepare(**kwargs):
         captured["model_context_query"] = kwargs.get("model_context_query")
-        return ("name,age\nalice,30", [], "direct_fallback")
+        return ("name,age\nalice,30", [], "direct_fallback", ["f1"])
     async def _fake_bus(**kwargs):
         captured.update(kwargs)
         return {"response": "ok", "request_id": "r1"}
@@ -254,7 +255,7 @@ async def test_api_chat_good_csv_plus_failed_csv_warns_model(monkeypatch):
     captured = {}
     async def _fake_images(**kwargs): return []
     async def _fake_ensure(**kwargs): return {"context_file_ids": ["csv_good"], "failures": [{"file_id": "csv_bad", "error": "bad csv"}]}
-    def _fake_prepare(**kwargs): return ("name,age\nalice,30", [], "direct_fallback")
+    def _fake_prepare(**kwargs): return ("name,age\nalice,30", [], "direct_fallback", ["csv_good"])
     async def _fake_bus(**kwargs): captured.update(kwargs); return {"response": "ok", "request_id": "r1"}
     monkeypatch.setattr(runtime_api, "_collect_attached_images", _fake_images)
     monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _fake_ensure)
@@ -302,3 +303,43 @@ async def test_api_chat_stream_image_plus_failed_csv_warns_model(monkeypatch):
     assert getattr(resp, "status", 0) == 200
     assert "csv_bad" in captured["transient_model_message"]
     assert "Do not claim" in captured["transient_model_message"]
+
+
+def test_direct_context_reports_the_files_whose_text_fitted(monkeypatch):
+    """The fallback stops at its budget: a later file is left out and must not be called excerpted."""
+    monkeypatch.setattr(runtime_api.file_context_storage, "get_file_meta", lambda s, f: SimpleNamespace(filename=f"{f}.csv", content_type="text/csv"))
+    chunks = {
+        "f1": [Chunk(chunk_id="c1", file_id="f1", session_id="s1", type="paragraph", content="row,value\n" + ("a,1\n" * 100), source="x", content_hash="h1")],
+        "f2": [Chunk(chunk_id="c2", file_id="f2", session_id="s1", type="paragraph", content="name,age\nalice,30", source="x", content_hash="h2")],
+    }
+    monkeypatch.setattr(runtime_api.file_context_storage, "get_file_chunks", lambda f: chunks[f])
+    prompt, included = runtime_api._direct_attachment_context(session_id="s1", file_ids=["f1", "f2"], user_question="q", max_chars=300)
+    assert prompt is not None and "row,value" in prompt and "alice" not in prompt
+    assert included == ["f1"]
+    prompt, included = runtime_api._direct_attachment_context(session_id="s1", file_ids=["f1", "f2"], user_question="q")
+    assert "alice" in prompt
+    assert included == ["f1", "f2"]
+
+
+def test_prepare_transient_model_message_reports_the_files_retrieval_cited(monkeypatch):
+    """Top-k retrieval runs across all the files: a file without a cited chunk has no excerpt in the prompt."""
+    monkeypatch.setattr(
+        runtime_api,
+        "inject_context",
+        lambda **kwargs: ("Based on the following context ...", "top-k", [{"chunk_id": "c9", "file_id": "f2", "page": None, "type": "table", "preview": "x"}]),
+    )
+    transient, citations, source, excerpt_file_ids = runtime_api._prepare_attachment_transient_model_message(session_id="s1", context_file_ids=["f1", "f2"], model_context_query="compare them")
+    assert transient.startswith("Based on") and source == "inject_context"
+    assert citations[0]["file_id"] == "f2"
+    assert excerpt_file_ids == ["f2"]
+
+
+def test_failure_notice_names_the_workspace_path_of_a_stored_failed_file():
+    """A failed file still stored for this session is named with its path; a missing one is not promised one."""
+    notice = runtime_api._build_attachment_parse_failure_notice(
+        [{"file_id": "f9", "error": "bad csv"}, {"file_id": "gone", "error": "File not found"}],
+        [{"file_id": "f9", "path": "/workspace/uploads/f9.csv"}],
+    )
+    assert "- f9: bad csv (still in the workspace at /workspace/uploads/f9.csv)" in notice
+    assert "- gone: File not found (not available in the workspace)" in notice
+    assert "paths listed under attached files" not in notice

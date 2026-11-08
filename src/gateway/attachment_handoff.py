@@ -52,6 +52,7 @@ HANDOFF_WITHOUT_BRIDGE = (
 # wording as well.
 STATUS_NOTES = {
     "excerpt": "an excerpt of it is in this prompt",
+    "not_in_prompt": "parsed, but no excerpt of it is in this prompt; read it from its path",
     "not_parsed": "it could not be parsed, read it from its path",
     "image_sent": "sent to the model as an image",
     "unreadable": "not readable by the chat model",
