@@ -1,12 +1,18 @@
-"""Attachments the chat model cannot read are handed to the agent.
+"""Every attachment is handed to the agent with its workspace path.
 
+- The block lists each attached file with its path, type, size, the member's
+  file name and what of it reached the model: a parsed document travels as an
+  excerpt, which is a preview; processing the file takes the path.
+- A parsed file that the top-k retrieval or the fallback budget left out of
+  the prompt is marked so instead of being called excerpted.
 - Images reach the model as image parts only when the chat provider can see
   them (AI Platform, or Copilot with EFP_COPILOT_VISION_VIA_CHAT); otherwise
-  they are listed in the handoff with their workspace paths.
+  they are marked as not readable.
 - The office formats the runtime does not parse (doc, dot, xls) are always
-  listed in the handoff and never parsed.
-- The handoff says whether this chat can analyze the files (the Local bridge
-  connector is on) or must tell the member it cannot.
+  marked as not readable and never parsed.
+- For the files marked as not readable the block says whether this chat can
+  analyze them (the Local bridge connector is on) or must tell the member it
+  cannot.
 """
 import asyncio
 
@@ -14,6 +20,8 @@ import pytest
 
 from src.efp_runtime.llm.vision import COPILOT_VISION_VIA_CHAT_ENV
 from src.gateway.attachment_handoff import (
+    ATTACHED_FILES_HEADER,
+    ATTACHED_FILES_RULE,
     HANDOFF_HEADER,
     HANDOFF_WITH_BRIDGE,
     HANDOFF_WITHOUT_BRIDGE,
@@ -33,19 +41,47 @@ from src.utils.file_parser.validators import (
 
 def test_build_attachment_handoff():
     files = [
-        {"path": "/workspace/uploads/abc.png", "name": "shot.png", "content_type": "image/png", "size_bytes": 1234},
-        {"path": "/workspace/uploads/def.xls", "name": "def.xls", "content_type": "application/vnd.ms-excel", "size_bytes": 99},
+        {"path": "/workspace/uploads/abc.png", "name": "shot.png", "content_type": "image/png", "size_bytes": 1234, "status": "unreadable"},
+        {"path": "/workspace/uploads/def.xls", "name": "def.xls", "content_type": "application/vnd.ms-excel", "size_bytes": 99, "status": "unreadable"},
+        {
+            "path": "/workspace/uploads/ghi.xlsx",
+            "name": "sales.xlsx",
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "size_bytes": 2048,
+            "status": "excerpt",
+        },
     ]
     text = build_attachment_handoff(files, bridge_available=True)
-    assert text.startswith(HANDOFF_HEADER)
-    assert '- /workspace/uploads/abc.png (image/png, 1234 bytes, attached as "shot.png")' in text
-    assert "- /workspace/uploads/def.xls (application/vnd.ms-excel, 99 bytes)" in text
+    assert text.startswith(ATTACHED_FILES_HEADER)
+    assert '- /workspace/uploads/abc.png (image/png, 1234 bytes, attached as "shot.png"; not readable by the chat model)' in text
+    assert "- /workspace/uploads/def.xls (application/vnd.ms-excel, 99 bytes; not readable by the chat model)" in text
+    assert (
+        '- /workspace/uploads/ghi.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, 2048 bytes, '
+        'attached as "sales.xlsx"; an excerpt of it is in this prompt)'
+    ) in text
+    # The rule comes after the list, the handoff wording after the rule.
+    assert text.index(ATTACHED_FILES_RULE) > text.index("ghi.xlsx")
+    assert text.index(HANDOFF_HEADER) > text.index(ATTACHED_FILES_RULE)
     assert HANDOFF_WITH_BRIDGE in text and HANDOFF_WITHOUT_BRIDGE not in text
     assert "Productivity Suite" in text and "inspect-image" not in text
 
     offline = build_attachment_handoff(files, bridge_available=False)
     assert HANDOFF_WITHOUT_BRIDGE in offline and HANDOFF_WITH_BRIDGE not in offline
     assert build_attachment_handoff([], bridge_available=True) == ""
+
+
+def test_build_attachment_handoff_for_readable_files_only_skips_the_analysis_wording():
+    files = [
+        {"path": "/workspace/uploads/ghi.xlsx", "name": "sales.xlsx", "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "size_bytes": 2048, "status": "excerpt"},
+        {"path": "/workspace/uploads/jkl.csv", "name": "jkl.csv", "content_type": "text/csv", "size_bytes": 10, "status": "not_parsed"},
+        {"path": "/workspace/uploads/mno.png", "name": "mno.png", "content_type": "image/png", "size_bytes": 5, "status": "image_sent"},
+    ]
+    text = build_attachment_handoff(files, bridge_available=False)
+    assert text.startswith(ATTACHED_FILES_HEADER) and text.endswith(ATTACHED_FILES_RULE)
+    assert "- /workspace/uploads/jkl.csv (text/csv, 10 bytes; it could not be parsed, read it from its path)" in text
+    assert "- /workspace/uploads/mno.png (image/png, 5 bytes; sent to the model as an image)" in text
+    assert HANDOFF_HEADER not in text and HANDOFF_WITHOUT_BRIDGE not in text and HANDOFF_WITH_BRIDGE not in text
+    assert "never ask the user where the file is" in text
 
 
 # --- validators --------------------------------------------------------------------
@@ -100,6 +136,8 @@ async def test_parse_file_refuses_forwarded_formats_with_a_reason(monkeypatch, t
 
 # --- the chat gateway ------------------------------------------------------------
 
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
 
 def _handoff_chat_fixture(monkeypatch, tmp_path, *, provider, bridge: bool):
     from src.gateway import runtime_api
@@ -108,8 +146,12 @@ def _handoff_chat_fixture(monkeypatch, tmp_path, *, provider, bridge: bool):
     captured = {}
     shot = tmp_path / "shot.png"
     book = tmp_path / "book.xls"
+    sheet = tmp_path / "sheet.xlsx"
+    notes = tmp_path / "notes.csv"
     shot.write_bytes(b"one")
     book.write_bytes(b"two")
+    sheet.write_bytes(b"four")
+    notes.write_bytes(b"a,b\n")
 
     class _Meta:
         def __init__(self, file_id: str, content_type: str, name: str):
@@ -118,8 +160,13 @@ def _handoff_chat_fixture(monkeypatch, tmp_path, *, provider, bridge: bool):
             self.content_type = content_type
             self.original_filename = name
 
-    metadata_map = {"f1": _Meta("f1", "image/png", "f1-shot.png"), "f2": _Meta("f2", "application/vnd.ms-excel", "f2-book.xls")}
-    file_map = {"f1": shot, "f2": book}
+    metadata_map = {
+        "f1": _Meta("f1", "image/png", "f1-shot.png"),
+        "f2": _Meta("f2", "application/vnd.ms-excel", "f2-book.xls"),
+        "f3": _Meta("f3", XLSX_MIME, "f3-sales.xlsx"),
+        "f4": _Meta("f4", "text/csv", "f4-notes.csv"),
+    }
+    file_map = {"f1": shot, "f2": book, "f3": sheet, "f4": notes}
 
     async def _fake_run_chat_via_execution_bus(**kwargs):
         captured.update(kwargs)
@@ -144,9 +191,20 @@ class _Request:
 
     def __init__(self, payload):
         self._payload = payload
+        self._items = {}
 
     async def json(self):
         return self._payload
+
+    # api_chat parks the attachment citations on the request (``request['file_citations']``).
+    def __setitem__(self, key, value):
+        self._items[key] = value
+
+    def __getitem__(self, key):
+        return self._items[key]
+
+    def get(self, key, default=None):
+        return self._items.get(key, default)
 
 
 @pytest.mark.asyncio
@@ -161,8 +219,10 @@ async def test_api_chat_hands_images_and_forwarded_files_to_the_agent_with_the_b
     assert captured["message"] == "what is in these?"
     # ...the agent is told where the files are and that the bridge can analyze them.
     handoff = captured["transient_model_message"]
-    assert f"- {shot} (image/png, 3 bytes, attached as \"f1-shot.png\")" in handoff
-    assert f"- {book} (application/vnd.ms-excel, 3 bytes, attached as \"f2-book.xls\")" in handoff
+    assert handoff.startswith(ATTACHED_FILES_HEADER)
+    assert f"- {shot} (image/png, 3 bytes, attached as \"f1-shot.png\"; not readable by the chat model)" in handoff
+    assert f"- {book} (application/vnd.ms-excel, 3 bytes, attached as \"f2-book.xls\"; not readable by the chat model)" in handoff
+    assert ATTACHED_FILES_RULE in handoff
     assert HANDOFF_WITH_BRIDGE in handoff and HANDOFF_WITHOUT_BRIDGE not in handoff
     assert "inspect-image" not in handoff
     assert captured["attachments"] == ["f1", "f2"]
@@ -191,5 +251,83 @@ async def test_api_chat_inlines_images_for_an_ai_platform_profile_but_still_hand
     assert response.status == 200
     assert len(captured["attached_images"]) == 1
     assert captured["attached_images"][0].startswith("data:image/png;base64,")
+    # Both files are listed with their paths; only the spreadsheet needs the analysis skill.
     handoff = captured["transient_model_message"]
-    assert str(book) in handoff and str(shot) not in handoff
+    assert f"- {book} (application/vnd.ms-excel, 3 bytes, attached as \"f2-book.xls\"; not readable by the chat model)" in handoff
+    assert f"- {shot} (image/png, 3 bytes, attached as \"f1-shot.png\"; sent to the model as an image)" in handoff
+    assert HANDOFF_WITH_BRIDGE in handoff
+
+
+@pytest.mark.asyncio
+async def test_api_chat_lists_a_parsed_spreadsheet_with_its_path_before_the_excerpt(monkeypatch, tmp_path):
+    """Processing an xlsx takes the file: the agent gets its path, and the excerpt is marked as a preview."""
+    monkeypatch.delenv(COPILOT_VISION_VIA_CHAT_ENV, raising=False)
+    runtime_api, captured, shot, book = _handoff_chat_fixture(monkeypatch, tmp_path, provider="github_copilot", bridge=False)
+    sheet = tmp_path / "sheet.xlsx"
+
+    async def _context(*, session_id, attachment_ids):
+        assert session_id == "s1" and attachment_ids == ["f3", "f1"]
+        return {"context_file_ids": ["f3"], "image_file_ids": ["f1"], "failures": [], "parsed_file_ids": ["f3"], "already_ready_file_ids": []}
+
+    monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _context)
+    monkeypatch.setattr(
+        runtime_api,
+        "_prepare_attachment_transient_model_message",
+        lambda **kwargs: (f"EXCERPT for: {kwargs['model_context_query']}", [], "inject_context", ["f3"]),
+    )
+
+    response = await runtime_api.api_chat(_Request({"message": "turn this into a csv", "session_id": "s1", "attachments": ["f3", "f1"]}))
+    assert response.status == 200
+    assert captured["message"] == "turn this into a csv"
+    prompt = captured["transient_model_message"]
+    assert prompt.startswith(ATTACHED_FILES_HEADER)
+    assert f"- {sheet} ({XLSX_MIME}, 4 bytes, attached as \"f3-sales.xlsx\"; an excerpt of it is in this prompt)" in prompt
+    assert f"- {shot} (image/png, 3 bytes, attached as \"f1-shot.png\"; not readable by the chat model)" in prompt
+    assert str(book) not in prompt
+    # The list and the rule lead; the excerpt follows; the bridge is off for the image.
+    assert prompt.index(ATTACHED_FILES_RULE) < prompt.index("EXCERPT for: turn this into a csv")
+    assert HANDOFF_WITHOUT_BRIDGE in prompt and HANDOFF_WITH_BRIDGE not in prompt
+    assert prompt.endswith("EXCERPT for: turn this into a csv")
+
+
+@pytest.mark.asyncio
+async def test_api_chat_with_only_a_parsed_file_lists_it_without_the_analysis_wording(monkeypatch, tmp_path):
+    monkeypatch.delenv(COPILOT_VISION_VIA_CHAT_ENV, raising=False)
+    runtime_api, captured, _shot, _book = _handoff_chat_fixture(monkeypatch, tmp_path, provider="github_copilot", bridge=False)
+    sheet = tmp_path / "sheet.xlsx"
+
+    async def _context(*, session_id, attachment_ids):
+        return {"context_file_ids": ["f3"], "image_file_ids": [], "failures": [], "parsed_file_ids": ["f3"], "already_ready_file_ids": []}
+
+    monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _context)
+    monkeypatch.setattr(runtime_api, "_prepare_attachment_transient_model_message", lambda **kwargs: ("EXCERPT", [], "inject_context", ["f3"]))
+
+    response = await runtime_api.api_chat(_Request({"message": "", "session_id": "s1", "attachments": ["f3"]}))
+    assert response.status == 200
+    assert captured["message"] == "[attachment]"
+    prompt = captured["transient_model_message"]
+    assert prompt.startswith(ATTACHED_FILES_HEADER) and str(sheet) in prompt
+    assert prompt.endswith("EXCERPT")
+    assert HANDOFF_HEADER not in prompt and HANDOFF_WITHOUT_BRIDGE not in prompt
+
+
+@pytest.mark.asyncio
+async def test_api_chat_marks_a_parsed_file_that_retrieval_left_out_of_the_prompt(monkeypatch, tmp_path):
+    """Top-k retrieval across two parsed files can cite only one: the other is not called excerpted."""
+    monkeypatch.delenv(COPILOT_VISION_VIA_CHAT_ENV, raising=False)
+    runtime_api, captured, _shot, _book = _handoff_chat_fixture(monkeypatch, tmp_path, provider="github_copilot", bridge=False)
+    sheet = tmp_path / "sheet.xlsx"
+    notes = tmp_path / "notes.csv"
+
+    async def _context(*, session_id, attachment_ids):
+        return {"context_file_ids": ["f3", "f4"], "image_file_ids": [], "failures": [], "parsed_file_ids": ["f3", "f4"], "already_ready_file_ids": []}
+
+    monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _context)
+    monkeypatch.setattr(runtime_api, "_prepare_attachment_transient_model_message", lambda **kwargs: ("EXCERPT of f3", [], "inject_context", ["f3"]))
+
+    response = await runtime_api.api_chat(_Request({"message": "compare them", "session_id": "s1", "attachments": ["f3", "f4"]}))
+    assert response.status == 200
+    prompt = captured["transient_model_message"]
+    assert f"- {sheet} ({XLSX_MIME}, 4 bytes, attached as \"f3-sales.xlsx\"; an excerpt of it is in this prompt)" in prompt
+    assert f"- {notes} (text/csv, 4 bytes, attached as \"f4-notes.csv\"; parsed, but no excerpt of it is in this prompt; read it from its path)" in prompt
+    assert prompt.endswith("EXCERPT of f3")
