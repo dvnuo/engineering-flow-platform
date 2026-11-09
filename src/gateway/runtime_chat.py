@@ -537,6 +537,14 @@ def _runtime_config(
     kwargs["workspace_root"] = _runtime_workspace_root()
     kwargs["default_provider_id"] = "github-copilot"
     kwargs["default_model"] = model
+    if not interactive:
+        # The profile's step limit (the Portal's Model provider connector,
+        # Max steps per message, projected to max_iterations) bounds what one
+        # chat message may do; the Portal offers Continue when it is reached.
+        # A background task, the Jira handler and a sub-agent have nobody to
+        # click it, so they keep the session default: unbounded unless
+        # `session.max_iterations` says otherwise.
+        kwargs["max_iterations"] = _resolve_max_iterations(interactive=False)
     if not (
         _mapping_has_key(managed_overlay_config, "skill_directories")
         or _mapping_has_key(profile_config, "skill_directories")
@@ -691,9 +699,12 @@ def _runtime_config_profile_kwargs(
 
 # An interactive chat turn stops after this many model calls and asks the
 # model to summarize; the Portal then offers "continue". Each call re-sends
-# the whole context, so an unbounded loop is an unbounded bill. Background
-# tasks keep the loop unbounded unless `session.max_iterations` says otherwise
-# (a value of 0 or less turns the cap off everywhere).
+# the whole context, so an unbounded loop is an unbounded bill. The Portal's
+# Model provider connector (Max steps per message, the administrator's
+# default or the member's own) overrides it through the profile's
+# `max_iterations`. Background tasks keep the loop unbounded unless
+# `session.max_iterations` says otherwise (a value of 0 or less turns the cap
+# off everywhere).
 DEFAULT_INTERACTIVE_MAX_ITERATIONS = 30
 # Estimated AI credits one interactive message may spend before the loop
 # wraps up (about $2 on GPT-6 Sol; a routine agentic turn is 50-150).

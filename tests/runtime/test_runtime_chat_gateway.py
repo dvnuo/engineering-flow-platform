@@ -939,3 +939,51 @@ def test_run_metadata_stamps_the_turn_with_hong_kong_time():
         r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} Asia/Hong_Kong \(UTC\+08:00\)",
         metadata["current_time"],
     )
+
+
+def test_runtime_chat_profile_step_limit_bounds_interactive_chats_only(monkeypatch):
+    """The Model provider connector's Max steps per message reaches the runtime as the
+    profile's ``max_iterations`` (the Secret overlay, or the request's runtime_profile
+    config). It caps a chat message, where the Portal offers Continue; a background
+    task has nobody to click it and keeps the session default (unbounded here)."""
+
+    class _FakeConfig:
+        @property
+        def session(self):
+            return {}
+
+        def get_effective_config(self):
+            return {"max_iterations": 80}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    interactive = runtime_chat._runtime_config("request-model", track_usage=True, interactive=True)
+    background = runtime_chat._runtime_config("request-model", track_usage=True, interactive=False)
+    per_request = runtime_chat._runtime_config(
+        "request-model",
+        track_usage=True,
+        interactive=True,
+        runtime_profile_config={"max_iterations": 12},
+    )
+
+    assert interactive.max_iterations == 80
+    assert background.max_iterations is None
+    assert per_request.max_iterations == 12
+
+
+def test_runtime_chat_session_step_limit_still_bounds_background_runs(monkeypatch):
+    class _FakeConfig:
+        @property
+        def session(self):
+            return {"max_iterations": 2}
+
+        def get_effective_config(self):
+            return {"max_iterations": 80}
+
+    monkeypatch.setattr(runtime_chat, "config", _FakeConfig())
+
+    interactive = runtime_chat._runtime_config("request-model", track_usage=True, interactive=True)
+    background = runtime_chat._runtime_config("request-model", track_usage=True, interactive=False)
+
+    assert interactive.max_iterations == 80
+    assert background.max_iterations == 2
