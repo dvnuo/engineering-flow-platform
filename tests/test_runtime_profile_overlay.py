@@ -1822,3 +1822,22 @@ def test_jenkins_cli_is_advertised_exactly_when_it_is_usable(jenkins, expected):
     from src.runtime_profile_projection import _has_enabled_jenkins_config
 
     assert _has_enabled_jenkins_config({"jenkins": jenkins}) is expected
+
+
+def test_boot_projection_maps_the_model_providers_step_limit_to_max_iterations(tmp_path, monkeypatch):
+    # The Portal stores the Model provider connector's Max steps per message
+    # as llm.max_steps in the canonical config; the native projection turns it
+    # into the Portal-managed max_iterations the gateway reads for chats.
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {"llm": {"provider": "github_copilot", "model": "gpt-6-sol", "max_steps": 60}},
+    )
+
+    effective = cfg.get_effective_config()
+    assert "max_steps" not in effective["llm"]
+    assert effective["max_iterations"] == 60
+
+    # Without one the runtime keeps its own default.
+    cfg = _env_config(tmp_path, monkeypatch, {"llm": {"provider": "github_copilot", "model": "gpt-6-sol"}})
+    assert "max_iterations" not in cfg.get_effective_config()

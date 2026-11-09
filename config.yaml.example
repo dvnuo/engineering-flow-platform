@@ -288,8 +288,9 @@ session:
   # Maximum agentic steps per message. Interactive Portal chats default to 30
   # when this is unset (the model is asked to summarize and the Portal offers
   # "continue"); background tasks stay unbounded until the model stops. A
-  # value of 0 or less turns the cap off everywhere.
-  # Alias-compatible with opencode-style `steps`.
+  # value of 0 or less turns the cap off everywhere. For interactive chats
+  # the Portal's Model provider connector (Max steps per message) takes
+  # precedence through the runtime profile.
   # max_iterations: 30
   # Estimated AI credits one interactive message may spend before the loop
   # wraps up (default 200; 0 turns the guard off). See run_credits_limit above.
