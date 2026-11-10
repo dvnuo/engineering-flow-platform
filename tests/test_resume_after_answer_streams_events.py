@@ -77,6 +77,51 @@ def test_a_resumed_run_hands_its_events_to_the_bus_and_the_registry(api, monkeyp
     assert record.final_payload["status"] == "waiting_for_question"
 
 
+def test_a_resumed_run_numbers_its_events_before_they_reach_the_bus(api, monkeypatch):
+    # A viewer that joins part-way follows the run by these numbers and finds
+    # what it missed in the run's journal, so both have to be in place by the
+    # time an event is on the bus.
+    seen_on_the_bus: list[tuple[int, int]] = []
+
+    async def fake_emit(_event_type, payload):
+        journal = api.chat_run_registry.journal_for(payload["request_id"])
+        seen_on_the_bus.append((payload.get("run_seq"), journal.last_seq))
+
+    async def fake_resume(**kwargs):
+        queue = kwargs["stream_callback"]
+        rid = kwargs["request_id"]
+        await queue.put(_projected("session.next.step.started", rid, {"run_id": "r2"}))
+        await queue.put(_projected("question.requested", rid, {"question_request": {"request_id": "q-2"}}))
+        return {"status": "waiting_for_question", "pending_question_request": {"request_id": "q-2"}, "response": ""}
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(api, "emit_agent_event", fake_emit)
+    monkeypatch.setattr(api, "resume_runtime_chat", fake_resume)
+    monkeypatch.setattr(api, "global_config", types.SimpleNamespace(llm={"model": "test-model"}))
+    monkeypatch.setattr(api, "session_manager", types.SimpleNamespace(mark_runtime_running=noop))
+    monkeypatch.setattr(api, "_resolve_runtime_agent_identity", lambda _r: ("agent-1", "Agent"))
+
+    async def run():
+        started = await api._resume_chat_after_user_input(
+            object(), session_id="s4", execution_metadata={}
+        )
+        await asyncio.gather(*list(api._RESUME_TASKS))
+        return started
+
+    started = asyncio.run(run())
+    rid = started["request_id"]
+
+    assert seen_on_the_bus == [(1, 1), (2, 2)]
+
+    # The finished run's journal still has them for a viewer catching up.
+    served = [event for event, _ts in api.chat_run_registry.journal_for(rid).records_after(0)]
+    assert [event["type"] for event in served] == ["session.next.step.started", "question.requested"]
+    assert [event["run_seq"] for event in served] == [1, 2]
+    assert all(event["request_id"] == rid for event in served)
+
+
 def test_a_resumed_run_that_fails_still_stops_draining(api, monkeypatch):
     async def fake_emit(*_a, **_k):
         return None

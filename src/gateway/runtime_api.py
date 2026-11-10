@@ -2139,8 +2139,11 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                     usage_snapshot = _usage_from_projected_event(event_payload)
                     if usage_snapshot is not None:
                         latest_usage = usage_snapshot
-                    await _emit_gateway_runtime_event(event_payload)
+                    # Numbered and journaled first: the number travels with the
+                    # event on both the socket and this stream, and a viewer
+                    # that connects in between finds the event in the journal.
                     chat_run_registry.record_event(request_id, event_payload)
+                    await _emit_gateway_runtime_event(event_payload)
                     if client_connected:
                         client_connected = await _try_write_sse_event(
                             response,
@@ -3811,8 +3814,9 @@ async def _resume_chat_after_user_input(
             else:
                 event_payloads = projector.project(event)
             for event_payload in event_payloads:
-                await _emit_gateway_runtime_event(event_payload)
+                # Numbered and journaled before it is sent, as on the stream.
                 chat_run_registry.record_event(request_id, event_payload)
+                await _emit_gateway_runtime_event(event_payload)
 
     async def _stop_drain(run_done: asyncio.Event, drain: asyncio.Task) -> None:
         # Let the drain flush what the run had already said, then wait for it.
@@ -4405,12 +4409,18 @@ async def api_load_session(request: web.Request) -> web.Response:
         set_log_context(session_id=session_id)
         if not session_id:
             return web.json_response({'error': 'Session ID required'}, status=400)
-        
+
+        # Asked before the history is read: a run that ends in between is
+        # still announced, and the page finds it finished when it joins. The
+        # other order could hand out history from before the answer with no
+        # run to wait for.
+        live_run = chat_run_registry.live_run_for_session(session_id)
+
         session_info = await session_manager.get_existing_session(session_id)
-        
+
         if not session_info:
             return web.json_response({'error': 'Session not found'}, status=404)
-        
+
         portal_user_id, portal_user_name = _extract_portal_identity(request, {})
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         set_log_context(agent_id=runtime_agent_id)
@@ -4437,6 +4447,9 @@ async def api_load_session(request: web.Request) -> web.Response:
             'name_source': session_name_source,
             'messages': normalized_history,
             'metadata': session_info.get('metadata', {}),
+            # The run in flight for this session, from the live registry and
+            # never from storage: None after a restart, when nothing is running.
+            'live_run': live_run,
         })
     except Exception as e:
         logger.error(f"[api_load_session] ERROR: {e}", exc_info=True)

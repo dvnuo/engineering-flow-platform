@@ -5,6 +5,7 @@ interrupted running chat sessions, and /api/chat request_id idempotency.
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -107,6 +108,55 @@ async def test_api_chat_stream_does_not_write_keepalive_when_events_flow(monkeyp
 
     assert not any(chunk.startswith(": keepalive") for chunk in response.writes)
     assert any("event: final" in chunk for chunk in response.writes)
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_numbers_each_event_before_it_is_sent(monkeypatch):
+    request_id = "portal-stream-numbered-req-1"
+    session_id = "s-stream-numbered"
+    runtime_api.chat_run_registry._records.pop(request_id, None)
+    monkeypatch.setenv("EFP_CHAT_SSE_KEEPALIVE_SECONDS", "60")
+    seen_on_the_bus = []
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        for step in ("one", "two"):
+            await kwargs["stream_callback"].put(
+                {
+                    "type": "session.next.step.started",
+                    "event_type": "session.next.step.started",
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "properties": {"step": step},
+                    "data": {"step": step},
+                }
+            )
+        return {"response": "quick", "usage": {}}
+
+    async def _record_emit(payload):
+        journal = runtime_api.chat_run_registry.journal_for(request_id)
+        seen_on_the_bus.append((payload.get("run_seq"), journal.last_seq))
+
+    _patch_stream_harness(monkeypatch, _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(runtime_api, "_emit_gateway_runtime_event", _record_emit)
+
+    try:
+        response = await runtime_api.api_chat_stream(
+            _PortalRequest({"message": "numbered task", "session_id": session_id, "client_request_id": request_id})
+        )
+        journal = runtime_api.chat_run_registry.journal_for(request_id)
+    finally:
+        runtime_api.chat_run_registry._records.pop(request_id, None)
+
+    # A viewer that connects between the two finds the event in the journal,
+    # under the number the socket and this stream both carry.
+    assert seen_on_the_bus == [(1, 1), (2, 2)]
+    stream_events = [
+        json.loads(chunk.split("data: ", 1)[1])
+        for chunk in response.writes
+        if chunk.startswith("event: runtime_event")
+    ]
+    assert [event["run_seq"] for event in stream_events] == [1, 2]
+    assert [event["run_seq"] for event, _ts in journal.records_after(0)] == [1, 2]
 
 
 @pytest.mark.asyncio

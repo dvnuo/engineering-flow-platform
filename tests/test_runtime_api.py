@@ -4865,6 +4865,51 @@ async def test_api_load_session_uses_custom_session_name_from_metadata(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_api_load_session_reports_the_run_in_flight(monkeypatch):
+    from src.gateway import runtime_api
+    from src.gateway.chat_run_registry import ChatRunRegistry
+
+    registry = ChatRunRegistry()
+    monkeypatch.setattr(runtime_api, "chat_run_registry", registry)
+    monkeypatch.setattr(runtime_api.session_manager, "_initialized", True)
+
+    async def _fake_get_existing_session(_session_id):
+        return {"history": [{"role": "user", "content": "hello"}], "metadata": {}}
+
+    monkeypatch.setattr(runtime_api.session_manager, "get_existing_session", _fake_get_existing_session)
+
+    class _Request:
+        match_info = {"session_id": "session-live"}
+        headers = {}
+        app = {}
+
+    async def _live_run():
+        resp = await runtime_api.api_load_session(_Request())
+        assert resp.status == 200
+        return json.loads(resp.text)["live_run"]
+
+    # Nothing running: the page has only the stored session to show.
+    assert await _live_run() is None
+
+    record = registry.start(session_id="session-live", request_id="req-live")
+    registry.record_event("req-live", {"type": "session.next.step.started"})
+    registry.record_event("req-live", {"type": "session.next.step.ended"})
+    assert await _live_run() == {
+        "request_id": "req-live",
+        "state": "running",
+        "started_at": record.started_at,
+        "last_seq": 2,
+    }
+
+    # A run of another session is not this session's.
+    registry.start(session_id="session-other", request_id="req-other")
+    assert (await _live_run())["request_id"] == "req-live"
+
+    registry.complete("req-live", {"ok": True, "response": "done"})
+    assert await _live_run() is None
+
+
+@pytest.mark.asyncio
 async def test_api_rename_session_success(monkeypatch):
     from src.gateway import runtime_api
 
