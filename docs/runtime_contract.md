@@ -49,9 +49,10 @@ prompt exceeds 272k input tokens) and reports them wherever it reports usage.
   `cache_hit_ratio` (cached / input, or null) and `pricing`
   `{model, tier: "default"|"long_context", threshold_tokens, source:
   "static"|"catalog"|"copilot_usage", tiers_seen}`. The `usage.updated` event
-  adds `estimated_credits` and `pricing` per step. When Copilot's usage object
-  carries its own charge (`copilot_usage.total_nano_aiu`, 1 credit =
-  10^9 nano-AIU, the number VS Code shows per request) that charge *is*
+  adds `estimated_credits` and `pricing` per step. When Copilot reports its
+  own charge (`copilot_usage.total_nano_aiu`, 1 credit = 10^9 nano-AIU, the
+  number VS Code shows per request; it sits on the `response.completed` event
+  next to `response`, or inside the usage object) that charge *is*
   `estimated_credits` for the step and the run: `actual_credits` carries it
   separately, `pricing.source` is `copilot_usage` (the table's figure rides
   along as `pricing.estimated_credits`) and the run's usage says

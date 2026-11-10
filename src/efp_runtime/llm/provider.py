@@ -189,9 +189,14 @@ DEFAULT_COPILOT_REASONING_EFFORT = "medium"
 # A routed run routes again when its session token is this close to
 # ``expires_at`` (VS Code's five-minute rule; the token lasts 24 h).
 COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS = 300
-# VS Code's CAPI client stamps this API version on every request; without
-# it the auto routes answer 404.
+# VS Code's CAPI client stamps this API version on its ``/auto`` and
+# ``/models`` calls; without it the auto routes answer 404.
 COPILOT_AUTO_API_VERSION = "2026-08-01"
+# The chat request needs an API version too (VS Code's value for it). Without
+# one the gateway ignores ``Copilot-Session-Token``: the routed request is
+# billed as the plain model, with no auto discount, and the answer carries no
+# quota snapshot headers (measured 2026-11-10 against a business seat).
+COPILOT_CHAT_API_VERSION = "2026-01-09"
 # Routing is one small classification call (VS Code allows five seconds);
 # the catalog fetch is just as small. Both stay well under the chat timeout.
 COPILOT_AUTO_ROUTE_TIMEOUT_SECONDS = 20.0
@@ -671,6 +676,7 @@ class GitHubCopilotHTTPTransport:
             "Editor-Version": self.editor_version,
             "Editor-Plugin-Version": self.editor_plugin_version,
             "Copilot-Integration-Id": self.integration_id,
+            "X-GitHub-Api-Version": COPILOT_CHAT_API_VERSION,
             "Openai-Intent": "conversation-edits",
             "x-initiator": self.initiator,
         }

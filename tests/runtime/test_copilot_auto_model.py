@@ -40,6 +40,7 @@ from efp_runtime.llm.provider import (
     COPILOT_AUTO_API_VERSION,
     COPILOT_AUTO_ROUTE_TIMEOUT_SECONDS,
     COPILOT_AUTO_SESSION_REFRESH_MARGIN_SECONDS,
+    COPILOT_CHAT_API_VERSION,
     CopilotAutoDecision,
     GitHubCopilotHTTPTransport,
     GitHubCopilotProvider,
@@ -415,6 +416,19 @@ def test_transport_session_token_header_follows_the_setter():
     assert transport._headers(stream=True)["Copilot-Session-Token"] == "sess-2"
     transport.set_auto_session_token(None)
     assert "Copilot-Session-Token" not in transport._headers()
+
+
+def test_chat_requests_carry_an_api_version_so_the_session_token_counts():
+    # Without X-GitHub-Api-Version the gateway ignores the session token and
+    # bills the routed request as the plain model (no auto discount).
+    transport = GitHubCopilotHTTPTransport(token="copilot-token")
+    transport.set_auto_session_token("sess-2")
+    for headers in (transport._headers(), transport._headers(stream=True)):
+        assert headers["Copilot-Session-Token"] == "sess-2"
+        assert headers["X-GitHub-Api-Version"] == COPILOT_CHAT_API_VERSION == "2026-01-09"
+    # A concrete model sends it too, the way VS Code does on every chat request.
+    transport.set_auto_session_token(None)
+    assert transport._headers(stream=True)["X-GitHub-Api-Version"] == COPILOT_CHAT_API_VERSION
 
 
 # --- provider ----------------------------------------------------------------

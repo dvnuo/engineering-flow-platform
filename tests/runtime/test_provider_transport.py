@@ -722,6 +722,7 @@ async def test_github_copilot_http_transport_posts_json_headers_and_returns_raw(
     assert headers["editor-version"] == "vscode/1.133.0"
     assert headers["editor-plugin-version"] == "copilot-chat/0.41.0"
     assert headers["copilot-integration-id"] == "vscode-chat"
+    assert headers["x-github-api-version"] == "2026-01-09"
     assert headers["openai-intent"] == "conversation-edits"
     assert headers["x-initiator"] == "agent"
 
