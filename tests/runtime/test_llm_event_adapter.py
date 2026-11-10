@@ -5,6 +5,7 @@ from efp_runtime.llm.events import LLMEventType
 from efp_runtime.session.models import MessagePartType
 from efp_runtime.session.processor import RuntimeSession, SessionProcessor
 from efp_runtime.session.status import RuntimeStatus
+from efp_runtime.usage import normalize_usage
 
 
 def _assert_responses_finished(events, usage=None):
@@ -627,3 +628,52 @@ async def test_streaming_responses_completed_emits_step_finish_and_finish_with_u
     assert step_finish.metadata["finish_reason"] == "stop"
     assert step_finish.metadata["response_id"] == "resp_1"
     assert step_finish.provider_metadata["openai"]["responseId"] == "resp_1"
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_completed_keeps_the_charge_copilot_puts_next_to_the_response():
+    # Copilot's final event: {"type", "sequence_number", "response", "copilot_usage"}.
+    adapter = DefaultLLMEventAdapter()
+    chunks = [
+        {"type": "response.output_text.delta", "delta": "Done"},
+        {
+            "type": "response.completed",
+            "sequence_number": 9,
+            "response": {"id": "resp_1", "usage": {"input_tokens": 287, "output_tokens": 5, "total_tokens": 292}},
+            "copilot_usage": {"total_nano_aiu": 2_808_000},
+        },
+    ]
+
+    events = [event async for event in adapter.normalize_stream(chunks)]
+    step_finish = next(event for event in events if event.type == LLMEventType.STEP_FINISH)
+    finish = next(event for event in events if event.type == LLMEventType.FINISH)
+
+    assert step_finish.usage == {
+        "input_tokens": 287,
+        "output_tokens": 5,
+        "total_tokens": 292,
+        "copilot_usage": {"total_nano_aiu": 2_808_000},
+    }
+    assert finish.usage == step_finish.usage
+    assert normalize_usage(finish.usage).actual_credits == 0.002808
+
+
+def test_a_charge_inside_the_usage_object_wins_over_one_next_to_it():
+    adapter = DefaultLLMEventAdapter()
+    response = {
+        "content": "Done.",
+        "usage": {"input_tokens": 1, "output_tokens": 1, "copilot_usage": {"total_nano_aiu": 5}},
+        "copilot_usage": {"total_nano_aiu": 7},
+    }
+
+    events = list(adapter.normalize_response(response))
+    step_finish = next(event for event in events if event.type == LLMEventType.STEP_FINISH)
+
+    assert step_finish.usage["copilot_usage"] == {"total_nano_aiu": 5}
+    # Without one inside (absent or null), the one next to the usage object is kept.
+    for inner in ({"input_tokens": 1}, {"input_tokens": 1, "copilot_usage": None}):
+        response["usage"] = inner
+        events = list(adapter.normalize_response(response))
+        step_finish = next(event for event in events if event.type == LLMEventType.STEP_FINISH)
+        assert step_finish.usage["copilot_usage"] == {"total_nano_aiu": 7}
+        assert "copilot_usage" not in inner or inner["copilot_usage"] is None

@@ -52,7 +52,7 @@ class DefaultLLMEventAdapter:
 
     def normalize_response(self, response: Mapping[str, Any]) -> Iterable[LLMEvent]:
         raw = dict(response)
-        usage = _dict_or_empty(raw.get("usage"))
+        usage = _with_copilot_charge(_dict_or_empty(raw.get("usage")), raw)
         yield LLMEvent(LLMEventType.STEP_START, raw=raw)
 
         if "error" in raw and raw.get("error"):
@@ -1190,11 +1190,23 @@ def _response_reasoning_provider_metadata(
 
 def _response_usage(raw: Mapping[str, Any]) -> Dict[str, Any]:
     response = raw.get("response")
-    if isinstance(response, Mapping):
-        usage = response.get("usage")
-        if isinstance(usage, Mapping):
-            return dict(usage)
-    return _dict_or_empty(raw.get("usage"))
+    usage = response.get("usage") if isinstance(response, Mapping) else None
+    usage = dict(usage) if isinstance(usage, Mapping) else _dict_or_empty(raw.get("usage"))
+    return _with_copilot_charge(usage, raw)
+
+
+def _with_copilot_charge(usage: Dict[str, Any], raw: Mapping[str, Any]) -> Dict[str, Any]:
+    """``usage`` plus the charge Copilot reports beside it.
+
+    Copilot puts ``copilot_usage.total_nano_aiu`` on the ``response.completed``
+    event itself, next to ``response``, not inside the usage object.
+    """
+
+    charge = raw.get("copilot_usage")
+    if isinstance(charge, Mapping) and not isinstance(usage.get("copilot_usage"), Mapping):
+        usage = dict(usage)
+        usage["copilot_usage"] = dict(charge)
+    return usage
 
 
 def _response_finish_reason(raw: Mapping[str, Any], *, has_function_call: bool) -> str:

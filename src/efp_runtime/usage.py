@@ -127,9 +127,10 @@ NANO_AIU_PER_CREDIT = 1_000_000_000
 def _actual_credits(raw: Mapping[str, Any]) -> Optional[float]:
     """Credits Copilot charged for the step, from ``copilot_usage.total_nano_aiu``.
 
-    GitHub's gateway stamps the charge on the usage object in nano-AIU
-    (``1 credit = 1_000_000_000 nano-AIU``), the number VS Code shows per
-    request. An explicit ``actual_credits`` (a merged summary) is honoured too.
+    GitHub's gateway reports the charge in nano-AIU (``1 credit =
+    1_000_000_000 nano-AIU``), the number VS Code shows per request; the LLM
+    adapter moves it from the final stream event into the usage object. An
+    explicit ``actual_credits`` (a merged summary) is honoured too.
     """
 
     explicit = _optional_float(raw.get("actual_credits"))
