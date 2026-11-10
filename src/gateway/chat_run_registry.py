@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
+
+from .chat_run_journal import ChatRunJournal
 
 
 logger = logging.getLogger(__name__)
@@ -17,6 +20,9 @@ CANCELLED_STATUSES = {"cancelled", "canceled"}
 RETAINED_EVENT_LIST_KEYS = ("events", "runtime_events", "thinking_events")
 RETAINED_EVENT_TAIL_ITEMS = 100
 DEFAULT_STALE_RUNNING_SECONDS = 6 * 3600
+# How long a finished run's journal stays, for a viewer still catching up on
+# its last events. After that the stored session is the only account of it.
+JOURNAL_RETENTION_SECONDS = 300
 # How often ``wait_terminal`` looks again while a stop settles.
 _WAIT_POLL_SECONDS = 0.05
 
@@ -104,6 +110,11 @@ class ChatRunRecord:
     cancel_requested_at: str = ""
     cancel_mode: str = ""
     cancellers: List[Canceller] = field(default_factory=list, repr=False)
+    # Every event of the run under its sequence number, for a viewer that
+    # joins late. None once it has been dropped: ``journal_expires_at``
+    # (monotonic) is set when the run ends.
+    journal: Optional[ChatRunJournal] = field(default_factory=ChatRunJournal, repr=False)
+    journal_expires_at: float = field(default=0.0, repr=False)
 
     @property
     def terminal(self) -> bool:
@@ -136,10 +147,12 @@ class ChatRunRegistry:
         *,
         max_records: int = 512,
         stale_running_seconds: float = DEFAULT_STALE_RUNNING_SECONDS,
+        journal_retention_seconds: float = JOURNAL_RETENTION_SECONDS,
     ) -> None:
         self._records: Dict[str, ChatRunRecord] = {}
         self._max_records = max_records
         self._stale_running_seconds = max(0.0, float(stale_running_seconds))
+        self._journal_retention_seconds = max(0.0, float(journal_retention_seconds))
 
     def start(self, *, session_id: str, request_id: str, engine: str = "native") -> ChatRunRecord:
         existing = self.get(request_id, session_id=session_id)
@@ -149,6 +162,7 @@ class ChatRunRegistry:
         self._records[request_id] = record
         self._fail_stale_running_records()
         self._prune_terminal_records()
+        self._drop_expired_journals()
         return record
 
     def _fail_stale_running_records(self) -> None:
@@ -178,6 +192,30 @@ class ChatRunRegistry:
             record.updated_at = utc_now_iso()
             record.task = None
             record.cancellers.clear()
+            self._retire_journal(record)
+
+    def _retire_journal(self, record: ChatRunRecord) -> None:
+        """Start the clock on a finished run's journal."""
+        if record.journal is None or record.journal_expires_at:
+            return
+        record.journal_expires_at = time.monotonic() + self._journal_retention_seconds
+        try:
+            asyncio.get_running_loop().call_later(
+                self._journal_retention_seconds, self._drop_journal, record
+            )
+        except RuntimeError:
+            # No loop to time it here: the next run to start sweeps it.
+            pass
+
+    @staticmethod
+    def _drop_journal(record: ChatRunRecord) -> None:
+        record.journal = None
+
+    def _drop_expired_journals(self) -> None:
+        now = time.monotonic()
+        for record in self._records.values():
+            if record.journal is not None and 0 < record.journal_expires_at <= now:
+                record.journal = None
 
     def _prune_terminal_records(self) -> None:
         if len(self._records) <= self._max_records:
@@ -230,6 +268,32 @@ class ChatRunRegistry:
             return record
         return None
 
+    def live_run_for_session(self, session_id: str) -> Dict[str, Any] | None:
+        """What a page opening the session needs to join the run in flight, if any.
+
+        ``last_seq`` is how far the run has got: the page asks the event socket
+        for everything after the sequence number it already has.
+        """
+        record = self.active_for_session(session_id)
+        if record is None:
+            return None
+        return {
+            "request_id": record.request_id,
+            "state": record.state,
+            "started_at": record.started_at,
+            "last_seq": record.latest_event_seq,
+        }
+
+    def journal_for(self, request_id: str, *, session_id: str | None = None) -> ChatRunJournal | None:
+        """The run's journal while it is kept; None once it is gone, or for an unknown run."""
+        record = self.get(request_id, session_id=session_id)
+        if record is None or record.journal is None:
+            return None
+        if 0 < record.journal_expires_at <= time.monotonic():
+            record.journal = None
+            return None
+        return record.journal
+
     def attach_task(self, request_id: str, task: asyncio.Task) -> None:
         record = self.get(request_id)
         if record is not None:
@@ -246,14 +310,27 @@ class ChatRunRegistry:
             # The run registered after the stop was asked for: tell it now.
             _invoke_canceller(canceller, request_id)
 
-    def record_event(self, request_id: str, event: Dict[str, Any]) -> None:
+    def record_event(self, request_id: str, event: Dict[str, Any]) -> int:
+        """Number the run's next event and keep it in the run's journal.
+
+        The number is written onto the event (``run_seq``), so call this before
+        the event is sent anywhere: a viewer orders what it receives by it, and
+        asks for what it missed by it. Returns 0, and leaves the event alone,
+        when the run is unknown or already over.
+        """
         record = self.get(request_id)
         if record is None or record.terminal:
-            return
+            return 0
         record.latest_event_seq += 1
+        seq = record.latest_event_seq
         created_at = event.get("created_at") if isinstance(event, dict) else None
         record.latest_event_at = str(created_at or utc_now_iso())
         record.updated_at = utc_now_iso()
+        if isinstance(event, dict):
+            event["run_seq"] = seq
+            if record.journal is not None:
+                record.journal.append(seq, event)
+        return seq
 
     def mark_detached(self, request_id: str) -> None:
         record = self.get(request_id)
@@ -274,6 +351,7 @@ class ChatRunRegistry:
         record.updated_at = utc_now_iso()
         record.task = None
         record.cancellers.clear()
+        self._retire_journal(record)
 
     def fail(self, request_id: str, error_payload: Dict[str, Any]) -> None:
         record = self.get(request_id)
@@ -289,6 +367,7 @@ class ChatRunRegistry:
         record.updated_at = utc_now_iso()
         record.task = None
         record.cancellers.clear()
+        self._retire_journal(record)
 
     def request_cancel(self, request_id: str) -> ChatRunRecord | None:
         """Ask the run to stop at its next checkpoint (cooperative).
@@ -325,6 +404,7 @@ class ChatRunRegistry:
         task = record.task
         record.task = None
         record.cancellers.clear()
+        self._retire_journal(record)
         if task is not None and not task.done():
             task.cancel()
         return True

@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime, timezone
 
 from src.gateway.chat_run_registry import (
@@ -129,3 +130,119 @@ def test_chat_run_registry_stale_check_handles_mixed_timestamp_formats():
     assert registry.get("stale").state == "failed"
     # Unparseable timestamps must not get a run killed.
     assert registry.get("weird").state == "running"
+
+
+def test_chat_run_registry_numbers_each_event_and_journals_it():
+    registry = ChatRunRegistry()
+    registry.start(session_id="s1", request_id="r1")
+    first = {"type": "session.next.step.started", "request_id": "r1"}
+    second = {"type": "session.next.step.ended", "request_id": "r1"}
+
+    assert registry.record_event("r1", first) == 1
+    assert registry.record_event("r1", second) == 2
+
+    # The number travels on the event itself, to every place it is sent.
+    assert first["run_seq"] == 1
+    assert second["run_seq"] == 2
+    journal = registry.journal_for("r1")
+    assert [event["type"] for event, _ts in journal.records_after(0)] == [
+        "session.next.step.started",
+        "session.next.step.ended",
+    ]
+    assert [event["run_seq"] for event, _ts in journal.records_after(1)] == [2]
+
+
+def test_chat_run_registry_leaves_an_event_alone_when_the_run_is_over_or_unknown():
+    registry = ChatRunRegistry()
+    registry.start(session_id="s1", request_id="r1")
+    registry.complete("r1", {"ok": True})
+    late = {"type": "session.next.step.started"}
+    stray = {"type": "session.next.step.started"}
+
+    assert registry.record_event("r1", late) == 0
+    assert registry.record_event("missing", stray) == 0
+
+    assert "run_seq" not in late
+    assert "run_seq" not in stray
+    assert registry.get("r1").latest_event_seq == 0
+    assert registry.journal_for("r1").records_after(0) == []
+
+
+def test_chat_run_registry_keeps_a_finished_runs_journal_for_a_while():
+    registry = ChatRunRegistry()
+    record = registry.start(session_id="s1", request_id="r1")
+    registry.record_event("r1", {"type": "session.next.step.started"})
+    assert record.journal_expires_at == 0
+
+    registry.complete("r1", {"ok": True})
+
+    # A viewer still catching up on the last events finds them.
+    assert registry.journal_for("r1").last_seq == 1
+
+    record.journal_expires_at = time.monotonic() - 1
+    assert registry.journal_for("r1") is None
+    assert record.journal is None
+
+
+def test_chat_run_registry_drops_expired_journals_when_a_run_starts():
+    registry = ChatRunRegistry()
+    finished = registry.start(session_id="s1", request_id="finished")
+    registry.fail("finished", {"error": "boom"})
+    recent = registry.start(session_id="s1", request_id="recent")
+    registry.cancel("recent")
+    finished.journal_expires_at = time.monotonic() - 1
+
+    running = registry.start(session_id="s1", request_id="next")
+
+    assert finished.journal is None
+    assert recent.journal is not None
+    assert running.journal is not None
+
+
+def test_chat_run_registry_drops_a_finished_runs_journal_on_a_timer():
+    async def scenario():
+        registry = ChatRunRegistry(journal_retention_seconds=0.01)
+        record = registry.start(session_id="s1", request_id="r1")
+        registry.record_event("r1", {"type": "session.next.step.started"})
+        registry.complete("r1", {"ok": True})
+        assert record.journal is not None
+
+        await asyncio.sleep(0.2)
+        assert record.journal is None
+        assert registry.journal_for("r1") is None
+
+    asyncio.run(scenario())
+
+
+def test_chat_run_registry_journal_belongs_to_the_runs_session():
+    registry = ChatRunRegistry()
+    registry.start(session_id="s1", request_id="r1")
+
+    assert registry.journal_for("r1") is not None
+    assert registry.journal_for("r1", session_id="s1") is not None
+    assert registry.journal_for("r1", session_id="other") is None
+    assert registry.journal_for("missing") is None
+
+
+def test_chat_run_registry_reports_the_run_in_flight_for_a_session():
+    registry = ChatRunRegistry()
+    assert registry.live_run_for_session("s1") is None
+
+    record = registry.start(session_id="s1", request_id="r1")
+    registry.record_event("r1", {"type": "session.next.step.started"})
+    registry.record_event("r1", {"type": "session.next.step.ended"})
+
+    assert registry.live_run_for_session("s1") == {
+        "request_id": "r1",
+        "state": "running",
+        "started_at": record.started_at,
+        "last_seq": 2,
+    }
+    assert registry.live_run_for_session("other") is None
+
+    # A run being stopped is still in flight until it has ended.
+    registry.request_cancel("r1")
+    assert registry.live_run_for_session("s1")["state"] == "cancelling"
+
+    registry.complete("r1", {"ok": True})
+    assert registry.live_run_for_session("s1") is None

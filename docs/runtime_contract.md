@@ -115,6 +115,38 @@ prompt exceeds 272k input tokens) and reports them wherever it reports usage.
   estimate). `source: "static"` is the hand-maintained list, returned without
   a credential or when the catalog cannot be fetched (`error` says why).
 
+## Following a Chat Run
+
+A page that did not start a run, or lost its chat stream, joins the run in
+flight from the runtime's memory of it; nothing of this is persisted.
+
+- Every event of a chat run carries `run_seq` (1, 2, 3... per request id; a
+  run resumed after a card answer has its own request id and starts at 1
+  again), the same number on `/api/chat/stream` and on `/api/events`.
+- The run registry keeps a journal of each run's events: at most 2,000
+  records or 2 MiB, consecutive text and tool-input deltas of one part merged
+  into one record, the oldest records dropped past the cap; kept 5 minutes
+  after the run ends and lost on a restart. A merged record served to a viewer
+  that has part of it covers only what the viewer lacks: `delta` is the text
+  from `run_seq_from` to `run_seq`, and its `id` is `<id>@<from>-<to>`.
+- `GET /api/sessions/{session_id}` adds `live_run`: `{request_id, state,
+  started_at, last_seq}` for the run in flight (`state` running or
+  cancelling), `null` when none is, after a restart included. It is read
+  before the history, so a run that ends meanwhile is still announced and
+  found finished when joined.
+- `GET /api/events?session_id=...&request_id=...&after_seq=N` attaches the
+  socket to that run. The welcome (`type: "connected"`) carries `attach:
+  {request_id, found, state, after_seq}`, plus `first_seq` and `last_seq` when
+  the journal is there; then come the journal's events after `N`, then the
+  run's live events, each once and in order. In this mode there is no replay
+  by time (`replay`, `replay_limit` and `last_event_at` are ignored), even when
+  `found` is false: a run that has not started yet streams from its first
+  event. When the journal cannot supply what follows the viewer's position (it
+  dropped its oldest records, or it is gone), `{"type": "resync", "data":
+  {request_id, reason: "journal_truncated"|"journal_unavailable", first_seq}}`
+  says that the events before `first_seq` are not coming. Without `after_seq`
+  the socket behaves as before.
+
 ## Runtime Profile Boot Contract
 
 Runtime-profile configuration is delivered exclusively through pod environment
