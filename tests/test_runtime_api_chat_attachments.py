@@ -261,6 +261,134 @@ async def test_pptx_upload_is_projected_to_slide_text(isolated_attachment_storag
     assert context["failures"] == []
 
 
+def _sample_xlsx_bytes() -> bytes:
+    import io
+
+    openpyxl = pytest.importorskip("openpyxl")
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Suppliers"
+    sheet.append(["Supplier", "Open tasks"])
+    sheet.append(["Acme", 12])
+    sheet.append(["Globex", 7])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _unreadable_xlsx_bytes() -> bytes:
+    """A zip that passes for a workbook at upload (it has ``xl/`` parts) but is not one."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("xl/workbook.xml", "<not a workbook")
+    return buffer.getvalue()
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@pytest.mark.asyncio
+async def test_xlsx_upload_is_projected_to_sheet_tables(isolated_attachment_storage):
+    from src.gateway import runtime_api
+
+    client = await _client()
+    try:
+        upload = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("2026 Supplier View - Copy1.xlsx", _sample_xlsx_bytes(), "application/octet-stream"),
+        )
+        assert upload.status == 201, await upload.text()
+        uploaded = await upload.json()
+        assert uploaded["content_type"] == XLSX_MIME
+        file_id = uploaded["file_id"]
+
+        parsed = await client.post("/api/files/parse", params={"session_id": "s1"}, json={"file_id": file_id})
+        assert parsed.status == 200, await parsed.text()
+        body = await parsed.json()
+        assert body["success"] is True
+        assert body["filename"] == "2026 Supplier View - Copy1.xlsx"
+        assert 'Sheet "Suppliers": rows 1-3.' in body["markdown"]
+        assert "| Acme | 12 |" in body["markdown"]
+        assert body["json"]["sheet_names"] == ["Suppliers"]
+    finally:
+        await client.close()
+
+    context = await runtime_api._ensure_chat_attachment_context(session_id="s1", attachment_ids=[file_id])
+    assert context["context_file_ids"] == [file_id]
+    assert context["failures"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_workbook_that_cannot_be_parsed_says_why_and_still_reaches_the_agent(isolated_attachment_storage, caplog):
+    """The parse answers 400, the log says why, and the stored file is still handed over by path."""
+    import logging
+
+    from src.gateway import runtime_api
+
+    pytest.importorskip("openpyxl")
+    client = await _client()
+    try:
+        upload = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("broken.xlsx", _unreadable_xlsx_bytes(), "application/octet-stream"),
+        )
+        assert upload.status == 201, await upload.text()
+        file_id = (await upload.json())["file_id"]
+
+        with caplog.at_level(logging.WARNING, logger=runtime_api.logger.name):
+            parsed = await client.post("/api/files/parse", params={"session_id": "s1"}, json={"file_id": file_id})
+        assert parsed.status == 400
+        body = await parsed.json()
+        assert body["success"] is False and body["error"]
+    finally:
+        await client.close()
+
+    failure_lines = [record.getMessage() for record in caplog.records if "[attachment_parse] failed" in record.getMessage()]
+    assert len(failure_lines) == 1
+    assert file_id in failure_lines[0] and XLSX_MIME in failure_lines[0]
+
+    context = await runtime_api._ensure_chat_attachment_context(session_id="s1", attachment_ids=[file_id])
+    assert context["context_file_ids"] == []
+    assert [item["file_id"] for item in context["failures"]] == [file_id]
+    attached = runtime_api._collect_attached_files(session_id="s1", attachments=[file_id])
+    assert [item["file_id"] for item in attached] == [file_id]
+    assert runtime_api._stored_unparsed_files(attached, context["failures"]) == attached
+    block = runtime_api._attached_files_block(attached, attachment_context=context, bridge_available=False)
+    assert "it could not be parsed, read it from its path" in block
+
+
+@pytest.mark.asyncio
+async def test_a_parser_that_raises_is_one_failed_file_not_a_failed_chat(isolated_attachment_storage, monkeypatch):
+    from src.gateway import runtime_api
+
+    client = await _client()
+    try:
+        upload = await client.post(
+            "/api/files/upload",
+            params={"session_id": "s1"},
+            data=_file_form("data.csv", b"name,age\nalice,30\n", "text/csv"),
+        )
+        assert upload.status == 201, await upload.text()
+        file_id = (await upload.json())["file_id"]
+    finally:
+        await client.close()
+
+    async def _boom(_file_id, _options=None):
+        raise RuntimeError("parser blew up")
+
+    monkeypatch.setattr(runtime_api, "parse_file", _boom)
+    context = await runtime_api._ensure_chat_attachment_context(session_id="s1", attachment_ids=[file_id])
+    assert context["context_file_ids"] == []
+    assert len(context["failures"]) == 1 and context["failures"][0]["file_id"] == file_id
+    assert "parser blew up" in context["failures"][0]["error"]
+    assert runtime_api.file_context_storage.get_file_meta("s1", file_id).parse_status == "failed"
+
+
 @pytest.mark.asyncio
 async def test_zip_upload_is_projected_to_listing_and_text_members(isolated_attachment_storage):
     from src.gateway import runtime_api

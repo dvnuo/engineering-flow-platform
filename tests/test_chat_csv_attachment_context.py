@@ -305,6 +305,37 @@ async def test_api_chat_stream_image_plus_failed_csv_warns_model(monkeypatch):
     assert "Do not claim" in captured["transient_model_message"]
 
 
+@pytest.mark.asyncio
+async def test_api_chat_stream_runs_when_the_only_attachment_failed_to_parse_but_is_stored(monkeypatch):
+    """The stream is refused only when nothing of the attachments is available; a stored file goes by path."""
+    runtime_api.global_config._config.setdefault("llm", {})
+    runtime_api.global_config._config["llm"].update({"api_key": "k", "model": "gpt-4o"})
+    captured = {}
+    stored = [{"file_id": "x1", "path": "/workspace/uploads/x1.xlsx", "name": "book.xlsx", "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "size_bytes": 10, "unreadable": False}]
+    async def _fake_ensure(**kwargs): return {"context_file_ids": [], "failures": [{"file_id": "x1", "error": "File is not a zip file"}]}
+    async def _fake_bus(**kwargs): captured.update(kwargs); return {"response": "ok", "request_id": "r1", "usage": {}}
+    monkeypatch.setattr(runtime_api, "_collect_attached_files", lambda **kwargs: list(stored))
+    monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _fake_ensure)
+    monkeypatch.setattr(runtime_api, "_resolve_runtime_agent_identity", lambda _r: (None, None))
+    monkeypatch.setattr(runtime_api, "_run_chat_via_execution_bus", _fake_bus)
+    monkeypatch.setattr(runtime_api, "build_runtime_response_payload", lambda _result, session_id: {"response": "ok", "session_id": session_id})
+
+    class _FakeStreamResponse:
+        def __init__(self, *args, **kwargs): self.status=kwargs.get("status",200)
+        async def prepare(self, _req): return None
+        async def write(self, _b): return None
+        async def write_eof(self): return None
+    monkeypatch.setattr(runtime_api.web, "StreamResponse", _FakeStreamResponse)
+
+    resp = await runtime_api.api_chat_stream(_FakeRequest({"message": "", "session_id": "s1", "attachments": ["x1"]}))
+    assert getattr(resp, "status", 0) == 200
+    assert captured["message"] == "[attachment]"
+    prompt = captured["transient_model_message"]
+    assert "/workspace/uploads/x1.xlsx" in prompt
+    assert "it could not be parsed, read it from its path" in prompt
+    assert "File is not a zip file" in prompt and "Do not claim" in prompt
+
+
 def test_direct_context_reports_the_files_whose_text_fitted(monkeypatch):
     """The fallback stops at its budget: a later file is left out and must not be called excerpted."""
     monkeypatch.setattr(runtime_api.file_context_storage, "get_file_meta", lambda s, f: SimpleNamespace(filename=f"{f}.csv", content_type="text/csv"))
