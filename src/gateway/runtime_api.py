@@ -815,6 +815,7 @@ async def _parse_file_into_file_context(*, session_id: str, file_id: str, option
     result = await parse_file(file_id, options or {})
     if not result.success:
         file_context_storage.update_file_status(session_id, file_id, status="failed", error=result.error)
+        _log_attachment_parse_failure(session_id, metadata, result.error)
         return {"success": False, "error": result.error, "file_id": file_id, "result": result}
 
     new_chunks: List[Chunk] = []
@@ -853,6 +854,7 @@ async def _parse_file_into_file_context(*, session_id: str, file_id: str, option
     if not new_chunks:
         error = "Parsed file did not produce any text chunks"
         file_context_storage.update_file_status(session_id, file_id, status="failed", error=error)
+        _log_attachment_parse_failure(session_id, metadata, error)
         return {"success": False, "error": error, "file_id": file_id, "saved_chunks": 0, "total_chars": 0}
 
     file_context_storage.delete_file_chunks(file_id)
@@ -860,7 +862,43 @@ async def _parse_file_into_file_context(*, session_id: str, file_id: str, option
         file_context_storage.save_chunk(chunk)
     file_context_storage.update_file_status(session_id=session_id, file_id=file_id, status="completed", chunk_count=len(new_chunks), total_chars=total_chars)
     retrieval_engine.rebuild_index(session_id)
+    logger.info(
+        "[attachment_parse] parsed session_id=%s file_id=%s content_type=%s chunks=%d chars=%d parse_ms=%s",
+        safe_log_field(session_id or "", 120),
+        file_id,
+        metadata.content_type,
+        len(new_chunks),
+        total_chars,
+        getattr(result, "parse_time_ms", None),
+    )
     return {"success": True, "result": result, "saved_chunks": len(new_chunks), "total_chars": total_chars}
+
+
+def _log_attachment_parse_failure(session_id: str, metadata: Any, error: Any) -> None:
+    """Say why an attachment could not be parsed.
+
+    A parser reports failure in its result instead of raising, and the
+    endpoints answer that with a plain 400, so without this line the access
+    log shows the 400 and nothing says what went wrong.
+    """
+    logger.warning(
+        "[attachment_parse] failed session_id=%s file_id=%s content_type=%s size=%s error=%s",
+        safe_log_field(session_id or "", 120),
+        getattr(metadata, "file_id", ""),
+        getattr(metadata, "content_type", ""),
+        getattr(metadata, "size", ""),
+        safe_preview(str(error or "unknown error"), 300),
+    )
+
+
+def _stored_unparsed_files(attached_files: Sequence[Dict[str, Any]], failures: Sequence[Any]) -> List[Dict[str, Any]]:
+    """The attachments that could not be parsed but are still stored in the workspace.
+
+    Such a file still goes to the agent, by its path: the attached-files block
+    marks it as not parsed and the agent reads it with its tools.
+    """
+    failed = {str(item.get("file_id")) for item in failures if isinstance(item, dict)}
+    return [item for item in attached_files if str(item.get("file_id")) in failed]
 
 
 async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: List[str]) -> Dict[str, Any]:
@@ -896,7 +934,18 @@ async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: Li
             context_file_ids.append(file_id)
             already_ready_file_ids.append(file_id)
             continue
-        parse_res = await _parse_file_into_file_context(session_id=session_id, file_id=file_id)
+        try:
+            parse_res = await _parse_file_into_file_context(session_id=session_id, file_id=file_id)
+        except Exception as exc:
+            # A parser that raises is one more failed file, not a failed chat.
+            logger.warning("[attachment_parse] raised file_id=%s: %s", file_id, sanitize_exception_message(exc), exc_info=True)
+            try:
+                file_context_storage.update_file_status(
+                    session_id, file_id, status="failed", error=sanitize_exception_message(exc) or "Parse failed"
+                )
+            except Exception:
+                logger.exception("Failed to persist file_context failure state for %s/%s", session_id, file_id)
+            parse_res ={"success": False, "error": sanitize_exception_message(exc) or "Parse failed"}
         if parse_res.get("success"):
             reparsed_chunks = file_context_storage.get_file_chunks(file_id)
             if any(_chunk_context_text(c) for c in reparsed_chunks):
@@ -1588,12 +1637,16 @@ async def api_chat(request: web.Request) -> web.Response:
         failure_notice = _build_attachment_parse_failure_notice(failures, attached_files)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
-        if failures and not context_file_ids and not attached_images and not attached_handoff_files:
+        # A file that could not be parsed but is still in the workspace goes to
+        # the agent by its path; the chat is refused only when nothing of the
+        # attachments is available at all.
+        unparsed_stored_files = _stored_unparsed_files(attached_files, failures)
+        if failures and not context_file_ids and not attached_images and not attached_handoff_files and not unparsed_stored_files:
             return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
         if original_user_text:
             history_message = original_user_text
-        elif context_file_ids:
+        elif context_file_ids or unparsed_stored_files:
             history_message = "[attachment]"
         elif attached_images or attached_handoff_files:
             history_message = "[image]"
@@ -1989,12 +2042,16 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         failure_notice = _build_attachment_parse_failure_notice(failures, attached_files)
         if failures:
             execution_metadata["attachment_parse_failures"] = failures
-        if failures and not context_file_ids and not attached_images and not attached_handoff_files:
+        # A file that could not be parsed but is still in the workspace goes to
+        # the agent by its path; the chat is refused only when nothing of the
+        # attachments is available at all.
+        unparsed_stored_files = _stored_unparsed_files(attached_files, failures)
+        if failures and not context_file_ids and not attached_images and not attached_handoff_files and not unparsed_stored_files:
             return web.json_response({"error": "attachment_parse_failed", "message": "One or more attached files could not be parsed.", "failures": failures, "session_id": session_id, "request_id": request_id}, status=400)
 
         if original_user_text:
             history_message = original_user_text
-        elif context_file_ids:
+        elif context_file_ids or unparsed_stored_files:
             history_message = "[attachment]"
         elif attached_images or attached_handoff_files:
             history_message = "[image]"

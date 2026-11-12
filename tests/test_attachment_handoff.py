@@ -312,6 +312,35 @@ async def test_api_chat_with_only_a_parsed_file_lists_it_without_the_analysis_wo
 
 
 @pytest.mark.asyncio
+async def test_api_chat_hands_a_file_that_could_not_be_parsed_to_the_agent_by_its_path(monkeypatch, tmp_path):
+    """A parse failure is not a failed chat: the file is in the workspace and the agent reads it from there."""
+    monkeypatch.delenv(COPILOT_VISION_VIA_CHAT_ENV, raising=False)
+    runtime_api, captured, _shot, _book = _handoff_chat_fixture(monkeypatch, tmp_path, provider="github_copilot", bridge=False)
+    sheet = tmp_path / "sheet.xlsx"
+
+    async def _context(*, session_id, attachment_ids):
+        return {"context_file_ids": [], "image_file_ids": [], "failures": [{"file_id": "f3", "error": "openpyxl not installed"}], "parsed_file_ids": [], "already_ready_file_ids": []}
+
+    monkeypatch.setattr(runtime_api, "_ensure_chat_attachment_context", _context)
+
+    response = await runtime_api.api_chat(_Request({"message": "count the tasks per supplier", "session_id": "s1", "attachments": ["f3"]}))
+    assert response.status == 200
+    assert captured["message"] == "count the tasks per supplier"
+    prompt = captured["transient_model_message"]
+    assert prompt.startswith(ATTACHED_FILES_HEADER)
+    assert f"- {sheet} ({XLSX_MIME}, 4 bytes, attached as \"f3-sales.xlsx\"; it could not be parsed, read it from its path)" in prompt
+    assert "openpyxl not installed" in prompt and f"still in the workspace at {sheet}" in prompt
+    assert HANDOFF_HEADER not in prompt
+
+    # Without words of the member's own it is still an attachment turn.
+    captured.clear()
+    response = await runtime_api.api_chat(_Request({"message": "", "session_id": "s1", "attachments": ["f3"]}))
+    assert response.status == 200
+    assert captured["message"] == "[attachment]"
+    assert str(sheet) in captured["transient_model_message"]
+
+
+@pytest.mark.asyncio
 async def test_api_chat_marks_a_parsed_file_that_retrieval_left_out_of_the_prompt(monkeypatch, tmp_path):
     """Top-k retrieval across two parsed files can cite only one: the other is not called excerpted."""
     monkeypatch.delenv(COPILOT_VISION_VIA_CHAT_ENV, raising=False)
