@@ -222,3 +222,18 @@ def test_table_markdown_is_not_padded_to_the_widest_cell():
     assert markdown.splitlines()[3] == "| b | short |"
     # A ragged row is filled out to the table's width.
     assert excel._table_to_markdown([["a", "b", "c"], ["1"]]).splitlines()[2] == "| 1 |  |  |"
+
+
+@pytest.mark.asyncio
+async def test_a_very_long_cell_is_cut(tmp_path):
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["note", "x" * 30000])
+    path = tmp_path / "f9.xlsx"
+    workbook.save(path)
+
+    result = await excel.parse_excel(str(path))
+
+    assert result.success is True
+    assert result.blocks[0].table_json[0] == ["note", "x" * excel.MAX_CELL_CHARS + "..."]

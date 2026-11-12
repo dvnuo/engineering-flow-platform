@@ -19,6 +19,7 @@ XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml
 MAX_SHEET_ROWS = 10000  # per sheet, the same cap csv has
 MAX_SHEET_COLUMNS = 200  # a sheet can declare 16384 columns and use five
 MAX_WORKBOOK_CHARS = 200_000  # across all sheets
+MAX_CELL_CHARS = 2000  # a cell holds up to 32767; the rest of a longer one is cut
 
 
 async def parse_excel(file_path: str, options: Dict = None) -> ParseResult:
@@ -208,7 +209,7 @@ def _read_sheet_rows(sheet: Any, *, max_rows: int, max_chars: int) -> Dict[str, 
             if values[MAX_SHEET_COLUMNS] is not None:
                 columns_cut = True
             values = values[:MAX_SHEET_COLUMNS]
-        row = [str(cell) if cell is not None else "" for cell in values]
+        row = [_cell_text(cell) for cell in values]
         while row and not row[-1].strip():
             row.pop()
         if not row:
@@ -227,6 +228,16 @@ def _read_sheet_rows(sheet: Any, *, max_rows: int, max_chars: int) -> Dict[str, 
         "truncated": truncated,
         "columns_cut": columns_cut,
     }
+
+
+def _cell_text(cell: Any) -> str:
+    """A cell's value as text, cut at MAX_CELL_CHARS so one row cannot outgrow the workbook's budget."""
+    if cell is None:
+        return ""
+    text = str(cell)
+    if len(text) > MAX_CELL_CHARS:
+        text = text[:MAX_CELL_CHARS] + "..."
+    return text
 
 
 def _sheet_caption(sheet_name: str, read: Dict[str, Any]) -> str:

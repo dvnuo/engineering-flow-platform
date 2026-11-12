@@ -940,10 +940,12 @@ async def _ensure_chat_attachment_context(*, session_id: str, attachment_ids: Li
             # A parser that raises is one more failed file, not a failed chat.
             logger.warning("[attachment_parse] raised file_id=%s: %s", file_id, sanitize_exception_message(exc), exc_info=True)
             try:
-                file_context_storage.update_file_status(session_id, file_id, status="failed", error=str(exc))
+                file_context_storage.update_file_status(
+                    session_id, file_id, status="failed", error=sanitize_exception_message(exc) or "Parse failed"
+                )
             except Exception:
                 logger.exception("Failed to persist file_context failure state for %s/%s", session_id, file_id)
-            parse_res = {"success": False, "error": sanitize_exception_message(exc) or "Parse failed"}
+            parse_res ={"success": False, "error": sanitize_exception_message(exc) or "Parse failed"}
         if parse_res.get("success"):
             reparsed_chunks = file_context_storage.get_file_chunks(file_id)
             if any(_chunk_context_text(c) for c in reparsed_chunks):
