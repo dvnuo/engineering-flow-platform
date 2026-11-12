@@ -184,9 +184,10 @@ def _read_sheet_rows(sheet: Any, *, max_rows: int, max_chars: int) -> Dict[str, 
 
     Returns the rows (blank rows dropped, trailing blank cells trimmed) with
     their sheet row numbers, the last sheet row the table covers, the
-    characters used, and whether rows or columns were left out. One column past
-    the limit is read so a sheet that really is wider is told apart from one
-    that only declares a wide range.
+    characters used, and whether rows or columns were left out. Columns count
+    as left out only when one past the limit holds a value, which tells a
+    sheet that really is wider from one that only declares or styles a wide
+    range.
     """
     declared_rows = _declared_rows(sheet)
     # The dimension record is a hint some writers get wrong (a streamed export
@@ -200,14 +201,18 @@ def _read_sheet_rows(sheet: Any, *, max_rows: int, max_chars: int) -> Dict[str, 
     chars = 0
     truncated = False
     columns_cut = False
-    for values in sheet.iter_rows(max_col=MAX_SHEET_COLUMNS + 1, values_only=True):
+    # No column bound: a row comes as wide as its last cell, so a value past
+    # the column limit is seen wherever it sits.
+    for values in sheet.iter_rows(values_only=True):
         if scanned >= max_rows or chars >= max_chars:
             truncated = True
             break
         scanned += 1
         if len(values) > MAX_SHEET_COLUMNS:
-            if values[MAX_SHEET_COLUMNS] is not None:
-                columns_cut = True
+            if not columns_cut:
+                # A styled cell without a value is not a column left out.
+                beyond = values[MAX_SHEET_COLUMNS:]
+                columns_cut = beyond.count(None) != len(beyond)
             values = values[:MAX_SHEET_COLUMNS]
         row = [_cell_text(cell) for cell in values]
         while row and not row[-1].strip():

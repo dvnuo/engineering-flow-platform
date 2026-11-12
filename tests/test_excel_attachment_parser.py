@@ -184,6 +184,33 @@ async def test_parse_excel_keeps_the_leading_columns_of_a_very_wide_sheet(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_parse_excel_says_columns_are_left_out_wherever_the_value_past_the_limit_sits(tmp_path):
+    from openpyxl.styles import PatternFill
+
+    workbook = openpyxl.Workbook()
+    sparse = workbook.active
+    sparse.title = "Sparse"
+    sparse.append(["item", "qty"])
+    sparse.append(["bolt", 4])
+    # The column right after the limit is empty; the total sits further out.
+    sparse.cell(row=2, column=excel.MAX_SHEET_COLUMNS + 5, value="total 4")
+    styled = workbook.create_sheet("Styled")
+    styled.append(["item", "qty"])
+    # A cell that only carries a fill is not a value that was left out.
+    styled.cell(row=1, column=excel.MAX_SHEET_COLUMNS + 5).fill = PatternFill("solid", fgColor="FFFF00")
+    path = _save(workbook, tmp_path / "f10.xlsx")
+
+    result = await excel.parse_excel(str(path))
+
+    captions = {block.sheet: block.content.splitlines()[0] for block in result.blocks if block.type == "table"}
+    assert captions == {
+        "Sparse": f'Sheet "Sparse": rows 1-2; columns after the first {excel.MAX_SHEET_COLUMNS} are left out.',
+        "Styled": 'Sheet "Styled": rows 1-1.',
+    }
+    assert "total 4" not in result.markdown
+
+
+@pytest.mark.asyncio
 async def test_parse_excel_reads_the_workbook_off_the_event_loop(tmp_path, monkeypatch):
     workbook = openpyxl.Workbook()
     workbook.active.append(["a", "b"])
