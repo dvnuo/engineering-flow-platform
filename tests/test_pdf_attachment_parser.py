@@ -348,7 +348,15 @@ def test_every_radical_maps_to_a_unified_ideograph():
     table = pdf._RADICAL_TO_IDEOGRAPH
     # All 214 Kangxi radicals and the CJK Radicals Supplement but its repeat mark (U+2E80).
     assert len(table) == 214 + 114
-    assert all(unicodedata.name(chr(target)).startswith("CJK UNIFIED IDEOGRAPH") for target in table.values())
+    # By block rather than by unicodedata.name: the interpreter's Unicode data can be
+    # older than a target (U+2B739 is Unicode 15.0, and Python 3.11 carries 14.0).
+    unified_ideographs = (
+        (0x3400, 0x4DBF),  # Extension A
+        (0x4E00, 0x9FFF),  # CJK Unified Ideographs
+        (0x20000, 0x2A6DF),  # Extension B
+        (0x2A700, 0x2B739),  # Extension C
+    )
+    assert all(any(first <= target <= last for first, last in unified_ideographs) for target in table.values())
     assert chr(table[0x2ED1]) == "長" and chr(table[0x2FA7]) == "長" and chr(table[0x2F3E]) == "戶"
     # The two supplement radicals Unicode also gives a compatibility decomposition agree with it.
     for radical in (0x2E9F, 0x2EF3):
