@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 from ...events import RuntimeEvent
+from ...input_sources import clean_params, clean_source
 from ...permissions import ALLOW, PermissionMetadata
 from ...questions import QuestionBroker, QuestionOption, QuestionPrompt
 from ...types import ToolResult
@@ -80,6 +81,17 @@ def create_question_tool(
             "saying what picking it leads to. A free-text box stays available beside "
             "the options unless you set `custom` to false.\n"
             "\n"
+            "When the answer is an item the user would otherwise have to look up and "
+            "type in -- a Jira issue, a pull request, a branch, a Confluence page -- "
+            "set `source` on that question and the user picks the item from a list "
+            "instead. The sources are `jira.issues` (`params` can narrow it by issue "
+            'type, for example `{"types": ["Epic"]}`), `jira.projects`, '
+            "`github.pull_requests`, `github.branches`, `github.repos` and "
+            "`confluence.pages`; any other value is ignored and the question is asked "
+            "as plain text. The answer reaches you the same way as every other answer: "
+            "a string, here the identifier of the picked item, such as an issue key or "
+            "a pull request URL.\n"
+            "\n"
             "Do not use it for anything you can settle yourself -- a question the code "
             "already answers, or a choice with a conventional default. Ask once, "
             "carrying every open question in a single call, rather than stopping the "
@@ -99,6 +111,20 @@ def create_question_tool(
                             "header": {"type": "string"},
                             "custom": {"type": "boolean"},
                             "metadata": {"type": "object"},
+                            "source": {
+                                "type": "string",
+                                "description": (
+                                    "The kind of item the answer is, one of the sources "
+                                    "named above, so the user picks it from a list."
+                                ),
+                            },
+                            "params": {
+                                "type": "object",
+                                "description": (
+                                    "Filters for `source`, for example "
+                                    '{"types": ["Epic"]} with `jira.issues`.'
+                                ),
+                            },
                             "options": {
                                 "type": "array",
                                 "items": {
@@ -149,8 +175,35 @@ def _parse_question(raw_question: Any) -> QuestionPrompt:
             for option in raw_question.get("options", []) or []
             if isinstance(option, Mapping)
         ],
-        metadata=dict(raw_question.get("metadata", {}) or {}),
+        metadata=_question_metadata(raw_question),
     )
+
+
+def _question_metadata(raw_question: Mapping[str, Any]) -> dict[str, Any]:
+    """The question's metadata, carrying its picker hint when it has a valid one.
+
+    The Portal reads ``source`` and ``source_params`` from here to offer a
+    picker in place of the text box. They travel in the metadata, which is
+    already stored and replayed with the question, rather than in new fields
+    every reader of a question payload would have to learn.
+
+    The tool is the only writer of the two keys: whatever the caller's own
+    metadata holds under those names is dropped, so what the Portal finds there
+    has always been through the checks below. A source that fails them leaves
+    the question exactly as it would have been asked without one, params
+    included, since params say nothing without the source they narrow.
+    """
+
+    metadata = dict(raw_question.get("metadata", {}) or {})
+    metadata.pop("source", None)
+    metadata.pop("source_params", None)
+    source = clean_source(raw_question.get("source"))
+    if source:
+        metadata["source"] = source
+        params = clean_params(raw_question.get("params"))
+        if params:
+            metadata["source_params"] = params
+    return metadata
 
 
 def _question_request_metadata(

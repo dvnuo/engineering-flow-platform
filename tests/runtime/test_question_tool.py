@@ -295,6 +295,201 @@ async def test_agent_answer_question_then_resume_appends_result_and_continues(tm
     assert history[3].parts[0].text == "I will use TypeScript."
 
 
+def _sourced_question(**extra: Any) -> dict[str, Any]:
+    return {"question": "Which epic?", "header": "Epic", **extra}
+
+
+async def _ask(questions: list[dict[str, Any]], **top_level: Any):
+    broker = QuestionBroker()
+    runtime = ToolRuntime(ToolRegistry([create_question_tool(broker)]))
+    call = ToolCall(
+        id="call_question",
+        tool_id="question",
+        args={"questions": questions, **top_level},
+    )
+    result = await runtime.execute(call, context=ToolContext(session_id="session-source"))
+    return result, broker, runtime, call
+
+
+@pytest.mark.asyncio
+async def test_question_source_and_params_travel_in_the_question_metadata():
+    result, broker, runtime, call = await _ask(
+        [
+            _sourced_question(source="jira.issues", params={"types": ["Epic"]}),
+            {"question": "Anything else?"},
+        ]
+    )
+
+    assert result.status == "question_requested"
+    questions = result.metadata["question_request"]["questions"]
+    # No new field on the question: the hint rides in the metadata that is
+    # already stored and replayed with it.
+    assert set(questions[0]) == {"question", "header", "options", "custom", "metadata"}
+    assert questions[0]["metadata"] == {
+        "source": "jira.issues",
+        "source_params": {"types": ["Epic"]},
+    }
+    assert questions[1]["metadata"] == {}
+    assert broker.pending()[0].to_dict()["questions"] == questions
+
+    # The answer is the picked item's identifier, a plain string as ever.
+    broker.answer(result.metadata["question_request"]["request_id"], ["FX-12", "No"])
+    answered = await runtime.execute(call, context=ToolContext(session_id="session-source"))
+
+    assert answered.status == "success"
+    assert answered.output["answers"] == [["FX-12"], ["No"]]
+    assert '"Which epic?"="FX-12"' in answered.content
+    assert answered.output["questions"][0]["metadata"]["source"] == "jira.issues"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source",
+    ["Jira Issues", "JIRA.issues", "jira..issues", "jira.", "jira/issues", " jira.issues", "j" * 65, ""],
+)
+async def test_question_with_an_invalid_source_is_asked_as_before(source: str):
+    plain, _, _, _ = await _ask([_sourced_question()])
+    result, _, _, _ = await _ask([_sourced_question(source=source, params={"types": ["Epic"]})])
+
+    assert result.status == "question_requested"
+    request = result.metadata["question_request"]
+    # Params say nothing without the source they narrow, so they go with it.
+    assert request["questions"][0]["metadata"] == {}
+    assert request["questions"] == plain.metadata["question_request"]["questions"]
+    assert request["request_id"] == plain.metadata["question_request"]["request_id"]
+
+
+@pytest.mark.asyncio
+async def test_question_params_are_cleaned_before_they_reach_the_portal():
+    params = {
+        "project": "  FX  ",
+        "types": [" Epic ", "", "Story"],
+        "open": True,
+        "limit": 25,
+        "long": "x" * 250,
+        "Bad-Key": "x",
+        "ratio": 1.5,
+        "nested": {"a": 1},
+        "mixed": ["a", 1],
+        "nothing": None,
+    }
+
+    cleaned, _, _, _ = await _ask([_sourced_question(source="jira.issues", params=params)])
+    nothing_left, _, _, _ = await _ask(
+        [_sourced_question(source="jira.projects", params={"Bad": "x", "ratio": 0.5})]
+    )
+    no_params, _, _, _ = await _ask([_sourced_question(source="github.repos")])
+
+    assert cleaned.metadata["question_request"]["questions"][0]["metadata"] == {
+        "source": "jira.issues",
+        "source_params": {
+            "project": "FX",
+            "types": ["Epic", "Story"],
+            "open": True,
+            "limit": 25,
+            "long": "x" * 200,
+        },
+    }
+    assert nothing_left.metadata["question_request"]["questions"][0]["metadata"] == {
+        "source": "jira.projects"
+    }
+    assert no_params.metadata["question_request"]["questions"][0]["metadata"] == {
+        "source": "github.repos"
+    }
+
+
+@pytest.mark.asyncio
+async def test_question_metadata_source_keys_are_written_by_the_tool_only():
+    # The free-form metadata is not a second, unchecked way to name a source:
+    # what the Portal reads under these two keys has always been validated.
+    smuggled = {"note": "kept", "source": "Anything Goes", "source_params": {"Bad Key": [1, 2]}}
+
+    without, _, _, _ = await _ask([_sourced_question(metadata=dict(smuggled))])
+    with_source, _, _, _ = await _ask(
+        [_sourced_question(metadata=dict(smuggled), source="github.branches")]
+    )
+
+    assert without.metadata["question_request"]["questions"][0]["metadata"] == {"note": "kept"}
+    assert with_source.metadata["question_request"]["questions"][0]["metadata"] == {
+        "note": "kept",
+        "source": "github.branches",
+    }
+
+
+@pytest.mark.asyncio
+async def test_question_schema_still_rejects_unknown_top_level_keys():
+    # `source` belongs to one question, not to the call.
+    misplaced, broker, _, _ = await _ask([_sourced_question()], source="jira.issues")
+    unknown, _, _, _ = await _ask([_sourced_question()], picker="jira.issues")
+    mistyped, _, _, _ = await _ask([_sourced_question(source=["jira.issues"])])
+
+    assert misplaced.status == "validation_error"
+    assert "Unexpected argument(s): source" in misplaced.content
+    assert broker.pending() == []
+    assert unknown.status == "validation_error"
+    # A source of the wrong JSON type is a malformed call like any other
+    # mistyped property, not a value to ignore quietly.
+    assert mistyped.status == "validation_error"
+    assert "questions[0].source" in mistyped.content
+
+
+def test_question_schema_and_description_name_the_sources():
+    tool = create_question_tool(QuestionBroker())
+    question_properties = tool.input_schema["properties"]["questions"]["items"]["properties"]
+
+    assert tool.input_schema["additionalProperties"] is False
+    assert set(tool.input_schema["properties"]) == {"questions", "metadata"}
+    assert question_properties["source"]["type"] == "string"
+    assert question_properties["params"]["type"] == "object"
+    assert tool.input_schema["properties"]["questions"]["items"]["required"] == ["question"]
+    for source in [
+        "jira.issues",
+        "jira.projects",
+        "github.pull_requests",
+        "github.branches",
+        "github.repos",
+        "confluence.pages",
+    ]:
+        assert f"`{source}`" in tool.description
+    assert '{"types": ["Epic"]}' in tool.description
+    assert tool.description.isascii()
+
+
+@pytest.mark.asyncio
+async def test_question_source_reaches_the_pending_request_and_the_stored_result(tmp_path: Path):
+    call = {
+        "id": "call_question",
+        "type": "function",
+        "function": {
+            "name": "question",
+            "arguments": json.dumps(
+                {"questions": [_sourced_question(source="github.pull_requests", params={"state": "open"})]}
+            ),
+        },
+    }
+    provider = ScriptedLLMProvider([{"tool_calls": [call]}, {"content": "Reviewing it."}])
+    runtime = AgentRuntime(
+        provider=provider,
+        config=RuntimeConfig(workspace_root=tmp_path, max_iterations=3, enable_question_tool=True),
+    )
+
+    first = await runtime.run("Review a pull request.", session_id="session-source-loop")
+
+    assert first.status == LoopStatus.WAITING_FOR_QUESTION
+    expected_metadata = {"source": "github.pull_requests", "source_params": {"state": "open"}}
+    assert first.pending_question_request["questions"][0]["metadata"] == expected_metadata
+
+    answer = "https://github.com/org/repo/pull/7"
+    runtime.answer_question(first.pending_question_request["request_id"], [answer])
+    resumed = await runtime.resume("session-source-loop")
+
+    assert resumed.status == LoopStatus.COMPLETED
+    tool_result = runtime.store.read_history("session-source-loop")[2].parts[0].tool_result
+    assert tool_result.metadata["answers"] == [[answer]]
+    assert tool_result.metadata["questions"][0]["metadata"] == expected_metadata
+    assert f'"Which epic?"="{answer}"' in tool_result.content
+
+
 def test_question_registry_is_opt_in(tmp_path: Path):
     default_registry = create_core_tool_registry(tmp_path)
     question_registry = create_core_tool_registry(

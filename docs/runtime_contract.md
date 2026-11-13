@@ -25,6 +25,8 @@ Native runtime must support:
 - `GET /api/copilot/quota`
 - `GET /api/models`
 - `GET /api/sessions`
+- `GET /api/personalization` and `GET /api/workspace/repos` (see Starter
+  Cards and Workspace Repositories below)
 - `POST /api/files/upload` and `POST /api/files/parse` (chatbox attachments;
   `GET /api/files/{file_id}/preview`, `GET /api/files/{file_id}` and
   `DELETE /api/files/{file_id}` complete the set). The accepted extensions
@@ -146,6 +148,70 @@ flight from the runtime's memory of it; nothing of this is persisted.
   {request_id, reason: "journal_truncated"|"journal_unavailable", first_seq}}`
   says that the events before `first_seq` are not coming. Without `after_seq`
   the socket behaves as before.
+
+## Starter Cards and Workspace Repositories
+
+`GET /api/personalization` answers `{"welcome": str|null, "cards": [...]}`
+from `portal/welcome.md` and `portal/cards.yaml` at the workspace root (the
+agents-repo branch the assistant booted with). Both files are optional, and
+whatever is invalid in them is dropped, never an error: at most 12 cards,
+text fields cut at 500 characters, prompts and templates at 4000.
+
+- A card is `{title, description, icon, prompt, input?}`. `prompt` is the
+  legacy form and uses `{{input}}`; `input` is `{label, placeholder}` plus,
+  when valid, `source` (a picker the Portal knows, such as `jira.issues`;
+  lower-case dotted name of at most 64 characters), `params` (filters for the
+  source) and `multiline` (only the boolean `true`). An input whose `source`
+  is invalid stays a plain text input.
+- `params` is a mapping of at most 8 entries: keys are lower-case
+  identifiers of at most 32 characters; a value is a string (at most 200
+  characters), a boolean, an integer, or a list of at most 10 strings (at
+  most 100 characters each). An entry with a bad key or value is dropped, and
+  a mapping left empty is omitted.
+- `?v=2` (a whole number of 2 or more) adds the form of a card: `fields` (1
+  to 6) and the `template` their values are placed in, by `{{name}}`. A field
+  is `{name, label, type, placeholder, required}` with `type` one of `text`
+  (default), `textarea`, `choice`, `file`; a `text` field may carry `source`
+  and `params`, a `choice` carries `options` (`[{value, label}]`, at most 20)
+  and `multiple`, a `file` may carry `accept` (extensions such as `.csv`, at
+  most 8), and any field may carry `default` (a string or a list of at most
+  20 strings; for a `choice`, only option values, and only the first unless
+  `multiple`). The two keys are valid together or dropped together: a name
+  that is missing, repeated or not a lower-case identifier, an unknown
+  `type`, a `choice` without a valid option, more than 6 fields, an empty
+  `template`, or a `{{name}}` in the template that no field declares.
+- Without `v`, or with any other value, `fields` and `template` are never
+  sent and a card that has no legacy `prompt` is left out, so a Portal that
+  predates the form renders exactly what it did. With `?v=2` such a card is
+  sent with `prompt: ""` and no `input`; a card that has both forms carries
+  both.
+
+`GET /api/workspace/repos` answers `200 {"repos": [...], "truncated": bool}`,
+the git repositories cloned in the workspace, for the Portal's branch picker.
+It is read-only and takes no parameter.
+
+- An entry is `{path, name, remote_url, host, repo, branch, head, upstream,
+  default_branch, ahead, dirty, last_commit_at}`. `path` is relative to the
+  workspace, with forward slashes. `remote_url` is the origin URL without its
+  userinfo, so a token in a clone URL never leaves the pod; `host` (no port,
+  lower case) and `repo` (the path without the leading slash and the trailing
+  `.git`) are read from it for https, `ssh://` and `git@host:owner/name.git`
+  remotes, and are "" without an origin or for a local path.
+- `branch` is "" on a detached HEAD, `upstream` "" when the branch tracks
+  nothing, `default_branch` what `refs/remotes/origin/HEAD` names ("" when
+  unknown). `ahead` counts the commits of `HEAD` that the upstream, else
+  `origin/<default_branch>`, does not have, and is `null` when there is
+  neither or the count fails. `dirty` is whether tracked files have changes,
+  `null` when that could not be told in time. `last_commit_at` is the
+  committer time of `HEAD` in UTC (ISO 8601), `null` before the first commit.
+- A repository is a directory holding a `.git` entry in one of `repos/*`,
+  `repos/*/*`, `.efp_runtime/repositories/*` or the direct children of the
+  workspace root; nothing else is scanned, the root itself is never listed,
+  and a directory that resolves outside the workspace is skipped.
+- At most 30 repositories, newest `last_commit_at` first. Only local,
+  read-only git commands run, each within 3 seconds and all within 8;
+  `truncated` is true when that budget ran out or more than 30 repositories
+  were found. A directory git cannot read is skipped.
 
 ## Runtime Profile Boot Contract
 
