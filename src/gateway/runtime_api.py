@@ -70,7 +70,8 @@ from src.gateway.runtime_request_contracts import (
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
 from src.efp_runtime.connector_bridge import get_connector_bridge_broker
-from src.gateway.personalization import load_personalization
+from src.gateway.personalization import load_personalization, personalization_version
+from src.gateway.workspace_repos import list_workspace_repos
 from src.efp_runtime.session.gateway_facade import (
     RuntimeSessionArtifacts,
     resolve_session_name,
@@ -3795,6 +3796,29 @@ async def api_personalization(request: web.Request) -> web.Response:
 
     Serves the greeting and starter cards from the agents-repo branch this
     assistant booted with, so Portal never has to clone that repo itself.
+    ``?v=2`` adds each card's form (``fields`` and ``template``); without it
+    the cards keep the shape a Portal older than the form expects.
+    """
+    version = personalization_version(request.query.get("v"))
+    try:
+        config_data = global_config.get_effective_config()
+    except Exception:
+        config_data = getattr(global_config, "_config", {}) or {}
+    workspace_root = resolve_runtime_workspace(config_data)
+    try:
+        payload = load_personalization(workspace_root, version=version)
+    except Exception:
+        logger.warning("Failed to load assistant personalization", exc_info=True)
+        payload = {"welcome": None, "cards": []}
+    return web.json_response(payload)
+
+
+async def api_workspace_repos(request: web.Request) -> web.Response:
+    """GET /api/workspace/repos
+
+    Lists the git repositories cloned in this assistant's workspace, for the
+    Portal's "branches in this workspace" picker. Read-only, and it takes no
+    path: the places scanned are fixed (see ``src/gateway/workspace_repos.py``).
     """
     _ = request
     try:
@@ -3803,10 +3827,12 @@ async def api_personalization(request: web.Request) -> web.Response:
         config_data = getattr(global_config, "_config", {}) or {}
     workspace_root = resolve_runtime_workspace(config_data)
     try:
-        payload = load_personalization(workspace_root)
+        # Every repository costs several git processes; off the event loop,
+        # or one slow disk would stall every chat stream of the pod.
+        payload = await asyncio.to_thread(list_workspace_repos, workspace_root)
     except Exception:
-        logger.warning("Failed to load assistant personalization", exc_info=True)
-        payload = {"welcome": None, "cards": []}
+        logger.warning("Failed to list workspace repositories", exc_info=True)
+        payload = {"repos": [], "truncated": False}
     return web.json_response(payload)
 
 
@@ -5784,6 +5810,7 @@ def setup_runtime_api_routes(app: web.Application):
     app.router.add_get('/api/sessions/{session_id}/connectors/pending', api_session_connectors_pending)
     app.router.add_post('/api/sessions/{session_id}/connectors/respond', api_session_connectors_respond)
     app.router.add_get('/api/personalization', api_personalization)
+    app.router.add_get('/api/workspace/repos', api_workspace_repos)
     app.router.add_get('/api/skills', api_skills)
     # Chat attachments (file-id based, one-shot per chat request). The legacy
     # path-based /api/files and /api/files/read browse aliases stay removed;
@@ -5809,6 +5836,7 @@ def setup_runtime_api_routes(app: web.Application):
     logger.info("  GET  /api/models  - Copilot models for this credential (catalog, else the static list)")
     logger.info("  GET  /api/copilot/quota - The member's Copilot AI-credit balance")
     logger.info("  GET  /api/skills  - Get available skills")
+    logger.info("  GET  /api/workspace/repos - Git repositories cloned in the workspace")
     logger.info("  POST /api/files/upload - Upload chat attachment (one-shot)")
     logger.info("  POST /api/files/parse - Parse chat attachment into session file context")
     logger.info("  GET  /api/files/{file_id}/preview - Preview parsed chat attachment")
