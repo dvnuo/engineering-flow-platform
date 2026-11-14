@@ -56,6 +56,7 @@ from src.gateway.chat_payloads import (
 from src.gateway.chat_run_registry import chat_run_registry
 from src.gateway.runtime_chat import (
     RuntimeChatError,
+    model_still_runnable,
     resume_runtime_chat,
     run_runtime_chat,
 )
@@ -3534,6 +3535,40 @@ def _metadata_with_pending_input_context(
     return merged
 
 
+def _resumed_turn_model(
+    request: web.Request,
+    data: Dict[str, Any],
+    pending_state: Mapping[str, Any],
+) -> Optional[str]:
+    """The model the run an answer resumes is asked to use.
+
+    An answer continues a turn, so it runs on that turn's model. The Portal
+    names it as ``model_override`` (the session's saved run settings, which
+    its chat proxy fills into the answer); otherwise the session kept the
+    model of the turn that asked, next to its connectors (see
+    ``pending_input_context`` in the session facade). The resume used to read
+    neither and ran on the assistant's configured model, so a turn started on
+    another model changed models halfway through. None is that configured
+    model: what a turn parked before the model was kept, or kept with a model
+    this runtime no longer lists, resumes on.
+    """
+    override = _extract_trusted_model_override(request, data)
+    if override:
+        return override
+    context = pending_state.get("input_context") if isinstance(pending_state, Mapping) else None
+    model = context.get("model") if isinstance(context, dict) else None
+    if not isinstance(model, str) or not model.strip():
+        return None
+    model = model.strip()
+    if not model_still_runnable(model):
+        logger.info(
+            "[user_input_resume] the parked turn's model %s is no longer available; resuming on the configured model",
+            model,
+        )
+        return None
+    return model
+
+
 # A question answer is a line or two the member picked or typed. The body cap
 # is ~30MB, and anything stored here is re-read and deep-copied on every
 # session load, so an answer far past this is not an answer.
@@ -3851,12 +3886,16 @@ async def _resume_chat_after_user_input(
     session_id: str,
     execution_metadata: Dict[str, Any],
     release_claim: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Continue a blocked chat turn once the user has supplied their input.
 
     Uses ``resume_runtime_chat`` so the answer continues the existing turn
     instead of appending a synthetic user message that would show up in the
     transcript as something the person never typed.
+
+    ``model`` is the model the turn was running on (see
+    ``_resumed_turn_model``); None is the assistant's configured model.
     """
     agent_id, agent_name = _resolve_runtime_agent_identity(request)
     # The Portal stamps its identity headers on every proxied request, not only
@@ -3883,7 +3922,7 @@ async def _resume_chat_after_user_input(
         request_id=request_id,
         agent_id=agent_id,
         agent_name=agent_name,
-        model=global_config.llm.get("model", DEFAULT_LLM_MODEL),
+        model=model or global_config.llm.get("model", DEFAULT_LLM_MODEL),
     )
 
     async def _drain(run_done: asyncio.Event) -> None:
@@ -3921,6 +3960,7 @@ async def _resume_chat_after_user_input(
                 agent_id=agent_id,
                 agent_name=agent_name,
                 request_id=request_id,
+                model=model,
                 portal_user_id=portal_user_id,
                 portal_user_name=portal_user_name,
                 stream_callback=event_queue,
@@ -3943,9 +3983,10 @@ async def _resume_chat_after_user_input(
             except Exception:
                 logger.debug("Resume event drain failed", exc_info=True)
             logger.error(
-                "[user_input_resume] resume failed | session_id=%s request_id=%s error=%s",
+                "[user_input_resume] resume failed | session_id=%s request_id=%s model=%s error=%s",
                 session_id,
                 request_id,
+                model or "(configured)",
                 sanitize_exception_message(exc),
                 exc_info=True,
             )
@@ -3963,9 +4004,14 @@ async def _resume_chat_after_user_input(
                     request_id=request_id,
                     user_message=sanitize_exception_message(exc),
                     error_type=type(exc).__name__,
+                    # Required by the helper: left out, the call raised a
+                    # TypeError that the except below swallowed at debug level,
+                    # so a failed resume never left its system error in the
+                    # transcript for the member to read.
+                    metadata=execution_metadata,
                 )
             except Exception:
-                logger.debug("Failed to persist chat failure state after resume", exc_info=True)
+                logger.warning("Failed to persist chat failure state after resume", exc_info=True)
         finally:
             if not run_done.is_set():
                 # Only a cancellation gets here with the drain still going:
@@ -4104,6 +4150,7 @@ async def api_session_question_respond(request: web.Request) -> web.Response:
             session_id=session_id,
             execution_metadata=execution_metadata,
             release_claim=request_id,
+            model=_resumed_turn_model(request, data, pending_state),
         )
     except Exception:
         _release_pending_claim(session_id, request_id)
@@ -4166,6 +4213,7 @@ async def api_session_permission_respond(request: web.Request) -> web.Response:
             # -- and a permission id is a hash of the ask, so a tool asking
             # again after a failed resume came back under the very same id.
             release_claim=request_id,
+            model=_resumed_turn_model(request, data, pending_state),
         )
     except Exception:
         _release_pending_claim(session_id, request_id)

@@ -202,6 +202,9 @@ async def run_runtime_chat(
             result,
             request_id=request_id,
             execution_metadata=execution_metadata,
+            # Kept while the turn waits on a card, so its answer resumes on
+            # this model and not on the assistant's default.
+            requested_model=runtime_model,
         )
         # A stopped turn has no answer to name the session after.
         if title_after_turn and result.status != LoopStatus.CANCELLED:
@@ -351,6 +354,9 @@ async def resume_runtime_chat(
             result,
             request_id=request_id,
             execution_metadata=execution_metadata,
+            # Kept while the turn waits on a card, so its answer resumes on
+            # this model and not on the assistant's default.
+            requested_model=runtime_model,
         )
         # A turn that paused on a question completes here.
         if title_after_turn and result.status != LoopStatus.CANCELLED:
@@ -754,6 +760,28 @@ def _resolve_model(model: str | None = None) -> str:
             error_type="invalid_model",
             details={"provider": "github-copilot"},
         ) from exc
+
+
+def model_still_runnable(model: str | None) -> bool:
+    """Whether ``model`` resolves on the configured provider today.
+
+    For a model remembered from an earlier run (the one a parked turn was
+    using): the model lists move between releases, and a remembered id that
+    has left them must not fail a run that can go on with the default.
+    """
+
+    if not isinstance(model, str) or not model.strip():
+        return False
+    llm_config = config.llm if isinstance(config.llm, dict) else {}
+    provider = str(llm_config.get("provider") or "").strip().lower()
+    if provider in {"ai_platform", "ai-platform"}:
+        # Never refused: an id the platform does not serve is coerced to its default.
+        return True
+    try:
+        _resolve_model(model)
+    except RuntimeChatError:
+        return False
+    return True
 
 
 def _admit_model_from_copilot_catalog(text: str) -> str | None:

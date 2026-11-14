@@ -556,12 +556,16 @@ class RuntimeSessionManager:
         *,
         request_id: str | None = None,
         execution_metadata: Mapping[str, Any] | None = None,
+        requested_model: str | None = None,
     ) -> None:
         """Write a run's outcome into session metadata.
 
         ``execution_metadata`` is the trusted metadata the run was started
         with; only its ``connectors`` are kept, and only while the run waits
         on a question or permission card (see ``_pending_input_context``).
+        ``requested_model`` is the model the run was asked to use (an auto id
+        included); it is kept for the same while, so the answer resumes the
+        turn on the model it was running on.
         """
         session = self._ensure_session(session_id)
         metadata = deepcopy(session.metadata)
@@ -614,8 +618,10 @@ class RuntimeSessionManager:
         # The connectors Portal vouched for on the turn that parked here. The
         # answer to the card arrives on another request, which an older Portal
         # sends without them; the resumed run falls back to this instead of
-        # losing the browser tool halfway through the turn.
-        input_context = _pending_input_context(execution_metadata)
+        # losing the browser tool halfway through the turn. The turn's model
+        # travels the same way: the answer names none, and the resumed run
+        # would otherwise switch to the assistant's default halfway through.
+        input_context = _pending_input_context(execution_metadata, requested_model=requested_model)
         if input_context is not None and (pending_permission is not None or pending_question is not None):
             metadata["pending_input_context"] = input_context
         else:
@@ -985,17 +991,21 @@ def _pending_tool_call_payloads(history: Iterable[Message]) -> list[dict[str, An
     return result
 
 
-def _pending_input_context(execution_metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """The Portal-vouched connectors of a turn, kept while it waits on a card."""
-    if not isinstance(execution_metadata, Mapping):
-        return None
-    connectors = execution_metadata.get("connectors")
-    if not isinstance(connectors, Mapping) or not connectors:
-        return None
-    context: dict[str, Any] = {"connectors": deepcopy(dict(connectors))}
-    if execution_metadata.get("enable_browser_tool") is True:
-        context["enable_browser_tool"] = True
-    return context
+def _pending_input_context(
+    execution_metadata: Mapping[str, Any] | None,
+    *,
+    requested_model: str | None = None,
+) -> dict[str, Any] | None:
+    """What a turn keeps while it waits on a card: its Portal-vouched connectors and its model."""
+    context: dict[str, Any] = {}
+    connectors = execution_metadata.get("connectors") if isinstance(execution_metadata, Mapping) else None
+    if isinstance(connectors, Mapping) and connectors:
+        context["connectors"] = deepcopy(dict(connectors))
+        if execution_metadata.get("enable_browser_tool") is True:
+            context["enable_browser_tool"] = True
+    if isinstance(requested_model, str) and requested_model.strip():
+        context["model"] = requested_model.strip()
+    return context or None
 
 
 def _runtime_state_from_metadata(
