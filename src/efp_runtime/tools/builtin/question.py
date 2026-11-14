@@ -23,6 +23,21 @@ def create_question_tool(
 
     async def execute(args: dict[str, Any], context: ToolContext) -> ToolResult:
         questions = _parse_questions(args.get("questions") or [])
+        if not questions:
+            # Nothing to draw a card from: the run would park on a question
+            # nobody can see, let alone answer. Say so to the model instead.
+            message = (
+                "questions must hold at least one question with text; "
+                "nothing was asked. Call the tool again with the question spelled out."
+            )
+            return ToolResult(
+                call_id=context.tool_call_id or "",
+                tool_name=tool_id,
+                status="validation_error",
+                success=False,
+                error=message,
+                content=message,
+            )
         answers = question_broker.consume_answer(
             context.session_id,
             context.tool_call_id,
@@ -79,7 +94,8 @@ def create_question_tool(
             "request is the right one. Each option is rendered as a labelled choice "
             "the user clicks, so give every option a short `label` and a `description` "
             "saying what picking it leads to. A free-text box stays available beside "
-            "the options unless you set `custom` to false.\n"
+            "the options unless you set `custom` to false, which only holds for a "
+            "question that lists options: one with none to pick from keeps the box.\n"
             "\n"
             "When the answer is an item the user would otherwise have to look up and "
             "type in -- a Jira issue, a pull request, a branch, a Confluence page -- "
@@ -155,26 +171,51 @@ def create_question_tool(
 
 
 def _parse_questions(raw_questions: Any) -> list[QuestionPrompt]:
+    """The questions that can be put to the user, in the order they were asked.
+
+    An entry with no words is left out, here and therefore in the request the
+    Portal draws and in the answer the model reads back: both come from this
+    list, so the n-th answer always belongs to the n-th question. The Portal
+    skips such an entry on its own, and every answer after it used to land on
+    the question before.
+    """
+
     if not isinstance(raw_questions, list):
         raise ValueError("questions must be an array.")
-    return [_parse_question(item) for item in raw_questions]
+    parsed = [_parse_question(item) for item in raw_questions]
+    return [question for question in parsed if question is not None]
 
 
-def _parse_question(raw_question: Any) -> QuestionPrompt:
+def _parse_question(raw_question: Any) -> Optional[QuestionPrompt]:
     if not isinstance(raw_question, Mapping):
         raise ValueError("question entries must be objects.")
+    question = str(raw_question.get("question", ""))
+    header = str(raw_question.get("header", "") or "")
+    if not question.strip():
+        # The words sometimes arrive in the header alone; with neither there
+        # is nothing to ask.
+        if not header.strip():
+            return None
+        question, header = header, ""
+    # An option without a label cannot be shown, so it is not a choice.
+    options = [
+        QuestionOption(
+            label=str(option.get("label", "")),
+            description=str(option.get("description", "") or ""),
+        )
+        for option in raw_question.get("options", []) or []
+        if isinstance(option, Mapping) and str(option.get("label", "") or "").strip()
+    ]
+    # `custom: false` takes the text box away, which is only safe while there
+    # is an option to pick instead. With none -- no options given, every label
+    # blank, or a `source` named in their place, whose picks land in that box --
+    # the card would show the question and no way to answer it.
+    custom = bool(raw_question.get("custom", True)) or not options
     return QuestionPrompt(
-        question=str(raw_question.get("question", "")),
-        header=str(raw_question.get("header", "") or ""),
-        custom=bool(raw_question.get("custom", True)),
-        options=[
-            QuestionOption(
-                label=str(option.get("label", "")),
-                description=str(option.get("description", "") or ""),
-            )
-            for option in raw_question.get("options", []) or []
-            if isinstance(option, Mapping)
-        ],
+        question=question,
+        header=header,
+        custom=custom,
+        options=options,
         metadata=_question_metadata(raw_question),
     )
 
@@ -237,6 +278,10 @@ def _answer_content(
     questions: list[QuestionPrompt],
     answers: list[list[str]],
 ) -> str:
+    if 0 < len(answers) < len(questions):
+        own_words = _own_words_content(answers)
+        if own_words:
+            return own_words
     pairs: list[str] = []
     for index, question in enumerate(questions):
         answer_values = answers[index] if index < len(answers) else []
@@ -247,6 +292,29 @@ def _answer_content(
     return (
         "User has answered your questions: "
         f"{'; '.join(pairs)}. You can now continue with the user's answers in mind."
+    )
+
+
+def _own_words_content(answers: list[list[str]]) -> str:
+    """What the model reads when the user typed a reply instead of filling in the card.
+
+    The card sends one answer per question. Fewer answers than questions means
+    the user wrote a line of their own, which the Portal posts as a single
+    answer. Paired by position, that line became the first question's answer
+    and every other question read "Unanswered", so a reply that settled all of
+    them ("release/2.4, and ask Alice to review") still told the model that
+    the rest were open, which is an invitation to ask them again. The reply is
+    handed over whole, for the model to read against all of its questions.
+    "" when there is no text to hand over.
+    """
+
+    reply = "; ".join(", ".join(values) for values in answers if values).strip()
+    if not reply:
+        return ""
+    return (
+        "The user replied in their own words instead of answering each question "
+        f'separately: "{reply}". Take from the reply whatever it settles, for any '
+        "of your questions, and ask again only about what it leaves open."
     )
 
 
