@@ -331,6 +331,13 @@ Each capability item includes at least:
   the turn with those, so the resumed run keeps the `browser` tool; an answer
   that names connectors wins, since it says which tab is answering. The
   context is dropped once a run ends without a pending card.
+- The context also keeps the model the parked turn was asked to use (`model`,
+  an auto id included). An answer resumes on the trusted `model_override` in
+  its body (the Portal's chat proxy fills in the session's saved run
+  settings), else on the kept model, else on the assistant's configured one;
+  a kept model the runtime no longer lists counts as none. A resumed run on an
+  auto id is routed like any other, on the prompt of the turn it continues
+  (the newest message a person wrote), and gets its own session token.
 - An accepted answer retires the card at once: before `question/respond` or
   `permission/respond` returns `202`, `pending_question_request` /
   `pending_permission_request` (and `pending_input_context`) leave session

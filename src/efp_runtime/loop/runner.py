@@ -1348,6 +1348,12 @@ class RuntimeLoopRunner:
         budget and the per-iteration payloads. Providers without
         ``resolve_auto_model`` and concrete models are left alone; a failure
         here is the provider's fallback at invoke time, never the run's.
+
+        A run that continues a turn (an answered question or permission card,
+        a regenerated edit) brings no user text of its own. It is routed on
+        the turn's prompt as the session stored it: with nothing to route on
+        the provider degrades to the default model without a session, and
+        that decision stands for the whole run.
         """
 
         requested_model = _requested_model_for_run(run_metadata, self._provider_model())
@@ -1360,9 +1366,12 @@ class RuntimeLoopRunner:
         if not isinstance(prompt, str) or not prompt.strip():
             prompt = user_text
         try:
-            history_chars = _messages_chars(list(self.store.read_history(session_id)))
-        except Exception:  # noqa: BLE001 - the size only guards the pick; routing goes on without it.
-            history_chars = None
+            history = list(self.store.read_history(session_id))
+        except Exception:  # noqa: BLE001 - the history only guards the pick; routing goes on without it.
+            history = None
+        history_chars = _messages_chars(history) if history is not None else None
+        if history and not (isinstance(prompt, str) and prompt.strip()):
+            prompt = _turn_prompt_from_history(history)
         try:
             resolution = await asyncio.to_thread(
                 resolver,
@@ -4049,6 +4058,38 @@ def _active_user_message(
             continue
         return message
     return None
+
+
+def _turn_prompt_from_history(messages: Iterable[Message]) -> str:
+    """The member's words for the turn that a run without user text continues.
+
+    The newest message a person wrote: what they typed
+    (``original_user_message``, kept when the model was shown a composed
+    prompt), else the message's own text. Compaction summaries and injected
+    notices (background task results, the time stamp) are nobody's words and
+    are skipped.
+    """
+
+    for message in reversed(list(messages)):
+        if message.role != MessageRole.USER:
+            continue
+        metadata = message.metadata if isinstance(message.metadata, Mapping) else {}
+        if metadata.get("synthetic") is True or _message_has_compaction_part(message):
+            continue
+        original = metadata.get("original_user_message")
+        if isinstance(original, str) and original.strip():
+            return original.strip()
+        text = " ".join(
+            part.text.strip()
+            for part in message.parts
+            if part.type is MessagePartType.TEXT
+            and isinstance(part.text, str)
+            and part.text.strip()
+            and not (isinstance(part.metadata, Mapping) and part.metadata.get("synthetic") is True)
+        )
+        if text:
+            return text
+    return ""
 
 
 def _ensure_active_user_replay(

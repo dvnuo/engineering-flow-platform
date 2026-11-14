@@ -159,7 +159,7 @@ def _resumed_metadata(monkeypatch, *, pending_state: dict, body: dict, endpoint)
     async def fake_record(*_a, **_k):
         return None
 
-    async def fake_resume(request, *, session_id, execution_metadata, release_claim=None):
+    async def fake_resume(request, *, session_id, execution_metadata, release_claim=None, model=None):
         captured["execution_metadata"] = execution_metadata
         return {"status": "accepted", "request_id": "chat-resume-1"}
 

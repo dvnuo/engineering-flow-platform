@@ -49,6 +49,8 @@ from efp_runtime.llm.provider import (
 )
 from efp_runtime.llm.request import ProviderRequest, RequestMessage, RequestMessagePart
 from efp_runtime.loop import LoopStatus, RuntimeLoopRunner, RuntimeRequest
+from efp_runtime.loop.runner import _turn_prompt_from_history
+from efp_runtime.session.models import CompactionPart, Message, MessagePart, MessageRole
 from efp_runtime.session.store import InMemorySessionStore
 from efp_runtime.tools.registry import ToolRegistry
 from efp_runtime.tools.runtime import ToolRuntime
@@ -825,3 +827,79 @@ async def test_runner_with_a_concrete_model_neither_routes_nor_reports_auto_fiel
     assert "requested_model" not in metadata
     assert "auto_tier" not in metadata
     assert "model_fallback_reason" not in metadata
+
+
+# --- a run that continues a turn ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_continues_a_turn_routes_on_the_prompt_the_session_stored():
+    # An answered question or permission card (and a regenerated edit) resumes
+    # with no user text of its own. With nothing to route on, the provider
+    # degraded to the default model without a session, for the whole run.
+    transport = _RoutingTransport([_responses_answer("Which branch?"), _responses_answer("Carried on.")])
+    provider = _MetadataSpyProvider(transport=transport, model="auto")
+    runner = _runner(provider)
+    await runner.run(
+        session_id="session-auto-resume",
+        user_text="composed prompt with attachment context",
+        metadata={"run_id": "run-1", "original_user_message": "ship the release notes"},
+    )
+
+    resumed = await runner.run(
+        session_id="session-auto-resume",
+        user_text="",
+        append_user_message=False,
+        metadata={"run_id": "run-2"},
+    )
+
+    assert resumed.status == LoopStatus.COMPLETED
+    assert transport.route_calls == [
+        ("ship the release notes", "balance", False),
+        ("ship the release notes", "balance", False),
+    ]
+    assert transport.payloads[-1]["model"] == "gpt-6-luna"
+    assert transport.session_token == "session-2"
+    assert provider.seen_metadata[-1]["auto_routing"] == {
+        "model": "gpt-6-luna",
+        "tier": "balance",
+        "session_active": True,
+        "fallback_reason": None,
+    }
+    metadata = resumed.final_assistant_message.metadata
+    assert metadata["model"] == "gpt-6-luna"
+    assert metadata["requested_model"] == "auto"
+    assert "model_fallback_reason" not in metadata
+
+
+def test_the_turns_prompt_is_the_newest_thing_a_person_wrote():
+    def user(text, **metadata):
+        return Message(role=MessageRole.USER, session_id="s", parts=[MessagePart.text_part(text)], metadata=metadata)
+
+    assistant = Message(role=MessageRole.ASSISTANT, session_id="s", parts=[MessagePart.text_part("Which branch?")])
+    notice = user("Background task t-1 finished.", synthetic=True, source="background_task.injected")
+    summary = Message(
+        role=MessageRole.USER,
+        session_id="s",
+        parts=[MessagePart.compaction_part(CompactionPart(summary="Earlier: the member asked for release notes."))],
+    )
+
+    # The member's own words win over the composed prompt the model was shown.
+    composed = user("Attached files: notes.md\n\nship it", original_user_message="ship it")
+    assert _turn_prompt_from_history([user("older"), composed, assistant]) == "ship it"
+    # Without them, the message's text.
+    assert _turn_prompt_from_history([user("older"), user("  ship the release notes  "), assistant]) == "ship the release notes"
+    # Injected notices and compaction summaries are nobody's words.
+    assert _turn_prompt_from_history([user("ship it"), assistant, notice, summary]) == "ship it"
+    stamped = Message(
+        role=MessageRole.USER,
+        session_id="s",
+        parts=[
+            MessagePart.text_part("Current time: 2026-11-14 20:24:49 HKT", metadata={"kind": "current_time", "synthetic": True}),
+            MessagePart.text_part("ship it"),
+        ],
+    )
+    assert _turn_prompt_from_history([stamped]) == "ship it"
+    # Nothing a person wrote: nothing to route on.
+    assert _turn_prompt_from_history([assistant, notice]) == ""
+    assert _turn_prompt_from_history([]) == ""
