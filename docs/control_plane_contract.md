@@ -14,6 +14,9 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
   form of the identity headers. EFP renders it (or, failing that, the header values) into a `Session user:`
   system message with identity rules, so the model treats `jira myself` / `currentUser()` as the shared service
   account and filters "my" requests by the session user explicitly. Untrusted requests cannot set it.
+- `portal_user` may also carry `github_login`, the member's GitHub login (the Portal username with the enterprise
+  suffix put back). EFP lists it in the `Session user:` message so "my pull requests" is filtered by that login
+  instead of `@me`, which is the service account; a value that does not look like a login is dropped.
 - The same `portal_user` object may carry `reply_language` (`en`, `zh-Hans`, `zh-Hant-HK`) and
   `reply_language_strict` (boolean; `true` when the member chose the language explicitly), the Portal's resolved
   reply language for the member. EFP renders a `Reply language:` system message directly after `Session user:`

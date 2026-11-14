@@ -325,6 +325,7 @@ and are not loaded through `EFP_TOOLS_DIR` or `EFP_EXTERNAL_TOOLS_*`.
   - `X-Portal-Author-Source: portal`.
 - `portal_user_id` / `portal_user_name` are trusted identity headers only (`X-Portal-User-Id`, `X-Portal-User-Name`).
 - Trusted chat `metadata.portal_user` (`{id, username, display_name}`) is the structured form of the same identity. The runtime renders it as a `Session user:` system message so the model can resolve "my"/"me" against the signed-in Portal member instead of the shared CLI service account; the header fields are the fallback when Portal sends no structured object.
+- `portal_user` may also carry `github_login`, the member's GitHub login (the Portal username with the enterprise suffix put back). The runtime lists it in the `Session user:` message so "my pull requests" is filtered by that login instead of `@me`, which is the service account.
 - The same object may carry `reply_language` (`en`, `zh-Hans`, `zh-Hant-HK`) and `reply_language_strict` (boolean), the Portal's resolved reply language for the member; the runtime renders them as the `Reply language:` system message after `Session user:` (see "Reply Language" above) and names sessions in the answer's language. Absent or unknown values change nothing.
 
 For complete control-plane contract details, see `docs/control_plane_contract.md`.

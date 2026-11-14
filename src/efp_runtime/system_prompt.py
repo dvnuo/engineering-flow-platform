@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any
@@ -41,8 +42,8 @@ Runtime CLI tools:
 _TRUNCATION_NOTICE = "[System prompt content truncated to {kept} of {original} chars.]"
 
 SESSION_USER_IDENTITY_RULES = """Identity rules:
-- The jira, confluence, gh, jenkins, and aws CLIs may authenticate with a shared service account configured in the user's Portal connectors rather than with this user's own account. `jira myself`, `confluence myself`, JQL/CQL `currentUser()`, and similar "current user" lookups describe that service account, never the session user.
-- When the user says "my", "mine", "me", "assigned to me", "my pages", or otherwise refers to themselves, filter explicitly by the session user identity above, for example JQL `assignee = "<username>"` or CQL `creator = "<username>"`. If the external system needs an account id, look the user up by username or display name first.
+- The jira, confluence, gh, jenkins, and aws CLIs may authenticate with a shared service account configured in the user's Portal connectors rather than with this user's own account. `jira myself`, `confluence myself`, JQL/CQL `currentUser()`, GitHub's `@me` and `gh api user`, and similar "current user" lookups describe that service account, never the session user.
+- When the user says "my", "mine", "me", "assigned to me", "my pages", "my pull requests", "my branches", or otherwise refers to themselves, filter explicitly by the session user identity above, for example JQL `assignee = "<username>"`, CQL `creator = "<username>"`, or `gh search prs --author <GitHub login>`. On GitHub the session user is the GitHub login above when one is listed, otherwise their username. If the external system needs an account id, look the user up by username or display name first.
 - If the session user cannot be resolved in the external system, ask which account to use instead of silently falling back to the service account."""
 
 LOCAL_BRIDGE_CONNECTOR_CONTEXT = """Connectors available in this chat:
@@ -273,6 +274,9 @@ class SystemPromptBuilder:
         username = identity.get("username")
         if username:
             fields.append(("username", username))
+        github_login = identity.get("github_login")
+        if github_login:
+            fields.append(("GitHub login", github_login))
         user_id = identity.get("id")
         if user_id:
             fields.append(("portal user id", user_id))
@@ -596,6 +600,9 @@ def _read_text_file(path: Path) -> str | None:
         return None
 
 
+_GITHUB_LOGIN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+
 def resolve_session_user(metadata: Mapping[str, Any] | None) -> dict[str, str] | None:
     """Return the Portal user identity carried by run metadata, if any.
 
@@ -603,6 +610,11 @@ def resolve_session_user(metadata: Mapping[str, Any] | None) -> dict[str, str] |
     metadata; ``portal_user_id`` / ``portal_user_name`` are the older header
     derived fields and act as a fallback so identity still reaches the prompt
     when only the headers were sent.
+
+    ``github_login`` is the member's GitHub login, which differs from the
+    Portal username when an enterprise suffix is stripped at sign-in. It is
+    read from the structured object only and kept only when it looks like a
+    login, because it is rendered into the system prompt.
     """
     if not isinstance(metadata, Mapping):
         return None
@@ -613,6 +625,9 @@ def resolve_session_user(metadata: Mapping[str, Any] | None) -> dict[str, str] |
             value = _clean_identity_value(structured.get(key))
             if value:
                 identity[key] = value
+        github_login = _clean_identity_value(structured.get("github_login"))
+        if _GITHUB_LOGIN_PATTERN.fullmatch(github_login):
+            identity["github_login"] = github_login
     if not identity.get("id"):
         value = _clean_identity_value(metadata.get("portal_user_id"))
         if value:
