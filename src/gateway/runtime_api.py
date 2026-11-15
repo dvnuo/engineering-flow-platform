@@ -54,6 +54,7 @@ from src.gateway.chat_payloads import (
     normalize_assistant_history_message,
 )
 from src.gateway.chat_run_registry import chat_run_registry
+from src.gateway.portal_trust import is_trusted_portal_request
 from src.gateway.runtime_chat import (
     RuntimeChatError,
     model_still_runnable,
@@ -272,9 +273,8 @@ async def _enrich_publish_metadata_with_context_preview(
 
 
 def _is_trusted_portal_request(request: web.Request) -> bool:
-    headers = getattr(request, "headers", {}) or {}
-    portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
-    return portal_source == "portal"
+    # The author-source header, plus the Portal trust token once the pod has one.
+    return is_trusted_portal_request(request)
 
 
 def _resolve_chat_display_user_name(data: Dict[str, Any], portal_user_name: Optional[str]) -> str:

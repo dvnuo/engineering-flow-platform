@@ -125,6 +125,23 @@ def test_is_trusted_portal_request_depends_only_on_portal_source_marker():
     assert untrusted is False
 
 
+def test_is_trusted_portal_request_needs_the_trust_token_once_the_pod_has_one(monkeypatch):
+    # The marker alone is believed only on a pod without EFP_PORTAL_TRUST_TOKEN
+    # (the tests above); tests/test_portal_trust.py covers the rest.
+    from src.gateway import runtime_api
+
+    monkeypatch.setenv("EFP_PORTAL_TRUST_TOKEN", "5ca1ab1e")
+    marker_only = _HeaderOnlyRequest({"X-Portal-Author-Source": "portal"})
+    wrong_token = _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Portal-Trust-Token": "5ca1ab1f"})
+    with_token = _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Portal-Trust-Token": "5ca1ab1e"})
+
+    assert runtime_api._is_trusted_portal_request(marker_only) is False
+    assert runtime_api._is_trusted_portal_request(wrong_token) is False
+    assert runtime_api._is_trusted_portal_request(with_token) is True
+    assert runtime_api._extract_trusted_model_override(marker_only, {"model_override": "gpt-5"}) is None
+    assert runtime_api._extract_trusted_model_override(with_token, {"model_override": "gpt-5"}) == "gpt-5"
+
+
 def test_extract_trusted_model_override_accepts_trimmed_value_for_trusted_request():
     from src.gateway import runtime_api
 

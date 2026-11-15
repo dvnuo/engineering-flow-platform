@@ -217,6 +217,11 @@ boot (no hot apply; config changes require a Portal-triggered restart):
   the read-only base `config.yaml` and scrubbed from the process environment
   after projection.
 - `EFP_PROFILE_REVISION` / `EFP_PROFILE_ID` — profile revision and id.
+- `EFP_PORTAL_TRUST_TOKEN` — per-assistant secret, which the Portal also sends
+  as `X-Portal-Trust-Token` on every request. While it is set the runtime
+  answers `401` to a request without it and sends it on its own calls to the
+  Portal's `/api/internal/*` API; unset (older pods, local development) nothing
+  is checked. See "Phase 5 Trust Contract" below.
 - Tools config env vars — exported by the runtime for CLI child processes
   (`jira`, `confluence`, `jenkins`, `aws-auth`, `nexus`, `splunk`,
   `pgsql`, `mobile-auto`) as
@@ -314,15 +319,17 @@ and are not loaded through `EFP_TOOLS_DIR` or `EFP_EXTERNAL_TOOLS_*`.
 
 | Endpoint | Method | Description | Required Header |
 |----------|--------|-------------|-----------------|
-| `/api/tasks/execute` | POST | Runtime task execution bridge | none (internal network / Portal proxy topology) |
-| `/api/capabilities` | GET | Runtime capability snapshot/filter API | none (internal network / Portal proxy topology) |
+| `/api/tasks/execute` | POST | Runtime task execution bridge | `X-Portal-Trust-Token` when the pod has `EFP_PORTAL_TRUST_TOKEN`, else none |
+| `/api/capabilities` | GET | Runtime capability snapshot/filter API | `X-Portal-Trust-Token` when the pod has `EFP_PORTAL_TRUST_TOKEN`, else none |
 
 ### Phase 5 Trust Contract (Portal ↔ Runtime)
 
 - `/api/chat` and `/api/chat/stream` remain usable for direct runtime chat.
 - Governance/capability metadata is only applied for **trusted Portal requests**.
 - Trusted chat request requires:
-  - `X-Portal-Author-Source: portal`.
+  - `X-Portal-Author-Source: portal`, and
+  - `X-Portal-Trust-Token` equal to the pod's `EFP_PORTAL_TRUST_TOKEN`, when the Portal injected one.
+- When `EFP_PORTAL_TRUST_TOKEN` is set, every request without the token is answered `401` (the `GET /api/events` WebSocket handshake too). Only `GET /health`, `/actuator/health` and `/ready` (probes) and callers on the pod's own loopback interface are served without it, so direct runtime chat then works from inside the pod only. When it is not set the runtime logs one warning at startup and serves every caller.
 - `portal_user_id` / `portal_user_name` are trusted identity headers only (`X-Portal-User-Id`, `X-Portal-User-Name`).
 - Trusted chat `metadata.portal_user` (`{id, username, display_name}`) is the structured form of the same identity. The runtime renders it as a `Session user:` system message so the model can resolve "my"/"me" against the signed-in Portal member instead of the shared CLI service account; the header fields are the fallback when Portal sends no structured object.
 - `portal_user` may also carry `github_login`, the member's GitHub login (the Portal username with the enterprise suffix put back). The runtime lists it in the `Session user:` message so "my pull requests" is filtered by that login instead of `@me`, which is the service account.
@@ -339,13 +346,13 @@ Additional runtime contracts:
 ### Portal Control-Plane Integration (Operator Minimum)
 
 1. **Portal -> EFP trusted chat**  
-   Header: `X-Portal-Author-Source: portal`.
+   Headers: `X-Portal-Author-Source: portal` and `X-Portal-Trust-Token` (the pod's `EFP_PORTAL_TRUST_TOKEN`).
 
 2. **Portal -> EFP internal runtime endpoints** (`/api/tasks/execute`, `/api/capabilities`)  
-   The current deployment mode relies on the trusted Portal source/header contract.
+   Header: `X-Portal-Trust-Token`, as on every other request the Portal makes to a pod that has `EFP_PORTAL_TRUST_TOKEN`.
 
 3. **EFP adapter -> Portal internal APIs** (`adapter:portal:*`)  
-   Requires `PORTAL_INTERNAL_BASE_URL` (env) or `server.portal_internal_base_url`.  
+   Requires `PORTAL_INTERNAL_BASE_URL` (env) or `server.portal_internal_base_url`; the runtime sends `X-Portal-Trust-Token` when the pod has `EFP_PORTAL_TRUST_TOKEN`.  
 
 ### Sessions
 

@@ -229,6 +229,12 @@ Portal-triggered restart with a new Secret.
   process can spawn.
 - `EFP_PROFILE_REVISION`: profile revision string from the same Secret.
 - `EFP_PROFILE_ID`: bound profile id, or `none` for unbound agents.
+- `EFP_PORTAL_TRUST_TOKEN`: per-assistant secret, not part of the profile. The
+  Portal sends it as `X-Portal-Trust-Token` on every request; while it is set
+  the runtime answers `401` to any request without it (except `/health`,
+  `/actuator/health`, `/ready` and loopback callers) and sends it on its calls
+  to the Portal's `/api/internal/*` API. Unset means no check. See
+  `docs/control_plane_contract.md`.
 - Tools config env vars: exported by the runtime itself after projection —
   EFP_-prefixed, indexed environment variables flattened from the tools
   `RootConfig`-shaped subset (`version`/`jira`/`confluence`/`jenkins`/`aws`/

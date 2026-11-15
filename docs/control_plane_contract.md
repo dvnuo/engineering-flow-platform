@@ -4,9 +4,10 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 
 ## 1) Chat Entrypoints (`/api/chat`, `/api/chat/stream`)
 
-- Direct runtime chat is allowed without Portal.
+- Direct runtime chat is allowed without Portal (from inside the pod only, once the pod has a trust token; see section 2).
 - Trusted Portal metadata/identity is only accepted when request is trusted:
   - `X-Portal-Author-Source: portal`
+  - and, when the pod has `EFP_PORTAL_TRUST_TOKEN`, the same value in `X-Portal-Trust-Token` (compared in constant time)
 - Portal identity is header-only:
   - `X-Portal-User-Id`
   - `X-Portal-User-Name`
@@ -29,19 +30,32 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 
 - `/api/tasks/execute` and `/api/capabilities` are internal control-plane endpoints.
 - Runtime profile apply still relies on trusted Portal source marker and deployment topology.
+- Portal trust token: the Portal injects `EFP_PORTAL_TRUST_TOKEN` (a per-assistant secret) into the pod and sends it
+  as `X-Portal-Trust-Token` on every request, the `GET /api/events` WebSocket handshake included. While the variable
+  is set, one middleware (`src/gateway/portal_trust.py`) answers `401 {"error": "portal_trust_token_required"}` to
+  every request without the right token, on every route. Served without it:
+  - `GET /health`, `GET /actuator/health`, `GET /ready` (the kubelet's readiness probe and the Portal's status
+    check cannot hold the token);
+  - callers on the pod's own loopback interface (socket peer `127.0.0.1` or `::1`; a request carrying
+    `Forwarded`, `X-Forwarded-For` or `X-Real-IP` never counts as one).
+- A pod without the variable (created before the Portal injected it, or local development) serves every caller as
+  before and logs one warning at startup.
 
 ## 3) Runtime Adapter → Portal Internal API Contract
 
 - `adapter:portal:*` actions call Portal internal APIs with:
   - base URL from `PORTAL_INTERNAL_BASE_URL` env, fallback `server.portal_internal_base_url`
+  - `X-Portal-Trust-Token` when the pod has `EFP_PORTAL_TRUST_TOKEN` (the session metadata publishes and the Jira
+    reconciliation send it too)
 
 ## 4) Trust Matrix
 
 | Chain | EFP setting | Portal side should provide |
 |---|---|---|
-| Portal → EFP `/api/tasks/execute`, `/api/capabilities` | none | none required (currently permissive) |
-| Portal → EFP trusted chat metadata/identity | `X-Portal-Author-Source: portal` | `X-Portal-User-Id`, `X-Portal-User-Name` (optional) |
-| Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_base_url` / `PORTAL_INTERNAL_BASE_URL` | internal route available at configured base URL |
+| Portal → EFP, every route | `EFP_PORTAL_TRUST_TOKEN` (unset: permissive) | `X-Portal-Trust-Token` |
+| Portal → EFP `/api/tasks/execute`, `/api/capabilities` | none beyond the trust token | none beyond the trust token |
+| Portal → EFP trusted chat metadata/identity | `X-Portal-Author-Source: portal` (plus the trust token) | `X-Portal-User-Id`, `X-Portal-User-Name` (optional) |
+| Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_base_url` / `PORTAL_INTERNAL_BASE_URL`, `EFP_PORTAL_TRUST_TOKEN` | internal route available at configured base URL |
 
 ## 5) Jira Reconciliation Contract (Runtime Fallback)
 
