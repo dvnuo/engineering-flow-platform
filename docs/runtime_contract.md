@@ -338,6 +338,16 @@ Each capability item includes at least:
   a kept model the runtime no longer lists counts as none. A resumed run on an
   auto id is routed like any other, on the prompt of the turn it continues
   (the newest message a person wrote), and gets its own session token.
+- Every question the `question` tool raises can be answered. An entry with no
+  words is left out (its `header` stands in when only that carries them), an
+  option with no label is dropped, and `custom: false` is kept only while the
+  question still has an option to pick, so a pending request never holds a
+  question with neither options nor a text box. A call left with no question
+  at all is answered with a `validation_error` result instead of parking the
+  run. Answers pair with questions by position in that list. Fewer answers
+  than questions is a reply typed in the member's own words (the Portal's
+  composer posts one line for the whole card): the tool result hands the
+  model the line whole rather than marking the other questions unanswered.
 - An accepted answer retires the card at once: before `question/respond` or
   `permission/respond` returns `202`, `pending_question_request` /
   `pending_permission_request` (and `pending_input_context`) leave session

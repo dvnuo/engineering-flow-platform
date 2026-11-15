@@ -592,3 +592,176 @@ def test_question_sources_stay_inside_runtime_boundary():
     ]
     for token in forbidden_tokens:
         assert token not in combined
+
+
+# --- every question that is asked can be answered -----------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        {"question": "Who should review it?", "custom": False},
+        {"question": "Who should review it?", "custom": False, "options": []},
+        {"question": "Who should review it?", "custom": False, "options": [{"label": ""}, {"label": "   "}]},
+        {"question": "Which issue is this for?", "custom": False, "source": "jira.issues"},
+    ],
+)
+async def test_a_question_with_nothing_to_pick_keeps_its_text_box(question: dict[str, Any]):
+    # `custom: false` takes the text box away. With no option to pick instead
+    # the card showed the question and no way to answer it, and "Send answer"
+    # could only say that a question was still open.
+    result, _, _, _ = await _ask([question])
+
+    assert result.status == "question_requested"
+    asked = result.metadata["question_request"]["questions"][0]
+    assert asked["custom"] is True
+    assert asked["options"] == []
+
+
+@pytest.mark.asyncio
+async def test_custom_false_stands_while_there_is_an_option_to_pick():
+    result, _, _, _ = await _ask(
+        [
+            {
+                "question": "Which environment?",
+                "custom": False,
+                "options": [{"label": "Production"}, {"label": ""}, {"label": "Staging"}],
+            }
+        ]
+    )
+
+    asked = result.metadata["question_request"]["questions"][0]
+    assert asked["custom"] is False
+    # A label-less option cannot be shown, so it is not offered.
+    assert [option["label"] for option in asked["options"]] == ["Production", "Staging"]
+
+
+@pytest.mark.asyncio
+async def test_a_question_without_words_is_left_out_and_the_answers_stay_aligned():
+    # The Portal skips an entry with no question text. While the runtime kept
+    # it, the card's second answer was read as the answer to the blank entry
+    # and the last question came back "Unanswered".
+    result, broker, runtime, call = await _ask(
+        [
+            {"question": "Which project?", "options": [{"label": "OPS"}, {"label": "PLAT"}]},
+            {"question": "   ", "options": [{"label": "All"}, {"label": "Some"}]},
+            {"question": "Which priority?", "options": [{"label": "P1"}, {"label": "P2"}]},
+        ]
+    )
+
+    request = result.metadata["question_request"]
+    assert [item["question"] for item in request["questions"]] == ["Which project?", "Which priority?"]
+
+    broker.answer(request["request_id"], ["OPS", "P1"])
+    answered = await runtime.execute(call, context=ToolContext(session_id="session-source"))
+
+    assert answered.status == "success"
+    assert '"Which project?"="OPS"' in answered.content
+    assert '"Which priority?"="P1"' in answered.content
+    assert "Unanswered" not in answered.content
+    assert [item["question"] for item in answered.output["questions"]] == ["Which project?", "Which priority?"]
+
+
+@pytest.mark.asyncio
+async def test_a_question_whose_words_are_in_the_header_is_asked_with_them():
+    result, _, _, _ = await _ask([{"question": "", "header": "Which branch should the fix target?"}])
+
+    asked = result.metadata["question_request"]["questions"][0]
+    assert asked["question"] == "Which branch should the fix target?"
+    assert asked["header"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("questions", [[], [{"question": "   "}], [{"question": "", "header": " "}]])
+async def test_a_call_that_asks_nothing_is_an_error_for_the_model(questions: list[dict[str, Any]]):
+    # It used to be raised as a question with nothing in it: no card could be
+    # drawn from it, so the run waited on an answer nobody could give.
+    result, broker, _, _ = await _ask(questions)
+
+    assert result.status == "validation_error"
+    assert result.success is False
+    assert "at least one question with text" in result.content
+    assert broker.pending() == []
+    assert "question_request" not in (result.metadata or {})
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_asks_nothing_does_not_park_the_run():
+    empty_call = {
+        "id": "call_question",
+        "type": "function",
+        "function": {"name": "question", "arguments": json.dumps({"questions": [{"question": " "}]})},
+    }
+    store = InMemorySessionStore()
+    runner = RuntimeLoopRunner(
+        store=store,
+        provider=ScriptedLLMProvider([{"tool_calls": [empty_call]}, {"content": "Which stack do you want?"}]),
+        tool_runtime=ToolRuntime(ToolRegistry([create_question_tool(QuestionBroker())])),
+        max_iterations=3,
+    )
+
+    result = await runner.run(user_text="Clarify before coding.", session_id="session-empty-question")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.pending_question_request is None
+    tool_results = [
+        part.tool_result
+        for message in store.read_history("session-empty-question")
+        for part in message.parts
+        if part.type is MessagePartType.TOOL_RESULT
+    ]
+    assert [item.status for item in tool_results] == ["validation_error"]
+
+
+# --- what the model reads back --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_reply_typed_in_the_users_own_words_is_handed_over_whole():
+    # The Portal's composer answers a card with one typed line, whatever the
+    # number of questions. Paired by position it answered the first question
+    # and left the rest "Unanswered", which told the model they were still open.
+    result, broker, runtime, call = await _ask(
+        [
+            {"question": "Which branch should the fix target?"},
+            {"question": "Who should review it?"},
+        ]
+    )
+    reply = "release/2.4, and ask Alice to review"
+
+    broker.answer(result.metadata["question_request"]["request_id"], [reply])
+    answered = await runtime.execute(call, context=ToolContext(session_id="session-source"))
+
+    assert answered.status == "success"
+    assert f'"{reply}"' in answered.content
+    assert "in their own words" in answered.content
+    assert "Unanswered" not in answered.content
+    # What is stored for the transcript is the answer as it was given.
+    assert answered.output["answers"] == [[reply]]
+    assert answered.metadata["answers"] == [[reply]]
+
+
+@pytest.mark.asyncio
+async def test_one_answer_per_question_is_still_read_question_by_question():
+    result, broker, runtime, call = await _ask(
+        [
+            {"question": "Which branch should the fix target?"},
+            {"question": "Who should review it?"},
+        ]
+    )
+
+    broker.answer(result.metadata["question_request"]["request_id"], ["main", []])
+    answered = await runtime.execute(call, context=ToolContext(session_id="session-source"))
+
+    assert '"Which branch should the fix target?"="main"' in answered.content
+    assert '"Who should review it?"="Unanswered"' in answered.content
+    assert "in their own words" not in answered.content
+
+
+def test_the_description_says_when_the_text_box_stays():
+    description = create_question_tool(QuestionBroker()).description
+
+    assert "unless you set `custom` to false" in description
+    assert "one with none to pick from keeps the box" in description
+    assert description.isascii()
