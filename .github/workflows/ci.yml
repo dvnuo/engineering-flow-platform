@@ -23,6 +23,9 @@ jobs:
       - env:
           PYTHONPATH: .
           EFP_EXTERNAL_TOOLS_STRICT: "false"
+        # These tests start and kill real processes; a hang must not hold the
+        # runner for the default six hours.
+        timeout-minutes: 15
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -45,6 +48,9 @@ jobs:
             "tests/runtime/test_interactive_question_tool.py",
             "tests/runtime/test_system_prompt_stack.py",
             "tests/runtime/test_question_request_identity.py",
+            "tests/runtime/test_shell_tool_parity.py",
+            "tests/runtime/test_cancel_cooperative.py",
+            "tests/runtime/test_shell_memory_bounds.py",
           ]
           missing = [p for p in tests if not Path(p).exists()]
           if missing:
@@ -69,7 +75,23 @@ jobs:
             tests/test_skill_repo_path.py \
             tests/runtime/test_interactive_question_tool.py \
             tests/runtime/test_system_prompt_stack.py \
-            tests/runtime/test_question_request_identity.py
+            tests/runtime/test_question_request_identity.py \
+            tests/runtime/test_shell_tool_parity.py \
+            tests/runtime/test_cancel_cooperative.py \
+            tests/runtime/test_shell_memory_bounds.py
+      # The bash tool stops a command that is about to push the assistant past
+      # its container memory limit. That reads cgroup and /proc files and kills
+      # a process group, none of which the step above exercises for real, so the
+      # shell tests run once more inside a container with a 512 MiB limit,
+      # together with the case that actually fills it.
+      - name: Shell tool inside a memory-limited container
+        timeout-minutes: 15
+        run: |
+          docker run --rm --memory=512m --memory-swap=512m \
+            -v "$PWD":/src -w /src \
+            -e PYTHONPATH=. -e PYTHONDONTWRITEBYTECODE=1 -e EFP_EXTERNAL_TOOLS_STRICT=false \
+            -e EFP_TEST_REQUIRE_MEMORY_LIMIT=1 \
+            python:3.11-slim sh -c "pip install -q --no-cache-dir -r requirements.txt && python -m pytest -q -p no:cacheprovider tests/runtime/test_shell_memory_guard_container.py tests/runtime/test_shell_memory_bounds.py tests/runtime/test_shell_tool_parity.py tests/runtime/test_cancel_cooperative.py"
 
   native-runtime-docker-smoke:
     runs-on: ubuntu-latest

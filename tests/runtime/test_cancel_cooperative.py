@@ -222,13 +222,16 @@ async def test_forced_cancel_during_a_tool_leaves_no_dangling_tool_call():
 async def test_shell_hard_cancel_kills_the_running_command():
     # The process directly, not through a shell: on Windows the shell is what
     # gets killed and the command it started keeps the pipes open, which is a
-    # property of the platform, not of the code under test.
+    # property of the platform, not of the code under test. In a session of its
+    # own on POSIX, as the tool starts every command: the kill goes to the
+    # process group, which would otherwise be the test runner's.
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
         "import time; time.sleep(30)",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=sys.platform != "win32",
     )
     context = ToolContext(cancel_requested=lambda: False)
     task = asyncio.create_task(
