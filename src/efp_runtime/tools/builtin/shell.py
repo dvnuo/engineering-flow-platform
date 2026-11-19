@@ -30,7 +30,7 @@ from .output import (
     save_workspace_output,
     truncate_tail,
 )
-from .redaction import redact_tool_output
+from .redaction import redact_after_gap, redact_before_gap, redact_tool_output
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,11 @@ _CAPTURE_HEAD_MAX_BYTES = 1024 * 1024
 _CAPTURE_READ_BYTES = 64 * 1024
 # A cut prefers a line boundary when one is this close to it.
 _CAPTURE_LINE_SEARCH_BYTES = 64 * 1024
+# The dropped output right next to each kept part is held as well. It never
+# reaches a result: the redaction filter reads it, so that a private key or a
+# token a cut went through is still recognised from the half that was kept. A
+# private-key block is at most 8,000 characters to the filter.
+_REDACTION_CONTEXT_BYTES = 16 * 1024
 # The structured copy of stdout/stderr that is stored with the session (twice:
 # on the tool call's state and on its result) and rewritten with every later
 # message. The model-visible text and the saved log do not depend on it.
@@ -123,8 +128,6 @@ def _create_shell_tool(
         exit_code = outcome.exit_code
         memory_stop = outcome.memory_stop
         duration_ms = int(round((time.monotonic() - started) * 1000))
-        stdout_raw, stdout_omitted_bytes = outcome.stdout.text("stdout")
-        stderr_raw, stderr_omitted_bytes = outcome.stderr.text("stderr")
 
         # Redact before anything downstream sees the text: the model-visible
         # content, the structured output, and the archived full log all derive
@@ -132,11 +135,10 @@ def _create_shell_tool(
         # can echo credentials that must never reach the transcript.
         # Off the event loop: redaction is linear but a large `kubectl logs`
         # is megabytes, and every other session in the pod shares this loop.
-        stdout, stderr = await asyncio.gather(
-            asyncio.to_thread(redact_tool_output, stdout_raw),
-            asyncio.to_thread(redact_tool_output, stderr_raw),
+        (stdout, stdout_omitted_bytes), (stderr, stderr_omitted_bytes) = await asyncio.gather(
+            asyncio.to_thread(_redacted_stream, outcome.stdout, "stdout"),
+            asyncio.to_thread(_redacted_stream, outcome.stderr, "stderr"),
         )
-        del stdout_raw, stderr_raw
         state_stdout, stdout_state_cut = _bounded_text(stdout, STATE_OUTPUT_MAX_CHARS)
         state_stderr, stderr_state_cut = _bounded_text(stderr, STATE_OUTPUT_MAX_CHARS)
         output = {
@@ -279,59 +281,73 @@ def _positive_int(value: Any, name: str) -> int:
     return value
 
 
+@dataclass(frozen=True)
+class _Captured:
+    """What is left of one stream once its command has ended.
+
+    With nothing left out, ``head`` is the whole stream. Otherwise ``head`` and
+    ``tail`` are the two parts that are kept, and ``after_head`` and
+    ``before_tail`` are the dropped output right next to them, for the
+    redaction filter only (see ``_REDACTION_CONTEXT_BYTES``).
+    """
+
+    head: bytes
+    after_head: bytes = b""
+    before_tail: bytes = b""
+    tail: bytes = b""
+    omitted_bytes: int = 0
+
+
 class _StreamCapture:
     """The first and the last part of one output stream, and a count of the rest.
 
     Until a command writes more than ``max_bytes`` nothing is dropped and
-    ``text`` returns exactly what the command wrote.
+    ``captured`` returns exactly what the command wrote.
     """
 
     def __init__(self, max_bytes: int) -> None:
         self.max_bytes = max_bytes
         self._head_limit = min(max_bytes // 4, _CAPTURE_HEAD_MAX_BYTES)
         self._tail_limit = max_bytes - self._head_limit
-        self._head = bytearray()
-        self._tail: deque[bytes] = deque()
-        self._tail_bytes = 0
+        # Each end of the stream, held with the redaction context beyond it.
+        # The two overlap until the stream is longer than both.
+        self._start = bytearray()
+        self._start_limit = self._head_limit + _REDACTION_CONTEXT_BYTES
+        self._end: deque[bytes] = deque()
+        self._end_limit = self._tail_limit + _REDACTION_CONTEXT_BYTES
+        self._end_bytes = 0
         self.total_bytes = 0
 
     def feed(self, chunk: bytes) -> None:
+        if not chunk:
+            return
         self.total_bytes += len(chunk)
-        room = self._head_limit - len(self._head)
+        room = self._start_limit - len(self._start)
         if room > 0:
-            self._head += chunk[:room]
-            chunk = chunk[room:]
-            if not chunk:
-                return
-        self._tail.append(chunk)
-        self._tail_bytes += len(chunk)
+            self._start += chunk[:room]
+        self._end.append(chunk)
+        self._end_bytes += len(chunk)
         # Whole chunks leave from the front once the ones after them cover the
-        # tail on their own, which cannot happen before the limit is passed.
-        while self._tail_bytes - len(self._tail[0]) >= self._tail_limit:
-            self._tail_bytes -= len(self._tail.popleft())
+        # end of the stream on their own.
+        while self._end_bytes - len(self._end[0]) >= self._end_limit:
+            self._end_bytes -= len(self._end.popleft())
 
-    def text(self, stream_name: str) -> tuple[str, int]:
-        """The captured text and how many bytes of the stream it leaves out."""
+    def captured(self) -> _Captured:
+        end = b"".join(self._end)
+        if self.total_bytes <= self.max_bytes:
+            # ``end`` is the whole stream, or all of it but a beginning that
+            # ``_start`` still holds.
+            return _Captured(head=bytes(self._start[: self.total_bytes - len(end)]) + end)
 
-        head = bytes(self._head)
-        tail = b"".join(self._tail)
-        if len(tail) > self._tail_limit:
-            tail = tail[-self._tail_limit :]
-        if self.total_bytes == len(head) + len(tail):
-            return (head + tail).decode("utf-8", errors="replace"), 0
-
-        head = _cut_back_to_line_end(head)
-        tail = _cut_forward_to_line_start(tail)
-        omitted = self.total_bytes - len(head) - len(tail)
-        marker = (
-            f"[{omitted} bytes left out here: the command wrote {self.total_bytes} bytes to "
-            f"{stream_name} and the shell tool keeps the first {len(head)} and the last "
-            f"{len(tail)}. Redirect the output to a file to keep all of it.]"
+        head = _cut_back_to_line_end(bytes(self._start[: self._head_limit]))
+        tail_start = _line_start_from(end, len(end) - self._tail_limit)
+        return _Captured(
+            head=head,
+            after_head=bytes(self._start[len(head) : len(head) + _REDACTION_CONTEXT_BYTES]),
+            before_tail=end[max(tail_start - _REDACTION_CONTEXT_BYTES, 0) : tail_start],
+            tail=end[tail_start:],
+            omitted_bytes=self.total_bytes - len(head) - (len(end) - tail_start),
         )
-        head_text = head.decode("utf-8", errors="replace")
-        if head_text and not head_text.endswith("\n"):
-            head_text += "\n"
-        return f"{head_text}{marker}\n{tail.decode('utf-8', errors='replace')}", omitted
 
 
 def _cut_back_to_line_end(data: bytes) -> bytes:
@@ -339,11 +355,42 @@ def _cut_back_to_line_end(data: bytes) -> bytes:
     return data if index < 0 else data[: index + 1]
 
 
-def _cut_forward_to_line_start(data: bytes) -> bytes:
-    index = data.find(b"\n", 0, _CAPTURE_LINE_SEARCH_BYTES)
+def _line_start_from(data: bytes, start: int) -> int:
+    """``start``, or where the next line begins when that is close."""
+
+    index = data.find(b"\n", start, start + _CAPTURE_LINE_SEARCH_BYTES)
     if index < 0 or index + 1 >= len(data):
-        return data
-    return data[index + 1 :]
+        return start
+    return index + 1
+
+
+def _redacted_stream(capture: _StreamCapture, stream_name: str) -> tuple[str, int]:
+    """One stream as a result shows it: redacted, with the bytes it leaves out counted.
+
+    The kept parts are redacted one at a time. Filtering them as one text would
+    let a private key that the first part ends in swallow everything after it.
+    """
+
+    held = capture.captured()
+    if not held.omitted_bytes:
+        return redact_tool_output(_decoded(held.head)), 0
+    omitted = held.omitted_bytes
+    marker = (
+        f"[{omitted} bytes left out here: the command wrote {capture.total_bytes} bytes to "
+        f"{stream_name} and the shell tool keeps the first {len(held.head)} and the last "
+        f"{len(held.tail)}. Redirect the output to a file to keep all of it.]"
+    )
+    head_text = redact_before_gap(_decoded(held.head), _decoded(held.after_head))
+    before_tail, tail = _decoded(held.before_tail), _decoded(held.tail)
+    del held  # megabytes that the slow filter below would otherwise keep alive
+    tail_text = redact_after_gap(before_tail, tail)
+    if head_text and not head_text.endswith("\n"):
+        head_text += "\n"
+    return f"{head_text}{marker}\n{tail_text}", omitted
+
+
+def _decoded(data: bytes) -> str:
+    return data.decode("utf-8", errors="replace")
 
 
 def _capture_max_bytes() -> int:

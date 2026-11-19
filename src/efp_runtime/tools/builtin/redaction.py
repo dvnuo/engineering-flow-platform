@@ -174,3 +174,91 @@ def redact_tool_output(text: str | None) -> str:
         if secret in value:
             value = value.replace(secret, REDACTED)
     return value
+
+
+# How far into kept text the filter is expected to act on something that lies
+# across a cut: several times the longest thing it matches, a private-key block
+# of at most 8,000 characters.
+_GAP_PROBE_CHARS = 64 * 1024
+
+
+def redact_before_gap(text: str, following: str) -> str:
+    """Redact ``text``, output that was kept while what followed it was dropped.
+
+    A filter that sees only the kept text misses a secret the cut went through:
+    the first characters of a token are not a token. ``following`` is the start
+    of what was dropped. None of it is returned. It is read so that the filter
+    sees such a secret whole, and from the first place where that changes what
+    it makes of ``text``, the rest of ``text`` is redacted.
+    """
+
+    alone = redact_tool_output(text)
+    if not text or not following:
+        return alone
+    # The filter is slow on megabytes, so the whole text is filtered a second
+    # time only when its end shows that the dropped part matters.
+    probe = text[-_GAP_PROBE_CHARS:]
+    probe_is_text = len(probe) == len(text)
+    probe_alone = alone if probe_is_text else redact_tool_output(probe)
+    probe_together = redact_tool_output(probe + following)
+    if probe_together.startswith(probe_alone):
+        return alone
+    together = probe_together if probe_is_text else redact_tool_output(text + following)
+    same = _common_prefix_length(alone, together)
+    if same == len(alone):
+        return alone
+    return alone[:same] + REDACTED
+
+
+def redact_after_gap(preceding: str, text: str) -> str:
+    """Redact ``text``, output that was kept while what came before it was dropped.
+
+    The mirror of :func:`redact_before_gap`. The end of a private key whose
+    BEGIN line was dropped, the rest of a token, and a value whose key name
+    ended the dropped part are recognised only with ``preceding`` in front.
+    """
+
+    alone = redact_tool_output(text)
+    if not text or not preceding:
+        return alone
+    probe = text[:_GAP_PROBE_CHARS]
+    probe_is_text = len(probe) == len(text)
+    probe_alone = alone if probe_is_text else redact_tool_output(probe)
+    probe_together = redact_tool_output(preceding + probe)
+    if probe_together.endswith(probe_alone):
+        return alone
+    together = probe_together if probe_is_text else redact_tool_output(preceding + text)
+    same = _common_suffix_length(alone, together)
+    if same == len(alone):
+        return alone
+    return REDACTED + alone[len(alone) - same :]
+
+
+def _common_prefix_length(first: str, second: str) -> int:
+    limit = min(len(first), len(second))
+    if first[:limit] == second[:limit]:
+        return limit
+    # The first ``low`` characters agree and the first ``high`` do not.
+    low, high = 0, limit
+    while high - low > 1:
+        middle = (low + high) // 2
+        if first[low:middle] == second[low:middle]:
+            low = middle
+        else:
+            high = middle
+    return low
+
+
+def _common_suffix_length(first: str, second: str) -> int:
+    limit = min(len(first), len(second))
+    if first[len(first) - limit :] == second[len(second) - limit :]:
+        return limit
+    # The last ``low`` characters agree and the last ``high`` do not.
+    low, high = 0, limit
+    while high - low > 1:
+        middle = (low + high) // 2
+        if first[len(first) - middle : len(first) - low] == second[len(second) - middle : len(second) - low]:
+            low = middle
+        else:
+            high = middle
+    return low

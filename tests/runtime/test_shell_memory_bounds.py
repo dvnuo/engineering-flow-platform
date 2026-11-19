@@ -11,6 +11,7 @@ everything in the container.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import shlex
 import subprocess
@@ -26,6 +27,12 @@ from efp_runtime.tools.builtin import create_core_tool_registry
 from efp_runtime.tools.builtin import memory_guard
 from efp_runtime.tools.builtin import shell as shell_module
 from efp_runtime.tools.builtin.memory_guard import MemoryReading
+from efp_runtime.tools.builtin.redaction import (
+    REDACTED,
+    redact_after_gap,
+    redact_before_gap,
+    redact_tool_output,
+)
 from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.runtime import ToolRuntime
 
@@ -79,17 +86,22 @@ def _lines(count: int) -> bytes:
     return b"".join(b"line-%06d\n" % index for index in range(count))
 
 
+def _capture_of(data: bytes, max_bytes: int, read_bytes: int = 4096):
+    capture = shell_module._StreamCapture(max_bytes)
+    for start in range(0, len(data), read_bytes):
+        capture.feed(data[start : start + read_bytes])
+    return capture
+
+
 # --- what the tool holds of one stream -------------------------------------
 
 
 def test_capture_under_the_limit_is_exactly_what_was_written():
     data = _lines(500)
-    capture = shell_module._StreamCapture(len(data) + 1)
+    capture = _capture_of(data, len(data) + 1, read_bytes=777)
 
-    for start in range(0, len(data), 777):
-        capture.feed(data[start : start + 777])
-
-    assert capture.text("stdout") == (data.decode(), 0)
+    assert capture.captured() == shell_module._Captured(head=data)
+    assert shell_module._redacted_stream(capture, "stdout") == (data.decode(), 0)
     assert capture.total_bytes == len(data)
 
 
@@ -99,16 +111,45 @@ def test_capture_at_the_limit_drops_nothing():
 
     capture.feed(data)
 
-    assert capture.text("stdout") == (data.decode(), 0)
+    assert shell_module._redacted_stream(capture, "stdout") == (data.decode(), 0)
+
+
+def test_capture_drops_nothing_at_any_size_up_to_the_limit():
+    # The two ends are held separately and overlap in a short stream; every
+    # length up to the limit must come back whole, however it was read.
+    limit = 8 * shell_module._REDACTION_CONTEXT_BYTES
+    data = bytes(index % 251 for index in range(limit))
+
+    for size in (0, 1, limit // 4, limit // 4 + 1, limit // 2, limit - 9000, limit - 1, limit):
+        for read_bytes in (1000, 4096, 65536, limit):
+            capture = _capture_of(data[:size], limit, read_bytes=read_bytes)
+            assert capture.captured() == shell_module._Captured(head=data[:size]), (size, read_bytes)
+
+
+def test_capture_past_the_limit_holds_the_dropped_output_next_to_each_cut():
+    context = shell_module._REDACTION_CONTEXT_BYTES
+    limit = 4096
+    # No line boundary anywhere, so both cuts fall exactly at the byte limits.
+    data = bytes(48 + index % 10 for index in range(10 * context))
+
+    for size in (limit + 1, limit + context, limit + 3 * context, len(data)):
+        for read_bytes in (1000, 4096, len(data)):
+            held = _capture_of(data[:size], limit, read_bytes=read_bytes).captured()
+            where = (size, read_bytes)
+
+            assert held.head == data[:1024], where
+            assert held.tail == data[size - 3072 : size], where
+            assert held.omitted_bytes == size - limit, where
+            # What follows the kept start, and what precedes the kept end.
+            assert held.after_head == data[1024 : 1024 + context][: size - 1024], where
+            assert held.before_tail == data[max(size - 3072 - context, 0) : size - 3072], where
 
 
 def test_capture_over_the_limit_keeps_both_ends_and_counts_the_middle():
     data = _lines(20_000)
-    capture = shell_module._StreamCapture(8192)
+    capture = _capture_of(data, 8192, read_bytes=1000)
 
-    for start in range(0, len(data), 1000):
-        capture.feed(data[start : start + 1000])
-    text, omitted = capture.text("stdout")
+    text, omitted = shell_module._redacted_stream(capture, "stdout")
 
     kept = text.splitlines()
     marker_index = next(i for i, line in enumerate(kept) if "left out here" in line)
@@ -132,19 +173,24 @@ def test_capture_result_does_not_depend_on_how_the_output_arrives():
         by_small_reads.feed(data[start : start + 13])
     by_one_read.feed(data)
 
-    assert by_small_reads.text("stderr") == by_one_read.text("stderr")
+    assert by_small_reads.captured() == by_one_read.captured()
+    assert shell_module._redacted_stream(by_small_reads, "stderr") == shell_module._redacted_stream(
+        by_one_read, "stderr"
+    )
 
 
 def test_capture_never_holds_much_more_than_its_limit():
     capture = shell_module._StreamCapture(64 * 1024)
     chunk = b"x" * (16 * 1024)
+    # The limit, the redaction context beyond each of the two cuts, and the
+    # read that was just added.
+    most = 64 * 1024 + 2 * shell_module._REDACTION_CONTEXT_BYTES + len(chunk)
 
     for _ in range(4096):  # 64 MiB through a 64 KiB capture
         capture.feed(chunk)
-        held = len(capture._head) + capture._tail_bytes
-        assert held <= 64 * 1024 + len(chunk)
+        assert len(capture._start) + capture._end_bytes <= most
 
-    text, omitted = capture.text("stdout")
+    text, omitted = shell_module._redacted_stream(capture, "stdout")
     assert capture.total_bytes == 4096 * len(chunk)
     # One unbroken line: there is no line boundary to cut at, and the count still adds up.
     assert omitted == capture.total_bytes - 64 * 1024
@@ -178,6 +224,229 @@ def test_bounded_text_leaves_short_text_alone_and_keeps_both_ends_of_long_text()
     assert bounded.endswith(text[-450:])
     assert f"[{len(text) - 600} characters left out of this record" in bounded
     assert len(bounded) < 600 + 120
+
+
+# --- secrets that a cut goes through ---------------------------------------
+#
+# The redaction filter recognises a secret by what surrounds it: the BEGIN line
+# of a private key, the first characters of a token, the key name in front of a
+# value. A cut can drop exactly that and keep the rest.
+
+
+def _secret(label: str, length: int) -> str:
+    return hashlib.sha256(label.encode()).hexdigest()[:length]
+
+
+_KEY_BODY = [_secret(f"private key line {index}", 40) for index in range(6)]
+_PRIVATE_KEY = "\n".join(["-----BEGIN PRIVATE KEY-----", *_KEY_BODY, "-----END PRIVATE KEY-----"])
+_DB_PASSWORD = _secret("database", 24)
+_CLIENT_SECRET = _secret("client", 24)
+_URL_PASSWORD = _secret("url", 20)
+_BEARER = _secret("bearer", 32)
+_YAML_VALUE = _secret("yaml", 24)
+_GITHUB_TOKEN = "ghp_" + _secret("github", 36)
+_SECRETS = [
+    *_KEY_BODY,
+    _DB_PASSWORD,
+    _CLIENT_SECRET,
+    _URL_PASSWORD,
+    _BEARER,
+    _YAML_VALUE,
+    _GITHUB_TOKEN,
+]
+# One secret of every shape the filter knows, as a command would print them.
+_SECRET_OUTPUT = (
+    "\n".join(
+        [
+            "cloning into 'service'",
+            f"DB_PASSWORD={_DB_PASSWORD}",
+            "resolving deltas: done",
+            f'{{"client_secret": "{_CLIENT_SECRET}", "region": "ap-east-1"}}',
+            f"remote: https://deploy:{_URL_PASSWORD}@git.example.com/service.git",
+            f"Authorization: Bearer {_BEARER}",
+            _PRIVATE_KEY,
+            "password:",
+            f"  {_YAML_VALUE}",
+            f"found {_GITHUB_TOKEN} in config/settings.py",
+            "scan finished",
+        ]
+    )
+    + "\n"
+)
+
+
+def _part_of_a_secret_in(text: str) -> str | None:
+    """Eight characters in a row of any secret that ``text`` shows, if it shows any."""
+
+    for secret in _SECRETS:
+        for start in range(len(secret) - 7):
+            if secret[start : start + 8] in text:
+                return secret[start : start + 8]
+    return None
+
+
+def test_the_filter_hides_every_secret_of_the_sample_when_it_sees_all_of_it():
+    whole = redact_tool_output(_SECRET_OUTPUT)
+
+    assert _part_of_a_secret_in(whole) is None
+    assert whole.startswith("cloning into 'service'\n")
+    assert whole.endswith("in config/settings.py\nscan finished\n")
+
+
+def test_text_kept_after_a_cut_shows_nothing_the_whole_output_hides():
+    whole = redact_tool_output(_SECRET_OUTPUT)
+    cuts_through_a_secret = 0
+
+    for cut in range(1, len(_SECRET_OUTPUT)):
+        dropped, kept = _SECRET_OUTPUT[:cut], _SECRET_OUTPUT[cut:]
+        shown = redact_after_gap(dropped, kept)
+
+        assert _part_of_a_secret_in(shown) is None, cut
+        # Apart from one redaction mark where the cut was, it is the end of
+        # what the filter makes of the whole output.
+        assert whole.endswith(shown.removeprefix(REDACTED)), cut
+        cuts_through_a_secret += _part_of_a_secret_in(redact_tool_output(kept)) is not None
+
+    # The sample does what it is for: filtered on its own, the kept text shows
+    # part of a secret at many of these cuts.
+    assert cuts_through_a_secret > 200
+
+
+def test_text_kept_before_a_cut_shows_nothing_the_whole_output_hides():
+    whole = redact_tool_output(_SECRET_OUTPUT)
+    cuts_through_a_secret = 0
+
+    for cut in range(1, len(_SECRET_OUTPUT)):
+        kept, dropped = _SECRET_OUTPUT[:cut], _SECRET_OUTPUT[cut:]
+        shown = redact_before_gap(kept, dropped)
+
+        assert _part_of_a_secret_in(shown) is None, cut
+        assert whole.startswith(shown.removesuffix(REDACTED)), cut
+        cuts_through_a_secret += _part_of_a_secret_in(redact_tool_output(kept)) is not None
+
+    assert cuts_through_a_secret > 20
+
+
+def test_ordinary_text_next_to_a_cut_is_left_as_it_is():
+    text = _lines(300).decode()
+
+    assert redact_after_gap(text, text) == text
+    assert redact_before_gap(text, text) == text
+    assert redact_after_gap("", text) == text
+    assert redact_before_gap(text, "") == text
+    assert redact_after_gap(text, "") == ""
+    assert redact_before_gap("", text) == ""
+
+
+def test_a_long_kept_text_is_filtered_again_only_when_the_dropped_part_matters(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from efp_runtime.tools.builtin import redaction
+
+    monkeypatch.setattr(redaction, "_GAP_PROBE_CHARS", 600)
+    filtered: list[int] = []
+    real_filter = redaction.redact_tool_output
+
+    def counting_filter(text):
+        filtered.append(len(text or ""))
+        return real_filter(text)
+
+    monkeypatch.setattr(redaction, "redact_tool_output", counting_filter)
+    long_text = _lines(1000).decode()  # 12,000 characters
+    key_start, key_end = _PRIVATE_KEY[:150], _PRIVATE_KEY[150:]
+
+    # Nothing of the dropped part reaches into the kept text: the kept text is
+    # filtered once, and only its first 600 characters a second time.
+    assert redaction.redact_after_gap("dropped line\n", long_text) == long_text
+    assert sorted(filtered) == [600, 600 + len("dropped line\n"), len(long_text)]
+
+    # A private key begins in the dropped part: now all of it is read again.
+    filtered.clear()
+    shown = redaction.redact_after_gap(key_start, key_end + "\n" + long_text)
+    assert shown == REDACTED + "\n" + long_text
+    assert max(filtered) == len(_PRIVATE_KEY) + 1 + len(long_text)
+
+    filtered.clear()
+    assert redaction.redact_before_gap(long_text, "dropped line\n") == long_text
+    assert sorted(filtered) == [600, 600 + len("dropped line\n"), len(long_text)]
+
+    filtered.clear()
+    shown = redaction.redact_before_gap(long_text + "found " + _GITHUB_TOKEN[:12], _GITHUB_TOKEN[12:] + " here\n")
+    assert shown == long_text + "found " + REDACTED
+    assert max(filtered) == len(long_text) + len("found ") + len(_GITHUB_TOKEN) + len(" here\n")
+
+
+def test_a_private_key_whose_begin_line_was_dropped_stays_redacted():
+    # 1,024 bytes are kept of an output with a private key near its end: the
+    # kept end starts inside the key, at its last line of key material.
+    data = _lines(2000) + _PRIVATE_KEY.encode() + b"\n" + _lines(55)
+    capture = _capture_of(data, 1024)
+
+    held = capture.captured()
+    assert held.tail.startswith(_KEY_BODY[-1].encode() + b"\n-----END PRIVATE KEY-----\n")
+    assert b"BEGIN PRIVATE KEY" in held.before_tail
+    assert _part_of_a_secret_in(redact_tool_output(held.tail.decode())) is not None
+
+    text, omitted = shell_module._redacted_stream(capture, "stdout")
+
+    assert _part_of_a_secret_in(text) is None
+    assert "PRIVATE KEY" not in text
+    assert omitted > 0 and f"[{omitted} bytes left out here" in text
+    assert text.endswith(REDACTED + "\n" + _lines(55).decode())
+    assert text.startswith("line-000000\n")
+
+
+def test_a_private_key_whose_end_line_was_dropped_takes_nothing_else_with_it():
+    data = b"started\n" + _PRIVATE_KEY.encode() + b"\n" + _lines(2000)
+    capture = _capture_of(data, 1024)
+
+    held = capture.captured()
+    assert b"BEGIN PRIVATE KEY" in held.head and b"END PRIVATE KEY" not in held.head
+
+    text, omitted = shell_module._redacted_stream(capture, "stdout")
+
+    assert _part_of_a_secret_in(text) is None
+    # The key is redacted to the cut and no further: the note about the cut and
+    # the end of the output are still there.
+    assert text.startswith("started\n" + REDACTED + "\n[")
+    assert f"[{omitted} bytes left out here" in text
+    assert text.endswith("line-001998\nline-001999\n")
+
+
+def test_a_token_cut_inside_one_long_line_is_not_shown_in_part():
+    token = _GITHUB_TOKEN.encode()
+
+    # No line boundary anywhere, so the kept end starts 23 characters into the token.
+    data = b"a" * 3000 + b" " + token + b" " + b"b" * 750
+    capture = _capture_of(data, 1024)
+    assert capture.captured().tail == token[23:] + b" " + b"b" * 750
+    text, _ = shell_module._redacted_stream(capture, "stdout")
+    assert _part_of_a_secret_in(text) is None
+    assert text.endswith("\n" + REDACTED + " " + "b" * 750)
+
+    # And the kept start ends 15 characters into it: too few for the filter to
+    # take them for a token on their own.
+    data = b"a" * 240 + b" " + token + b" " + b"b" * 3000
+    capture = _capture_of(data, 1024)
+    assert capture.captured().head == b"a" * 240 + b" " + token[:15]
+    text, _ = shell_module._redacted_stream(capture, "stdout")
+    assert _part_of_a_secret_in(text) is None
+    assert text.startswith("a" * 240 + " " + REDACTED + "\n[")
+
+
+def test_a_value_on_the_line_after_its_key_name_is_redacted_across_a_cut():
+    value_line = f"  {_YAML_VALUE}\n".encode()
+    data = _lines(2000) + b"password:\n" + value_line + _lines(61)
+    capture = _capture_of(data, 1024)
+
+    held = capture.captured()
+    assert held.tail.startswith(value_line)
+    assert held.before_tail.endswith(b"password:\n")
+
+    text, _ = shell_module._redacted_stream(capture, "stdout")
+
+    assert _part_of_a_secret_in(text) is None
+    assert text.endswith(REDACTED + "\n" + _lines(61).decode())
 
 
 # --- the tool, end to end ---------------------------------------------------
@@ -242,6 +511,33 @@ async def test_output_past_the_capture_limit_keeps_both_ends_everywhere(
     assert "bytes left out here" in saved
     assert "Redirect the output to a file" in saved
     assert len(saved) < 4096 + 1024
+
+
+@pytest.mark.asyncio
+async def test_a_private_key_at_the_cut_reaches_neither_the_model_nor_the_saved_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(shell_module.CAPTURE_MAX_BYTES_ENV, "1024")
+
+    # The last 768 bytes are kept: 40 short lines and, before them, most of the
+    # key but not its BEGIN line.
+    result = await _run_bash(
+        tmp_path,
+        "print('\\n'.join('line-{:06d}'.format(i) for i in range(3000))); "
+        f"print({_PRIVATE_KEY!r}); "
+        "print('\\n'.join('tail-{:06d}'.format(i) for i in range(40)))",
+    )
+
+    assert result.status == "success"
+    assert result.output["stdout_truncated"] is True
+    saved = (tmp_path / result.metadata["output_path"]).read_text(encoding="utf-8")
+    for text in (result.content, result.output["stdout"], saved):
+        assert _part_of_a_secret_in(text) is None
+        assert "PRIVATE KEY" not in text
+        assert REDACTED in text
+        assert "tail-000000" in text and "tail-000039" in text
+    assert "bytes left out here" in saved
 
 
 @pytest.mark.asyncio
@@ -463,7 +759,7 @@ async def test_a_command_filling_the_container_is_stopped_alone(
     assert outcome.cancelled is False
     assert outcome.exit_code is None
     assert process.returncode is not None
-    assert outcome.stdout.text("stdout")[0].startswith("started")
+    assert shell_module._redacted_stream(outcome.stdout, "stdout")[0].startswith("started")
     assert shell_module._RUNNING_COMMANDS == set()
 
 

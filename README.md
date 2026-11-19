@@ -160,7 +160,10 @@ tool keeps a command from doing that in two ways.
   still reads the end of the output, and the saved log under
   `.efp_runtime/tool-output/` holds what was kept. A command that needs all of
   a larger output redirects it to a file. The copy of stdout/stderr stored with
-  the session is bounded at 64,000 characters per stream.
+  the session is bounded at 64,000 characters per stream. Credentials are
+  redacted in what is kept as in any other output, including a private key or a
+  token that a cut goes through: the 16 KiB of dropped output next to each cut
+  are still read by the redaction filter, and never shown.
 - **Memory guard.** While a command runs inside a memory-limited container, the
   tool reads the container's use (leaving the page cache out) twice a second.
   When 90% of the limit is in use and the command's own processes hold at least
