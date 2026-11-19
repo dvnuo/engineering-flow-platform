@@ -546,8 +546,13 @@ def _memory_stop_for(pid: int, percent: int) -> _MemoryStop | None:
 def _kill_process(process: asyncio.subprocess.Process) -> None:
     if _POSIX:
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            return
+            group = os.getpgid(process.pid)
+            # The tool starts every command in a session of its own, so its
+            # group is never ours. A process handed in from elsewhere may share
+            # our group, and signalling that would end this process too.
+            if group != os.getpgid(0):
+                os.killpg(group, signal.SIGKILL)
+                return
         except (ProcessLookupError, PermissionError, OSError):
             pass
     try:

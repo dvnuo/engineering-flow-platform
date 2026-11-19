@@ -23,6 +23,9 @@ jobs:
       - env:
           PYTHONPATH: .
           EFP_EXTERNAL_TOOLS_STRICT: "false"
+        # These tests start and kill real processes; a hang must not hold the
+        # runner for the default six hours.
+        timeout-minutes: 15
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -82,6 +85,7 @@ jobs:
       # shell tests run once more inside a container with a 512 MiB limit,
       # together with the case that actually fills it.
       - name: Shell tool inside a memory-limited container
+        timeout-minutes: 15
         run: |
           docker run --rm --memory=512m --memory-swap=512m \
             -v "$PWD":/src -w /src \

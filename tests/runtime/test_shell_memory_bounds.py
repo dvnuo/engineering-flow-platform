@@ -422,13 +422,16 @@ def _announce_then_sleep(marker: Path | None, seconds: int) -> str:
 
 async def _sleeping_process(seconds: int = 30, marker: Path | None = None) -> asyncio.subprocess.Process:
     # The process directly, not through a shell: on Windows killing the shell
-    # leaves the command it started holding the pipes open.
+    # leaves the command it started holding the pipes open. In a session of its
+    # own on POSIX, as the tool starts every command: stopping it kills its
+    # process group, which would otherwise be the test runner's.
     return await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
         _announce_then_sleep(marker, seconds),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=os.name == "posix",
     )
 
 
@@ -612,3 +615,27 @@ async def test_a_sigkilled_command_says_so_in_its_result(tmp_path: Path):
     assert "before" in result.content
     assert "SIGKILL, exit code 137" in result.content
     assert "memory_exceeded" not in result.output
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are a POSIX notion")
+@pytest.mark.asyncio
+async def test_stopping_a_process_in_our_own_group_never_signals_the_group(monkeypatch: pytest.MonkeyPatch):
+    # The tool starts every command in its own session. A process that shares
+    # this process's group (started some other way) must be killed alone:
+    # signalling the group would end the runtime itself.
+    signalled = []
+    monkeypatch.setattr(shell_module.os, "killpg", lambda group, sig: signalled.append(group))
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import time; time.sleep(30)",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert os.getpgid(process.pid) == os.getpgid(0)
+
+    shell_module._kill_process(process)
+
+    await asyncio.wait_for(process.wait(), timeout=5)
+    assert signalled == []
+    assert process.returncode is not None
