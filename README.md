@@ -147,6 +147,37 @@ the second; the loop prefixes it to the request copy of the member's message
 only, so transcripts and the cached system prefix are untouched. Set
 `include_environment_context: false` in the runtime config to drop the block.
 
+### Shell Commands and Memory
+
+The runtime and every command the `bash` tool starts share one container
+memory limit, and on current Kubernetes nodes a container that passes it is
+killed whole: the assistant restarts and the turn in progress is lost. The
+tool keeps a command from doing that in two ways.
+
+- **Bounded output.** The tool holds at most 8 MiB of each of a command's
+  streams (stdout, stderr). A command that writes more keeps its first and last
+  part with a one-line note of how much was left out between them; the model
+  still reads the end of the output, and the saved log under
+  `.efp_runtime/tool-output/` holds what was kept. A command that needs all of
+  a larger output redirects it to a file. The copy of stdout/stderr stored with
+  the session is bounded at 64,000 characters per stream.
+- **Memory guard.** While a command runs inside a memory-limited container, the
+  tool reads the container's use (leaving the page cache out) twice a second.
+  When 90% of the limit is in use and the command's own processes hold at least
+  10% of it, that command is stopped, and only that command: the result says
+  how much was in use and asks for a smaller memory footprint, so the model can
+  retry in batches. With several commands running, the largest one goes. A
+  command the kernel killed anyway (`SIGKILL`, exit code 137) is explained the
+  same way. Outside a memory-limited Linux container nothing is read and
+  nothing changes.
+
+| Env | Purpose | Default |
+|-----|---------|---------|
+| `EFP_SHELL_CAPTURE_MAX_BYTES` | Bytes of each output stream held for one command | `8388608` |
+| `EFP_SHELL_MEMORY_GUARD_PERCENT` | Share of the container memory limit at which the command filling it is stopped; `0` switches the guard off | `90` |
+
+The Portal passes both to every agent pod when its own environment sets them.
+
 ### Reply Language
 
 The Portal sends the member's language preference with every proxied request
