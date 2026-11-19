@@ -576,6 +576,46 @@ def test_provider_falls_back_without_a_prompt_and_when_the_pick_cannot_hold_the_
     assert admitted.session_active is True
 
 
+def test_a_long_conversation_keeps_the_pick_when_the_default_model_holds_no_more():
+    # Seen 2026-11-19: a session's stored history had grown to ~886k estimated
+    # tokens. Luna's prompt budget is 1M - 8k - 128k = 864k and so is the
+    # default model's, so the fallback held no more of the conversation: it
+    # only left the auto pool, on that turn and on every later one.
+    transport = _RoutingTransport([], selected=LUNA_AUTO)
+    provider = GitHubCopilotProvider(transport=transport, model="auto")
+    assert model_prompt_budget_tokens(resolve_model_context_profile(DEFAULT_MODEL_ID)) == 864_000
+    resolution = provider.resolve_auto_model(prompt="hey", run_key="r1", history_chars=885_937 * 4)
+    assert resolution.model == "gpt-6-luna"
+    assert resolution.session_active is True
+    assert resolution.fallback_reason is None
+    assert transport.session_token == "session-1"
+    # So does a pick with a larger budget than the default model's.
+    transport.selected = SOL61_AUTO
+    larger = provider.resolve_auto_model(prompt="hey", run_key="r2", history_chars=2_000_000 * 4)
+    assert larger.model == "gpt-6.1-sol"
+    assert larger.session_active is True
+    # A smaller pick still yields to the default model, which holds more.
+    transport.selected = MAI
+    smaller = provider.resolve_auto_model(prompt="hey", run_key="r3", history_chars=885_937 * 4)
+    assert smaller.model == DEFAULT_MODEL_ID
+    assert smaller.fallback_reason == "selected model mai-code-1.1-flash: prompt budget 120000 tokens is below the conversation's ~885937 tokens"
+    assert transport.session_token is None
+
+
+def test_the_size_guard_compares_with_the_default_models_learned_profile():
+    # The runner budgets a fallback run with what Copilot said about the
+    # default model when it said anything; the guard reads the same row.
+    register_model_context_profile(
+        copilot_model_context_profile(_entry(DEFAULT_MODEL_ID, window=400_000, prompt=272_000, output=128_000))
+    )
+    transport = _RoutingTransport([], selected=_entry("mid-model", window=500_000, prompt=372_000, output=128_000))
+    provider = GitHubCopilotProvider(transport=transport, model="auto")
+    # mid-model: 500k - 8k - 128k = 364k; the default model now: 400k - 8k - 128k = 264k.
+    resolution = provider.resolve_auto_model(prompt="hey", run_key="r1", history_chars=600_000 * 4)
+    assert resolution.model == "mid-model"
+    assert resolution.session_active is True
+
+
 def test_provider_routes_again_when_the_session_token_is_about_to_expire(monkeypatch):
     now = [1_000_000.0]
     monkeypatch.setattr(provider_module.time, "time", lambda: now[0])
@@ -808,6 +848,50 @@ async def test_runner_without_routing_support_falls_back_and_says_so():
     assert metadata["requested_model"] == "auto"
     assert metadata["auto_tier"] == "balance"
     assert "no auto routing support" in metadata["model_fallback_reason"]
+
+
+@pytest.mark.asyncio
+async def test_runner_keeps_a_long_session_in_the_auto_pool_and_compacts_the_request():
+    # The stored transcript is never rewritten, so it outgrows every model's
+    # budget sooner or later; the request is what gets compacted.
+    store = InMemorySessionStore()
+    store.create_session(session_id="session-auto-long")
+    for index in range(36):
+        for role in (MessageRole.USER, MessageRole.ASSISTANT):
+            store.append_message(
+                "session-auto-long",
+                role=role,
+                parts=[MessagePart.text_part("{0:02d} ".format(index) + "word " * 10_000)],
+                status="complete",
+            )
+    stored_chars = sum(len(part.text or "") for message in store.read_history("session-auto-long") for part in message.parts)
+    luna_budget_chars = model_prompt_budget_tokens(copilot_model_context_profile(LUNA_AUTO)) * 4
+    assert stored_chars > luna_budget_chars
+    transport = _RoutingTransport([_responses_answer("Still here.")], selected=LUNA_AUTO)
+    provider = _MetadataSpyProvider(transport=transport, model="auto")
+
+    result = await _runner(provider, store).run(
+        session_id="session-auto-long",
+        user_text="carry on",
+        metadata={"run_id": "run-long"},
+    )
+
+    assert result.status == LoopStatus.COMPLETED
+    assert transport.payloads[0]["model"] == "gpt-6-luna"
+    assert transport.session_token == "session-1"
+    assert provider.seen_metadata[0]["auto_routing"] == {
+        "model": "gpt-6-luna",
+        "tier": "balance",
+        "session_active": True,
+        "fallback_reason": None,
+    }
+    sent_chars = sum(
+        len(part.get("text") or "")
+        for item in transport.payloads[0]["input"]
+        for part in item.get("content") or ()
+    )
+    assert 0 < sent_chars <= luna_budget_chars < stored_chars
+    assert "model_fallback_reason" not in result.final_assistant_message.metadata
 
 
 @pytest.mark.asyncio

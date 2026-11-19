@@ -108,7 +108,10 @@ Auto picker works: each user turn posts the prompt and a tier to Copilot's
 picked for that turn, and the run sends that model together with the
 session token that bills it in the auto pool at the auto discount. The pick
 is honoured when the runtime can drive it (served on `/responses`, tool
-calls allowed, its prompt budget covering the conversation so far); the
+calls allowed) and `gpt-6-sol` would not hold more of the conversation so
+far: a pick whose prompt budget is below the conversation still stands when
+`gpt-6-sol`'s budget is no larger, and the request is compacted to the pick's
+budget as on any other turn. The
 context budget and the reasoning effort follow the picked model's Copilot
 metadata. If the route fails or the pick cannot be driven, the run falls
 back to `gpt-6-sol` without the session and `usage.updated` events report
