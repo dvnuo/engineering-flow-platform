@@ -719,6 +719,9 @@ def test_the_processes_of_a_session_are_listed_without_the_ones_that_have_ended(
     _write(tmp_path / "self" / "stat", _stat_line(1, "self", 101, 10))
 
     assert sorted(memory_guard.session_process_ids(101, tmp_path)) == [101, 102, 103]
+    # Stopping a session signals every one of them: a process whose first
+    # thread has ended while others run reads as ended too.
+    assert sorted(memory_guard.session_process_ids(101, tmp_path, include_ended=True)) == [101, 102, 103, 104]
     assert memory_guard.session_process_ids(999, tmp_path) == []
     assert memory_guard.session_process_ids(101, tmp_path / "absent") == []
 
@@ -872,7 +875,7 @@ async def test_a_command_filling_the_container_is_stopped_alone(
     assert swept == [process.pid]
 
 
-@pytest.mark.skipif(os.name != "posix", reason="process groups and /proc are POSIX")
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the session's processes from /proc")
 @pytest.mark.asyncio
 async def test_a_stopped_command_takes_what_left_its_process_group_with_it(
     tmp_path: Path,

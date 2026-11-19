@@ -171,12 +171,13 @@ tool keeps a command from doing that in two ways.
   how much was in use and asks for a smaller memory footprint, so the model can
   retry in batches. A command's share is the memory of its own that its
   processes hold; files it has mapped (a `git` pack file) do not count, as the
-  kernel can drop them. The stop reaches every process of the command,
-  including one started through `timeout`. With several commands running, the
-  largest one goes, and no other is stopped for a second after it, until the
-  freed memory shows. A command the kernel killed anyway (`SIGKILL`, exit code
-  137) is explained the same way. Outside a memory-limited Linux container
-  nothing is read and nothing changes.
+  kernel can drop them, and neither does shared memory. The stop reaches every
+  process of the command, including what `timeout` runs when `timeout` is not
+  the last thing on the line (`timeout 600 job | tail`). With several commands
+  running, the largest one goes, and no other is stopped for a second after
+  it, until the freed memory shows. A command the kernel killed anyway
+  (`SIGKILL`, exit code 137) is explained the same way. Outside a
+  memory-limited Linux container nothing is read and nothing changes.
 
 | Env | Purpose | Default |
 |-----|---------|---------|

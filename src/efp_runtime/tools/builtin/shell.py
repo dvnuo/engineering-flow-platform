@@ -645,7 +645,11 @@ def _kill_rest_of_session(session_id: int) -> None:
     try:
         # Twice: a process may have started another one while the first pass ran.
         for _ in range(2):
-            members = [pid for pid in session_process_ids(session_id) if pid != own]
+            members = [
+                pid
+                for pid in session_process_ids(session_id, include_ended=True)
+                if pid != own
+            ]
             if not members:
                 return
             for pid in members:

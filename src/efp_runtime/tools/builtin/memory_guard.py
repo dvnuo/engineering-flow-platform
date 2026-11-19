@@ -93,7 +93,9 @@ def session_memory_bytes(
     backed by a file (a mapped pack file, shared libraries) are left out, as
     they are from the container reading: the kernel can drop them, and counting
     them would blame a ``git`` command with large mapped files for pressure it
-    did not cause.
+    did not cause. Shared memory is left out with them, because the kernel
+    reports the two as one figure; a command that fills the container through
+    ``/dev/shm`` is therefore not recognised as the one doing it.
     """
 
     totals = {int(session_id): 0 for session_id in session_ids}
@@ -111,15 +113,26 @@ def session_memory_bytes(
     return totals
 
 
-def session_process_ids(session_id: int, proc_root: Path | None = None) -> list[int]:
-    """The live processes of one session, by process id."""
+def session_process_ids(
+    session_id: int,
+    proc_root: Path | None = None,
+    *,
+    include_ended: bool = False,
+) -> list[int]:
+    """The processes of one session, by process id.
+
+    A process that has ended and only waits to be collected is left out unless
+    ``include_ended`` is set. One whose first thread has ended while others
+    still run reads the same way, which is why the code that stops a session
+    asks for all of them.
+    """
 
     base = PROC_ROOT if proc_root is None else Path(proc_root)
     wanted = int(session_id)
     return [
         int(directory.name)
         for directory, state, session, _resident in _processes(base)
-        if session == wanted and state not in _DEAD_STATES
+        if session == wanted and (include_ended or state not in _DEAD_STATES)
     ]
 
 

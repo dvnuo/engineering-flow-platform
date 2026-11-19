@@ -110,6 +110,7 @@ def test_the_container_limit_and_this_process_are_read_from_the_real_files():
 @pytest.mark.asyncio
 async def test_a_command_filling_the_container_is_stopped_and_the_runtime_lives_on(tmp_path: Path):
     limit = _container_limit()
+    assert limit is not None, "no memory limit: filling memory here would take the machine down"
     runtime = _runtime(tmp_path)
 
     result = await runtime.execute(
@@ -155,29 +156,39 @@ async def test_a_command_filling_the_container_is_stopped_and_the_runtime_lives_
 
 @pytest.mark.asyncio
 async def test_a_command_run_through_timeout_is_stopped_as_well(tmp_path: Path):
-    # `timeout` moves into a process group of its own, so what it runs is not
-    # in the shell's group. `cd . &&` keeps the shell as its parent.
+    # `timeout` moves into a process group of its own, and what it runs goes
+    # with it, out of the group the tool kills first. `; true` keeps the shell
+    # from replacing itself with `timeout`, which would leave one group again.
     limit = _container_limit()
+    assert limit is not None, "no memory limit: filling memory here would take the machine down"
     runtime = _runtime(tmp_path)
+    says_its_group = (
+        "import os\n"
+        "print('outside the group of the shell:', os.getpgrp() != os.getsid(0), flush=True)\n"
+    )
 
     result = await runtime.execute(
         ToolCall(
             id="call-fill-memory-under-timeout",
             tool_id="bash",
             args={
-                "command": "cd . && timeout 110 " + _python_command(_FILL_MEMORY),
+                "command": "timeout 110 " + _python_command(says_its_group + _FILL_MEMORY) + "; true",
                 "description": "Fill the container's memory under timeout",
                 "timeout": 120_000,
             },
         )
     )
 
+    # Reaching these lines at all means the process holding the memory was
+    # stopped: killing only the shell's group would have left it filling the
+    # container until the kernel ended everything in it.
     tail = result.content[-1500:]
     assert result.status == "success", tail
     assert result.output.get("memory_exceeded") is True, tail
     assert result.output["timed_out"] is False
     assert result.metadata["command_memory_bytes"] >= limit * 0.1
-    assert "holding" in result.content
-    # The process that held the memory is gone, not only the shell above it.
+    saved = (tmp_path / result.metadata["output_path"]).read_text(encoding="utf-8")
+    assert "outside the group of the shell: True" in saved
+    assert "holding" in saved
     after = read_container_memory()
     assert after is not None and after.used_percent < 90
