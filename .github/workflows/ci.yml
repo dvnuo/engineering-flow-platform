@@ -90,6 +90,7 @@ jobs:
           docker run --rm --memory=512m --memory-swap=512m \
             -v "$PWD":/src -w /src \
             -e PYTHONPATH=. -e PYTHONDONTWRITEBYTECODE=1 -e EFP_EXTERNAL_TOOLS_STRICT=false \
+            -e EFP_TEST_REQUIRE_MEMORY_LIMIT=1 \
             python:3.11-slim sh -c "pip install -q --no-cache-dir -r requirements.txt && python -m pytest -q -p no:cacheprovider tests/runtime/test_shell_memory_guard_container.py tests/runtime/test_shell_memory_bounds.py tests/runtime/test_shell_tool_parity.py tests/runtime/test_cancel_cooperative.py"
 
   native-runtime-docker-smoke:

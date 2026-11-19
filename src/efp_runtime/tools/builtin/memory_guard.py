@@ -33,6 +33,9 @@ GUARD_PERCENT_ENV = "EFP_SHELL_MEMORY_GUARD_PERCENT"
 # cgroup v1 reports "no limit" as a number near 2**63; anything this large is
 # not a limit a container can reach.
 _UNLIMITED_BYTES = 1 << 60
+# Process states in /proc/<pid>/stat of a process that has ended and only waits
+# to be collected: there is nothing left of it to stop.
+_DEAD_STATES = frozenset({"Z", "X", "x"})
 
 
 @dataclass(frozen=True)
@@ -83,33 +86,57 @@ def session_memory_bytes(
     session_ids: Iterable[int],
     proc_root: Path | None = None,
 ) -> dict[int, int]:
-    """Resident memory of every process in each session (a command and what it started).
+    """Memory of its own that every process in each session holds (a command and what it started).
 
     The shell tool starts each command in a session of its own, so the session
-    id is the command's process id. Shared pages are counted once per process,
-    which overstates the total; the figures are used to tell which command is
-    the large one, not to account for memory.
+    id is the command's process id. Only anonymous memory is counted. Pages
+    backed by a file (a mapped pack file, shared libraries) are left out, as
+    they are from the container reading: the kernel can drop them, and counting
+    them would blame a ``git`` command with large mapped files for pressure it
+    did not cause.
     """
 
     totals = {int(session_id): 0 for session_id in session_ids}
     if not totals:
         return totals
     base = PROC_ROOT if proc_root is None else Path(proc_root)
+    page_size = _page_size()
+    for directory, _state, session, resident_pages in _processes(base):
+        if session not in totals:
+            continue
+        anonymous_pages = _read_anonymous_pages(directory / "statm")
+        if anonymous_pages is None:
+            anonymous_pages = resident_pages
+        totals[session] += anonymous_pages * page_size
+    return totals
+
+
+def session_process_ids(session_id: int, proc_root: Path | None = None) -> list[int]:
+    """The live processes of one session, by process id."""
+
+    base = PROC_ROOT if proc_root is None else Path(proc_root)
+    wanted = int(session_id)
+    return [
+        int(directory.name)
+        for directory, state, session, _resident in _processes(base)
+        if session == wanted and state not in _DEAD_STATES
+    ]
+
+
+def _processes(base: Path):
+    """``(directory, state, session, resident pages)`` of every process under ``base``."""
+
     try:
         entries = list(os.scandir(base))
     except OSError:
-        return totals
-    page_size = _page_size()
+        return
     for entry in entries:
         if not entry.name.isdigit():
             continue
-        fields = _read_stat_fields(Path(entry.path) / "stat")
-        if fields is None:
-            continue
-        session, resident_pages = fields
-        if session in totals:
-            totals[session] += resident_pages * page_size
-    return totals
+        directory = Path(entry.path)
+        fields = _read_stat_fields(directory / "stat")
+        if fields is not None:
+            yield (directory, *fields)
 
 
 def _read_cgroup_v2(base: Path) -> MemoryReading | None:
@@ -118,11 +145,13 @@ def _read_cgroup_v2(base: Path) -> MemoryReading | None:
     if limit is None or current is None or limit <= 0 or limit >= _UNLIMITED_BYTES:
         return None
     stat = _read_stat_file(base / "memory.stat")
-    reclaimable = (
-        stat.get("inactive_file", 0)
-        + stat.get("active_file", 0)
-        + stat.get("slab_reclaimable", 0)
-    )
+    inactive_file = stat.get("inactive_file")
+    active_file = stat.get("active_file")
+    if inactive_file is None or active_file is None:
+        # Without the page cache figures the cache would count as use, and a
+        # container whose cache has filled the limit would look nearly full.
+        return None
+    reclaimable = inactive_file + active_file + stat.get("slab_reclaimable", 0)
     return MemoryReading(limit_bytes=limit, used_bytes=max(current - reclaimable, 0))
 
 
@@ -132,10 +161,11 @@ def _read_cgroup_v1(base: Path) -> MemoryReading | None:
     if limit is None or current is None or limit <= 0 or limit >= _UNLIMITED_BYTES:
         return None
     stat = _read_stat_file(base / "memory.stat")
-    reclaimable = stat.get(
-        "total_inactive_file", stat.get("inactive_file", 0)
-    ) + stat.get("total_active_file", stat.get("active_file", 0))
-    return MemoryReading(limit_bytes=limit, used_bytes=max(current - reclaimable, 0))
+    inactive_file = stat.get("total_inactive_file", stat.get("inactive_file"))
+    active_file = stat.get("total_active_file", stat.get("active_file"))
+    if inactive_file is None or active_file is None:
+        return None
+    return MemoryReading(limit_bytes=limit, used_bytes=max(current - inactive_file - active_file, 0))
 
 
 def _read_int(path: Path) -> int | None:
@@ -166,8 +196,8 @@ def _read_stat_file(path: Path) -> dict[str, int]:
     return values
 
 
-def _read_stat_fields(path: Path) -> tuple[int, int] | None:
-    """Session id and resident pages from a ``/proc/<pid>/stat`` line."""
+def _read_stat_fields(path: Path) -> tuple[str, int, int] | None:
+    """State, session id and resident pages from a ``/proc/<pid>/stat`` line."""
 
     try:
         text = path.read_text(encoding="ascii", errors="replace")
@@ -183,7 +213,23 @@ def _read_stat_fields(path: Path) -> tuple[int, int] | None:
     if len(fields) < 22:
         return None
     try:
-        return int(fields[3]), int(fields[21])
+        return fields[0], int(fields[3]), int(fields[21])
+    except ValueError:
+        return None
+
+
+def _read_anonymous_pages(path: Path) -> int | None:
+    """Resident pages that are not backed by a file, from a ``/proc/<pid>/statm`` line."""
+
+    try:
+        fields = path.read_text(encoding="ascii", errors="replace").split()
+    except OSError:
+        return None
+    # size, resident, shared (resident pages backed by a file or shared memory), ...
+    if len(fields) < 3:
+        return None
+    try:
+        return max(int(fields[1]) - int(fields[2]), 0)
     except ValueError:
         return None
 

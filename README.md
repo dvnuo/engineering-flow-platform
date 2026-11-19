@@ -169,10 +169,14 @@ tool keeps a command from doing that in two ways.
   When 90% of the limit is in use and the command's own processes hold at least
   10% of it, that command is stopped, and only that command: the result says
   how much was in use and asks for a smaller memory footprint, so the model can
-  retry in batches. With several commands running, the largest one goes. A
-  command the kernel killed anyway (`SIGKILL`, exit code 137) is explained the
-  same way. Outside a memory-limited Linux container nothing is read and
-  nothing changes.
+  retry in batches. A command's share is the memory of its own that its
+  processes hold; files it has mapped (a `git` pack file) do not count, as the
+  kernel can drop them. The stop reaches every process of the command,
+  including one started through `timeout`. With several commands running, the
+  largest one goes, and no other is stopped for a second after it, until the
+  freed memory shows. A command the kernel killed anyway (`SIGKILL`, exit code
+  137) is explained the same way. Outside a memory-limited Linux container
+  nothing is read and nothing changes.
 
 | Env | Purpose | Default |
 |-----|---------|---------|

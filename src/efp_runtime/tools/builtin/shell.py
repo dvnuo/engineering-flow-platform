@@ -23,6 +23,7 @@ from .memory_guard import (
     guard_percent,
     read_container_memory,
     session_memory_bytes,
+    session_process_ids,
 )
 from .output import (
     DEFAULT_MAX_OUTPUT_CHARS,
@@ -70,6 +71,11 @@ _SIGKILL_EXIT_CODES = frozenset({-9, 137})
 # Commands the tool is running right now, by process id (which is also their
 # session id); the memory guard picks the largest of them.
 _RUNNING_COMMANDS: set[int] = set()
+# After the guard stops a command it stops no other for this long. The kernel
+# needs a moment to take the memory back, and until it has, the next largest
+# command would look like the one filling the container.
+_MEMORY_STOP_SETTLE_SECONDS = 1.0
+_memory_stop_settles_at = 0.0
 
 
 def create_bash_tool(
@@ -313,7 +319,7 @@ class _StreamCapture:
         # The two overlap until the stream is longer than both.
         self._start = bytearray()
         self._start_limit = self._head_limit + _REDACTION_CONTEXT_BYTES
-        self._end: deque[bytes] = deque()
+        self._end: deque[bytearray] = deque()
         self._end_limit = self._tail_limit + _REDACTION_CONTEXT_BYTES
         self._end_bytes = 0
         self.total_bytes = 0
@@ -325,9 +331,16 @@ class _StreamCapture:
         room = self._start_limit - len(self._start)
         if room > 0:
             self._start += chunk[:room]
-        self._end.append(chunk)
+        # Small reads are gathered into blocks: a command that flushes a few
+        # bytes at a time would otherwise cost an object per read, many times
+        # the bytes it wrote.
+        block = self._end[-1] if self._end else None
+        if block is not None and len(block) + len(chunk) <= _CAPTURE_READ_BYTES:
+            block += chunk
+        else:
+            self._end.append(bytearray(chunk))
         self._end_bytes += len(chunk)
-        # Whole chunks leave from the front once the ones after them cover the
+        # Whole blocks leave from the front once the ones after them cover the
         # end of the stream on their own.
         while self._end_bytes - len(self._end[0]) >= self._end_limit:
             self._end_bytes -= len(self._end.popleft())
@@ -489,6 +502,8 @@ async def _communicate_with_timeout_and_cancel(
             task.cancel()
 
     _kill_process(process)
+    if memory_stop is not None:
+        _kill_rest_of_session(process.pid)
     await communicate_task
     await asyncio.gather(*helper_tasks, return_exceptions=True)
     outcome.cancelled = bool(cancelled)
@@ -571,6 +586,10 @@ async def _wait_for_memory_pressure(process: asyncio.subprocess.Process) -> _Mem
 
 
 def _memory_stop_for(pid: int, percent: int) -> _MemoryStop | None:
+    global _memory_stop_settles_at
+
+    if time.monotonic() < _memory_stop_settles_at:
+        return None
     reading = read_container_memory()
     if reading is None or reading.used_percent < percent:
         return None
@@ -578,11 +597,12 @@ def _memory_stop_for(pid: int, percent: int) -> _MemoryStop | None:
     own = sizes.get(pid, 0)
     if own * 100 < reading.limit_bytes * COMMAND_SHARE_FLOOR_PERCENT:
         return None
-    # One command per reading: the largest goes, and the others are looked at
-    # again on their next poll, by which time its memory has been returned.
+    # One command at a time: the largest goes, and the others are looked at
+    # again once its memory has had time to come back.
     largest = max(sizes, key=lambda other: (sizes[other], -other))
     if largest != pid:
         return None
+    _memory_stop_settles_at = time.monotonic() + _MEMORY_STOP_SETTLE_SECONDS
     return _MemoryStop(
         limit_bytes=reading.limit_bytes,
         used_bytes=reading.used_bytes,
@@ -606,6 +626,35 @@ def _kill_process(process: asyncio.subprocess.Process) -> None:
         process.kill()
     except ProcessLookupError:
         pass
+
+
+def _kill_rest_of_session(session_id: int) -> None:
+    """Kill what the group kill left of a command the memory guard stopped.
+
+    The tool starts each command in a session of its own and ``_kill_process``
+    kills the shell's process group. A process that moved to a group of its own
+    is in the session but not in that group; ``timeout`` does this, and what it
+    runs is then usually the one holding the memory. So is a process the shell
+    left behind when it exited. Only the memory guard goes this far: a timeout
+    and a stop end a command exactly as they did before.
+    """
+
+    if not _POSIX:
+        return
+    own = os.getpid()
+    try:
+        # Twice: a process may have started another one while the first pass ran.
+        for _ in range(2):
+            members = [pid for pid in session_process_ids(session_id) if pid != own]
+            if not members:
+                return
+            for pid in members:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+    except Exception:  # noqa: BLE001 - best effort; the group kill has already happened.
+        logger.debug("shell.memory_guard.session_kill_failed session=%s", session_id, exc_info=True)
 
 
 def _format_shell_content(

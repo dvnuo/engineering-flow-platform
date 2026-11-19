@@ -16,6 +16,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,13 @@ async def _run_bash(tmp_path: Path, script: str, **args: Any):
             },
         )
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_stop_is_settling(monkeypatch: pytest.MonkeyPatch):
+    # The guard stops nothing for a moment after it stopped a command; one
+    # test's stop must not hold up the next test's.
+    monkeypatch.setattr(shell_module, "_memory_stop_settles_at", 0.0)
 
 
 def _lines(count: int) -> bytes:
@@ -182,9 +190,9 @@ def test_capture_result_does_not_depend_on_how_the_output_arrives():
 def test_capture_never_holds_much_more_than_its_limit():
     capture = shell_module._StreamCapture(64 * 1024)
     chunk = b"x" * (16 * 1024)
-    # The limit, the redaction context beyond each of the two cuts, and the
-    # read that was just added.
-    most = 64 * 1024 + 2 * shell_module._REDACTION_CONTEXT_BYTES + len(chunk)
+    # The limit, the redaction context beyond each of the two cuts, and one
+    # block of reads that has not been pushed out yet.
+    most = 64 * 1024 + 2 * shell_module._REDACTION_CONTEXT_BYTES + shell_module._CAPTURE_READ_BYTES
 
     for _ in range(4096):  # 64 MiB through a 64 KiB capture
         capture.feed(chunk)
@@ -195,6 +203,18 @@ def test_capture_never_holds_much_more_than_its_limit():
     # One unbroken line: there is no line boundary to cut at, and the count still adds up.
     assert omitted == capture.total_bytes - 64 * 1024
     assert len(text) < 64 * 1024 + 512
+
+
+def test_capture_of_tiny_reads_costs_no_more_than_the_same_bytes_in_large_reads():
+    # A command that flushes two bytes at a time: one object per read would
+    # cost many times the bytes written.
+    data = _lines(40_000)  # 480,000 bytes
+    by_tiny_reads = _capture_of(data, 256 * 1024, read_bytes=2)
+    by_large_reads = _capture_of(data, 256 * 1024, read_bytes=64 * 1024)
+
+    assert by_tiny_reads.captured() == by_large_reads.captured()
+    assert len(by_tiny_reads._end) <= len(by_large_reads._end) + 1
+    assert len(by_tiny_reads._end) < 10
 
 
 def test_capture_limit_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch):
@@ -617,9 +637,35 @@ def test_cgroup_v1_unlimited_and_missing_files_are_not_guarded(tmp_path: Path):
     assert memory_guard.read_container_memory(tmp_path) is None
 
 
-def _stat_line(pid: int, name: str, session: int, resident_pages: int) -> str:
-    fields = ["S", "1", str(session), str(session)] + ["0"] * 17 + [str(resident_pages)] + ["0"] * 10
+def test_a_container_whose_page_cache_cannot_be_told_apart_is_not_guarded(tmp_path: Path):
+    # Counting the cache as use would make a container that has only read a
+    # lot of files look nearly full.
+    v2 = tmp_path / "v2"
+    _write(v2 / "memory.max", f"{GIB}\n")
+    _write(v2 / "memory.current", "990000000\n")
+    assert memory_guard.read_container_memory(v2) is None  # no memory.stat at all
+    _write(v2 / "memory.stat", "anon 100000000\nfile 890000000\n")
+    assert memory_guard.read_container_memory(v2) is None  # the two cache lines are missing
+    _write(v2 / "memory.stat", "inactive_file 800000000\nactive_file 90000000\n")
+    assert memory_guard.read_container_memory(v2) == MemoryReading(limit_bytes=GIB, used_bytes=100_000_000)
+
+    v1 = tmp_path / "v1"
+    _write(v1 / "memory" / "memory.limit_in_bytes", f"{GIB}\n")
+    _write(v1 / "memory" / "memory.usage_in_bytes", "990000000\n")
+    assert memory_guard.read_container_memory(v1) is None
+    _write(v1 / "memory" / "memory.stat", "cache 890000000\n")
+    assert memory_guard.read_container_memory(v1) is None
+    _write(v1 / "memory" / "memory.stat", "inactive_file 800000000\nactive_file 90000000\n")
+    assert memory_guard.read_container_memory(v1) == MemoryReading(limit_bytes=GIB, used_bytes=100_000_000)
+
+
+def _stat_line(pid: int, name: str, session: int, resident_pages: int, state: str = "S") -> str:
+    fields = [state, "1", str(session), str(session)] + ["0"] * 17 + [str(resident_pages)] + ["0"] * 10
     return f"{pid} ({name}) " + " ".join(fields) + "\n"
+
+
+def _statm_line(resident_pages: int, file_backed_pages: int) -> str:
+    return f"{resident_pages * 3} {resident_pages} {file_backed_pages} 1 0 {resident_pages} 0\n"
 
 
 def test_session_memory_adds_up_every_process_of_each_command(
@@ -628,9 +674,14 @@ def test_session_memory_adds_up_every_process_of_each_command(
 ):
     monkeypatch.setattr(memory_guard, "_page_size", lambda: 4096)
     _write(tmp_path / "101" / "stat", _stat_line(101, "sh", 101, 10))
+    _write(tmp_path / "101" / "statm", _statm_line(10, 4))
     # A name with spaces and parentheses must not shift the fields.
     _write(tmp_path / "102" / "stat", _stat_line(102, "my (odd) scan) x", 101, 1000))
+    _write(tmp_path / "102" / "statm", _statm_line(1000, 100))
+    # No statm to read: every resident page counts, as the stat line has it.
     _write(tmp_path / "200" / "stat", _stat_line(200, "python", 200, 300))
+    _write(tmp_path / "201" / "stat", _stat_line(201, "helper", 200, 50))
+    _write(tmp_path / "201" / "statm", "unreadable\n")
     _write(tmp_path / "300" / "stat", _stat_line(300, "runtime", 1, 9999))
     _write(tmp_path / "301" / "stat", "301 (gone)\n")
     _write(tmp_path / "self" / "stat", _stat_line(1, "self", 101, 5000))
@@ -638,9 +689,38 @@ def test_session_memory_adds_up_every_process_of_each_command(
 
     totals = memory_guard.session_memory_bytes([101, 200, 555], tmp_path)
 
-    assert totals == {101: 1010 * 4096, 200: 300 * 4096, 555: 0}
+    assert totals == {101: (6 + 900) * 4096, 200: 350 * 4096, 555: 0}
     assert memory_guard.session_memory_bytes([], tmp_path) == {}
     assert memory_guard.session_memory_bytes([7], tmp_path / "absent") == {7: 0}
+
+
+def test_a_command_is_not_charged_for_the_files_it_has_mapped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # git with a large pack file mapped: nearly all of its resident pages are
+    # the file, which the kernel can drop and the container reading leaves out.
+    monkeypatch.setattr(memory_guard, "_page_size", lambda: 4096)
+    _write(tmp_path / "500" / "stat", _stat_line(500, "git", 500, 200_000))
+    _write(tmp_path / "500" / "statm", _statm_line(200_000, 195_000))
+    # More file-backed than resident cannot be: it reads as nothing of its own.
+    _write(tmp_path / "501" / "stat", _stat_line(501, "odd", 500, 10))
+    _write(tmp_path / "501" / "statm", _statm_line(10, 50))
+
+    assert memory_guard.session_memory_bytes([500], tmp_path) == {500: 5_000 * 4096}
+
+
+def test_the_processes_of_a_session_are_listed_without_the_ones_that_have_ended(tmp_path: Path):
+    _write(tmp_path / "101" / "stat", _stat_line(101, "sh", 101, 10))
+    _write(tmp_path / "102" / "stat", _stat_line(102, "timeout", 101, 10))
+    _write(tmp_path / "103" / "stat", _stat_line(103, "python (job)", 101, 10, state="R"))
+    _write(tmp_path / "104" / "stat", _stat_line(104, "done", 101, 0, state="Z"))
+    _write(tmp_path / "200" / "stat", _stat_line(200, "other", 200, 10))
+    _write(tmp_path / "self" / "stat", _stat_line(1, "self", 101, 10))
+
+    assert sorted(memory_guard.session_process_ids(101, tmp_path)) == [101, 102, 103]
+    assert memory_guard.session_process_ids(999, tmp_path) == []
+    assert memory_guard.session_process_ids(101, tmp_path / "absent") == []
 
 
 def test_guard_percent_reads_the_environment(monkeypatch: pytest.MonkeyPatch):
@@ -694,6 +774,7 @@ def test_only_the_largest_command_is_stopped_and_only_under_pressure(monkeypatch
         command_bytes=900 * MIB,
     )
     # The smaller command is left running while the larger one is stopped.
+    monkeypatch.setattr(shell_module, "_memory_stop_settles_at", 0.0)
     assert shell_module._memory_stop_for(22, 90) is None
 
     # Below the threshold nothing is stopped, however large the command.
@@ -707,6 +788,26 @@ def test_only_the_largest_command_is_stopped_and_only_under_pressure(monkeypatch
     # No limit to read: nothing to guard.
     monkeypatch.setattr(shell_module, "read_container_memory", lambda: None)
     assert shell_module._memory_stop_for(11, 90) is None
+
+
+def test_after_one_stop_the_next_largest_command_is_given_time(monkeypatch: pytest.MonkeyPatch):
+    # A stopped command's memory does not come back at once. Until it has, the
+    # container still reads as full and the next command looks like the cause.
+    limit = 2 * GIB
+    monkeypatch.setattr(shell_module, "_MEMORY_STOP_SETTLE_SECONDS", 0.2)
+    monkeypatch.setattr(shell_module, "_RUNNING_COMMANDS", {11, 22})
+    _pressure(monkeypatch, used=int(limit * 0.95), sizes={11: 1400 * MIB, 22: 300 * MIB})
+    assert shell_module._memory_stop_for(11, 90) is not None
+
+    # 11 is being killed and is no longer among the running commands; the
+    # reading has not moved yet.
+    monkeypatch.setattr(shell_module, "_RUNNING_COMMANDS", {22})
+    assert shell_module._memory_stop_for(22, 90) is None
+
+    # Still full after that time: now it is 22 that is filling the container.
+    time.sleep(0.25)
+    stop = shell_module._memory_stop_for(22, 90)
+    assert stop is not None and stop.command_bytes == 300 * MIB
 
 
 def _announce_then_sleep(marker: Path | None, seconds: int) -> str:
@@ -740,6 +841,13 @@ async def test_a_command_filling_the_container_is_stopped_alone(
     marker = tmp_path / "filled"
     _pressure(monkeypatch, used=int(2 * GIB * 0.95), sizes=None, once=marker)
     process = await _sleeping_process(marker=marker)
+    swept: list[int] = []
+    real_sweep = shell_module._kill_rest_of_session
+    monkeypatch.setattr(
+        shell_module,
+        "_kill_rest_of_session",
+        lambda session_id: (swept.append(session_id), real_sweep(session_id)),
+    )
 
     outcome = await asyncio.wait_for(
         shell_module._communicate_with_timeout_and_cancel(
@@ -761,6 +869,68 @@ async def test_a_command_filling_the_container_is_stopped_alone(
     assert process.returncode is not None
     assert shell_module._redacted_stream(outcome.stdout, "stdout")[0].startswith("started")
     assert shell_module._RUNNING_COMMANDS == set()
+    assert swept == [process.pid]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups and /proc are POSIX")
+@pytest.mark.asyncio
+async def test_a_stopped_command_takes_what_left_its_process_group_with_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # `timeout` moves into a process group of its own, so killing the shell's
+    # group leaves it and what it runs alive, still holding the output open and
+    # still holding the memory.
+    monkeypatch.setattr(shell_module, "_MEMORY_POLL_SECONDS", 0.05)
+    marker = tmp_path / "filled"
+    _pressure(monkeypatch, used=int(2 * GIB * 0.95), sizes=None, once=marker)
+    child = (
+        "import os, time; os.setpgid(0, 0); print('started', flush=True); "
+        "open({!r}, 'w').close(); time.sleep(120)".format(marker.as_posix())
+    )
+    # `; true` keeps the shell from replacing itself with the child.
+    process = await asyncio.create_subprocess_shell(
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(child)}; true",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+
+    # Without the rest of the session this waits for the child's two minutes.
+    outcome = await asyncio.wait_for(
+        shell_module._communicate_with_timeout_and_cancel(
+            process,
+            timeout=120,
+            context=ToolContext(cancel_requested=lambda: False),
+        ),
+        timeout=20,
+    )
+
+    assert outcome.memory_stop is not None
+    assert shell_module._redacted_stream(outcome.stdout, "stdout")[0].startswith("started")
+    assert memory_guard.session_process_ids(process.pid) == []
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_ends_a_command_the_way_it_always_has(monkeypatch: pytest.MonkeyPatch):
+    # Only the memory guard goes after the rest of the session.
+    swept: list[int] = []
+    monkeypatch.setattr(shell_module, "_kill_rest_of_session", swept.append)
+    monkeypatch.setattr(shell_module, "read_container_memory", lambda: None)
+    process = await _sleeping_process(seconds=30)
+
+    outcome = await asyncio.wait_for(
+        shell_module._communicate_with_timeout_and_cancel(
+            process,
+            timeout=0.3,
+            context=ToolContext(cancel_requested=lambda: False),
+        ),
+        timeout=15,
+    )
+
+    assert outcome.timed_out is True
+    assert outcome.memory_stop is None
+    assert swept == []
 
 
 @pytest.mark.asyncio
