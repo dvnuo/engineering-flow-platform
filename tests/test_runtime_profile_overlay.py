@@ -1342,11 +1342,9 @@ def test_build_tools_config_json_transforms_atlassian_and_copies_verbatim_sectio
             "base_url": "https://jira.example.test",
             "rest_path": "/rest/api/3",
             "api_version": "3",
-            "auth": {
-                "type": "basic_api_key",
-                "username": "bot",
-                "api_key": "jira-token",
-            },
+            # A company-hosted Jira takes its token as Bearer, without the
+            # username beside it.
+            "auth": {"type": "bearer_token", "token": "jira-token"},
         }
     ]
 
@@ -1434,6 +1432,68 @@ def test_build_tools_config_json_projects_jenkins_as_single_instance():
             ],
         }
     }
+
+
+_CLOUD_API_KEY = {"type": "basic_api_key", "username": "me@example.test", "api_key": "tok"}
+_BEARER = {"type": "bearer_token", "token": "tok"}
+
+
+@pytest.mark.parametrize("product", ["jira", "confluence"])
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        # Atlassian Cloud: an API token signs in as Basic with the account email.
+        ({"url": "https://acme.atlassian.net", "username": "me@example.test", "token": "tok"}, _CLOUD_API_KEY),
+        ({"url": "https://ACME.Atlassian.NET/wiki/", "username": "me@example.test", "token": "tok"}, _CLOUD_API_KEY),
+        ({"url": "https://acme.jira.com", "username": "me@example.test", "api_token": "tok"}, _CLOUD_API_KEY),
+        (
+            {"url": "https://api.atlassian.com/ex/confluence/0f1e2d3c", "username": "me@example.test", "token": "tok"},
+            _CLOUD_API_KEY,
+        ),
+        # A saved password does not outrank the token the member added later.
+        (
+            {"url": "https://acme.atlassian.net", "username": "me@example.test", "password": "pw", "token": "tok"},
+            _CLOUD_API_KEY,
+        ),
+        ({"url": "https://acme.atlassian.net", "token": "tok"}, _BEARER),
+        # A company-hosted site (Data Center): its personal access token is
+        # accepted as Bearer only, so the username beside it is left out.
+        ({"url": "https://wiki.corp.example.test", "username": "me", "token": "tok"}, _BEARER),
+        ({"url": "https://jira.corp.example.test:8443/jira", "username": "me", "api_token": "tok"}, _BEARER),
+        ({"url": "https://wiki.corp.example.test", "username": "me", "password": "pw", "token": "tok"}, _BEARER),
+        ({"url": "https://wiki.corp.example.test", "token": "tok"}, _BEARER),
+        # A company's own host is not Atlassian's because it ends alike.
+        ({"url": "https://notatlassian.net", "username": "me", "token": "tok"}, _BEARER),
+        ({"url": "https://acme.atlassian.net.corp.example.test", "username": "me", "token": "tok"}, _BEARER),
+        # No token: the username and password sign in, on either kind of site.
+        (
+            {"url": "https://wiki.corp.example.test", "username": "me", "password": "pw"},
+            {"type": "basic_password", "username": "me", "password": "pw"},
+        ),
+        (
+            {"url": "https://acme.atlassian.net", "username": "me", "password": "pw"},
+            {"type": "basic_password", "username": "me", "password": "pw"},
+        ),
+    ],
+)
+def test_build_tools_config_json_signs_in_to_an_atlassian_row_like_the_portal_test(product, row, expected):
+    # The same choice as the Portal's instance_auth_headers, so the credential
+    # a member's Test button proved is the one the CLI sends.
+    root = profile_config_module.build_tools_config_json({product: {"enabled": True, "instances": [row]}})
+    assert root[product]["instances"][0]["auth"] == expected
+
+
+@pytest.mark.parametrize("product", ["jenkins", "nexus", "splunk"])
+def test_build_tools_config_json_keeps_basic_for_a_username_with_a_token_outside_atlassian(product):
+    # Jenkins API tokens and Nexus user tokens are Basic with their username
+    # wherever the service is hosted, and a password still comes first there.
+    row = {"name": "main", "url": "https://svc.corp.example.test", "username": "me", "token": "tok"}
+    root = profile_config_module.build_tools_config_json({product: {"enabled": True, "instances": [row]}})
+    assert root[product]["instances"][0]["auth"] == {"type": "basic_api_key", "username": "me", "api_key": "tok"}
+
+    row["password"] = "pw"
+    root = profile_config_module.build_tools_config_json({product: {"enabled": True, "instances": [row]}})
+    assert root[product]["instances"][0]["auth"] == {"type": "basic_password", "username": "me", "password": "pw"}
 
 
 def test_build_tools_config_json_jenkins_bearer_token_instance():
