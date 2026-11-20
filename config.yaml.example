@@ -368,10 +368,13 @@ server:
 # ============================================
 # Jira Configuration (OPTIONAL)
 # ============================================
-# Jira supports multiple authentication methods:
-# 1. Bearer Token (recommended for Jira Cloud)
-# 2. Basic Auth with API Token (recommended for Jira Server/DC)
-# 3. Basic Auth with Password (legacy, not recommended)
+# The fields of a Jira or Confluence instance decide how it signs in:
+# 1. A token on Atlassian Cloud (an *.atlassian.net address) with the account
+#    email as username: Basic auth with the API token.
+# 2. A token anywhere else (a company-hosted Data Center site): Bearer with
+#    the personal access token. A username beside it is left out, because
+#    Data Center answers 401 to a token sent as Basic.
+# 3. A username and password with no token: Basic auth (legacy, Data Center).
 #
 # Runtime profile application projects Jira/Confluence values into the
 # Atlassian CLI config used by the prebuilt `jira` and `confluence` binaries
