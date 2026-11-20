@@ -41,6 +41,7 @@ from .models import (
     model_prompt_budget_tokens,
     register_model_context_profile,
     preferred_model_context_profile,
+    resolve_model_context_profile,
     static_model_context_profile,
 )
 from .openai import (
@@ -1129,8 +1130,10 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
 
         Routes once per run: ``POST /auto`` with the turn's prompt and the
         auto id's tier. The model Copilot picks is admitted when the runtime
-        can drive it (served on ``/responses``, tool calls not refused, its
-        prompt budget covering the conversation so far); the transport then
+        can drive it (served on ``/responses``, tool calls not refused) and
+        the default model would not hold more of the conversation so far (a
+        pick whose prompt budget is below the conversation stands when the
+        default model's is no larger); the transport then
         carries the session token, the configured reasoning effort is clamped
         to what the model lists, and the model's context profile (the
         ``GET /models`` row, else the metadata from the answer, else the
@@ -1196,7 +1199,13 @@ class GitHubCopilotProvider(OpenAICompatibleProvider):
         if history_chars is not None:
             budget_tokens = model_prompt_budget_tokens(profile)
             history_tokens = max(0, int(history_chars)) // max(1, profile.chars_per_token)
-            if history_tokens > budget_tokens:
+            # The default model is the only alternative, so the conversation
+            # overrules Copilot's pick only when that model holds more of it.
+            # At run start ``history_chars`` is the stored history, which only
+            # grows (the request is compacted to the budget, the transcript is
+            # not rewritten): judged on size alone, a long session would leave
+            # the auto pool for good, for a model with the same window.
+            if history_tokens > budget_tokens and budget_tokens < _default_model_prompt_budget_tokens():
                 return self._auto_fallback(
                     "selected model {0}: prompt budget {1} tokens is below the conversation's ~{2} tokens".format(
                         model,
@@ -2594,6 +2603,12 @@ def _request_history_chars(request: RuntimeRequest) -> int:
                     if isinstance(value, str):
                         total += len(value)
     return total
+
+
+def _default_model_prompt_budget_tokens() -> int:
+    """The prompt budget of the model an auto run falls back to, as the runner budgets it."""
+
+    return model_prompt_budget_tokens(resolve_model_context_profile(DEFAULT_MODEL_ID))
 
 
 def _auto_pick_refusal(model: str, *sources: Any) -> str | None:
