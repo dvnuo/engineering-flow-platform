@@ -26,6 +26,7 @@ from efp_runtime.loop import (
 from efp_runtime.models import ToolCall
 from efp_runtime.runtime import RuntimeConfig
 from efp_runtime.session.models import MessagePartType, MessageRole
+from efp_runtime.session.search import is_task_session_id
 from efp_runtime.tools.builtin.task import TaskToolRequest, create_task_tool
 from efp_runtime.tools.definition import ToolContext, ToolDef
 from efp_runtime.tools.registry import ToolRegistry
@@ -371,6 +372,9 @@ async def test_subagent_runner_selects_profile_and_builds_child_prompt():
     assert " " not in result.metadata["child_session_id"]
     assert "parent_session" in result.metadata["child_session_id"]
     assert "task_1" in result.metadata["child_session_id"]
+    # The child run is stored beside its parent, so the id it is given has to
+    # be one the sessions list and session_search leave out.
+    assert is_task_session_id(result.metadata["child_session_id"])
 
     assert len(provider.requests) == 1
     request = provider.requests[0]

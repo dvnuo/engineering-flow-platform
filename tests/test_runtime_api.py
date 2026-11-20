@@ -182,6 +182,7 @@ async def test_api_sessions_hides_task_sessions_by_default(monkeypatch):
                 _fake_summary("agent-task-task-1"),
                 _fake_summary("generic-task-task-2"),
                 _fake_summary("delegation-rule-1-event-1"),
+                _fake_summary("subagent-s-human-task_1"),
                 _fake_summary("s-human"),
             ]
 

@@ -33,6 +33,10 @@ TASK_SESSION_ID_PREFIXES = (
     "delegation:",
     "delegation-",
     "task-",
+    # A subagent's child run is stored beside its parent as
+    # "subagent-<parent>-<task>" (agents.task_runner); its first message is the
+    # rendered <task_prompt>, not anything a member wrote.
+    "subagent-",
 )
 
 # User-role messages the runtime itself appends. They carry no member words,
