@@ -395,9 +395,39 @@ async def test_execute_portal_action_base_url_env_precedence_over_config(monkeyp
     assert captured["url"].startswith("https://portal.env/")
 
 
-def test_build_portal_internal_api_headers_content_type_contract():
+def test_build_portal_internal_api_headers_content_type_contract(monkeypatch):
+    monkeypatch.delenv("EFP_PORTAL_TRUST_TOKEN", raising=False)
     assert build_portal_internal_api_headers(include_content_type=True) == {"Content-Type": "application/json"}
     assert build_portal_internal_api_headers(include_content_type=False) == {}
+
+
+def test_build_portal_internal_api_headers_carry_the_portal_trust_token(monkeypatch):
+    monkeypatch.setenv("EFP_PORTAL_TRUST_TOKEN", " 5ca1ab1e \n")
+    assert build_portal_internal_api_headers(include_content_type=True) == {
+        "Content-Type": "application/json",
+        "X-Portal-Trust-Token": "5ca1ab1e",
+    }
+    assert build_portal_internal_api_headers(include_content_type=False) == {"X-Portal-Trust-Token": "5ca1ab1e"}
+
+    monkeypatch.setenv("EFP_PORTAL_TRUST_TOKEN", "   ")
+    assert build_portal_internal_api_headers(include_content_type=False) == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_portal_action_sends_the_portal_trust_token(monkeypatch):
+    captured = {}
+
+    async def _fake_get(url, headers):
+        captured["headers"] = headers
+        return {"success": True, "error": None, "result": {"items": []}}
+
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.env")
+    monkeypatch.setenv("EFP_PORTAL_TRUST_TOKEN", "5ca1ab1e")
+    monkeypatch.setattr("src.runtime.adapter_executor._get_portal_json", _fake_get)
+
+    result = await execute_adapter_action("adapter:portal:get_group_task_board", {"group_id": "group-1"})
+    assert result["success"] is True
+    assert captured["headers"]["X-Portal-Trust-Token"] == "5ca1ab1e"
 
 
 @pytest.mark.asyncio

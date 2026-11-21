@@ -65,6 +65,7 @@ class _FakeClientSession:
 def portal(monkeypatch):
     _FakeClientSession.calls = []
     _FakeClientSession.status = 200
+    monkeypatch.delenv("EFP_PORTAL_TRUST_TOKEN", raising=False)
     monkeypatch.setattr(client, "ClientSession", _FakeClientSession)
     monkeypatch.setattr(client, "get_portal_internal_base_url", lambda: "http://portal.internal")
     return _FakeClientSession
@@ -98,6 +99,42 @@ async def test_publish_session_metadata_still_puts_the_full_row(portal):
     assert call["url"] == "http://portal.internal/api/internal/agents/agent-1/sessions/s-1/metadata"
     assert json.loads(call["json"]["metadata_json"]) == {"session_title": "Release pipeline permissions"}
     assert call["timeout"] is None
+
+
+async def test_publishes_carry_the_portal_trust_token_when_the_pod_has_one(monkeypatch, portal):
+    monkeypatch.setenv("EFP_PORTAL_TRUST_TOKEN", "5ca1ab1e")
+    expected = {"Content-Type": "application/json", "X-Portal-Trust-Token": "5ca1ab1e"}
+
+    assert await client.publish_session_title(agent_id="agent-1", session_id="s-1", title="Name") is True
+    await client.publish_session_metadata(
+        agent_id="agent-1",
+        session_id="s-1",
+        last_execution_id="exec-1",
+        latest_event_type="chat.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={},
+    )
+
+    assert [call["method"] for call in portal.calls] == ["patch", "put"]
+    assert [call["headers"] for call in portal.calls] == [expected, expected]
+
+
+async def test_publishes_send_no_trust_token_header_when_the_pod_has_none(portal):
+    assert await client.publish_session_title(agent_id="agent-1", session_id="s-1", title="Name") is True
+    await client.publish_session_metadata(
+        agent_id="agent-1",
+        session_id="s-1",
+        last_execution_id="exec-1",
+        latest_event_type="chat.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={},
+    )
+
+    assert [call["headers"] for call in portal.calls] == [{"Content-Type": "application/json"}] * 2
 
 
 async def test_publish_session_title_is_quiet_about_failures(portal, caplog):

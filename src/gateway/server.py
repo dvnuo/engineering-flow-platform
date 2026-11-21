@@ -23,6 +23,7 @@ from src.utils.truncate import truncate
 from src.config import config
 from src.workspace_defaults import resolve_runtime_workspace
 from src.external_cli import jira as jira_cli
+from src.gateway.portal_trust import log_portal_trust_status, portal_trust_middleware
 from src.gateway.runtime_chat import run_runtime_chat
 from src.efp_runtime.session.gateway_facade import (
     JIRA_SESSION_PREFIX,
@@ -336,7 +337,9 @@ class Gateway:
         self.port = config.server.get("port", 8000)
         self.app = web.Application(
             client_max_size=resolve_upload_client_max_size(),
-            middlewares=[access_log_middleware],
+            # The access log is outermost so a refused request still leaves its
+            # http.end line; the trust check runs before every route's handler.
+            middlewares=[access_log_middleware, portal_trust_middleware],
         )
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
@@ -734,6 +737,7 @@ class Gateway:
         await self.site.start()
 
         logger.info(f"Gateway started on http://{self.host}:{self.port}")
+        log_portal_trust_status()
 
         if self.jira_enabled:
             logger.info("Jira webhook route enabled; writeback uses external jira CLI")
