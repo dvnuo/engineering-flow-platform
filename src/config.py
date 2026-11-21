@@ -834,6 +834,20 @@ class Config:
             os.environ.pop(var, None)
         self._mobile_env_vars = set()
 
+    @staticmethod
+    def _profile_env_name(value: Any, default: str) -> str:
+        """The variable a profile asks a credential to be exported as.
+
+        Names the platform reads itself are not the profile's to set: with
+        ``EFP_PORTAL_TRUST_TOKEN`` here the BrowserStack key would become the
+        token the gateway checks every caller against. Such a name falls back
+        to the default one.
+        """
+        name = str(value or default).strip()
+        if name.upper().startswith(("EFP_", "PORTAL_")):
+            return default
+        return name
+
     def apply_mobile_env(self) -> None:
         mobile_config = self.mobile
         browserstack = (
@@ -843,8 +857,8 @@ class Config:
         )
         username = str(browserstack.get("username") or "").strip()
         access_key = str(browserstack.get("access_key") or "").strip()
-        username_env = str(browserstack.get("username_env") or "BROWSERSTACK_USERNAME").strip()
-        access_key_env = str(browserstack.get("access_key_env") or "BROWSERSTACK_ACCESS_KEY").strip()
+        username_env = self._profile_env_name(browserstack.get("username_env"), "BROWSERSTACK_USERNAME")
+        access_key_env = self._profile_env_name(browserstack.get("access_key_env"), "BROWSERSTACK_ACCESS_KEY")
 
         self._clear_mobile_env()
         if not (isinstance(mobile_config, dict) and mobile_config.get("enabled") and isinstance(browserstack, dict)):

@@ -1841,3 +1841,41 @@ def test_boot_projection_maps_the_model_providers_step_limit_to_max_iterations(t
     # Without one the runtime keeps its own default.
     cfg = _env_config(tmp_path, monkeypatch, {"llm": {"provider": "github_copilot", "model": "gpt-6-sol"}})
     assert "max_iterations" not in cfg.get_effective_config()
+
+
+def test_apply_mobile_env_never_writes_a_variable_the_platform_reads(tmp_path, monkeypatch):
+    # The gateway checks every caller against EFP_PORTAL_TRUST_TOKEN, read from
+    # the environment: a profile that names it must not replace the token.
+    monkeypatch.setenv("EFP_PORTAL_TRUST_TOKEN", "the-portals-token")
+    monkeypatch.setenv("PORTAL_AGENT_ID", "agent-1")
+    for key in ["BROWSERSTACK_USERNAME", "BROWSERSTACK_ACCESS_KEY", "BROWSERSTACK_LOCAL_BINARY"]:
+        monkeypatch.delenv(key, raising=False)
+
+    cfg = _env_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "mobile-auto": {
+                "enabled": True,
+                "default_provider": "browserstack",
+                "browserstack": {
+                    "username": "bs-user",
+                    "access_key": "bs-access-key",
+                    "username_env": "portal_agent_id",
+                    "access_key_env": "EFP_PORTAL_TRUST_TOKEN",
+                },
+            }
+        },
+    )
+    cfg.apply_mobile_env()
+
+    assert os.environ["EFP_PORTAL_TRUST_TOKEN"] == "the-portals-token"
+    assert os.environ["PORTAL_AGENT_ID"] == "agent-1"
+    # The credentials still reach the tools, under the names they read by default.
+    assert os.environ["BROWSERSTACK_USERNAME"] == "bs-user"
+    assert os.environ["BROWSERSTACK_ACCESS_KEY"] == "bs-access-key"
+
+    # Turning the section off clears what was exported, and nothing else.
+    cfg._clear_mobile_env()
+    assert os.environ["EFP_PORTAL_TRUST_TOKEN"] == "the-portals-token"
+    assert os.environ["PORTAL_AGENT_ID"] == "agent-1"

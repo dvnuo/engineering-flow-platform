@@ -38,6 +38,10 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
     check cannot hold the token);
   - callers on the pod's own loopback interface (socket peer `127.0.0.1` or `::1`; a request carrying
     `Forwarded`, `X-Forwarded-For` or `X-Real-IP` never counts as one).
+
+  `POST /webhook/jira` is not among them: on a pod with a token it answers `401` to Jira itself, which cannot send
+  the header. The route starts a chat run and writes a Jira comment, so it stays closed; Jira events reach an
+  assistant through the Portal (which polls the sources), not through a webhook that points at the pod.
 - A pod without the variable (created before the Portal injected it, or local development) serves every caller as
   before and logs one warning at startup.
 
