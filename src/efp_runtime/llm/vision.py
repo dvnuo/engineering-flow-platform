@@ -1,11 +1,17 @@
-"""Which chat providers accept image content.
+"""Whether attached images are sent to the chat model as image content.
 
-GitHub Copilot's models no longer accept image input on the enterprise plan,
-so a Copilot chat turn must not inline attachments as image parts: the gateway
-hands the files to the agent for the attached-files analysis skill instead
-(see ``src/gateway/attachment_handoff.py``). AI Platform chat/completions is
-multimodal. ``EFP_COPILOT_VISION_VIA_CHAT=1`` flips Copilot back on the day
-vision returns.
+Every chat model is treated as having no vision, whichever provider the
+profile chats on: by default a chat turn never inlines attachments as image
+parts. The gateway lists the images in the "Attached files" block instead
+(see ``src/gateway/attachment_handoff.py``) and the agent reads them with the
+inspect-image CLI when the Image analysis connector is configured, or through
+the attached-files analysis skill when it is not.
+
+``EFP_CHAT_VISION`` is the deployment switch that turns inlining on, for any
+provider: an operator sets it (the Portal writes it into every agent pod from
+its own setting of the same name) when the chat models of the deployment do
+accept images. ``EFP_COPILOT_VISION_VIA_CHAT`` is the older name of the same
+switch and is still read. There is no member-facing control.
 """
 
 from __future__ import annotations
@@ -13,18 +19,17 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
+CHAT_VISION_ENV = "EFP_CHAT_VISION"
+# The switch's first name, from when only Copilot had lost vision. A synonym.
 COPILOT_VISION_VIA_CHAT_ENV = "EFP_COPILOT_VISION_VIA_CHAT"
+CHAT_VISION_ENV_VARS = (CHAT_VISION_ENV, COPILOT_VISION_VIA_CHAT_ENV)
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
-def normalize_provider_id(value: Any) -> str:
-    """``ai_platform`` / ``github_copilot`` from any alias the profile may carry."""
-    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if text == "ai_platform":
-        return "ai_platform"
-    if text in {"", "github_copilot", "github", "copilot"}:
-        return "github_copilot"
-    return text
+def chat_vision_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """True when the deployment switch is on under either of its names."""
+    env = os.environ if environ is None else environ
+    return any(str(env.get(name, "") or "").strip().lower() in _TRUE_VALUES for name in CHAT_VISION_ENV_VARS)
 
 
 def chat_provider_accepts_images(
@@ -32,9 +37,9 @@ def chat_provider_accepts_images(
     *,
     environ: Mapping[str, str] | None = None,
 ) -> bool:
-    """True when the configured chat provider can take image parts in a request."""
-    provider = normalize_provider_id((llm_config or {}).get("provider"))
-    if provider == "ai_platform":
-        return True
-    env = os.environ if environ is None else environ
-    return str(env.get(COPILOT_VISION_VIA_CHAT_ENV, "") or "").strip().lower() in _TRUE_VALUES
+    """True when a chat request may carry image parts.
+
+    The provider in ``llm_config`` no longer decides (the argument stays for
+    the callers): only the deployment switch does, see ``chat_vision_enabled``.
+    """
+    return chat_vision_enabled(environ)

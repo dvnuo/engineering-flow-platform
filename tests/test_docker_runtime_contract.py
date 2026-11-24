@@ -186,6 +186,17 @@ def test_prepare_runtime_tools_script_uses_dynamic_cmd_discovery():
     assert "./cmd/browser" not in text
 
 
+def test_prepare_runtime_tools_script_stages_inspect_image_and_leaves_out_the_bridge():
+    text = _text("scripts/prepare-runtime-tools.sh")
+    # inspect-image is a runtime tool (the agent reads images with it, see the
+    # Image analysis connector); only efp-bridge, which runs on the member's
+    # own computer, is left out of the image by default.
+    assert 'EXCLUDED_RUNTIME_TOOLS="${EXCLUDED_RUNTIME_TOOLS:-efp-bridge}"' in text
+    assert "efp-bridge inspect-image" not in text
+    readme = _text("runtime-tools/README.md")
+    assert "EXCLUDED_RUNTIME_TOOLS" in readme and "inspect-image" in readme
+
+
 def test_runtime_tools_gitignore_and_readme_cover_dynamic_binaries():
     gitignore = _text(".gitignore")
     assert "runtime-tools/*" in gitignore

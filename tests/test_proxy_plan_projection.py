@@ -1,16 +1,19 @@
-"""Where each connector's proxy lands: the environment, the tools config, the LLM transports."""
+"""Where each connector's proxy lands: the environment, the tools config, inspect-image, the LLM transports."""
 
 from __future__ import annotations
 
 import base64
 import json
 import os
+import pathlib
 import urllib.request
 
 from src.config import Config
 from src.efp_runtime.llm import provider as provider_module
+from src.external_cli import inspect_image_config as iic
 from src.external_cli import profile_config as profile_config_module
 from src.gateway import runtime_chat
+from src.utils.proxy_plan import build_proxy_plan
 
 PROXY_ENV_KEYS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY")
 
@@ -236,6 +239,57 @@ def test_cli_environment_gets_the_default_proxy_and_the_credential_variables(mon
         RuntimeError("failed via https://ub:pb@proxy-b.example.test with pb"), {"proxy": proxy_section()}
     )
     assert "pb" not in redacted
+
+
+def test_inspect_image_config_takes_the_image_analysis_proxy():
+    """The Image analysis connector has an assignment of its own; the model provider's is not it."""
+    token_file = pathlib.Path("/tmp/token")
+    image_analysis = {
+        "enabled": True,
+        "model": "gpt-5.4",
+        "ai_platform": {
+            "chat": {"host": "https://chat.int", "uri": "/v1/api/v1/chat/completions"},
+            "ib2b": {"host": "https://ib2b.int", "uri": "/dsp/token"},
+            "auth": {"username": "u", "password": "pw", "usercase": "uc"},
+        },
+    }
+    llm = {"provider": "github_copilot", "model": "gpt-5.6-terra", "api_key": "ghu"}
+
+    def _settings(**assignments):
+        settings, reason = iic.resolve_image_analysis_settings(
+            {"llm": llm, "image_analysis": image_analysis, "proxy": proxy_section(**assignments)}
+        )
+        assert reason is None
+        return settings
+
+    settings = _settings(image_analysis="corp-b")
+    assert settings.proxy == "https://ub:pb@proxy-b.example.test"
+    payload = iic.build_inspect_image_config(settings, token_file=token_file)
+    assert payload["inspect_image"]["api"] == {"proxy": "https://ub:pb@proxy-b.example.test"}
+
+    settings = _settings(image_analysis="none")
+    assert iic.build_inspect_image_config(settings, token_file=token_file)["inspect_image"]["api"] == {"proxy": "none"}
+
+    # No assignment, or the default proxy by name: the CLI follows the
+    # environment, which carries the default proxy, and the file names none.
+    for assignments in ({}, {"image_analysis": ""}, {"image_analysis": "corp-a"}):
+        settings = _settings(**assignments)
+        assert settings.proxy == "", assignments
+        assert "api" not in iic.build_inspect_image_config(settings, token_file=token_file)["inspect_image"]
+
+    # The model provider's proxy is the model provider's.
+    assert _settings(llm="corp-b").proxy == ""
+    assert _settings(llm="corp-b", image_analysis="none").proxy == "none"
+
+    # A proxy whose no_proxy exempts the chat host is a direct connection.
+    exempt = proxy_section(image_analysis="corp-b")
+    exempt["proxies"][1]["no_proxy"] = "chat.int"
+    settings, _reason = iic.resolve_image_analysis_settings({"image_analysis": image_analysis, "proxy": exempt})
+    assert settings.proxy == "none"
+
+    # The plan reports the assignment under the connector's own key.
+    summary = build_proxy_plan(proxy_section(image_analysis="corp-b", llm="corp-a")).summary()
+    assert summary["assignments"] == {"image_analysis": "corp-b", "llm": "corp-a"}
 
 
 def _proxy_handler_of(opener):

@@ -36,7 +36,7 @@ from src.hooks.file_context import inject_context
 from src.hooks.file_context.models import Chunk, SessionFileMeta
 from src.hooks.file_context.retrieval import retrieval_engine
 from src.hooks.file_context.storage import storage as file_context_storage
-from src.config import config as global_config, DEFAULT_LLM_MODEL
+from src.config import config as global_config, DEFAULT_LLM_MODEL, get_image_analysis_state
 from src.efp_runtime.llm.vision import chat_provider_accepts_images
 from src.gateway.attachment_handoff import build_attachment_handoff
 from src.utils.file_parser.validators import is_forwarded_upload_mime
@@ -717,10 +717,11 @@ def _collect_attached_files(
     may ask for it to be processed, which takes the file itself rather than
     the excerpt the model gets. ``unreadable`` marks the files the chat model
     cannot read, the office formats the runtime does not parse (doc, dot,
-    xls) and, when the chat provider cannot see images
+    xls) and, unless the deployment lets the chat model see images
     (``images_unreadable``), the images; the block tells the agent how those
     are analyzed. Uploads live under the workspace (``/workspace/uploads``),
-    so the agent reads the path as it is; nothing is copied.
+    so the agent reads the path as it is, and passes it to ``inspect-image``
+    as it is; nothing is copied.
     """
     files: List[Dict[str, Any]] = []
     if not (attachments and isinstance(attachments, list)):
@@ -762,6 +763,7 @@ def _attached_files_block(
     *,
     attachment_context: Dict[str, Any],
     bridge_available: bool,
+    image_analysis_configured: bool = False,
     excerpt_file_ids: Sequence[str] = (),
 ) -> str:
     """The attached-files block of this message: each file's path and what of it reached the model.
@@ -770,7 +772,9 @@ def _attached_files_block(
     message holds. Retrieval keeps the top-k chunks across all the files and the
     direct fallback stops at its character budget, so a parsed file can have no
     excerpt in the prompt; it is marked so rather than sending the model to look
-    for text that is not there.
+    for text that is not there. ``image_analysis_configured`` (the boot state
+    of the Image analysis connector) and ``bridge_available`` decide how the
+    block says the unreadable files are analyzed.
     """
     parsed = {str(file_id) for file_id in (attachment_context.get("context_file_ids") or [])}
     excerpted = {str(file_id) for file_id in excerpt_file_ids}
@@ -792,7 +796,16 @@ def _attached_files_block(
         else:
             entry["status"] = ""
         described.append(entry)
-    return build_attachment_handoff(described, bridge_available=bridge_available)
+    return build_attachment_handoff(
+        described,
+        bridge_available=bridge_available,
+        image_analysis_configured=image_analysis_configured,
+    )
+
+
+def _image_analysis_configured() -> bool:
+    """Whether boot projected the Image analysis connector for inspect-image."""
+    return bool(get_image_analysis_state().get("configured"))
 
 
 def _with_attached_files_block(block: str, rest: Optional[str]) -> str:
@@ -1612,14 +1625,16 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
-        # The chat model reads parsed documents and text as an excerpt. Images
-        # reach it as image parts only when the provider can see them (AI
-        # Platform, or Copilot with EFP_COPILOT_VISION_VIA_CHAT); every other
-        # image, and the office formats the runtime does not parse, is handed
-        # to the agent for the attached-files analysis skill (Productivity
-        # Suite through the member's browser) instead. Every attachment is
-        # listed with its workspace path, whatever reached the model: a request
-        # to process the file takes the file, not the excerpt.
+        # The chat model reads parsed documents and text as an excerpt. It is
+        # treated as having no vision, whatever the provider: images reach it
+        # as image parts only when the deployment switch EFP_CHAT_VISION is on.
+        # Otherwise an image is handed to the agent, for the inspect-image CLI
+        # when the Image analysis connector is configured and for the
+        # attached-files analysis skill (Productivity Suite through the
+        # member's browser) when it is not; the office formats the runtime
+        # does not parse always go to that skill. Every attachment is listed
+        # with its workspace path, whatever reached the model: a request to
+        # process the file takes the file, not the excerpt.
         vision_via_chat = chat_provider_accepts_images(global_config.llm if isinstance(global_config.llm, dict) else {})
         attached_images = await _collect_attached_images(
             session_id=session_id,
@@ -1698,6 +1713,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 attached_files,
                 attachment_context=attachment_context,
                 bridge_available=_local_bridge_available(execution_metadata),
+                image_analysis_configured=_image_analysis_configured(),
                 excerpt_file_ids=excerpt_file_ids,
             )
             transient_model_message = _with_attached_files_block(block, transient_model_message or failure_notice)
@@ -2018,14 +2034,16 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             return busy_response
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
-        # The chat model reads parsed documents and text as an excerpt. Images
-        # reach it as image parts only when the provider can see them (AI
-        # Platform, or Copilot with EFP_COPILOT_VISION_VIA_CHAT); every other
-        # image, and the office formats the runtime does not parse, is handed
-        # to the agent for the attached-files analysis skill (Productivity
-        # Suite through the member's browser) instead. Every attachment is
-        # listed with its workspace path, whatever reached the model: a request
-        # to process the file takes the file, not the excerpt.
+        # The chat model reads parsed documents and text as an excerpt. It is
+        # treated as having no vision, whatever the provider: images reach it
+        # as image parts only when the deployment switch EFP_CHAT_VISION is on.
+        # Otherwise an image is handed to the agent, for the inspect-image CLI
+        # when the Image analysis connector is configured and for the
+        # attached-files analysis skill (Productivity Suite through the
+        # member's browser) when it is not; the office formats the runtime
+        # does not parse always go to that skill. Every attachment is listed
+        # with its workspace path, whatever reached the model: a request to
+        # process the file takes the file, not the excerpt.
         vision_via_chat = chat_provider_accepts_images(global_config.llm if isinstance(global_config.llm, dict) else {})
         attached_images = await _collect_attached_images(
             session_id=session_id,
@@ -2098,6 +2116,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 attached_files,
                 attachment_context=attachment_context,
                 bridge_available=_local_bridge_available(execution_metadata),
+                image_analysis_configured=_image_analysis_configured(),
                 excerpt_file_ids=excerpt_file_ids,
             )
             transient_model_message = _with_attached_files_block(block, transient_model_message or failure_notice)

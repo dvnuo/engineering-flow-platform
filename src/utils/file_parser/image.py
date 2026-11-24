@@ -45,6 +45,23 @@ def _get_paddleocr():
 # Default constraints
 DEFAULT_IMAGE_CONSTRAINTS = ImageConstraints()
 
+# What parse_image_with_vision answers while the deployment switch is off.
+CHAT_VISION_OFF_ERROR = (
+    "Vision parsing is off: the chat model is not sent images unless the deployment sets EFP_CHAT_VISION"
+)
+
+
+def chat_vision_enabled() -> bool:
+    """Whether the chat model may be sent an image at all.
+
+    The same deployment switch the chat gateway obeys (EFP_CHAT_VISION, off
+    by default; see src/efp_runtime/llm/vision.py): every chat model is
+    treated as having no vision unless it is on.
+    """
+    from src.efp_runtime.llm.vision import chat_vision_enabled as _switch_on
+
+    return _switch_on()
+
 
 async def parse_image(
     file_path: str,
@@ -54,9 +71,10 @@ async def parse_image(
     """Parse image file.
     
     Strategy:
-    1. Vision LLM (if enabled and available)
+    1. Vision LLM (if the caller asks for it with ``vision_enabled`` and the
+       deployment lets the chat model see images, see ``chat_vision_enabled``)
     2. OCR fallback (PaddleOCR or Tesseract)
-    
+
     Args:
         file_path: Path to image file
         options: Parser options
@@ -72,8 +90,10 @@ async def parse_image(
     file_id = Path(file_path).stem.split("_")[0]
     filename = Path(file_path).name
     
-    # Try Vision LLM first (validate LLM constraints only when using vision)
-    vision_enabled = options.get("vision_enabled", False)
+    # Try Vision LLM first (validate LLM constraints only when using vision).
+    # The option asks for it; the deployment switch decides whether an image
+    # may go to the chat model, and with the switch off this is the OCR path.
+    vision_enabled = bool(options.get("vision_enabled", False)) and chat_vision_enabled()
     if vision_enabled:
         valid, error = validate_image_for_llm(file_path, constraints)
         if valid:
@@ -105,21 +125,32 @@ async def parse_image(
 async def parse_image_with_vision(file_path: str, options: Dict) -> ParseResult:
     """Parse image using Vision LLM.
     
-    Note: This requires an LLM client to be configured.
-    
+    Note: This requires an LLM client to be configured, and it sends the image
+    to the chat model, so it obeys the deployment switch: with the switch off
+    (the default) nothing is sent and the result says vision is off.
+
     Args:
         file_path: Path to image
         options: Options including vision_enabled, prompt
-        
+
     Returns:
         ParseResult with vision-generated description
     """
-    from src.gateway.runtime_chat import run_runtime_chat
-    import uuid
-    
     file_id = Path(file_path).stem.split("_")[0]
     filename = Path(file_path).name
-    
+
+    if not chat_vision_enabled():
+        return ParseResult(
+            success=False,
+            content_type=get_mime_type(file_path),
+            file_id=file_id,
+            filename=filename,
+            error=CHAT_VISION_OFF_ERROR
+        )
+
+    from src.gateway.runtime_chat import run_runtime_chat
+    import uuid
+
     try:
         # Get image as data URL for LLM
         image_data_url = get_image_for_llm(file_path)
