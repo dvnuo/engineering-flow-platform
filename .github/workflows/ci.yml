@@ -34,6 +34,7 @@ jobs:
             "tests/test_excel_attachment_parser.py",
             "tests/test_pdf_attachment_parser.py",
             "tests/test_attachment_handoff.py",
+            "tests/test_image_analysis.py",
             "tests/test_runtime_api_chat_attachments.py",
             "tests/test_file_context_table_markdown_fallback.py",
             "tests/test_agent_llm_tools_surface.py",
@@ -62,6 +63,7 @@ jobs:
             tests/test_excel_attachment_parser.py \
             tests/test_pdf_attachment_parser.py \
             tests/test_attachment_handoff.py \
+            tests/test_image_analysis.py \
             tests/test_runtime_api_chat_attachments.py \
             tests/test_file_context_table_markdown_fallback.py \
             tests/test_agent_llm_tools_surface.py \

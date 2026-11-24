@@ -15,6 +15,12 @@ on the run; a push to master fails the image jobs with the same message
 Current generated binaries include `jira`, `confluence`, `browser`, and `mobile-auto`. Future
 tools added under `cmd/<tool>` are prepared the same way.
 
+`EXCLUDED_RUNTIME_TOOLS` (a space-separated list, by default `efp-bridge`) names the
+`cmd/<tool>` directories that are not built for the pod: `efp-bridge` is the Portal's
+local bridge and runs on the member's own computer. `inspect-image` is staged like the
+other CLIs: the agent runs it from `bash` to read images, configured by the Portal's
+Image analysis connector.
+
 For private managed mobile sessions, CI may also stage the BrowserStack-provided
 `BrowserStackLocal` binary here by setting `BROWSERSTACK_LOCAL_SOURCE` or
 `BROWSERSTACK_LOCAL_BINARY` before running the prepare script. That binary is

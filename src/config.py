@@ -159,6 +159,7 @@ class Config:
     PROJECT_EXAMPLE = Path(__file__).parent.parent / 'config.yaml.example'
     MANAGED_OVERLAY_SECTIONS = {
         "llm",
+        "image_analysis",
         "proxy",
         "jira",
         "confluence",
@@ -207,6 +208,26 @@ class Config:
                     "trust_token_header": True,
                     "tracking_prefix": True,
                     "token": True,
+                },
+            },
+        },
+        # The Image analysis connector: inspect-image on AI Platform, a
+        # section of its own that does not depend on the chat provider (see
+        # external_cli/inspect_image_config.py). The Portal fills the chat and
+        # iB2B endpoints from its deployment settings; a key missing here
+        # would never reach the projection.
+        "image_analysis": {
+            "enabled": True,
+            "model": True,
+            "ai_platform": {
+                "chat": {"host": True, "uri": True},
+                "ib2b": {"host": True, "uri": True},
+                "auth": {
+                    "username": True,
+                    "password": True,
+                    "usercase": True,
+                    "trust_token_header": True,
+                    "tracking_prefix": True,
                 },
             },
         },
@@ -1177,6 +1198,27 @@ def get_profile_boot_state() -> Dict[str, Any]:
     return dict(_profile_boot_state)
 
 
+# Whether inspect-image can read images for this profile (the Image analysis
+# connector's AI Platform account and endpoints, projected at boot). GET /ready
+# reports it and the chat gateway words the attached-files block by it.
+_image_analysis_state: Dict[str, Any] = {
+    "configured": False,
+    "reason": "runtime profile boot projection has not completed",
+    "model": None,
+    "config_path": None,
+}
+
+
+def get_image_analysis_state() -> Dict[str, Any]:
+    return dict(_image_analysis_state)
+
+
+def _set_image_analysis_state(state: Dict[str, Any]) -> None:
+    _image_analysis_state.clear()
+    _image_analysis_state.update({"configured": False, "reason": None, "model": None, "config_path": None})
+    _image_analysis_state.update(state)
+
+
 # The Proxy connector as this runtime resolved it at boot (names, addresses
 # and assignments, never credentials). GET /ready reports it so "which proxy
 # does my Jira go through" has an answer without reading the pod.
@@ -1218,10 +1260,13 @@ def bootstrap_profile_boot() -> bool:
        from the tools RootConfig-shaped subset of the effective config, e.g.
        EFP_JIRA_INSTANCES_0_BASE_URL / EFP_AWS_DOMAIN) for every CLI child
        process.
-    3. Apply proxy / jenkins / mobile / kubeconfig env exactly once.
-    4. Scrub EFP_PROFILE_CONFIG from os.environ so no child process can see the
+    3. Project the Image analysis connector (image_analysis) into a config
+       file of inspect-image's own plus the INSPECT_IMAGE_CONFIG and
+       EFP_INSPECT_IMAGE_AI_PLATFORM_* variables, or remove them.
+    4. Apply proxy / jenkins / mobile / kubeconfig env exactly once.
+    5. Scrub EFP_PROFILE_CONFIG from os.environ so no child process can see the
        full profile blob.
-    5. Record success/failure for GET /ready.
+    6. Record success/failure for GET /ready.
 
     A projection failure keeps the process alive (liveness /health stays ok) but
     leaves /ready at 503 so the pod never becomes ready with a broken profile.
@@ -1259,6 +1304,27 @@ def bootstrap_profile_boot() -> bool:
             if error is None:
                 error = f"Failed to build tools config env vars: {exc}"
             logger.warning("Failed to build tools config env vars", exc_info=True)
+
+    # Image analysis: give inspect-image a config of its own and the AI
+    # Platform account through the environment (see inspect_image_config.py).
+    # A profile without the connector removes any earlier file and variables.
+    try:
+        from src.external_cli.inspect_image_config import (
+            apply_image_analysis_projection,
+            export_image_analysis_env,
+        )
+
+        projection = apply_image_analysis_projection(
+            config.get_effective_config(),
+            config_dir=Path(config.config_path).parent,
+        )
+        export_image_analysis_env(projection)
+        _set_image_analysis_state(projection.status())
+    except Exception as exc:
+        _set_image_analysis_state({"configured": False, "reason": f"projection failed: {exc}"})
+        if error is None:
+            error = f"Failed to project image analysis settings: {exc}"
+        logger.warning("Failed to project image analysis settings", exc_info=True)
 
     config.apply_proxy()
     try:

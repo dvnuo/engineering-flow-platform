@@ -34,8 +34,12 @@ Native runtime must support:
   `pdf,docx,xlsx,csv,txt,log,pptx,zip,md,yaml,yml,json,xml,doc,dot,xls,png,jpg,jpeg,jpe,jfif,tiff,webp,bmp`,
   the formats Productivity Suite takes; images, and the office formats the
   runtime does not parse (doc, dot, xls), are stored and handed to the agent
-  instead of parsed, see Connectors below) and the size cap from
-  `EFP_MAX_UPLOAD_MB`; the Portal sets both on the pod from its own settings.
+  instead of parsed, see Image Analysis and Attached Files below) and the size
+  cap from `EFP_MAX_UPLOAD_MB`, which is also the largest image `inspect-image`
+  takes; the Portal sets both on the pod from its own settings.
+  `POST /api/files/parse` with `options.vision_enabled` sends an image to the
+  chat model only when the deployment switch `EFP_CHAT_VISION` is on; with the
+  switch off (the default) the option falls back to OCR.
 
 ## Usage, Credits and Budget Events
 
@@ -249,9 +253,92 @@ Portal-triggered restart with a new Secret.
   value is respected), pointing at `aws.kubeconfig_path` or
   `~/.efp/kube/config`, outside the workspace. `aws-auth eks kubeconfig` writes
   `<account>/<cluster>` contexts there and `kubectl` reads them.
-- `GET /ready` returns `200 {"ready": true, "runtime_profile_id", "revision"}`
+- `INSPECT_IMAGE_CONFIG` and `EFP_INSPECT_IMAGE_AI_PLATFORM_USERNAME` /
+  `_PASSWORD` / `_USERCASE`: exported by the runtime when the profile's
+  `image_analysis` section (the Portal's Image analysis connector) is
+  configured, see Image Analysis and Attached Files below. A failure to
+  project it fails the boot like any other projection.
+- `GET /ready` returns
+  `200 {"ready": true, "runtime_profile_id", "revision", "image_analysis", "proxy"}`
   only after the boot projection succeeded, `503 {"ready": false, "error"}`
-  otherwise. `GET /health` stays always-ok as the liveness probe.
+  otherwise. `image_analysis` is `{configured, reason, model, config_path}`
+  (never the account) and `proxy` the resolved Proxy connector without
+  credentials. `GET /health` stays always-ok as the liveness probe.
+
+## Image Analysis and Attached Files
+
+Every chat model is treated as having no vision, whichever provider the
+profile chats on (GitHub Copilot or AI Platform).
+
+- Default: no chat request carries image parts. `EFP_CHAT_VISION` truthy
+  (`1`, `true`, `yes`, `on`) in the pod's environment turns inlining on, for
+  any provider; `EFP_COPILOT_VISION_VIA_CHAT` is the older name of the same
+  switch and is still read. It is an operator's switch that the Portal writes
+  into every agent pod from its own setting of the same name; there is no
+  member-facing control. The file parser's vision path
+  (`parse_image_with_vision`, reached through `POST /api/files/parse` with
+  `options.vision_enabled`) obeys the same switch.
+- An image the chat model cannot see is read, in this order: with the
+  `inspect-image` CLI when image analysis is configured; else, in an
+  interactive chat with the Local bridge on, through Productivity Suite (the
+  attached-files analysis skill); else the agent says which files it could not
+  read. When `inspect-image` answers `auth_required` or `config_error`, or
+  still fails after one retry, the agent falls back to Productivity Suite if
+  the Local bridge is on, and otherwise says the Image analysis connector
+  needs checking. The office formats the runtime does not parse (doc, dot,
+  xls) are not images: Productivity Suite is their only route.
+- The connector is the profile section `image_analysis`, independent of `llm`
+  (it is read whatever `llm.provider` is, and `llm.ai_platform` is never read
+  for it): `{enabled, model, ai_platform: {chat: {host, uri}, ib2b: {host,
+  uri}, auth: {username, password, usercase, trust_token_header,
+  tracking_prefix}}}`. The Portal fills the endpoints from its deployment
+  settings and leaves the section out when the connector is off. It is
+  configured when `enabled` is true and `ai_platform.auth.username`,
+  `.password`, `.usercase`, `ai_platform.chat.host` and `ai_platform.ib2b.host`
+  are all non-empty.
+- When configured, boot writes `<directory of config.yaml>/inspect-image.yaml`
+  (mode 0600) and exports `INSPECT_IMAGE_CONFIG` (that path) plus
+  `EFP_INSPECT_IMAGE_AI_PLATFORM_USERNAME` / `_PASSWORD` / `_USERCASE`, which
+  the file references as `${NAME}` so the password never lands on disk. The
+  file holds `inspect_image: {provider: ai_platform, defaults: {model},
+  limits: {max_image_bytes}}` and `ai_platform: {chat, ib2b, auth}`;
+  `model` is `image_analysis.model` coerced to an AI Platform model (default
+  `gpt-5.4`), `max_image_bytes` follows `EFP_MAX_UPLOAD_MB`, `auth.token_file`
+  is `<that directory>/tmp/inspect-image-ai-platform-token` (removed at every
+  boot so a changed account never reuses a token), and `inspect_image.api.proxy`
+  is present only when the Proxy connector's assignment for `image_analysis`
+  gives one (a proxy URL or `none`). When not configured both files are
+  removed and no variable is exported. The file is inspect-image's own
+  because the CLI rewrites its config on every token refresh
+  (`src/external_cli/inspect_image_config.py`).
+- `GET /ready` reports `image_analysis: {configured, reason, model,
+  config_path}`. The reasons when not configured: `image analysis is off for
+  this profile`, `AI Platform username, password, and usercase are required`,
+  `AI Platform chat endpoint is not configured`, `AI Platform iB2B endpoint is
+  not configured`.
+- A configured profile gets the image-analysis instruction text appended to
+  `instruction_texts` (`RUNTIME_PROFILE_IMAGE_ANALYSIS_INSTRUCTIONS` in
+  `src/runtime_profile_projection.py`, the same string as the Portal's
+  constant). Sub-agents and background tasks inherit `instruction_texts`, so
+  they read images with the CLI too; they have no browser and no bridge.
+- Every chat attachment is listed in an "Attached files" block in the prompt
+  with its workspace path and what of it reached the model
+  (`src/gateway/attachment_handoff.py`). When some are not readable by the
+  chat model (images while the switch is off; doc, dot, xls), one more line
+  follows the list and its rule: a sentence saying so, then, by case (the
+  bridge is `connectors.local_bridge` present and not disabled in the trusted
+  metadata):
+
+  | Image analysis | Unreadable images | Unreadable office files | What follows |
+  |---|---|---|---|
+  | configured | yes | no | how to run `inspect-image`; then the fallback: Productivity Suite with the bridge, or tell the user and name the connector without it |
+  | configured | yes | yes | the same; then, for the office files, Productivity Suite with the bridge, or that they cannot be analyzed without it |
+  | configured | no | yes | Productivity Suite with the bridge, or that the files cannot be analyzed in this chat |
+  | not configured | any | any | Productivity Suite with the bridge, or that the files cannot be analyzed in this chat; with unreadable images and no bridge, also that the Image analysis connector would read them |
+
+  The agent is told never to guess what a file shows and never to fall back
+  to OCR or image-parsing scripts. With `EFP_CHAT_VISION` on, images are
+  listed as sent to the model and nothing points at `inspect-image`.
 
 ## Runtime Asset Directories
 
@@ -268,7 +355,7 @@ Portal-triggered restart with a new Secret.
 - Interactive chats also get `session_search`, which searches and reads the assistant's other stored sessions under the runtime session root (member and assistant text only). It scopes to the Portal member by default (`scope=mine`, the header-derived `portal_user_id` from `X-Portal-User-Id` matched against the `author_id` stamped on member turns) and to the whole agent on request (`scope=agent`). Without a member identity `mine` fails closed, and reading another member's session always needs `scope=agent`. The Portal stamps the identity headers on every proxied request, and the gateway passes them on the question/permission answer and edit-regenerate resumes as well as on chat. A runtime profile can disable it with `enable_session_search: false`.
 - Interactive chats also get `memory`, which keeps up to 50 one-sentence standing notes per Portal member under `<session root>/memory/<member>.json` and renders them into the system prompt as "Member notes". Notes are written only when the model calls `remember`, never extracted automatically; the tool refuses without a member identity (the same header-derived `portal_user_id`, never a body-supplied `portal_user`). A runtime profile can disable it with `enable_member_memory: false`.
 - Legacy Python tool packages such as `src.bash_tools` are not present, and Jira/GitHub/Confluence/Git Python tools are not exposed as LLM tools.
-- The runtime image may include prebuilt `engineering-flow-platform-tools` CLI binaries on `PATH` in `/usr/local/bin`. Current binaries include `jira`, `confluence`, `jenkins`, `aws-auth`, `nexus`, `splunk`, `pgsql`, `browser`, and `mobile-auto`; future binaries are discovered from `cmd/<tool>` in that repo. The image also carries the AWS CLI v2, `kubectl` (pinned to a minor release line through `KUBECTL_STABLE_CHANNEL`/`KUBECTL_VERSION`), and `jq`; the AWS login provider `aws-auth login` shells out to (`adfs-assume` or `saml2aws`, per `aws.provider`) is staged into `runtime-tools/` by `scripts/prepare-runtime-tools.sh` from `ADFS_ASSUME_SOURCE`/`SAML2AWS_SOURCE` and installed alongside.
+- The runtime image may include prebuilt `engineering-flow-platform-tools` CLI binaries on `PATH` in `/usr/local/bin`. Current binaries include `jira`, `confluence`, `jenkins`, `aws-auth`, `nexus`, `splunk`, `pgsql`, `browser`, and `mobile-auto`, plus `inspect-image` for image analysis (see Image Analysis and Attached Files above); future binaries are discovered from `cmd/<tool>` in that repo, except the ones `scripts/prepare-runtime-tools.sh` leaves out as not for the pod (`EXCLUDED_RUNTIME_TOOLS`, by default `efp-bridge`, which runs on the member's computer). The image also carries the AWS CLI v2, `kubectl` (pinned to a minor release line through `KUBECTL_STABLE_CHANNEL`/`KUBECTL_VERSION`), and `jq`; the AWS login provider `aws-auth login` shells out to (`adfs-assume` or `saml2aws`, per `aws.provider`) is staged into `runtime-tools/` by `scripts/prepare-runtime-tools.sh` from `ADFS_ASSUME_SOURCE`/`SAML2AWS_SOURCE` and installed alongside.
 - AWS access is per account: `aws-auth login --account <name>` writes each configured account's credentials to the AWS CLI profile named after the account, and `aws-auth eks kubeconfig --account <name> --cluster <cluster>` writes a `<account>/<cluster>` kubectl context. The profile's `aws.accounts[]` matrix, provider, and defaults reach the CLI through `EFP_AWS_*`; the `assume-role` provider needs no directory password, so the boot projection skips `aws-auth auth login` for it.
 - The troubleshooting CLIs `nexus`, `splunk`, and `pgsql` are configured through the profile sections of the same names. `nexus` and `splunk` are read-only binaries; `pgsql` writes only when the section's `access` is `read_write` (absent reads as `read_only`, in which mode the CLI refuses every write before connecting), and then runs whatever the configured database role and endpoint allow, so a profile that should only read keeps the default access and is given a read-only role or a replica endpoint. `nexus`/`splunk` are projected like jira (`EFP_NEXUS_INSTANCES_0_BASE_URL`, `EFP_SPLUNK_INSTANCES_0_AUTH_TOKEN`, `EFP_SPLUNK_INSTANCES_0_APP`, ...) with an empty `rest_path` because each CLI owns its REST prefix; `pgsql` is copied verbatim: the shared settings (`EFP_PGSQL_ACCESS`, `EFP_PGSQL_SSLMODE`, `EFP_PGSQL_STATEMENT_TIMEOUT_SECONDS`, `EFP_PGSQL_MAX_ROWS`) and the rows (`EFP_PGSQL_INSTANCES_0_HOST`, `_DATABASE`, `_USERNAME`, `_PASSWORD`), with each row's `proxy` filled from the Proxy connector's assignment. The CLI instruction text names all three when any is enabled.
 - `bash` output is passed through the runtime's secret redaction before it reaches the model and before the full output is archived under `.efp_runtime/tool-output/`; `bash` also exposes the command string as its permission subject, so `tool_permissions.bash` accepts subject globs such as `{"*kubectl*delete*": "deny", "*": "allow"}`.
@@ -369,13 +456,17 @@ Each capability item includes at least:
   yes, dry_run, continue_on_error, target_id?}`; the page pulls each file
   through the Server files download, stages it on the bridge, and runs the
   command with the staged ids.
-- Chat attachments the model cannot read (images, unless the chat provider
-  can see them; doc, dot, xls) are listed in an "Attached files" block in
-  the prompt (`src/gateway/attachment_handoff.py`). When the trusted metadata
-  carries `connectors.local_bridge` and it is not disabled, the block points
-  the agent at the attached-files analysis skill (Productivity Suite through
+- Chat attachments the model cannot read (images, unless the deployment
+  switch `EFP_CHAT_VISION` is on; doc, dot, xls) are listed in an "Attached
+  files" block in the prompt (`src/gateway/attachment_handoff.py`). Images go
+  to the `inspect-image` CLI first when the Image analysis connector is
+  configured. For everything else, and as the fallback for an image
+  `inspect-image` could not read: when the trusted metadata carries
+  `connectors.local_bridge` and it is not disabled, the block points the
+  agent at the attached-files analysis skill (Productivity Suite through
   `workflow.run`); otherwise it says the files cannot be analyzed in this
-  chat and never to guess.
+  chat and never to guess. The cases are listed under Image Analysis and
+  Attached Files above.
 - The Portal page answers with
   `POST /api/sessions/{session_id}/connectors/respond`
   `{request_id, client_id, ok, result | error}` → `202`; an unknown, foreign,

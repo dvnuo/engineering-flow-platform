@@ -391,6 +391,7 @@ class Gateway:
         """
         from src.config import (
             config as runtime_config,
+            get_image_analysis_state,
             get_profile_boot_state,
             get_proxy_plan_state,
         )
@@ -404,6 +405,9 @@ class Gateway:
                     "ready": True,
                     "runtime_profile_id": meta.get("runtime_profile_id"),
                     "revision": meta.get("revision"),
+                    # The Image analysis connector as projected at boot for
+                    # inspect-image: configured or why not, never the account.
+                    "image_analysis": get_image_analysis_state(),
                     # The Proxy connector as resolved at boot: names, addresses
                     # and assignments, never credentials.
                     "proxy": get_proxy_plan_state(),

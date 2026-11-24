@@ -280,13 +280,25 @@ boot (no hot apply; config changes require a Portal-triggered restart):
   default proxy is exported as `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` and
   `NO_PROXY` (what `aws`, `kubectl`, `gh` and `git` follow); every other
   connector's proxy is written into its own tool config (`EFP_<PRODUCT>_INSTANCES_<i>_PROXY`,
-  pgsql's per-instance `proxy`, mobile-auto's `browserstack.http_proxy`)
-  and used by the LLM transports, so the model
+  pgsql's per-instance `proxy`, mobile-auto's `browserstack.http_proxy`,
+  inspect-image's `api.proxy`) and used by the LLM transports, so the model
   provider and PostgreSQL can leave through different proxies. The credentials
   of every proxy are exported as `EFP_PROXY_<NAME>_USERNAME`/`_PASSWORD` for
   mobile-auto. `GET /ready` reports the resolved plan without credentials. A
   profile with the older flat `proxy.url` shape reads as one proxy named
   `default`. See `src/utils/proxy_plan.py`.
+- Image analysis — the profile's `image_analysis` section is the Portal's
+  Image analysis connector (AI Platform), independent of the chat provider.
+  When it is configured the runtime writes `inspect-image.yaml` next to
+  `config.yaml` and exports `INSPECT_IMAGE_CONFIG` plus
+  `EFP_INSPECT_IMAGE_AI_PLATFORM_USERNAME`/`_PASSWORD`/`_USERCASE` (the file
+  references them, so the password never lands on disk), and the agent reads
+  images with the `inspect-image` CLI from `bash`. The chat model itself is
+  treated as having no vision: images are inlined into a chat request only
+  when the deployment switch `EFP_CHAT_VISION` is on. Without the connector,
+  an interactive chat with the Local bridge on analyzes images through
+  Productivity Suite. `GET /ready` reports `image_analysis`. See "Image
+  Analysis and Attached Files" in `docs/runtime_contract.md`.
 
 `GET /ready` reports readiness only after the boot projection succeeded. In
 local development (no `EFP_PROFILE_CONFIG`), the runtime uses `config.yaml`

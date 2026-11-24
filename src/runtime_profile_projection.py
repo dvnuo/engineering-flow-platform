@@ -13,9 +13,10 @@ baked into the per-runtime Secret payload.
 
 For the native runtime this re-normalizes the LLM to itself (github_copilot +
 bare model, a no-op), leaves opencode-restricted fields untouched (profile
-configs never carry them), and re-adds the native CLI tool instructions. For
-opencode it would instead normalize the LLM to ``github-copilot`` +
-``provider/model`` and drop the opencode-restricted fields.
+configs never carry them), and re-adds the native CLI tool instructions and
+the image-analysis instructions. For opencode it would instead normalize the
+LLM to ``github-copilot`` + ``provider/model`` and drop the opencode-restricted
+fields.
 
 Ported verbatim from:
   - engineering-flow-platform-portal app/contracts/provider_projection.py
@@ -155,6 +156,22 @@ RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS = (
     "operations after the user explicitly confirms. Credentials come from the user's Portal connectors and are applied in "
     "the runtime container through CLIs or environment variables; if a CLI returns auth_failed, tell the user which "
     "connector to fix in Portal > Connectors instead of guessing or inventing tokens."
+)
+
+# The same string as the Portal's constant of this name: sub-agents and
+# background tasks inherit instruction_texts, which is how they learn to read
+# an image without the attached-files block of an interactive chat.
+RUNTIME_PROFILE_IMAGE_ANALYSIS_INSTRUCTIONS = (
+    "Images are read through the inspect-image CLI on AI Platform (the Image analysis connector); the chat model cannot see "
+    "an image unless the prompt says it was attached as image content. For a screenshot, photo, diagram, or any image file in "
+    "the workspace or listed in an Attached files block, run `inspect-image inspect --image <path> --prompt \"<what to read or "
+    "explain>\" --json` from bash and answer from data.result.answer and data.result.visible_text; add --preset ocr, ui, "
+    "diagram, chart, or error when it fits, and ask a follow-up question with another call. Never pass --model (the model "
+    "comes from the connector), never run inspect-image auth login, never guess what an image shows, and never fall back to "
+    "OCR or image-parsing scripts. If inspect-image returns auth_required or config_error, or still fails after one retry, use "
+    "the attached-files analysis skill (Productivity Suite through the Local bridge) when the Local bridge is on for this "
+    "chat (the browser tool is available); otherwise tell the user the image could not be analyzed and that the Image "
+    "analysis connector under Portal > Connectors needs checking."
 )
 
 OPENCODE_RUNTIME_RESTRICTION_FIELDS = frozenset(
@@ -331,6 +348,27 @@ def _flag_true(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def _has_image_analysis_config(config: dict[str, Any]) -> bool:
+    """Whether inspect-image can run on AI Platform for this profile.
+
+    The Image analysis connector is the image_analysis section, independent
+    of llm (whatever llm.provider is, and llm.ai_platform is not read). It is
+    configured when it is enabled and carries the AI Platform account plus
+    the deployment-managed chat and iB2B hosts, which Portal materializes into
+    image_analysis.ai_platform before the runtime sees it.
+    """
+    section = config.get("image_analysis") if isinstance(config.get("image_analysis"), dict) else {}
+    if not _flag_true(section.get("enabled")):
+        return False
+    ai_platform = section.get("ai_platform") if isinstance(section.get("ai_platform"), dict) else {}
+    auth = ai_platform.get("auth") if isinstance(ai_platform.get("auth"), dict) else {}
+    chat = ai_platform.get("chat") if isinstance(ai_platform.get("chat"), dict) else {}
+    ib2b = ai_platform.get("ib2b") if isinstance(ai_platform.get("ib2b"), dict) else {}
+    if not all(str(auth.get(key) or "").strip() for key in ("username", "password", "usercase")):
+        return False
+    return bool(str(chat.get("host") or "").strip()) and bool(str(ib2b.get("host") or "").strip())
+
+
 def _with_native_cli_tool_instructions(
     config: dict[str, Any],
     runtime_type: str | None,
@@ -340,6 +378,8 @@ def _with_native_cli_tool_instructions(
     texts: list[str] = []
     if _has_enabled_external_cli_config(config):
         texts.append(RUNTIME_PROFILE_CLI_TOOL_INSTRUCTIONS)
+    if _has_image_analysis_config(config):
+        texts.append(RUNTIME_PROFILE_IMAGE_ANALYSIS_INSTRUCTIONS)
     if not texts:
         return config
     projected = deepcopy(config)
@@ -361,8 +401,9 @@ def project_canonical_for_runtime(
 
     The runtimes call this at boot on the config parsed from the Secret. Native
     re-normalizes the LLM to itself (a no-op) and gains the CLI tool
-    instructions; opencode re-normalizes the LLM to its ``provider/model`` form
-    and drops the opencode-restricted fields.
+    instructions and, when the Image analysis connector is configured, the
+    image-analysis instructions; opencode re-normalizes the LLM to its
+    ``provider/model`` form and drops the opencode-restricted fields.
     """
     projected = deepcopy(canonical) if isinstance(canonical, dict) else {}
     llm = projected.get("llm")

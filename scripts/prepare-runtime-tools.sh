@@ -106,10 +106,11 @@ if [[ "${#tool_names[@]}" -eq 0 ]]; then
 fi
 
 # CLIs the tools repo builds for the member's own computer, not for the pod:
-# efp-bridge is the Portal's local bridge, and inspect-image is a local
-# image-analysis CLI (Portal assistants analyze attachments through
-# Productivity Suite in the member's browser instead).
-EXCLUDED_RUNTIME_TOOLS="${EXCLUDED_RUNTIME_TOOLS:-efp-bridge inspect-image}"
+# efp-bridge is the Portal's local bridge and runs next to the member's
+# browser. Everything else is staged, inspect-image included: it is the
+# image-analysis CLI the agent runs from bash (the Portal's Image analysis
+# connector configures it).
+EXCLUDED_RUNTIME_TOOLS="${EXCLUDED_RUNTIME_TOOLS:-efp-bridge}"
 runtime_tool_names=()
 for tool_name in "${tool_names[@]}"; do
   case " $EXCLUDED_RUNTIME_TOOLS " in
