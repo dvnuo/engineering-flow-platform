@@ -42,7 +42,7 @@ from typing import Any, Mapping, MutableMapping
 
 from ruamel.yaml import YAML
 
-from src.efp_runtime.llm.models import AI_PLATFORM_MODEL_IDS, DEFAULT_AI_PLATFORM_MODEL
+from src.efp_runtime.llm.models import DEFAULT_IMAGE_ANALYSIS_MODEL, IMAGE_ANALYSIS_MODEL_IDS
 from src.utils.file_parser.validators import resolve_max_upload_mb
 from src.utils.proxy_plan import build_proxy_plan, hostname_of
 
@@ -131,11 +131,15 @@ def max_image_bytes() -> int:
 
 
 def coerce_vision_model(model: Any) -> str:
-    """A model AI Platform serves; anything else lands on the AI Platform default."""
+    """A model the Image analysis connector offers; anything else lands on its default.
+
+    The connector's own list (``IMAGE_ANALYSIS_MODEL_IDS``), which holds the
+    AI Platform chat models and the GPT-6 models added for image analysis.
+    """
     text = str(model or "").strip()
     if "/" in text:
         text = text.split("/", 1)[1].strip()
-    return text if text in AI_PLATFORM_MODEL_IDS else DEFAULT_AI_PLATFORM_MODEL
+    return text if text in IMAGE_ANALYSIS_MODEL_IDS else DEFAULT_IMAGE_ANALYSIS_MODEL
 
 
 def image_analysis_section(config: Mapping[str, Any] | None) -> Mapping[str, Any]:

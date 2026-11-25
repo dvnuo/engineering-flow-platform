@@ -20,6 +20,7 @@ from ruamel.yaml import YAML
 
 import src.config as config_module
 from src.config import Config
+from src.efp_runtime.llm.models import AI_PLATFORM_MODEL_IDS, IMAGE_ANALYSIS_MODEL_IDS
 from src.efp_runtime.llm.vision import (
     CHAT_VISION_ENV,
     COPILOT_VISION_VIA_CHAT_ENV,
@@ -162,11 +163,21 @@ def test_resolve_image_analysis_settings():
         settings, reason = iic.resolve_image_analysis_settings(_profile(provider=provider, model=""))
         assert reason is None and settings.model == "gpt-5.4", provider
 
-    # The model is one AI Platform serves; anything else lands on the default.
+    # The model is one the connector offers; anything else lands on the default.
     assert iic.resolve_image_analysis_settings(_profile(model="gpt-5.4-mini"))[0].model == "gpt-5.4"
     assert iic.resolve_image_analysis_settings(_profile(model="ai-platform/gpt-5.6-luna"))[0].model == "gpt-5.6-luna"
     assert iic.coerce_vision_model("gpt-5.4-mini") == "gpt-5.4"
     assert iic.coerce_vision_model("ai-platform/gpt-5.6-luna") == "gpt-5.6-luna"
+    # GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol are the connector's own additions to the AI Platform chat list.
+    for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"):
+        assert iic.coerce_vision_model(model) == model
+        assert iic.coerce_vision_model(f"ai-platform/{model}") == model
+        assert iic.resolve_image_analysis_settings(_profile(model=model))[0].model == model
+        assert model not in AI_PLATFORM_MODEL_IDS
+    assert IMAGE_ANALYSIS_MODEL_IDS == (*AI_PLATFORM_MODEL_IDS, "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol")
+    # Not every Copilot id: one outside the list (GPT-6 Astra, an auto id) is repaired like any other.
+    for model in ("gpt-6-astra", "auto", "gpt-9-bogus"):
+        assert iic.coerce_vision_model(model) == "gpt-5.4"
 
     # Endpoint paths and the two header settings fall back to inspect-image's own defaults.
     bare = _profile()
@@ -197,6 +208,12 @@ def test_apply_projection_writes_a_config_with_environment_references(tmp_path, 
     assert loaded["inspect_image"]["defaults"]["model"] == "gpt-5.6-sol"
     # Whatever the upload API accepts (25 MiB by default) inspect-image must take too.
     assert loaded["inspect_image"]["limits"]["max_image_bytes"] == 25 * 1024 * 1024
+    # A GPT-6 model the connector names reaches the CLI's config, and /ready, as chosen.
+    for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"):
+        chosen = iic.apply_image_analysis_projection(_profile(model=model), config_dir=tmp_path / model)
+        written = YAML().load((tmp_path / model / "inspect-image.yaml").read_text(encoding="utf-8"))
+        assert written["inspect_image"]["defaults"]["model"] == model
+        assert chosen.status()["model"] == model
     # No Proxy connector: the CLI follows the environment and the file names no proxy.
     assert "api" not in loaded["inspect_image"]
     assert loaded["ai_platform"]["chat"] == {"host": "https://chat.int", "uri": "/v1/api/v1/chat/completions"}
