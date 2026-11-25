@@ -210,6 +210,80 @@ async def test_credits_are_not_estimated_off_copilot():
     assert _events(result, "usage.updated")[0].payload["pricing"] is None
 
 
+@pytest.mark.asyncio
+async def test_the_credits_guard_never_pauses_a_run_off_copilot():
+    # The same expensive run as the guard's own test above. On AI Platform
+    # there are no credits to count, so the limit is never reached and the
+    # run is not cut down to a summary.
+    store = InMemorySessionStore()
+    expensive = {"input_tokens": 5_000_000, "output_tokens": 1_000}
+    provider = ScriptedLLMProvider(
+        [
+            _tool_call_response(usage=expensive),
+            {"content": "Done.", "usage": {"input_tokens": 10, "output_tokens": 5}},
+        ]
+    )
+    runner = _runner(
+        store,
+        provider,
+        tool_runtime=_tool_runtime(),
+        default_provider_id="ai_platform",
+        default_model="gpt-6-sol",
+        run_credits_limit=100,
+    )
+
+    result = await runner.run(session_id="s-ai-credits", user_text="Go.")
+
+    assert result.status == LoopStatus.COMPLETED
+    assert result.iterations == 2
+    second = provider.requests[1]
+    assert second.metadata.get("credits_guard_reached") is not True
+    assert second.metadata.get("tool_choice") != "none"
+    assert _events(result, "run_credits_limit_reached") == []
+    assert _events(result, "run_budget_paused") == []
+    assert _events(result, "run_finish")[0].payload.get("terminal_reason") != "budget_paused"
+    assert result.usage["estimated_credits"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_ai_platform_run_on_a_model_copilot_also_serves_carries_nothing_of_copilots_billing():
+    # GPT-6 Sol is served by both providers. On AI Platform it has no credits,
+    # no long-context tier and no pricing threshold; the same run on Copilot
+    # has all three. The context budget names the run's provider, which is
+    # what the context usage reads the threshold by.
+    store = InMemorySessionStore()
+    usage = {"input_tokens": 300_000, "output_tokens": 1_000}
+    provider = ScriptedLLMProvider([{"content": "ok", "usage": dict(usage)}])
+    runner = _runner(store, provider, default_provider_id="ai_platform", default_model="gpt-6-sol")
+
+    result = await runner.run(session_id="s-ai-sol", user_text="Go.")
+
+    assert result.usage["estimated_credits"] is None
+    assert "pricing" not in result.usage
+    request_metadata = provider.requests[0].provider_request.metadata
+    assert request_metadata["provider_id"] == "ai_platform"
+    assert request_metadata["context_budget"]["provider_id"] == "ai_platform"
+    assert request_metadata["long_context_budget"] is True
+    snapshot = _events(result, "context_usage")[0].payload
+    assert snapshot["model"] == {
+        "provider_id": "ai_platform",
+        "model_id": "gpt-6-sol",
+        "context_window_tokens": 1_000_000,
+    }
+    assert snapshot["billing_threshold_tokens"] is None
+    assert snapshot["billing_tier"] is None
+
+    copilot_provider = ScriptedLLMProvider([{"content": "ok", "usage": dict(usage)}])
+    copilot_runner = _runner(store, copilot_provider, default_model="gpt-6-sol")
+    copilot_result = await copilot_runner.run(session_id="s-copilot-sol", user_text="Go.")
+
+    assert copilot_result.usage["estimated_credits"] > 0
+    assert copilot_result.usage["pricing"]["tier"] == "long_context"
+    copilot_metadata = copilot_provider.requests[0].provider_request.metadata
+    assert copilot_metadata["provider_id"] == "github-copilot"
+    assert _events(copilot_result, "context_usage")[0].payload["billing_threshold_tokens"] == 272_000
+
+
 # --- request-path pruning -----------------------------------------------------
 
 

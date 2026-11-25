@@ -89,6 +89,31 @@ def test_record_usage_without_a_priced_model_has_no_credits():
         assert tracker.get_session_summary("s2")["total_estimated_credits"] == 0.0
 
 
+def test_record_usage_on_ai_platform_has_no_credits_for_a_model_copilot_prices():
+    # GPT-6 Sol is served by both providers and has a Copilot price row. A run
+    # that brought no credits (an AI Platform run never does) used to be
+    # priced here from that row, whatever the record's provider.
+    with tempfile.TemporaryDirectory() as tmp:
+        tracker = UsageTracker(f"{tmp}/usage")
+        tokens = {"model": "gpt-6-sol", "input_tokens": 300_000, "output_tokens": 1_000}
+        on_ai_platform = tracker.record_usage(provider="ai_platform", session_id="ai", **tokens)
+        assert on_ai_platform.estimated_credits is None
+        assert on_ai_platform.pricing_tier is None
+        assert tracker.get_session_summary("ai")["total_estimated_credits"] == 0.0
+        assert tracker.get_usage_by_provider(hours=24)["ai_platform"]["estimated_credits"] == 0.0
+        # The tokens are still booked.
+        assert tracker.get_session_summary("ai")["total_input"] == 300_000
+
+        for copilot in ("github_copilot", "github-copilot", ""):
+            priced = tracker.record_usage(provider=copilot, session_id=f"copilot-{copilot}", **tokens)
+            assert priced.estimated_credits > 0
+            assert priced.pricing_tier == "long_context"
+
+        # Credits a caller did price are kept as given.
+        kept = tracker.record_usage(provider="ai_platform", session_id="given", estimated_credits=1.5, **tokens)
+        assert kept.estimated_credits == 1.5
+
+
 def test_parse_usage_from_response_reads_the_responses_api_shape():
     with tempfile.TemporaryDirectory() as tmp:
         tracker = UsageTracker(f"{tmp}/usage")

@@ -170,6 +170,21 @@ def estimate_usage_credits(
     return estimate.credits, estimate.tier
 
 
+_COPILOT_PROVIDERS = frozenset({"github_copilot", "github-copilot", "copilot"})
+
+
+def billed_in_credits(provider: Optional[str]) -> bool:
+    """Whether usage on ``provider`` is billed in Copilot AI credits.
+
+    Credits are GitHub's unit: a run on AI Platform has none, whatever its
+    model (GPT-6 Sol is served by both). A record that names no provider is
+    taken for Copilot's, as every record was before providers were told apart.
+    """
+
+    text = str(provider or "").strip().lower()
+    return not text or text in _COPILOT_PROVIDERS
+
+
 _EMPTY_TOTALS = {
     "total_input": 0,
     "total_output": 0,
@@ -237,10 +252,14 @@ class UsageTracker:
         estimated_credits: Optional[float] = None,
         pricing_tier: Optional[str] = None,
         iterations: Optional[int] = None,
+        provider: Optional[str] = None,
     ) -> UsageStats:
         credits = _float(estimated_credits)
         tier = pricing_tier or None
-        if credits is None:
+        # Credits the caller did not price are estimated from the model's
+        # Copilot price row, and only for a Copilot record: the same model id
+        # on AI Platform is not billed in credits.
+        if credits is None and billed_in_credits(provider):
             credits, computed_tier = estimate_usage_credits(
                 model,
                 input_tokens=input_tokens,
@@ -290,7 +309,8 @@ class UsageTracker:
 
         ``input_tokens`` is the prompt as billed (cached tokens included);
         ``estimated_credits`` / ``pricing_tier`` are taken from the caller when
-        the run already priced its steps, else computed here from the totals.
+        the run already priced its steps, else computed here from the totals
+        for a Copilot ``provider``; a run on another provider has no credits.
         """
         stats = self._stats(
             model=model,
@@ -301,6 +321,7 @@ class UsageTracker:
             estimated_credits=estimated_credits,
             pricing_tier=pricing_tier,
             iterations=iterations,
+            provider=provider,
         )
         usage_entry = {
             "type": "usage",

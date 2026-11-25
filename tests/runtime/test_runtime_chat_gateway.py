@@ -987,3 +987,90 @@ def test_runtime_chat_session_step_limit_still_bounds_background_runs(monkeypatc
 
     assert interactive.max_iterations == 80
     assert background.max_iterations == 2
+
+
+@pytest.mark.parametrize(
+    ("llm", "expected"),
+    [
+        ({"provider": "ai_platform", "model": "gpt-6-sol"}, "ai_platform"),
+        ({"provider": "ai-platform"}, "ai_platform"),
+        ({"provider": "AI_Platform"}, "ai_platform"),
+        ({"provider": "github_copilot", "model": "gpt-6-sol"}, "github-copilot"),
+        ({"provider": "copilot"}, "github-copilot"),
+        ({}, "github-copilot"),
+    ],
+)
+def test_runtime_config_names_the_provider_the_run_is_on(monkeypatch, llm, expected):
+    """The runner prices a step in Copilot credits, stops an unset context
+    budget at Copilot's default tier and reports Copilot's long-context
+    threshold only for a Copilot run. Every run used to be named
+    github-copilot here, so a run on AI Platform got all three whenever its
+    model had a Copilot price row.
+    """
+
+    monkeypatch.setattr(runtime_chat.config, "_config", {"llm": llm}, raising=False)
+
+    assert runtime_chat._run_provider_id() == expected
+    assert runtime_chat._runtime_config("gpt-6-sol", track_usage=True).default_provider_id == expected
+    # A profile's own provider id still never reaches the runner.
+    with_profile = runtime_chat._runtime_config(
+        "gpt-6-sol",
+        track_usage=True,
+        runtime_profile_config={"default_provider_id": "openai", "provider": "openai"},
+    )
+    assert with_profile.default_provider_id == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_key", "priced"),
+    [("ai_platform", False), ("github_copilot", True)],
+)
+async def test_a_turn_run_from_the_gateways_config_is_priced_only_on_copilot(monkeypatch, tmp_path, provider_key, priced):
+    """The whole path: the config the gateway builds, a real turn, the usage it reports.
+
+    GPT-6 Sol with a 300k-token prompt is long-context on Copilot. On AI
+    Platform the same turn has no credits, no tier and no threshold, and the
+    model is told which provider it runs on.
+    """
+
+    from efp_runtime.loop import ScriptedLLMProvider
+    from efp_runtime.runtime import AgentRuntime
+
+    monkeypatch.setattr(
+        runtime_chat.config,
+        "_config",
+        {"llm": {"provider": provider_key, "model": "gpt-6-sol"}, "session": {"max_iterations": 2}},
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_chat, "_runtime_workspace_root", lambda: tmp_path)
+    provider = ScriptedLLMProvider(
+        [{"content": "done", "usage": {"input_tokens": 300_000, "output_tokens": 1_000}}]
+    )
+
+    result = await AgentRuntime(
+        provider=provider,
+        config=runtime_chat._runtime_config("gpt-6-sol", track_usage=True),
+    ).run("hi", session_id="s-priced")
+
+    request_metadata = provider.requests[0].provider_request.metadata
+    snapshots = [event.payload for event in result.runtime_events if event.type == "context_usage"]
+    system_text = " ".join(
+        str(getattr(message, "content", "") or "")
+        for message in provider.requests[0].provider_request.messages
+        if getattr(message, "role", "") == "system"
+    )
+    if priced:
+        assert result.usage["estimated_credits"] > 0
+        assert result.usage["pricing"]["tier"] == "long_context"
+        assert request_metadata["provider_id"] == "github-copilot"
+        assert snapshots[0]["billing_threshold_tokens"] == 272_000
+        assert "github-copilot/gpt-6-sol" in system_text
+    else:
+        assert result.usage["estimated_credits"] is None
+        assert "pricing" not in result.usage
+        assert request_metadata["provider_id"] == "ai_platform"
+        assert snapshots[0]["billing_threshold_tokens"] is None
+        assert snapshots[0]["billing_tier"] is None
+        assert "ai_platform/gpt-6-sol" in system_text
+        assert "github-copilot/" not in system_text

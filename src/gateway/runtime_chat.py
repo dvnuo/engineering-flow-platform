@@ -517,6 +517,29 @@ def _attach_deliverables(
     persist_deliverable_blocks(store, session_id, message_id, file_blocks)
 
 
+def _run_provider_id() -> str:
+    """The provider a run is on, as the runtime names it: ``ai_platform`` or ``github-copilot``.
+
+    The runner reads it for three things that are Copilot's alone: pricing a
+    step in AI credits (which the interactive credits limit then counts),
+    stopping an unset context budget at Copilot's default pricing tier, and
+    reporting Copilot's long-context threshold with the context usage. Every
+    run used to be named ``github-copilot`` here, so a run on AI Platform got
+    all three whenever its model had a Copilot price row (the GPT-5.6 line,
+    and GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol since AI Platform serves them).
+
+    It follows ``llm.provider`` of the runtime's own config, the way
+    ``_build_llm_provider`` picks the provider, and never a profile's
+    ``default_provider_id``.
+    """
+
+    llm_config = getattr(config, "llm", None)
+    provider = str(llm_config.get("provider") or "").strip().lower() if isinstance(llm_config, dict) else ""
+    if provider in {"ai_platform", "ai-platform"}:
+        return "ai_platform"
+    return "github-copilot"
+
+
 def _runtime_config(
     model: str,
     *,
@@ -533,7 +556,7 @@ def _runtime_config(
     )
     kwargs: dict[str, Any] = {
         "workspace_root": _runtime_workspace_root(),
-        "default_provider_id": "github-copilot",
+        "default_provider_id": _run_provider_id(),
         "default_model": model,
         "max_iterations": _resolve_max_iterations(interactive=interactive),
         "track_usage": track_usage,
@@ -541,7 +564,7 @@ def _runtime_config(
     kwargs.update(_runtime_config_profile_kwargs(managed_overlay_config))
     kwargs.update(_runtime_config_profile_kwargs(profile_config))
     kwargs["workspace_root"] = _runtime_workspace_root()
-    kwargs["default_provider_id"] = "github-copilot"
+    kwargs["default_provider_id"] = _run_provider_id()
     kwargs["default_model"] = model
     if not interactive:
         # The profile's step limit (the Portal's Model provider connector,
