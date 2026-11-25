@@ -103,6 +103,20 @@ AI_PLATFORM_MODEL_IDS = (
     "gpt-5.6-sol",
     "gpt-5.6-terra",
 )
+# The models the Image analysis connector may name for the inspect-image CLI
+# (the profile's ``image_analysis.model``): the list above plus GPT-6 Luna,
+# GPT-6 Sol and GPT-6.1 Sol, added for image analysis on 2026-11-24. The chat
+# list above did not grow with it. Must stay aligned with the Portal's
+# app/contracts/llm_catalog.py IMAGE_ANALYSIS_MODELS for the same reason as
+# above: an id the Portal offers but this tuple lacks is silently replaced by
+# DEFAULT_IMAGE_ANALYSIS_MODEL when the CLI's config is written.
+IMAGE_ANALYSIS_MODEL_IDS = (
+    *AI_PLATFORM_MODEL_IDS,
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6.1-sol",
+)
+DEFAULT_IMAGE_ANALYSIS_MODEL = DEFAULT_AI_PLATFORM_MODEL
 
 
 @dataclass(frozen=True)
