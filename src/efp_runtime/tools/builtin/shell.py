@@ -36,7 +36,21 @@ from .redaction import redact_after_gap, redact_before_gap, redact_tool_output
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT_MS = 30_000
+# How long a command may run when the call gives no ``timeout``. Two minutes
+# covers the slow CLIs an assistant runs as one command (inspect-image waits up
+# to 90 seconds for its model) without the model having to ask for more.
+DEFAULT_TIMEOUT_MS = 120_000
+# ``timeout`` is in milliseconds, while the tools next to this one (webfetch,
+# browser) and the CLIs a command runs count in seconds. A model that writes
+# 120 means two minutes; taken as milliseconds the command was stopped before
+# it had started, and the model read that as "the CLI does not work". Nobody
+# gives a command less than a second on purpose, so a value below this is read
+# as seconds.
+TIMEOUT_READ_AS_SECONDS_BELOW = 1000
+TIMEOUT_DESCRIPTION = (
+    "How long the command may run, in milliseconds. Default 120000 (two minutes); 300000 is five minutes. "
+    "A value below 1000 is read as seconds."
+)
 _CANCEL_POLL_SECONDS = 0.05
 _POSIX = os.name == "posix"
 
@@ -86,7 +100,11 @@ def create_bash_tool(
     return _create_shell_tool(
         "bash",
         workspace_root,
-        description="Run a bash command from a workspace-contained working directory.",
+        description=(
+            "Run a bash command from a workspace-contained working directory. The command is stopped after "
+            "`timeout` milliseconds (default 120000, two minutes); give a command that needs longer a larger "
+            "`timeout`."
+        ),
         permission=permission,
     )
 
@@ -263,7 +281,11 @@ def _shell_input_schema() -> dict[str, Any]:
         "properties": {
             "command": {"type": "string"},
             "description": {"type": "string"},
-            "timeout": {"type": "integer", "minimum": 1},
+            "timeout": {
+                "type": "integer",
+                "minimum": 1,
+                "description": TIMEOUT_DESCRIPTION,
+            },
             "workdir": {"type": "string"},
         },
         "additionalProperties": False,
@@ -276,7 +298,14 @@ def _resolve_workdir(root: Path, args: dict[str, Any]) -> Path:
 
 def _resolve_timeout(args: dict[str, Any]) -> tuple[float, int]:
     timeout_ms = _positive_int(args.get("timeout", DEFAULT_TIMEOUT_MS), "timeout")
+    if timeout_ms < TIMEOUT_READ_AS_SECONDS_BELOW:
+        timeout_ms *= 1000
     return timeout_ms / 1000.0, timeout_ms
+
+
+def _timeout_seconds_text(timeout_ms: int) -> str:
+    seconds = f"{timeout_ms / 1000.0:.3f}".rstrip("0").rstrip(".")
+    return f"{seconds} second" if seconds == "1" else f"{seconds} seconds"
 
 
 def _positive_int(value: Any, name: str) -> int:
@@ -709,7 +738,10 @@ def _format_shell_content(
             "\n".join(
                 [
                     "<shell_metadata>",
-                    f"shell tool terminated command after exceeding timeout {timeout_ms}ms.",
+                    f"shell tool terminated command after exceeding timeout {timeout_ms}ms "
+                    f"({_timeout_seconds_text(timeout_ms)}). The command ran out of time; that alone does "
+                    "not show that what it ran is broken or unavailable. When it needs longer, run it again "
+                    "with a larger `timeout`, in milliseconds (300000 is five minutes).",
                     "</shell_metadata>",
                 ]
             )

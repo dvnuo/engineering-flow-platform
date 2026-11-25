@@ -163,7 +163,9 @@ def test_the_handoff_texts_are_the_agreed_ones():
         'before you answer. Run `inspect-image inspect --image <path> --prompt "<what to read or explain>" --json` from bash '
         "and answer from data.result.answer and data.result.visible_text; add --preset ocr, ui, diagram, chart, or error when "
         "it fits, and ask a follow-up question with another call. Never pass --model, never guess what an image shows, and "
-        "never fall back to OCR or image-parsing scripts."
+        "never fall back to OCR or image-parsing scripts. A read can take a minute or more: leave the bash call its default "
+        "`timeout` or give it a larger one (milliseconds, 180000 is three minutes), and when the bash timeout stops the "
+        "command, run it again with a larger `timeout` instead of counting that as an inspect-image failure."
     )
     assert HANDOFF_IMAGES_FALLBACK_WITH_BRIDGE == (
         "If inspect-image answers auth_required or config_error, or still fails after one retry, analyze the images with the "

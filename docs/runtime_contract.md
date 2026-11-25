@@ -301,8 +301,11 @@ profile chats on (GitHub Copilot or AI Platform).
   read. When `inspect-image` answers `auth_required` or `config_error`, or
   still fails after one retry, the agent falls back to Productivity Suite if
   the Local bridge is on, and otherwise says the Image analysis connector
-  needs checking. The office formats the runtime does not parse (doc, dot,
-  xls) are not images: Productivity Suite is their only route.
+  needs checking. A command the `bash` timeout stopped is not such a failure:
+  the handoff tells the agent that a read can take a minute or more and to run
+  it again with a larger `timeout`. The office formats the runtime does not
+  parse (doc, dot, xls) are not images: Productivity Suite is their only
+  route.
 - The connector is the profile section `image_analysis`, independent of `llm`
   (it is read whatever `llm.provider` is, and `llm.ai_platform` is never read
   for it): `{enabled, model, ai_platform: {chat: {host, uri}, ib2b: {host,
@@ -377,6 +380,7 @@ profile chats on (GitHub Copilot or AI Platform).
 - AWS access is per account: `aws-auth login --account <name>` writes each configured account's credentials to the AWS CLI profile named after the account, and `aws-auth eks kubeconfig --account <name> --cluster <cluster>` writes a `<account>/<cluster>` kubectl context. The profile's `aws.accounts[]` matrix, provider, and defaults reach the CLI through `EFP_AWS_*`; the `assume-role` provider needs no directory password, so the boot projection skips `aws-auth auth login` for it.
 - The troubleshooting CLIs `nexus`, `splunk`, and `pgsql` are configured through the profile sections of the same names. `nexus` and `splunk` are read-only binaries; `pgsql` writes only when the section's `access` is `read_write` (absent reads as `read_only`, in which mode the CLI refuses every write before connecting), and then runs whatever the configured database role and endpoint allow, so a profile that should only read keeps the default access and is given a read-only role or a replica endpoint. `nexus`/`splunk` are projected like jira (`EFP_NEXUS_INSTANCES_0_BASE_URL`, `EFP_SPLUNK_INSTANCES_0_AUTH_TOKEN`, `EFP_SPLUNK_INSTANCES_0_APP`, ...) with an empty `rest_path` because each CLI owns its REST prefix; `pgsql` is copied verbatim: the shared settings (`EFP_PGSQL_ACCESS`, `EFP_PGSQL_SSLMODE`, `EFP_PGSQL_STATEMENT_TIMEOUT_SECONDS`, `EFP_PGSQL_MAX_ROWS`) and the rows (`EFP_PGSQL_INSTANCES_0_HOST`, `_DATABASE`, `_USERNAME`, `_PASSWORD`), with each row's `proxy` filled from the Proxy connector's assignment. The CLI instruction text names all three when any is enabled.
 - `bash` output is passed through the runtime's secret redaction before it reaches the model and before the full output is archived under `.efp_runtime/tool-output/`; `bash` also exposes the command string as its permission subject, so `tool_permissions.bash` accepts subject globs such as `{"*kubectl*delete*": "deny", "*": "allow"}`.
+- `bash` stops a command after its `timeout`, which is in milliseconds; a call without one gets 120000 (two minutes). A value below 1000 is read as seconds: the tools next to `bash` (`webfetch`, `browser`) and the CLIs count in seconds, and a model that wrote `120` for two minutes used to have its command stopped after 120 ms. The note the model reads on a timeout gives the limit in both units, says that the command ran out of time (not that what it ran is unavailable), and how to give it longer.
 - Agents use those CLIs through the model-visible `bash` built-in in the workspace-full-access runtime workspace. They should run `<tool> commands --json`, then `<tool> schema <command> --json`, prefer `--json`, use `--dry-run` before writes, and pass `--yes` for destructive operations.
 - Runtime profile boot projection applies GitHub, AWS, and Git configuration through real CLIs and exports Jira, Confluence, Jenkins, and mobile BrowserStack configuration to CLI child processes via EFP_-prefixed indexed tools config env vars (e.g. `EFP_JIRA_INSTANCES_0_BASE_URL`, `EFP_AWS_DOMAIN`, `EFP_MOBILE_AUTO_BROWSERSTACK_USERNAME`).
 - Private managed mobile runs require BrowserStackLocal at `/usr/local/bin/BrowserStackLocal` or a configured `BROWSERSTACK_LOCAL_BINARY`; CI may stage that third-party binary into `runtime-tools/BrowserStackLocal`.
