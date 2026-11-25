@@ -87,13 +87,20 @@ prompt exceeds 272k input tokens) and reports them wherever it reports usage.
   `total_reasoning_tokens`, `total_estimated_credits` (also per model).
 - Credits, pricing tiers and the long-context threshold are Copilot's. A
   run on AI Platform has none of them, whatever its model (GPT-6 Luna, GPT-6
-  Sol and GPT-6.1 Sol are served by both providers): `estimated_credits` is
-  null and `pricing` absent in `usage` and on `usage.updated`, the credits
-  guard never fires, `context_usage` reports `billing_threshold_tokens` and
-  `billing_tier` as null with `model.provider_id` `ai_platform`, an unset
-  context budget runs to the model's window, and `GET /api/usage` books the
-  tokens without credits. The gateway names the run's provider from
-  `llm.provider` (`runtime_chat._run_provider_id`).
+  Sol and GPT-6.1 Sol are served by both providers): in the response's
+  `usage`, `estimated_credits` is null and `pricing` absent; on
+  `usage.updated` both are null; the credits guard never fires;
+  `context_usage` (the event and the endpoint, a snapshot stored earlier
+  included) reports `billing_threshold_tokens` and `billing_tier` as null
+  with `model.provider_id` `ai_platform`; an unset context budget runs to the
+  model's window. The gateway names the run's provider from `llm.provider`
+  (`runtime_chat.run_provider_id`).
+- `GET /api/usage`: `total_estimated_credits` (and a model's or provider's
+  `estimated_credits`) is null until a record that carries credits is
+  counted, so usage that is not billed in credits has no credits total
+  rather than one of zero. `total_cost_usd` and `cost` stay a list-price
+  estimate in dollars for any provider: what the tokens would cost at the
+  published rates, not a bill.
 - `GET /api/copilot/quota` answers 200 with `{available, source, fetched_at,
   plan, reset_date, reset_date_utc, token_based_billing, snapshots: [{id,
   label, entitlement, remaining, used, credits_used, percent_remaining,

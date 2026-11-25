@@ -1010,15 +1010,24 @@ def test_runtime_config_names_the_provider_the_run_is_on(monkeypatch, llm, expec
 
     monkeypatch.setattr(runtime_chat.config, "_config", {"llm": llm}, raising=False)
 
-    assert runtime_chat._run_provider_id() == expected
+    assert runtime_chat.run_provider_id() == expected
     assert runtime_chat._runtime_config("gpt-6-sol", track_usage=True).default_provider_id == expected
-    # A profile's own provider id still never reaches the runner.
+    # A profile's own provider id never reaches the runner. The fields a
+    # profile may set do not include it...
     with_profile = runtime_chat._runtime_config(
         "gpt-6-sol",
         track_usage=True,
         runtime_profile_config={"default_provider_id": "openai", "provider": "openai"},
     )
     assert with_profile.default_provider_id == expected
+    # ...and if one ever got through that filter, the run's provider is set
+    # after the profile is applied.
+    monkeypatch.setattr(
+        runtime_chat,
+        "_runtime_config_profile_kwargs",
+        lambda _config: {"default_provider_id": "openai"},
+    )
+    assert runtime_chat._runtime_config("gpt-6-sol", track_usage=True).default_provider_id == expected
 
 
 @pytest.mark.asyncio
@@ -1027,11 +1036,12 @@ def test_runtime_config_names_the_provider_the_run_is_on(monkeypatch, llm, expec
     [("ai_platform", False), ("github_copilot", True)],
 )
 async def test_a_turn_run_from_the_gateways_config_is_priced_only_on_copilot(monkeypatch, tmp_path, provider_key, priced):
-    """The whole path: the config the gateway builds, a real turn, the usage it reports.
+    """The config the gateway builds, driven through a real turn of the runtime.
 
     GPT-6 Sol with a 300k-token prompt is long-context on Copilot. On AI
     Platform the same turn has no credits, no tier and no threshold, and the
-    model is told which provider it runs on.
+    model is told which provider it runs on. (What the chat endpoint then
+    books for GET /api/usage is covered in tests/test_usage_credits.py.)
     """
 
     from efp_runtime.loop import ScriptedLLMProvider
@@ -1074,3 +1084,47 @@ async def test_a_turn_run_from_the_gateways_config_is_priced_only_on_copilot(mon
         assert snapshots[0]["billing_tier"] is None
         assert "ai_platform/gpt-6-sol" in system_text
         assert "github-copilot/" not in system_text
+
+
+def test_a_stored_context_snapshot_loses_copilots_pricing_line_off_copilot(monkeypatch):
+    """A snapshot is stored with its session and returned as written.
+
+    One written before runs were named by their provider (or while the
+    assistant was on Copilot) carries Copilot's long-context threshold. On an
+    AI Platform assistant the context endpoint must not hand that to the
+    Portal, which would draw the pricing line; a Copilot assistant keeps it.
+    """
+
+    from src.gateway import runtime_api
+
+    stored = {
+        "used_tokens": 300_000,
+        "context_window_tokens": 1_000_000,
+        "billing_threshold_tokens": 272_000,
+        "billing_tier": "long_context",
+        "model": {"provider_id": "github-copilot", "model_id": "gpt-6-sol", "context_window_tokens": 1_000_000},
+    }
+
+    def _returned():
+        return runtime_api._context_usage_with_compact_state(
+            stored, session_id="s-stored", message_count=4, runtime_status="completed"
+        )
+
+    monkeypatch.setattr(runtime_chat.config, "_config", {"llm": {"provider": "ai_platform"}}, raising=False)
+    on_ai_platform = _returned()
+    assert on_ai_platform["billing_threshold_tokens"] is None
+    assert on_ai_platform["billing_tier"] is None
+    assert on_ai_platform["model"] == {
+        "provider_id": "ai_platform",
+        "model_id": "gpt-6-sol",
+        "context_window_tokens": 1_000_000,
+    }
+    assert on_ai_platform["used_tokens"] == 300_000
+    # The stored snapshot itself is not rewritten.
+    assert stored["billing_threshold_tokens"] == 272_000 and stored["model"]["provider_id"] == "github-copilot"
+
+    monkeypatch.setattr(runtime_chat.config, "_config", {"llm": {"provider": "github_copilot"}}, raising=False)
+    on_copilot = _returned()
+    assert on_copilot["billing_threshold_tokens"] == 272_000
+    assert on_copilot["billing_tier"] == "long_context"
+    assert on_copilot["model"]["provider_id"] == "github-copilot"

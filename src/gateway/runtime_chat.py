@@ -517,7 +517,7 @@ def _attach_deliverables(
     persist_deliverable_blocks(store, session_id, message_id, file_blocks)
 
 
-def _run_provider_id() -> str:
+def run_provider_id() -> str:
     """The provider a run is on, as the runtime names it: ``ai_platform`` or ``github-copilot``.
 
     The runner reads it for three things that are Copilot's alone: pricing a
@@ -556,7 +556,7 @@ def _runtime_config(
     )
     kwargs: dict[str, Any] = {
         "workspace_root": _runtime_workspace_root(),
-        "default_provider_id": _run_provider_id(),
+        "default_provider_id": run_provider_id(),
         "default_model": model,
         "max_iterations": _resolve_max_iterations(interactive=interactive),
         "track_usage": track_usage,
@@ -564,7 +564,7 @@ def _runtime_config(
     kwargs.update(_runtime_config_profile_kwargs(managed_overlay_config))
     kwargs.update(_runtime_config_profile_kwargs(profile_config))
     kwargs["workspace_root"] = _runtime_workspace_root()
-    kwargs["default_provider_id"] = _run_provider_id()
+    kwargs["default_provider_id"] = run_provider_id()
     kwargs["default_model"] = model
     if not interactive:
         # The profile's step limit (the Portal's Model provider connector,

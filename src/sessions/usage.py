@@ -131,6 +131,9 @@ def estimate_cost(
 
     Copilot-priced models use GitHub's published rates (tier by prompt size,
     cached input at its own rate); everything else uses the legacy table.
+    It is a list-price estimate for any provider, AI Platform included: what
+    the tokens would cost at the published rates, not what anybody is billed.
+    Credits, unlike it, exist only on Copilot (``billed_in_credits``).
     """
 
     estimate = estimate_credits(
@@ -193,7 +196,11 @@ _EMPTY_TOTALS = {
     "total_cost_usd": 0.0,
     "total_cached_input_tokens": 0,
     "total_reasoning_tokens": 0,
-    "total_estimated_credits": 0.0,
+    # None until a record that carries credits is added: usage that is not
+    # billed in credits (AI Platform, a model Copilot has no price for) has no
+    # credits total, and the Portal then shows the dollar estimate instead of
+    # "0.0 credits".
+    "total_estimated_credits": None,
     "request_count": 0,
 }
 
@@ -515,7 +522,8 @@ def _empty_bucket() -> Dict[str, Any]:
         "cached_input_tokens": 0,
         "reasoning_tokens": 0,
         "cost": 0.0,
-        "estimated_credits": 0.0,
+        # None until a record that carries credits is added (see _EMPTY_TOTALS).
+        "estimated_credits": None,
         "requests": 0,
     }
 
@@ -526,7 +534,7 @@ def _add_bucket(bucket: Dict[str, Any], entry: Dict[str, Any]) -> None:
     bucket["cached_input_tokens"] += _int(entry.get("cached_input_tokens"))
     bucket["reasoning_tokens"] += _int(entry.get("reasoning_tokens"))
     bucket["cost"] += _float(entry.get("cost")) or 0.0
-    bucket["estimated_credits"] += _float(entry.get("estimated_credits")) or 0.0
+    bucket["estimated_credits"] = _add_credits(bucket["estimated_credits"], entry.get("estimated_credits"))
     bucket["requests"] += 1
 
 
@@ -541,8 +549,19 @@ def _add_totals(summary: Dict[str, Any], entry: Dict[str, Any]) -> None:
     summary["total_cost_usd"] += cost
     summary["total_cached_input_tokens"] += _int(entry.get("cached_input_tokens"))
     summary["total_reasoning_tokens"] += _int(entry.get("reasoning_tokens"))
-    summary["total_estimated_credits"] += _float(entry.get("estimated_credits")) or 0.0
+    summary["total_estimated_credits"] = _add_credits(
+        summary["total_estimated_credits"], entry.get("estimated_credits")
+    )
     summary["request_count"] += 1
+
+
+def _add_credits(total: Optional[float], credits: Any) -> Optional[float]:
+    """``total`` plus a record's credits; a record without credits leaves it as it is, None included."""
+
+    value = _float(credits)
+    if value is None:
+        return total
+    return (total or 0.0) + value
 
 
 def _int(value: Any) -> int:
