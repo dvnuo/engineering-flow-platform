@@ -1481,7 +1481,15 @@ class RuntimeLoopRunner:
             else None
         )
         payload = {
-            "provider_id": profile.provider_id,
+            # The run's provider, not the profile's: a context profile is
+            # keyed by model id and always says github-copilot, so an AI
+            # Platform run reported Copilot's long-context threshold with
+            # its context usage (context/usage.py reads this id).
+            "provider_id": (
+                profile.provider_id
+                if _is_copilot_provider_id(self.default_provider_id)
+                else self.default_provider_id
+            ),
             "model_id": profile.model_id,
             "context_window_tokens": profile.context_window_tokens,
             "context_safety_margin_tokens": safety_margin_tokens,

@@ -52,6 +52,10 @@ jobs:
             "tests/runtime/test_shell_tool_parity.py",
             "tests/runtime/test_cancel_cooperative.py",
             "tests/runtime/test_shell_memory_bounds.py",
+            "tests/test_ai_platform_provider.py",
+            "tests/test_usage_credits.py",
+            "tests/runtime/test_copilot_credits_loop.py",
+            "tests/runtime/test_runtime_chat_gateway.py",
           ]
           missing = [p for p in tests if not Path(p).exists()]
           if missing:
@@ -80,7 +84,11 @@ jobs:
             tests/runtime/test_question_request_identity.py \
             tests/runtime/test_shell_tool_parity.py \
             tests/runtime/test_cancel_cooperative.py \
-            tests/runtime/test_shell_memory_bounds.py
+            tests/runtime/test_shell_memory_bounds.py \
+            tests/test_ai_platform_provider.py \
+            tests/test_usage_credits.py \
+            tests/runtime/test_copilot_credits_loop.py \
+            tests/runtime/test_runtime_chat_gateway.py
       # The bash tool stops a command that is about to push the assistant past
       # its container memory limit. That reads cgroup and /proc files and kills
       # a process group, none of which the step above exercises for real, so the

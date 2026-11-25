@@ -86,7 +86,42 @@ def test_record_usage_without_a_priced_model_has_no_credits():
         assert stats.estimated_credits is None
         assert stats.pricing_tier is None
         assert stats.cost == pytest.approx((1_000 * 5.0 + 100 * 15.0) / 1e6)
-        assert tracker.get_session_summary("s2")["total_estimated_credits"] == 0.0
+        # No credits is not zero credits: the Portal shows the dollar estimate then.
+        assert tracker.get_session_summary("s2")["total_estimated_credits"] is None
+
+
+def test_record_usage_on_ai_platform_has_no_credits_for_a_model_copilot_prices():
+    # GPT-6 Sol is served by both providers and has a Copilot price row. A run
+    # that brought no credits (an AI Platform run never does) used to be
+    # priced here from that row, whatever the record's provider.
+    with tempfile.TemporaryDirectory() as tmp:
+        tracker = UsageTracker(f"{tmp}/usage")
+        tokens = {"model": "gpt-6-sol", "input_tokens": 300_000, "output_tokens": 1_000}
+        on_ai_platform = tracker.record_usage(provider="ai_platform", session_id="ai", **tokens)
+        assert on_ai_platform.estimated_credits is None
+        assert on_ai_platform.pricing_tier is None
+        # No credits total at all, in every view of the record.
+        assert tracker.get_session_summary("ai")["total_estimated_credits"] is None
+        assert tracker.get_global_summary(hours=24)["total_estimated_credits"] is None
+        assert tracker.get_usage_by_provider(hours=24)["ai_platform"]["estimated_credits"] is None
+        assert tracker.get_usage_by_model(hours=24)["gpt-6-sol"]["estimated_credits"] is None
+        # The tokens are still booked, and the dollar figure stays a list-price estimate.
+        assert tracker.get_session_summary("ai")["total_input"] == 300_000
+        assert tracker.get_session_summary("ai")["total_cost_usd"] > 0
+
+        for copilot in ("github_copilot", "github-copilot", ""):
+            priced = tracker.record_usage(provider=copilot, session_id=f"copilot-{copilot}", **tokens)
+            assert priced.estimated_credits > 0
+            assert priced.pricing_tier == "long_context"
+
+        # Credits a caller did price are kept as given.
+        kept = tracker.record_usage(provider="ai_platform", session_id="given", estimated_credits=1.5, **tokens)
+        assert kept.estimated_credits == 1.5
+        # A total counts the records that carry credits and skips the ones that do not.
+        by_provider = tracker.get_usage_by_provider(hours=24)
+        assert by_provider["ai_platform"]["estimated_credits"] == 1.5
+        assert by_provider["ai_platform"]["requests"] == 2
+        assert tracker.get_usage_by_model(hours=24)["gpt-6-sol"]["estimated_credits"] > 1.5
 
 
 def test_parse_usage_from_response_reads_the_responses_api_shape():
@@ -125,5 +160,54 @@ def test_old_records_without_the_new_fields_still_summarize():
         summary = tracker.get_session_summary("old")
         assert summary["total_input"] == 10
         assert summary["total_cached_input_tokens"] == 0
-        assert summary["total_estimated_credits"] == 0.0
+        assert summary["total_estimated_credits"] is None
         assert tracker.get_global_summary()["request_count"] == 1
+
+
+def test_the_chat_endpoint_books_an_ai_platform_run_without_credits(monkeypatch):
+    # What /api/chat does with a finished run's usage (runtime_api._record_chat_usage),
+    # which is what GET /api/usage and the Portal's Usage panel then read.
+    from src.gateway import runtime_api
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tracker = UsageTracker(f"{tmp}/usage")
+        monkeypatch.setattr(runtime_api, "usage_tracker", tracker)
+
+        # An AI Platform run as the runner reports it: tokens, no credits, no pricing.
+        monkeypatch.setattr(
+            runtime_api.global_config,
+            "_config",
+            {"llm": {"provider": "ai_platform", "model": "gpt-6-sol"}},
+            raising=False,
+        )
+        runtime_api._record_chat_usage(
+            {"input_tokens": 300_000, "output_tokens": 1_000, "estimated_credits": None, "iterations": 2},
+            model="gpt-6-sol",
+            session_id="chat-ai",
+        )
+        summary = tracker.get_session_summary("chat-ai")
+        assert summary["request_count"] == 1
+        assert summary["total_input"] == 300_000
+        assert summary["total_estimated_credits"] is None
+        by_provider = tracker.get_usage_by_provider(hours=24)
+        assert by_provider["ai_platform"]["requests"] == 1
+        assert by_provider["ai_platform"]["estimated_credits"] is None
+
+        # The same turn on Copilot keeps the credits the runner priced it at.
+        monkeypatch.setattr(
+            runtime_api.global_config,
+            "_config",
+            {"llm": {"provider": "github_copilot", "model": "gpt-6-sol"}},
+            raising=False,
+        )
+        runtime_api._record_chat_usage(
+            {
+                "input_tokens": 300_000,
+                "output_tokens": 1_000,
+                "estimated_credits": 123.0,
+                "pricing": {"model": "gpt-6-sol", "tier": "long_context"},
+            },
+            model="gpt-6-sol",
+            session_id="chat-copilot",
+        )
+        assert tracker.get_session_summary("chat-copilot")["total_estimated_credits"] == 123.0

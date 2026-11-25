@@ -59,6 +59,7 @@ from src.gateway.runtime_chat import (
     RuntimeChatError,
     default_turn_model,
     model_still_runnable,
+    run_provider_id,
     resume_runtime_chat,
     run_runtime_chat,
 )
@@ -4893,6 +4894,28 @@ def _current_native_context_usage(
     return current
 
 
+def _without_copilot_billing_off_copilot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Take Copilot's pricing line out of a context snapshot when the assistant is not on Copilot.
+
+    A snapshot is stored with its session and returned as it was written. One
+    written before runs were named by their provider, or while the assistant
+    still ran on Copilot, carries Copilot's long-context threshold, a billing
+    tier and ``github-copilot`` as the model's provider. The next message
+    rewrites it; until then the Portal would draw the pricing line on a
+    session of an AI Platform assistant.
+    """
+
+    provider_id = run_provider_id()
+    if provider_id == "github-copilot":
+        return snapshot
+    snapshot["billing_threshold_tokens"] = None
+    snapshot["billing_tier"] = None
+    model = snapshot.get("model")
+    if isinstance(model, Mapping):
+        snapshot["model"] = {**model, "provider_id": provider_id}
+    return snapshot
+
+
 def _context_usage_with_compact_state(
     snapshot: Mapping[str, Any],
     *,
@@ -4900,7 +4923,7 @@ def _context_usage_with_compact_state(
     message_count: int,
     runtime_status: str,
 ) -> Dict[str, Any]:
-    result = dict(snapshot)
+    result = _without_copilot_billing_off_copilot(dict(snapshot))
     in_progress = runtime_status in {"running", "accepted", "queued", "in_progress"}
     eligible = message_count > 1 and not in_progress
     reason = None
