@@ -363,9 +363,8 @@ async def _execute_review_skill_via_chat_loop(
     skill_kwargs: Dict[str, Any],
     automation_trace: Dict[str, Any],
 ) -> Dict[str, Any]:
-    from src.config import DEFAULT_LLM_MODEL, config
     from src.efp_runtime.session.gateway_facade import runtime_session_manager
-    from src.gateway.runtime_chat import run_runtime_chat
+    from src.gateway.runtime_chat import default_turn_model, run_runtime_chat
     metadata = payload.get("_execution_metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
     agent_id = payload.get("_runtime_agent_id")
@@ -385,7 +384,7 @@ async def _execute_review_skill_via_chat_loop(
     )
     if not runtime_session_manager._initialized:
         await runtime_session_manager.initialize()
-    model = metadata.get("resolved_model") or metadata.get("model") or config.llm.get("model", DEFAULT_LLM_MODEL)
+    model = metadata.get("resolved_model") or metadata.get("model") or default_turn_model()
     chat_metadata = {
         **metadata, "path": "/api/tasks/execute/github_review_task/chat", "task_type": "github_review_task", "skill_name": skill_name,
         "execution_mode": "chat_tool_loop", "runtime_managed_writeback": True, "allowed_capability_ids": list(_READ_ONLY_GITHUB_REVIEW_TOOL_CAPABILITY_IDS), "allowed_capability_types": list(_READ_ONLY_GITHUB_REVIEW_CAPABILITY_TYPES), "review_metadata": review_metadata, "skill_kwargs": skill_kwargs,

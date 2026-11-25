@@ -303,8 +303,9 @@ profile chats on (GitHub Copilot or AI Platform).
   file holds `inspect_image: {provider: ai_platform, defaults: {model},
   limits: {max_image_bytes}}` and `ai_platform: {chat, ib2b, auth}`;
   `model` is `image_analysis.model` coerced to a model the connector offers
-  (`IMAGE_ANALYSIS_MODEL_IDS`: the AI Platform chat models plus `gpt-6-luna`,
-  `gpt-6-sol` and `gpt-6.1-sol`; default `gpt-5.4`), `max_image_bytes` follows `EFP_MAX_UPLOAD_MB`, `auth.token_file`
+  (`IMAGE_ANALYSIS_MODEL_IDS`, the models of the AI Platform chat provider:
+  `gpt-5.4`, the GPT-5.6 line, `gpt-6-luna`, `gpt-6-sol` and `gpt-6.1-sol`;
+  default `gpt-5.4`), `max_image_bytes` follows `EFP_MAX_UPLOAD_MB`, `auth.token_file`
   is `<that directory>/tmp/inspect-image-ai-platform-token` (removed at every
   boot so a changed account never reuses a token), and `inspect_image.api.proxy`
   is present only when the Proxy connector's assignment for `image_analysis`

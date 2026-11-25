@@ -57,6 +57,7 @@ from src.gateway.chat_run_registry import chat_run_registry
 from src.gateway.portal_trust import is_trusted_portal_request
 from src.gateway.runtime_chat import (
     RuntimeChatError,
+    default_turn_model,
     model_still_runnable,
     resume_runtime_chat,
     run_runtime_chat,
@@ -1728,7 +1729,7 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Get request-scoped model (trusted portal override only)
         model_override = _extract_trusted_model_override(request, data)
-        model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
+        model = model_override or default_turn_model()
         
         # Run EFP runtime; session_manager remains the gateway-side history mirror.
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
@@ -2148,7 +2149,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
         # Get request-scoped model (trusted portal override only)
         model_override = _extract_trusted_model_override(request, data)
-        model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
+        model = model_override or default_turn_model()
 
         # Run EFP runtime and stream runtime events where available.
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
@@ -5473,7 +5474,7 @@ async def api_edit_message_async(request: web.Request) -> web.Response:
         # the chat proxy fills in from the session's saved run settings, so an
         # explicit ``model`` wins over it.
         model_override = _extract_trusted_model_override(request, data, keys=("model", "model_override"))
-        model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
+        model = model_override or default_turn_model()
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)

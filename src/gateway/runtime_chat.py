@@ -904,10 +904,34 @@ def _join_url(host: str, uri: str) -> str:
     return host + uri
 
 
+def default_turn_model() -> str:
+    """The model a turn runs on when its request names none.
+
+    The profile's model; for a profile that names none (the Portal's "Use
+    runtime local default"), the default of the configured provider. The API
+    handlers used to fall back to ``DEFAULT_LLM_MODEL`` (gpt-6-sol, a Copilot
+    choice) whatever the provider. On AI Platform that id was not served and
+    was coerced to the platform's default further down; the platform serves
+    it since 2026-11-24, so the same fallback would now run gpt-6-sol for a
+    profile whose member chose nothing. With the default taken here, a
+    gpt-6-sol that reaches ``_resolve_ai_platform_model`` is always somebody's
+    choice (the profile's, or a member's pick for the session).
+    """
+
+    llm_config = config.llm if isinstance(config.llm, dict) else {}
+    configured = str(llm_config.get("model") or "").strip()
+    if configured:
+        return configured
+    provider = str(llm_config.get("provider") or "").strip().lower()
+    if provider in {"ai_platform", "ai-platform"}:
+        return DEFAULT_AI_PLATFORM_MODEL
+    return DEFAULT_LLM_MODEL
+
+
 def _resolve_ai_platform_model(model: str | None) -> str:
-    # Coerce to a valid AI Platform model. /api/chat forwards a Copilot default
-    # model id (e.g. gpt-6-sol) when llm.model is unset, which AI Platform
-    # does not serve; fall back to the AI Platform default in that case.
+    # Coerce to a valid AI Platform model: the request's, else the profile's;
+    # an id the platform does not serve (GPT-6 Astra, an auto id, a retired
+    # one) and a profile that names no model land on the platform's default.
     configured = str(model or config.llm.get("model") or "").strip()
     if configured in AI_PLATFORM_MODEL_IDS:
         return configured
