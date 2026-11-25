@@ -134,7 +134,8 @@ def coerce_vision_model(model: Any) -> str:
     """A model the Image analysis connector offers; anything else lands on its default.
 
     The connector's own list (``IMAGE_ANALYSIS_MODEL_IDS``), which holds the
-    AI Platform chat models and the GPT-6 models added for image analysis.
+    models of the AI Platform chat provider: gpt-5.4, the GPT-5.6 line and
+    GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol.
     """
     text = str(model or "").strip()
     if "/" in text:

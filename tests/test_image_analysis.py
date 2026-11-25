@@ -168,13 +168,21 @@ def test_resolve_image_analysis_settings():
     assert iic.resolve_image_analysis_settings(_profile(model="ai-platform/gpt-5.6-luna"))[0].model == "gpt-5.6-luna"
     assert iic.coerce_vision_model("gpt-5.4-mini") == "gpt-5.4"
     assert iic.coerce_vision_model("ai-platform/gpt-5.6-luna") == "gpt-5.6-luna"
-    # GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol are the connector's own additions to the AI Platform chat list.
+    # GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol: the connector's since 2026-11-24, the chat list's a day later.
     for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"):
         assert iic.coerce_vision_model(model) == model
         assert iic.coerce_vision_model(f"ai-platform/{model}") == model
         assert iic.resolve_image_analysis_settings(_profile(model=model))[0].model == model
-        assert model not in AI_PLATFORM_MODEL_IDS
-    assert IMAGE_ANALYSIS_MODEL_IDS == (*AI_PLATFORM_MODEL_IDS, "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol")
+    assert IMAGE_ANALYSIS_MODEL_IDS == (
+        "gpt-5.4",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+    )
+    assert IMAGE_ANALYSIS_MODEL_IDS == AI_PLATFORM_MODEL_IDS
     # Not every Copilot id: one outside the list (GPT-6 Astra, an auto id) is repaired like any other.
     for model in ("gpt-6-astra", "auto", "gpt-9-bogus"):
         assert iic.coerce_vision_model(model) == "gpt-5.4"

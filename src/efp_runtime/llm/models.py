@@ -92,9 +92,12 @@ def is_supported_copilot_model_id(value: Any) -> bool:
         return False
     return True
 
-# AI Platform (enterprise gateway) models. Must stay aligned with the Portal
-# catalog (app/contracts/llm_catalog.py AI_PLATFORM_MODELS): the runtime coerces
-# any model outside this tuple back to DEFAULT_AI_PLATFORM_MODEL, so a model the
+# AI Platform (enterprise gateway) models: gpt-5.4, the GPT-5.6 line and, since
+# 2026-11-25, GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol (not GPT-6 Astra, and no
+# auto id). Those three are also Copilot models, so they are the only ids the
+# two providers share. Must stay aligned with the Portal catalog
+# (app/contracts/llm_catalog.py AI_PLATFORM_MODELS): the runtime coerces any
+# model outside this tuple back to DEFAULT_AI_PLATFORM_MODEL, so a model the
 # Portal offers but this list lacks is silently replaced by gpt-5.4.
 DEFAULT_AI_PLATFORM_MODEL = "gpt-5.4"
 AI_PLATFORM_MODEL_IDS = (
@@ -102,20 +105,19 @@ AI_PLATFORM_MODEL_IDS = (
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
-)
-# The models the Image analysis connector may name for the inspect-image CLI
-# (the profile's ``image_analysis.model``): the list above plus GPT-6 Luna,
-# GPT-6 Sol and GPT-6.1 Sol, added for image analysis on 2026-11-24. The chat
-# list above did not grow with it. Must stay aligned with the Portal's
-# app/contracts/llm_catalog.py IMAGE_ANALYSIS_MODELS for the same reason as
-# above: an id the Portal offers but this tuple lacks is silently replaced by
-# DEFAULT_IMAGE_ANALYSIS_MODEL when the CLI's config is written.
-IMAGE_ANALYSIS_MODEL_IDS = (
-    *AI_PLATFORM_MODEL_IDS,
     "gpt-6-luna",
     "gpt-6-sol",
     "gpt-6.1-sol",
 )
+# The models the Image analysis connector may name for the inspect-image CLI
+# (the profile's ``image_analysis.model``). The connector got GPT-6 Luna,
+# GPT-6 Sol and GPT-6.1 Sol on 2026-11-24, a day before the chat list did;
+# the two now hold the same models. It keeps its own name because the choice
+# is the connector's own (``coerce_vision_model``). Must stay aligned with the
+# Portal's app/contracts/llm_catalog.py IMAGE_ANALYSIS_MODELS for the same
+# reason as above: an id the Portal offers but this tuple lacks is silently
+# replaced by DEFAULT_IMAGE_ANALYSIS_MODEL when the CLI's config is written.
+IMAGE_ANALYSIS_MODEL_IDS = AI_PLATFORM_MODEL_IDS
 DEFAULT_IMAGE_ANALYSIS_MODEL = DEFAULT_AI_PLATFORM_MODEL
 
 
@@ -156,9 +158,9 @@ def resolve_model_context_profile(
     The catalog is keyed by model id alone: a context window is a property of
     the model, not of the gateway serving it. ``provider_id`` is accepted (and
     a ``provider/model`` prefix is stripped from ``model``) so callers can pass
-    a qualified id, but it does not gate the lookup - ai_platform serves the
-    same GPT-5.x line (see ``AI_PLATFORM_MODEL_IDS``) with the same 1M-class
-    window as Copilot, and this profile is the default source of the native
+    a qualified id, but it does not gate the lookup - ai_platform serves
+    GPT-5.x and GPT-6 models (see ``AI_PLATFORM_MODEL_IDS``) with the same
+    1M-class window as Copilot, and this profile is the default source of the native
     runtime's context budget, so falling back to the 64k profile purely
     because of a provider id would compact those sessions roughly seven times
     too early.
