@@ -93,7 +93,7 @@ def is_supported_copilot_model_id(value: Any) -> bool:
     return True
 
 # AI Platform (enterprise gateway) models: gpt-5.4, the GPT-5.6 line and, since
-# 2026-11-25, GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol (not GPT-6 Astra, and no
+# 2026-11-24, GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol (not GPT-6 Astra, and no
 # auto id). Those three are also Copilot models, so they are the only ids the
 # two providers share. Must stay aligned with the Portal catalog
 # (app/contracts/llm_catalog.py AI_PLATFORM_MODELS): the runtime coerces any
@@ -111,8 +111,8 @@ AI_PLATFORM_MODEL_IDS = (
 )
 # The models the Image analysis connector may name for the inspect-image CLI
 # (the profile's ``image_analysis.model``). The connector got GPT-6 Luna,
-# GPT-6 Sol and GPT-6.1 Sol on 2026-11-24, a day before the chat list did;
-# the two now hold the same models. It keeps its own name because the choice
+# GPT-6 Sol and GPT-6.1 Sol first and the chat list later the same day
+# (2026-11-24); the two now hold the same models. It keeps its own name because the choice
 # is the connector's own (``coerce_vision_model``). Must stay aligned with the
 # Portal's app/contracts/llm_catalog.py IMAGE_ANALYSIS_MODELS for the same
 # reason as above: an id the Portal offers but this tuple lacks is silently

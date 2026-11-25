@@ -128,7 +128,7 @@ def test_resolve_ai_platform_model_keeps_every_catalog_model(monkeypatch):
 
     from src.efp_runtime.llm.models import AI_PLATFORM_MODEL_IDS
 
-    # GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol joined the chat list on 2026-11-25.
+    # GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol joined the chat list on 2026-11-24.
     assert AI_PLATFORM_MODEL_IDS == (
         "gpt-5.4",
         "gpt-5.6-luna",
@@ -138,9 +138,12 @@ def test_resolve_ai_platform_model_keeps_every_catalog_model(monkeypatch):
         "gpt-6-sol",
         "gpt-6.1-sol",
     )
-    monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "ai_platform", "model": "gpt-5.4"}}, raising=False)
-    for model_id in AI_PLATFORM_MODEL_IDS:
-        assert rc._resolve_ai_platform_model(model_id) == model_id
+    # As a member's pick for the session, on a profile that names no model
+    # (the Portal's "Use runtime local default") and on one that names another.
+    for profile in ({"provider": "ai_platform"}, {"provider": "ai_platform", "model": "gpt-5.4"}):
+        monkeypatch.setattr(rc.config, "_config", {"llm": profile}, raising=False)
+        for model_id in AI_PLATFORM_MODEL_IDS:
+            assert rc._resolve_ai_platform_model(model_id) == model_id
     # The profile's own model too, with no request override.
     for model_id in ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"):
         monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "ai_platform", "model": model_id}}, raising=False)
@@ -168,22 +171,65 @@ def test_resolve_ai_platform_model_coerces_non_ai_platform_model(monkeypatch):
     assert rc._resolve_ai_platform_model(None) == "gpt-5.4"
 
 
-def test_a_profile_that_names_no_model_keeps_the_ai_platform_default(monkeypatch):
-    # /api/chat forwards DEFAULT_LLM_MODEL (gpt-6-sol, the runtime's Copilot
-    # default) when the profile names no model. AI Platform serves that id
-    # now, but nobody chose it: the platform's default must not move with the list.
+def test_a_turn_without_a_model_runs_on_the_default_of_its_provider(monkeypatch):
+    # The API handlers used to fall back to DEFAULT_LLM_MODEL (gpt-6-sol, a
+    # Copilot choice) whatever the provider. AI Platform did not serve that id
+    # and coerced it to gpt-5.4; now that it does, the fallback would have run
+    # gpt-6-sol for a profile whose member chose nothing.
     import src.gateway.runtime_chat as rc
 
     assert rc.DEFAULT_LLM_MODEL == "gpt-6-sol"
     monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "ai_platform"}}, raising=False)
-    assert rc._resolve_ai_platform_model(rc.DEFAULT_LLM_MODEL) == "gpt-5.4"
-    # Another model on the request is a choice and stands.
-    assert rc._resolve_ai_platform_model("gpt-6-luna") == "gpt-6-luna"
-    # With a model in the profile the forwarded id is the member's own choice.
-    monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "ai_platform", "model": "gpt-6-sol"}}, raising=False)
+    assert rc.default_turn_model() == "gpt-5.4"
+    assert rc._resolve_ai_platform_model(rc.default_turn_model()) == "gpt-5.4"
+    monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "ai-platform", "model": "  "}}, raising=False)
+    assert rc.default_turn_model() == "gpt-5.4"
+    # The profile's model when it names one.
+    monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "ai_platform", "model": " gpt-6-sol "}}, raising=False)
+    assert rc.default_turn_model() == "gpt-6-sol"
+    assert rc._resolve_ai_platform_model(rc.default_turn_model()) == "gpt-6-sol"
+    # Copilot is as it was.
+    monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "github_copilot"}}, raising=False)
+    assert rc.default_turn_model() == "gpt-6-sol"
+    monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "github_copilot", "model": "auto"}}, raising=False)
+    assert rc.default_turn_model() == "auto"
+    monkeypatch.setattr(rc.config, "_config", {}, raising=False)
+    assert rc.default_turn_model() == "gpt-6-sol"
+
+
+def test_gpt_6_sol_picked_for_a_session_stands_on_a_profile_without_a_model(monkeypatch):
+    # Regression for the first shape of this fix, which compared ids: it took
+    # every gpt-6-sol on a profile without a model for the forwarded default
+    # and ran gpt-5.4, so the one model a member could not pick was GPT-6 Sol.
+    import src.gateway.runtime_chat as rc
+
+    llm = {
+        "provider": "ai_platform",
+        "ai_platform": {
+            "chat": {"host": "https://c", "uri": "/v1/api/v1/chat/completions"},
+            "auth": {"username": "u", "password": "p"},
+        },
+    }
+    monkeypatch.setattr(rc.config, "_config", {"llm": llm}, raising=False)
     assert rc._resolve_ai_platform_model("gpt-6-sol") == "gpt-6-sol"
-    monkeypatch.setattr(rc.config, "_config", {"llm": {"provider": "ai_platform", "model": "gpt-5.4"}}, raising=False)
-    assert rc._resolve_ai_platform_model("gpt-6-sol") == "gpt-6-sol"  # a per-session pick over the profile's model
+    _provider, runtime_model = rc._build_llm_provider("gpt-6-sol")
+    assert runtime_model == "gpt-6-sol"
+    # And a turn that names nothing still lands on the platform's default.
+    _provider, runtime_model = rc._build_llm_provider(rc.default_turn_model())
+    assert runtime_model == "gpt-5.4"
+
+
+def test_every_turn_entry_point_takes_its_default_from_the_provider():
+    # Where a turn's model is chosen when the request names none: /api/chat,
+    # its stream, a message edit, and the GitHub review task.
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    api = (root / "src" / "gateway" / "runtime_api.py").read_text(encoding="utf-8")
+    assert api.count("model = model_override or default_turn_model()") == 3
+    assert "model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)" not in api
+    review = (root / "src" / "runtime" / "github_review.py").read_text(encoding="utf-8")
+    assert 'metadata.get("resolved_model") or metadata.get("model") or default_turn_model()' in review
 
 
 def test_build_llm_provider_dispatches_to_ai_platform(monkeypatch):
