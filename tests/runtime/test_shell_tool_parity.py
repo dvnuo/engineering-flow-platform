@@ -11,6 +11,7 @@ import pytest
 from efp_runtime.models import ToolCall
 from efp_runtime.permissions import ASK, PermissionDecision, PermissionMetadata
 from efp_runtime.tools.builtin import create_core_tool_registry
+from efp_runtime.tools.builtin import shell as shell_module
 from efp_runtime.tools.definition import ToolContext
 from efp_runtime.tools.runtime import ToolRuntime
 
@@ -52,7 +53,79 @@ async def test_shell_schema_matches_opencode_visible_arguments(tmp_path: Path):
         "timeout",
         "workdir",
     ]
-    assert schema["properties"]["timeout"] == {"type": "integer", "minimum": 1}
+    timeout = schema["properties"]["timeout"]
+    assert {key: timeout[key] for key in ("type", "minimum")} == {"type": "integer", "minimum": 1}
+
+
+def test_the_model_is_told_the_unit_and_the_default_of_timeout(tmp_path: Path):
+    """An unlabelled ``timeout`` was filled in as seconds: 120 stopped a command after 120 ms."""
+    tool = create_core_tool_registry(tmp_path).require("bash")
+    timeout = tool.input_schema["properties"]["timeout"]
+    default = str(shell_module.DEFAULT_TIMEOUT_MS)
+
+    assert shell_module.DEFAULT_TIMEOUT_MS == 120_000
+    assert "milliseconds" in timeout["description"]
+    assert default in timeout["description"]
+    assert "below 1000 is read as seconds" in timeout["description"]
+    assert "milliseconds" in tool.description
+    assert default in tool.description
+
+
+@pytest.mark.parametrize(
+    ("given", "effective_ms"),
+    [
+        # Below a second nobody means milliseconds: seconds.
+        (1, 1_000),
+        (90, 90_000),
+        (120, 120_000),
+        (999, 999_000),
+        # From 1000 on the value is milliseconds, as before.
+        (1_000, 1_000),
+        (5_000, 5_000),
+        (120_000, 120_000),
+        (600_000, 600_000),
+    ],
+)
+def test_a_timeout_below_one_second_is_read_as_seconds(given: int, effective_ms: int):
+    seconds, timeout_ms = shell_module._resolve_timeout({"timeout": given})
+
+    assert timeout_ms == effective_ms
+    assert seconds == effective_ms / 1000.0
+
+
+def test_a_call_without_timeout_gets_two_minutes():
+    assert shell_module._resolve_timeout({}) == (120.0, 120_000)
+
+
+@pytest.mark.parametrize("bad", [0, -5, 1.5, "120", True, None])
+def test_a_timeout_that_is_no_positive_integer_is_refused(bad: Any):
+    with pytest.raises(ValueError):
+        shell_module._resolve_timeout({"timeout": bad})
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_written_in_seconds_lets_the_command_finish(tmp_path: Path):
+    """``timeout: 120`` is two minutes, so a command that takes a moment is not cut at 120 ms."""
+    runtime = _runtime(tmp_path)
+
+    result = await runtime.execute(
+        ToolCall(
+            id="call-shell-seconds",
+            tool_id="bash",
+            args={
+                "command": _python_command("import time; time.sleep(0.6); print('read')"),
+                "description": "Takes longer than 120 ms",
+                "timeout": 120,
+            },
+        )
+    )
+
+    assert result.status == "success"
+    assert result.output["timed_out"] is False
+    assert result.output["exit_code"] == 0
+    assert "read" in result.output["stdout"]
+    assert result.metadata["timeout_ms"] == 120_000
+    assert "exceeding timeout" not in result.content
 
 
 @pytest.mark.asyncio
@@ -83,9 +156,9 @@ async def test_timeout_is_milliseconds_and_adds_shell_metadata(tmp_path: Path):
             id="call-shell-timeout",
             tool_id="bash",
             args={
-                "command": _python_command("import time; time.sleep(1)"),
+                "command": _python_command("import time; time.sleep(10)"),
                 "description": "Sleep longer than timeout",
-                "timeout": 100,
+                "timeout": 1000,
             },
         )
     )
@@ -96,9 +169,36 @@ async def test_timeout_is_milliseconds_and_adds_shell_metadata(tmp_path: Path):
     assert result.output["exit_code"] is None
     assert result.metadata["timed_out"] is True
     assert result.metadata["cancelled"] is False
-    assert result.metadata["timeout_ms"] == 100
+    assert result.metadata["timeout_ms"] == 1000
     assert "<shell_metadata>" in result.content
-    assert "100ms" in result.content
+    assert "exceeding timeout 1000ms (1 second)" in result.content
+    # The model must not read a timeout as "the CLI is unavailable", and must
+    # learn how to give the command longer.
+    assert "ran out of time" in result.content
+    assert "does not show that what it ran is broken or unavailable" in result.content
+    assert "larger `timeout`, in milliseconds (300000 is five minutes)" in result.content
+
+
+@pytest.mark.parametrize(
+    ("timeout_ms", "text"),
+    [
+        (1_000, "1 second"),
+        (1_500, "1.5 seconds"),
+        (30_000, "30 seconds"),
+        (120_000, "120 seconds"),
+        (3_600_000, "3600 seconds"),
+    ],
+)
+def test_the_timeout_note_gives_the_limit_in_both_units(timeout_ms: int, text: str):
+    content = shell_module._format_shell_content(
+        stdout="",
+        stderr="",
+        timed_out=True,
+        cancelled=False,
+        timeout_ms=timeout_ms,
+    )
+
+    assert f"exceeding timeout {timeout_ms}ms ({text})." in content
 
 
 @pytest.mark.asyncio
